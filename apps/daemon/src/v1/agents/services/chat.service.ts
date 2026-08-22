@@ -473,6 +473,7 @@ export class ChatService {
     title?: string;
     approval?: ChatApprovalMode;
     effort?: string;
+    contextWindow?: string;
     configDir?: string;
     /**
      * The app's global custom instructions as they stand right now. Snapshotted
@@ -528,6 +529,7 @@ export class ChatService {
         cwd,
         model: input.model ?? null,
         effort: input.effort ?? null,
+        contextWindow: input.contextWindow ?? null,
         configDir,
         // Blank normalizes to null so "typed nothing" and "cleared the box"
         // are one state in the row, and the turn input below cannot hand an
@@ -655,6 +657,7 @@ export class ChatService {
       approval?: ChatApprovalMode;
       model?: string | null;
       effort?: string | null;
+      contextWindow?: string | null;
     },
   ): Promise<RunWire> {
     const em = this.em.fork();
@@ -676,6 +679,17 @@ export class ChatService {
       ...(patch.approval !== undefined ? { approval: patch.approval } : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
+      // A window size belongs to the MODEL that offered it, so a patch that
+      // changes the model and says nothing about the window CLEARS it rather
+      // than carrying it across: `1m` on a model with no such axis is
+      // `-32602 Unknown model config option`, and `300k` on one whose sizes are
+      // `272k|1m` is refused the same way. The user picks again from the new
+      // model's own list, which is what the chip re-fetches anyway.
+      ...(patch.contextWindow !== undefined
+        ? { contextWindow: patch.contextWindow }
+        : patch.model !== undefined
+          ? { contextWindow: null }
+          : {}),
     };
     // Captured before the write: `updateById` mutates this same
     // identity-mapped entity, so `run.approval` is already the NEW value by the
@@ -1196,6 +1210,13 @@ export class ChatService {
       }
       return;
     }
+    if (event.type === 'reasoning_delta') {
+      if (event.parentToolUseId === undefined) {
+        this.partials.reasoning(runId, SINGLE_AGENT_NODE, null, event.text);
+        await this.restatusAfterOffTurnSignal(runId, event);
+      }
+      return;
+    }
     if (event.type === 'context_progress') {
       this.partials.context(
         runId,
@@ -1373,10 +1394,12 @@ export class ChatService {
    *   instead of having that turn's activity phrase restated as `still
    *   working`. A row is worth re-announcing for; an unfinished word is not.
    *
-   * `context_progress` is the third live signal and is deliberately NOT one of
-   * these: it measures the WINDOW rather than asserting that anything is being
-   * produced, and it is also emitted synthetically once a compaction has
-   * FINISHED — the one moment the CLI is demonstrably not working.
+   * `context_progress` is the one live signal deliberately NOT routed here: it
+   * measures the WINDOW rather than asserting that anything is being produced,
+   * and it is also emitted synthetically once a compaction has FINISHED — the
+   * one moment the CLI is demonstrably not working. The other three
+   * (`text_delta`, `thinking_progress`, `reasoning_delta`) each carry something
+   * the model just authored, which is exactly the claim this makes.
    */
   private async restatusAfterOffTurnSignal(
     runId: string,
@@ -1660,6 +1683,7 @@ export class ChatService {
         !isUserQuestion(adapter.getConfig().questionToolName, toolName);
       const model = settings.model ?? undefined;
       const effort = settings.effort ?? undefined;
+      const contextWindow = settings.contextWindow ?? undefined;
       // Re-resolved per turn, exactly like `cwd` above: the row holds the
       // canonical path as of creation, and a directory deleted (or a symlink
       // re-pointed) since then would otherwise reach argv, where the CLI
@@ -1944,6 +1968,7 @@ export class ChatService {
           cwd,
           model,
           effort,
+          contextWindow,
           configDir,
           customInstructions,
           resumeSessionId,
@@ -1986,8 +2011,8 @@ export class ChatService {
             }
             if (event.type === 'thinking_progress') {
               // EPHEMERAL, like a text delta: the only honest signal during a
-              // silent reasoning stretch, since the text itself is redacted.
-              // Main thread only, for the same reason — one counter per run.
+              // reasoning stretch this CLI has REDACTED. Main thread only, for
+              // the same reason — one counter per run.
               if (event.parentToolUseId !== undefined) {
                 return;
               }
@@ -1996,6 +2021,23 @@ export class ChatService {
                 SINGLE_AGENT_NODE,
                 null,
                 event.tokens,
+              );
+              return;
+            }
+            if (event.type === 'reasoning_delta') {
+              // The other half of the same answer, for a CLI that DISCLOSES
+              // what it is thinking. EPHEMERAL and main-thread-only on exactly
+              // the terms above — there is one live tail per run, so two
+              // sub-agents reasoning at once would interleave into nobody's
+              // words.
+              if (event.parentToolUseId !== undefined) {
+                return;
+              }
+              this.partials.reasoning(
+                runId,
+                SINGLE_AGENT_NODE,
+                null,
+                event.text,
               );
               return;
             }
@@ -2077,23 +2119,20 @@ export class ChatService {
               return;
             }
             if (event.type === 'context_compacted') {
-              // Announced rather than persisted, at every phase, because what
-              // each explains is momentary: first a long pause with nothing
-              // happening on screen, then the context meter dropping by most of
-              // the window between one request and the next. The next tool call
-              // replaces whichever phrase is standing.
-              //
-              // The `started` phrase is the one the user actually asked for. A
+              // Announced rather than persisted, because what it explains is
+              // momentary: a long pause with nothing happening on screen. A
               // compaction measured 46s in the probe behind
               // `CLAUDE_COMPACTING_STATUS`, and for that whole time the row said
-              // only "Working…" with a climbing timer — the reported defect.
+              // only "Working…" with a climbing timer — the reported defect the
+              // `started` phrase answers.
               //
-              // `failed` announces NULL, which is what takes the present-tense
-              // phrase back down. Saying nothing is right here rather than
-              // saying "compaction failed": the durable `system` row already
-              // carries the CLI's own reason, and the activity channel describes
-              // what the run is DOING — after a refusal it is back to whatever
-              // it was doing before.
+              // BOTH endings announce NULL, which is what takes the phrase back
+              // down; see below for why `finished` joined `failed` there.
+              // Saying nothing is right rather than "compaction failed" or
+              // "compacted the conversation": the durable `system` row carries
+              // the CLI's own reason or its own summary, and the activity
+              // channel describes what the run is DOING — afterwards it is back
+              // to whatever it was doing before.
               //
               // MAIN THREAD ONLY, like the `tool_call` announce below and for
               // the same measured reason: a sub-agent's events arrive on this
@@ -2111,15 +2150,30 @@ export class ChatService {
                   postTokens: event.postTokens,
                 };
               }
+              // ONE phrase, and it is the present-tense one. A `finished`
+              // announce used to word itself by trigger ("compacted the
+              // conversation", or "… to free up context") — a PAST-TENSE
+              // sentence on a channel that means "what this run is doing right
+              // now", and which the transcript draws as a spinning row with a
+              // climbing clock. Reported against a `/compact` whose whole turn
+              // is the compaction, so nothing came along to replace it: the row
+              // read `⟳ compacted the conversation · 54s` directly under the
+              // durable summary that already said it was over — "он всё ещё
+              // пишет, что компакт продолжает работать".
+              //
+              // Null is what `failed` already does, for the reason that applies
+              // here too: afterwards the run is back to whatever it was doing,
+              // and "Working…" is the honest standing phrase for that. Nothing
+              // is lost with it — the CLI's own summary lands as a durable row
+              // carrying the figures the phrase never had (`compactedTokens`
+              // below), which is both a better sentence and one that survives a
+              // reload. Measured on the author's own database: 14 compactions,
+              // 14 summary rows.
               this.announceActivity(
                 runId,
-                event.phase === 'failed'
-                  ? null
-                  : event.phase === 'started'
-                    ? 'compacting the conversation'
-                    : event.trigger === 'manual'
-                      ? 'compacted the conversation'
-                      : 'compacted the conversation to free up context',
+                event.phase === 'started'
+                  ? 'compacting the conversation'
+                  : null,
               );
               return;
             }

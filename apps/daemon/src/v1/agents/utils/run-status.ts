@@ -70,6 +70,12 @@ export async function writeRunStatus(
   announce: RunStatusAnnounce = {},
 ): Promise<void> {
   await deps.runDao.updateById(runId, { status }, em);
+  // Read AFTER the write, because that is what it describes: the row's own
+  // `updatedAt` moved just now, and this is the only announce that can say so
+  // (`RunStatusEvent.at`). Taken from the clock rather than read back off the
+  // entity to keep the write one query — the two differ by the flush's own
+  // latency, which is a sub-millisecond gap in a list ordered by seconds.
+  const at = new Date().toISOString();
   // `awaiting: null` on EVERY status write, which is the one place it can be
   // stated once for both paths' many settle branches.
   //
@@ -98,6 +104,7 @@ export async function writeRunStatus(
     status,
     activity,
     awaiting: null,
+    at,
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),

@@ -45,6 +45,44 @@ export interface AgentConfigDirCapability {
 /**
  * 
  * @export
+ * @interface AgentContextWindow
+ */
+export interface AgentContextWindow {
+    /**
+     * Passed verbatim to the CLI as that model's window setting
+     * @type {string}
+     * @memberof AgentContextWindow
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentContextWindow
+     */
+    label: string;
+}
+/**
+ * 
+ * @export
+ * @interface AgentContextWindowListingDto
+ */
+export interface AgentContextWindowListingDto {
+    /**
+     * 
+     * @type {Array<AgentContextWindow>}
+     * @memberof AgentContextWindowListingDto
+     */
+    windows: Array<AgentContextWindow>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentContextWindowListingDto
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface AgentCount
  */
 export interface AgentCount {
@@ -119,6 +157,12 @@ export interface AgentFollowUpCapability {
      * @memberof AgentFollowUpCapability
      */
     unavailableReason: string | null;
+    /**
+     * Whether a mid-turn message stops what the agent is doing
+     * @type {boolean}
+     * @memberof AgentFollowUpCapability
+     */
+    interrupts: boolean;
 }
 
 
@@ -347,6 +391,12 @@ export interface AgentSession {
      * @memberof AgentSession
      */
     updatedAt: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentSession
+     */
+    snippet: string | null;
 }
 /**
  * 
@@ -728,6 +778,19 @@ export interface ChatTotals {
 /**
  * 
  * @export
+ * @interface ChatTotalsDto
+ */
+export interface ChatTotalsDto {
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof ChatTotalsDto
+     */
+    totals: ChatTotals;
+}
+/**
+ * 
+ * @export
  * @interface ClaudeModesCapability
  */
 export interface ClaudeModesCapability {
@@ -942,6 +1005,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     effort?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    contextWindow?: string;
     /**
      * 
      * @type {string}
@@ -1912,6 +1981,12 @@ export interface RunDto {
      * @type {string}
      * @memberof RunDto
      */
+    contextWindow: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
     configDir: string | null;
     /**
      * 
@@ -2220,6 +2295,12 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     effort?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    contextWindow?: string | null;
 }
 
 
@@ -2428,6 +2509,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     effort?: string;
+    /**
+     * Context-window size; omitted = the model's own default
+     * @type {string}
+     * @memberof WorkflowAgentNode
+     */
+    contextWindow?: string;
     /**
      * What this agent does — shown to agents wired to call it
      * @type {string}

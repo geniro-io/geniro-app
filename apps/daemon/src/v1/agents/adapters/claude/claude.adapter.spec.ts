@@ -32,10 +32,13 @@ import {
   CLAUDE_BASE_ARGS,
   CLAUDE_BROWSER_TOOLS_ENV,
   CLAUDE_BROWSER_TOOLS_SETTING_ENV,
+  CLAUDE_COMMANDS_CHANGED_SUBTYPE,
   CLAUDE_CONFIG_DIR_ENV,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_MODEL_FLAG,
+  CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
+  CLAUDE_RELOAD_COMMANDS_SUBTYPE,
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_TODO_TOOLS_ENV,
@@ -1732,7 +1735,18 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
     ]);
     expect(captured.args).not.toContain('--dangerously-skip-permissions');
     expect(captured.args).not.toContain('--permission-mode');
-    expect(JSON.parse(child.stdin.written.trim())).toEqual({
+
+    // TWO lines, and the second is the whole of what this probe asks for. The
+    // CLI names its commands on `init` and describes NONE of them; the
+    // sentences come back only when it is asked to reload, so the probe writes
+    // that request and reads the announcement. Nothing else was granted for it
+    // — the argv above is unchanged, since this CLI already speaks stream-json
+    // on stdin.
+    const lines = child.stdin.written
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => JSON.parse(line));
+    expect(lines[0]).toEqual({
       type: 'user',
       message: {
         role: 'user',
@@ -1741,6 +1755,68 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
         ],
       },
     });
+    expect(lines[1]).toEqual({
+      type: 'control_request',
+      request_id: CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
+      request: { subtype: CLAUDE_RELOAD_COMMANDS_SUBTYPE },
+    });
+    expect(lines).toHaveLength(2);
+  });
+
+  it('takes the DESCRIBED list the reload announces, over the bare names on init', async () => {
+    // The reported "Автокомплит не показывает описание тулов", at its source.
+    // `system/init` names every command and describes none — measured against
+    // this daemon's own endpoint on a real profile, 64 of 67 rows had no
+    // sentence at all, `/compact` and `/autocompact` among them. The reload's
+    // announcement carries the same names WITH each entry's own description
+    // (68 of 68 in the live probe), and it arrives before `init`.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(
+      `${JSON.stringify({
+        type: 'system',
+        subtype: CLAUDE_COMMANDS_CHANGED_SUBTYPE,
+        commands: [
+          {
+            name: 'compact',
+            description:
+              'Free up context by summarizing the conversation so far',
+            argumentHint: '',
+          },
+          // No sentence for this one: the CLI spells that as an empty string,
+          // and it must arrive as null — a blank would render as an invisible
+          // description AND outrank a real one from the disk scan.
+          { name: 'clear', description: '' },
+        ],
+      })}\n`,
+    );
+
+    expect(await reported).toEqual([
+      {
+        name: 'compact',
+        description: 'Free up context by summarizing the conversation so far',
+      },
+      { name: 'clear', description: null },
+    ]);
+  });
+
+  it('still answers from init alone when the reload announces nothing', async () => {
+    // The degrade, and it is the whole safety of asking: a CLI that stops
+    // answering the reload falls back to the bare names it already reported,
+    // which is exactly what the autocomplete shows today — never to nothing.
+    const { spawn, child } = probeSpawn();
+    const reported = new ClaudeAdapter({
+      spawn,
+      probeRootDir: tempDir('probe-root-'),
+    }).listReportedCommands();
+
+    child.stdout.emitData(initLine(['clear']));
+
+    expect(await reported).toEqual([{ name: 'clear', description: null }]);
   });
 
   it('reports nothing when the CLI exits before its init line', async () => {
@@ -1877,31 +1953,35 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
     });
   });
 
-  it('signs the CLI in to THAT profile, not the default one', () => {
+  it('signs the CLI in to THAT profile, not the default one', async () => {
     // The failure this closes: a chat on a second subscription whose session
     // expired: signing in under the default directory leaves that chat exactly
-    // as expired, with no error to explain it.
-    expect(new ClaudeAdapter().loginTarget('/profiles/work')).toEqual({
-      ok: true,
-      kind: 'command',
-      command: 'claude',
-      args: ['auth', 'login'],
-      env: { [CLAUDE_CONFIG_DIR_ENV]: '/profiles/work' },
+    // as expired, with no error to explain it. Read off the CHILD the adapter
+    // would spawn, since the daemon runs this itself — there is no invocation
+    // handed to a terminal to inspect any more.
+    const { adapter, spawned } = recordingClaude();
+    await adapter.runLogin({
+      configDir: '/profiles/work',
+      timeoutMs: 1_000,
+      onSpawn: () => undefined,
     });
+
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args).toEqual(['auth', 'login']);
+    expect(spawned[0]?.env[CLAUDE_CONFIG_DIR_ENV]).toBe('/profiles/work');
   });
 
-  it('signs the CLI OUT with its own command, in THAT profile', () => {
+  it('signs the CLI OUT with its own command, in THAT profile', async () => {
     // `claude auth logout`, from `claude auth --help` on 2.1.227. The config
     // directory matters more here than on the sign-in path, not less: a logout
     // that dropped it would clear the DEFAULT account's credentials while the
     // user was acting on a card for a different profile.
-    expect(new ClaudeAdapter().logoutTarget('/profiles/work')).toEqual({
-      ok: true,
-      kind: 'command',
-      command: 'claude',
-      args: ['auth', 'logout'],
-      env: { [CLAUDE_CONFIG_DIR_ENV]: '/profiles/work' },
-    });
+    const { adapter, spawned } = recordingClaude();
+    await adapter.runLogout({ configDir: '/profiles/work', timeoutMs: 1_000 });
+
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args).toEqual(['auth', 'logout']);
+    expect(spawned[0]?.env[CLAUDE_CONFIG_DIR_ENV]).toBe('/profiles/work');
   });
 
   it('omits the model flag for a run on the CLI’s default', () => {
@@ -2193,21 +2273,74 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
   });
 });
 
+/**
+ * A ClaudeAdapter whose children are recorded rather than run — both seams,
+ * because the three auth commands do not take the same one: `runLogin` and
+ * `runMcpLogin` force the process-group path (a sign-in has a browser opener
+ * under it, and the pty wrapper has `script` under that), while `runLogout` is
+ * an ordinary `execFile`.
+ *
+ * It exists because these invocations stopped being VALUES the daemon hands to
+ * a terminal and became children it spawns: the only place left to read the
+ * argv and the profile env off is the spawn itself.
+ */
+function recordingClaude(): {
+  adapter: ClaudeAdapter;
+  spawned: { args: string[]; env: NodeJS.ProcessEnv }[];
+} {
+  const spawned: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const record = (
+    args: readonly string[],
+    options: Record<string, unknown>,
+  ): void => {
+    spawned.push({
+      args: [...args],
+      env: (options.env ?? {}) as NodeJS.ProcessEnv,
+    });
+  };
+  const adapter = new ClaudeAdapter({
+    groupSpawnFn: spawnAnswering('', 4242, record),
+    execFileFn: ((
+      _command: string,
+      args: readonly string[],
+      options: Record<string, unknown>,
+      done: (err: null, stdout: string, stderr: string) => void,
+    ) => {
+      record(args, options);
+      queueMicrotask(() => done(null, '', ''));
+      return new FakeChild() as unknown as ChildProcess;
+    }) as unknown as typeof execFile,
+  });
+  return { adapter, spawned };
+}
+
 describe('ClaudeAdapter — signing in to an MCP server', () => {
-  it('composes the CLI’s real sign-in argv', () => {
+  it('composes the CLI’s real sign-in argv, ending in the server name', async () => {
     // The literal subcommand, from `claude mcp --help` on 2.1.223:
     //   login [options] <name>  Authenticate with an MCP server
-    // Spelled out here on purpose. The base's shared test derives the argv from
-    // the same config the code reads, so it cannot tell `mcp login` from any
-    // other pair of words; this is the assertion that would fail if the config
-    // drifted off what the binary accepts.
-    expect(new ClaudeAdapter().mcpLoginTarget('probe-linear')).toEqual({
-      ok: true,
-      kind: 'command',
-      command: 'claude',
-      args: ['mcp', 'login', 'probe-linear'],
-      env: {},
+    // The server's name is the last ARGUMENT, and that is the half a config pin
+    // cannot state: an argv composed without it runs `claude mcp login` with no
+    // target, and one composed with it in the wrong place authenticates
+    // nothing while looking exactly as correct.
+    const { adapter, spawned } = recordingClaude();
+    await adapter.runMcpLogin({
+      server: 'probe-linear',
+      cwd: process.cwd(),
+      timeoutMs: 1_000,
+      onSpawn: () => undefined,
     });
+
+    // The TAIL, because a pty command is spawned through `script` and the
+    // wrapper's own argv leads. No profile was asked for, so none is set —
+    // never the CLI's default path, which would be this app inventing a
+    // profile the caller never chose.
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.args.slice(-3)).toEqual([
+      'mcp',
+      'login',
+      'probe-linear',
+    ]);
+    expect(spawned[0]?.env[CLAUDE_CONFIG_DIR_ENV]).toBeUndefined();
   });
 });
 
@@ -2560,5 +2693,74 @@ describe('ClaudeAdapter — re-moding a turn already running', () => {
     child.emit('close', 0, null);
 
     expect(handle.setApprovalMode('plan')).toBe(false);
+  });
+});
+
+describe("ClaudeAdapter.listSessions — the picker's search", () => {
+  const profiles: string[] = [];
+
+  afterEach(() => {
+    while (profiles.length > 0) {
+      rmSync(profiles.pop() as string, { recursive: true, force: true });
+    }
+  });
+
+  /** A profile whose two conversations open identically and diverge after. */
+  function profileWithTwoTalks(): string {
+    const root = mkdtempSync(join(tmpdir(), 'claude-adapter-sessions-'));
+    profiles.push(root);
+    const write = (id: string, said: string): void => {
+      const dir = join(root, 'projects', 'proj');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, `${id}.jsonl`),
+        [
+          JSON.stringify({
+            type: 'user',
+            cwd: '/w',
+            message: { role: 'user', content: 'help me with the updater' },
+          }),
+          JSON.stringify({
+            type: 'assistant',
+            cwd: '/w',
+            message: {
+              role: 'assistant',
+              content: [{ type: 'text', text: said }],
+            },
+          }),
+        ].join('\n'),
+      );
+    };
+    write('found', 'The app.asar archive is never deleted.');
+    write('other', 'The release feed is fine.');
+    return root;
+  }
+
+  it('narrows the answer by what was SAID, not by the row it would show', async () => {
+    // The wiring, end to end through the adapter — the reader below it has its
+    // own cases, and a query the adapter forgot to pass on would leave every
+    // one of them green while the picker searched nothing.
+    const listing = await new ClaudeAdapter({}).listSessions({
+      cwd: null,
+      configDir: profileWithTwoTalks(),
+      limit: 10,
+      query: 'asar',
+    });
+
+    // Both open with the same prompt, so the titles cannot tell them apart.
+    expect(listing.sessions.map((session) => session.id)).toEqual(['found']);
+    expect(listing.sessions[0]?.snippet).toContain('app.asar archive');
+  });
+
+  it('leaves an unsearched listing whole', async () => {
+    const listing = await new ClaudeAdapter({}).listSessions({
+      cwd: null,
+      configDir: profileWithTwoTalks(),
+      limit: 10,
+      query: null,
+    });
+
+    expect(listing.sessions).toHaveLength(2);
+    expect(listing.partialReason).toBeNull();
   });
 });

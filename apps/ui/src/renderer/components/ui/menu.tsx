@@ -411,7 +411,7 @@ export function Menu({
         className,
       )}>
       {searchPlaceholder !== undefined ? (
-        <div className="shrink-0 border-b border-border px-3 py-1.5">
+        <div className="shrink-0 border-b border-border/60 px-3 py-1.5">
           <input
             ref={searchRef}
             value={query}
@@ -454,10 +454,18 @@ export function Menu({
                 // across the padding and made the panel look like two stacked
                 // boxes.
                 className={cn(
-                  groupIndex > 0 && 'mt-1 border-t border-border/70 pt-1',
+                  // Faint, to match the panel's own softened edge: at /70 the
+                  // rule was heavier than the border around it and cut a
+                  // four-row menu into two stacked boxes.
+                  groupIndex > 0 && 'mt-1 border-t border-border/45 pt-1',
                 )}>
                 {group.label !== undefined ? (
-                  <p className="px-2.5 pb-1 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  // A micro-label, not a banner. `tracking-wide` over 11px
+                  // uppercase stretched "START FROM A CONFIGURATION" across the
+                  // full width of a four-row menu, where it outweighed every
+                  // row under it — the loudest thing on a surface whose whole
+                  // job is the rows.
+                  <p className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-muted-foreground/75">
                     {group.label}
                   </p>
                 ) : null}
@@ -474,7 +482,12 @@ export function Menu({
                       aria-selected={selected}
                       disabled={item.disabled}
                       className={cn(
-                        'flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-foreground transition-colors',
+                        // `rounded-lg`, which is the panel's own 12px radius
+                        // less its 4px padding. At `rounded-md` the row's
+                        // corners were tighter than the panel's, so a
+                        // highlighted row sitting in the corner traced a second,
+                        // disagreeing curve just inside the first.
+                        'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors',
                         '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
                         item.tone === 'destructive' &&
                           'text-destructive [&>svg]:text-destructive',

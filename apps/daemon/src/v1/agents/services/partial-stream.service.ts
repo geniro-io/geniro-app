@@ -28,6 +28,15 @@ interface LiveState {
   thinkingStretch: number;
   /** The CURRENT stretch's running total, or null when not reasoning. */
   thinkingCurrent: number | null;
+  /**
+   * The CURRENT stretch's reasoning text so far, or '' when there is none.
+   *
+   * Only a CLI that DISCLOSES its thinking ever fills this — claude redacts
+   * the block entirely and reports a token count instead, which is why the two
+   * are separate fields rather than one. Either one being present means a
+   * stretch is open ({@link PartialStreamService.isReasoning}).
+   */
+  thinkingText: string;
   /** When the CURRENT stretch began (epoch ms), or null when not reasoning. */
   thinkingSince: number | null;
   /** Prompt-side tokens as of the turn's most recent request, or null. */
@@ -136,8 +145,9 @@ export class PartialStreamService {
       // stretch open forever once a turn crossed 64 KB, so the "thinking" row
       // never cleared for that agent again — the exact defect this plane was
       // reworked to fix.
-      const endedAStretch = state.thinkingCurrent !== null;
+      const endedAStretch = this.isReasoning(state);
       state.thinkingCurrent = null;
+      state.thinkingText = '';
       if (state.text.length >= MAX_TAIL_CHARS) {
         // Publish ONLY when this delta actually changed something — i.e. it
         // ended a reasoning stretch. Publishing unconditionally here would put
@@ -170,7 +180,7 @@ export class PartialStreamService {
       // runs three tools, then thinks again is two separate waits, and showing
       // the first one's clock still running through the second read as a
       // counter that never resets under rows that kept piling up above it.
-      if (state.thinkingCurrent === null) {
+      if (!this.isReasoning(state)) {
         state.thinkingStretch += 1;
         state.thinkingSince = Date.now();
       }
@@ -179,6 +189,62 @@ export class PartialStreamService {
     } catch (err) {
       this.warn('thinking', err);
     }
+  }
+
+  /**
+   * Extend the CURRENT stretch's reasoning TEXT and publish it — the same
+   * REPLACE semantics as {@link append}, for a CLI that discloses what it is
+   * thinking rather than only how many tokens it has spent.
+   *
+   * It OPENS a stretch exactly as {@link thinking} does, and that is what the
+   * report this exists for turned on: cursor streams thought chunks and no
+   * stretch was ever opened for them, so a turn that thought for minutes drew
+   * the generic `Working…` row for the whole wait — the transcript's answer
+   * for an agent that has shown nothing, about an agent that was showing
+   * something the whole time.
+   *
+   * Words WIN over thinking on the client, so the two never race for the same
+   * row: this only ever fills a stretch that `append` has not already closed.
+   */
+  reasoning(
+    runId: string,
+    ownerKey: string,
+    nodeId: string | null,
+    delta: string,
+  ): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      const opened = !this.isReasoning(state);
+      if (opened) {
+        state.thinkingStretch += 1;
+        state.thinkingSince = Date.now();
+      }
+      // Past the cap the stretch is already open and the text cannot grow, so
+      // there is nothing new to say — publishing anyway would put a
+      // byte-identical event on the wire for every remaining chunk, which is
+      // the traffic the cap exists to stop (the same rule `append` follows).
+      if (!opened && state.thinkingText.length >= MAX_TAIL_CHARS) {
+        return;
+      }
+      state.thinkingText = (state.thinkingText + delta).slice(
+        0,
+        MAX_TAIL_CHARS,
+      );
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('reasoning', err);
+    }
+  }
+
+  /**
+   * Whether a reasoning stretch is open — EITHER channel counts.
+   *
+   * One predicate rather than a check per call site: a CLI fills one of the two
+   * and never both, so a site that asked about only the token total would treat
+   * a cursor stretch as closed and open a second one on its next chunk.
+   */
+  private isReasoning(state: LiveState): boolean {
+    return state.thinkingCurrent !== null || state.thinkingText !== '';
   }
 
   /**
@@ -203,10 +269,11 @@ export class PartialStreamService {
   endThinking(runId: string, ownerKey: string, nodeId: string | null): void {
     try {
       const state = this.stateOf(runId, ownerKey);
-      if (state.thinkingCurrent === null) {
+      if (!this.isReasoning(state)) {
         return;
       }
       state.thinkingCurrent = null;
+      state.thinkingText = '';
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('endThinking', err);
@@ -350,6 +417,7 @@ export class PartialStreamService {
       text: '',
       thinkingStretch: 0,
       thinkingCurrent: null,
+      thinkingText: '',
       thinkingSince: null,
       contextTokens: null,
     };
@@ -364,15 +432,19 @@ export class PartialStreamService {
     nodeId: string | null,
     state: LiveState,
   ): RunDeltaEvent {
-    // All three reasoning fields are null while NOT reasoning — that is what
-    // hides the indicator, and publishing them as one group is what stops a
-    // client seeing a stretch id without the clock that belongs to it.
-    const reasoning = state.thinkingCurrent !== null;
+    // EVERY reasoning field is null while NOT reasoning — that is what hides
+    // the indicator, and publishing them as one group is what stops a client
+    // seeing a stretch id without the clock that belongs to it.
+    const reasoning = this.isReasoning(state);
     return {
       runId,
       nodeId,
       text: state.text,
       thinkingTokens: state.thinkingCurrent,
+      // Null rather than '' when there is none, so "this CLI redacts its
+      // thinking" and "this stretch has not produced a word yet" are the same
+      // reading on the wire — neither has text to show.
+      thinkingText: state.thinkingText === '' ? null : state.thinkingText,
       thinkingSince: reasoning ? state.thinkingSince : null,
       thinkingStretch: reasoning ? state.thinkingStretch : null,
       contextTokens: state.contextTokens,
@@ -402,6 +474,7 @@ export class PartialStreamService {
       }
       state.text = '';
       state.thinkingCurrent = null;
+      state.thinkingText = '';
       this.publish(this.eventOf(runId, ownerKey, nodeId, state));
     } catch (err) {
       this.warn('retire', err);
@@ -436,6 +509,7 @@ export class PartialStreamService {
           ...state,
           text: '',
           thinkingCurrent: null,
+          thinkingText: '',
         }),
       );
       return tail;
@@ -480,6 +554,7 @@ export class PartialStreamService {
             ...state,
             text: '',
             thinkingCurrent: null,
+            thinkingText: '',
           }),
         );
       }

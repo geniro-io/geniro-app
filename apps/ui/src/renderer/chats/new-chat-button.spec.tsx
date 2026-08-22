@@ -35,6 +35,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     target: 'claude',
     model: null,
     effort: null,
+    contextWindow: null,
     approval: null,
     configDir: null,
     ...over,

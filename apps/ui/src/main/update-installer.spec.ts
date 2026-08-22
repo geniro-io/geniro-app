@@ -395,6 +395,81 @@ describe('sweepUpdateDebris', () => {
     expect(await installedVersion()).toBe('installed-1.3.0');
   });
 
+  it('deletes with asar support switched OFF, and switches it back on at the end', async () => {
+    // The reported hang, and the ONLY part of it a node-environment spec can
+    // observe. Under electron `fs.rm({recursive})` walks INTO an `app.asar` —
+    // it stats as a directory there — and never comes back; measured at 30s+
+    // and still running on a 111KB archive, against 1ms under node. So this
+    // suite cannot reproduce the hang, and pinning "the tree is gone" would
+    // certify nothing: that passes with the fix deleted. The flag is what
+    // behaves identically in both runtimes, so the flag is what is pinned.
+    //
+    // Sampled every event-loop turn rather than checked once, because the raise
+    // has to cover the WALK and not merely bracket the call. It is deliberately
+    // NOT asserted over the whole sweep: the flag is legitimately down while
+    // the sweep is still READING directories, and an `every` over those samples
+    // is a test that passes or fails on scheduling.
+    //
+    // The refcount in `withoutAsar` is entered here — two trees are deleted
+    // concurrently — but not claimed. A refcounted restore and a naive one
+    // produce the same edge sequence seen from outside, so no assertion over
+    // real filesystem work distinguishes them, and a title saying otherwise
+    // would certify nothing.
+    const slow = join(workDir, 'update-slow');
+    await mkdir(slow, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 150 }, (_, i) =>
+        writeFile(join(slow, `file-${i}`), 'a dead download'),
+      ),
+    );
+    await mkdir(`${bundlePath}.old-111`, { recursive: true });
+
+    const samples: unknown[] = [];
+    let sampling = true;
+    const sampler = (async (): Promise<void> => {
+      while (sampling) {
+        samples.push(process.noAsar);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    })();
+    const removed = await sweepUpdateDebris({ workDir, bundlePath });
+    sampling = false;
+    await sampler;
+
+    // Deleting 150 files spans many loop turns, so a sample taken while one was
+    // in flight is guaranteed — and with the raise removed there is no `true`
+    // among them at all, which is exactly what makes this a pin rather than a
+    // description.
+    expect(samples).toContain(true);
+    // And lowered again: left raised, every later `require` of a path inside
+    // the app's own archive would fail for the rest of the launch.
+    expect(process.noAsar).toBe(false);
+    expect(removed.sort()).toEqual([`${bundlePath}.old-111`, slow].sort());
+  });
+
+  it('names only what it actually removed, not what it tried to remove', async () => {
+    // The log line built from this list is the sweep's only record. A path it
+    // names while the directory is still sitting there sends whoever reads it
+    // looking somewhere else — which is how 118MB of undeletable archive went
+    // on being reported as removed, launch after launch.
+    const locked = join(workDir, 'update-locked');
+    await mkdir(locked, { recursive: true });
+    await writeFile(join(locked, 'trapped'), 'cannot be unlinked');
+    await mkdir(join(workDir, 'update-ok'), { recursive: true });
+    // No write permission on the parent — the child cannot be unlinked, so the
+    // removal genuinely fails rather than being told to fail.
+    chmodSync(locked, 0o500);
+
+    try {
+      const removed = await sweepUpdateDebris({ workDir, bundlePath });
+
+      expect(removed).toEqual([join(workDir, 'update-ok')]);
+      expect(await readdir(workDir)).toEqual(['update-locked']);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+  });
+
   it('answers a clean install with nothing, rather than failing on a work dir that was never created', async () => {
     expect(
       await sweepUpdateDebris({

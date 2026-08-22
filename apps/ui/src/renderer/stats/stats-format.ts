@@ -53,6 +53,46 @@ export function formatDayTitle(date: string): string {
 }
 
 /**
+ * The calendar day an ISO instant falls on, in the machine's own timezone.
+ *
+ * The daemon's twin (`v1/stats/utils/usage-fold.ts` `localDateKey`), and the
+ * reason this exists rather than `iso.slice(0, 10)`: that slice reads the UTC
+ * day, while every bucket on the page is a LOCAL one. The two disagree for
+ * anyone off UTC, and the span under the title was reading the wrong end of the
+ * disagreement — measured here (UTC+5) on the Today period, whose start is a
+ * local midnight and therefore the PREVIOUS UTC day: the header said "August 20
+ * – August 21" over a chart holding one column labelled Aug 21.
+ */
+function localDayKey(iso: string): string {
+  const at = new Date(iso);
+  const month = `${at.getMonth() + 1}`.padStart(2, '0');
+  const day = `${at.getDate()}`.padStart(2, '0');
+  return `${at.getFullYear()}-${month}-${day}`;
+}
+
+/**
+ * The period's span under the page title, as one day or as two.
+ *
+ * Takes the daemon's ISO bounds rather than day keys, because reading a day out
+ * of an instant is the part that has to be got right once — see
+ * {@link localDayKey}. With the CALLER slicing them, the comparison and the two
+ * renderings each had their own copy of that mistake.
+ *
+ * A one-day span is stated ONCE: printed as a range it dashed a date to itself,
+ * which is a range that is not one and invites reading its halves as two
+ * different days. Reachable on every period, not only Today — the daemon clamps
+ * a request to what its ledger holds, so a first-day install answers "90 days"
+ * with one.
+ */
+export function dayRangeTitle(fromIso: string, toIso: string): string {
+  const from = localDayKey(fromIso);
+  const to = localDayKey(toIso);
+  return from === to
+    ? formatDayTitle(from)
+    : `${formatDayTitle(from)} – ${formatDayTitle(to)}`;
+}
+
+/**
  * A turn count with its noun agreeing: `1 turn`, `2 turns`, `0 turns`.
  *
  * Shared rather than restated at each site because the page renders the same

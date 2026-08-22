@@ -136,6 +136,16 @@ export interface CliTurnOptions {
    */
   buildFollowUpPayload?: (message: FollowUpMessage) => string | undefined;
   /**
+   * Deliver that same message through a driver that writes for itself, for a
+   * CLI whose channel is a request in a stateful protocol rather than one
+   * stdin line ({@link TurnDriver.sendFollowUp}).
+   *
+   * Takes precedence over {@link buildFollowUpPayload} when both are defined.
+   * The settle guard is still applied HERE, so a driver never has to know
+   * whether the turn it is driving is already over.
+   */
+  sendFollowUp?: (message: FollowUpMessage) => boolean;
+  /**
    * Encode a mid-turn approval-mode change as the stdin line the CLI expects.
    * Undefined = THIS turn cannot be re-moded, and `setApprovalMode` is a no-op
    * — which is a per-TURN fact, not a per-CLI one: the same adapter answers
@@ -470,6 +480,25 @@ const TURN_END_EXIT_GRACE_MS = 2000;
  * servers, and the next turn reuses it. Only the turn is given up on.
  */
 const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
+
+/**
+ * Main-thread events that prove the MODEL is producing again, and so end a
+ * hold — see the release in `emit`.
+ *
+ * Only what the agent itself authored. A `tool_result` is deliberately absent:
+ * it is the ENVIRONMENT answering a call the turn made before it stopped
+ * talking, and it arrives whether or not the agent ever acts on it — a
+ * delegate's late result is exactly that, and it is the case the hold exists
+ * to keep a turn open FOR. Every one here cannot arrive without the model
+ * having emitted something new.
+ */
+const RESUMES_A_HELD_TURN: ReadonlySet<AgentEvent['type']> = new Set([
+  'text',
+  'text_delta',
+  'reasoning_delta',
+  'thinking_progress',
+  'tool_call',
+]);
 
 /** The mutable state of the one turn currently in flight. */
 interface TurnState {
@@ -1358,6 +1387,43 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       finishTurn(turn, normalized);
       return;
     }
+    // The MAIN thread has spoken again while its own terminal was held: the
+    // agent is working, so the hold is over — whatever background work is still
+    // outstanding.
+    //
+    // A hold says two things at once, and only one of them survives this. The
+    // turn stays open (that is what `openWork` is for), but the agent is no
+    // longer IDLE — which is the half every consumer acts on: the composer
+    // sends a message straight to an idle CLI instead of queueing it, and the
+    // badge reads the run as idle rather than running. Nothing took either back
+    // down, so both stayed wrong for the rest of the turn. Reported as "it sent
+    // message not in queue … its always, not just during compaction": a
+    // background task with no end (a dev server) held the turn, the user's next
+    // three messages each went straight into a CLI that was demonstrably
+    // working, and the last of them landed mid-compaction.
+    //
+    // MAIN THREAD ONLY. A delegate's rows arrive on this same stream and are
+    // usually the very work the hold is waiting for — clearing on those would
+    // undo the mechanism entirely.
+    //
+    // The deferred terminal is DROPPED rather than kept, and that is the point
+    // of doing this here: it describes a turn that has since continued, so
+    // releasing it when the last unit reports would settle the turn in the
+    // middle of the agent's next answer, filing everything after it under no
+    // turn at all. The turn now ends on its NEXT terminal — which is held again
+    // if work is still out, since `openWork` is untouched — and the silence
+    // deadline still bounds a CLI that speaks once and then wedges.
+    if (
+      turn.deferredTerminal !== null &&
+      event.parentToolUseId === undefined &&
+      RESUMES_A_HELD_TURN.has(event.type)
+    ) {
+      opts.logger?.debug?.(
+        `${opts.command}: releasing the hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
+      );
+      turn.deferredTerminal = null;
+      turn.options.onEvent({ type: 'turn_held', open: 0 });
+    }
     // The CLI is still talking, so it has not wedged — push the deadline out.
     armSilenceDeadline(turn);
     turn.options.onEvent(normalized);
@@ -1890,11 +1956,37 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         );
         return delivered;
       },
-      sendUserMessage: (message) =>
+      sendUserMessage: (message) => {
         // Guarded like the verdict above, and for the same reason: a write that
         // lands after the turn settled would be reported as delivered while the
         // agent never sees it, and the caller would drop it from its queue.
-        turnWrite(() => turnOptions.buildFollowUpPayload?.(message)),
+        //
+        // A driver that writes for itself takes the same guard and skips the
+        // payload builder — see `CliTurnOptions.sendFollowUp`, which exists
+        // because a stateful protocol's frame cannot be built without also
+        // being recorded.
+        const delivered = turnOptions.sendFollowUp
+          ? !turn.settled &&
+            !turn.terminalEmitted &&
+            turnOptions.sendFollowUp(message)
+          : turnWrite(() => turnOptions.buildFollowUpPayload?.(message));
+        // A message delivered into a HELD turn ends the hold at the write,
+        // rather than when the CLI gets round to answering. Waiting for it to
+        // speak leaves a window — measured at 8 seconds in the reported case,
+        // where a compaction was the thing it had been asked to do and said
+        // nothing for its whole first stretch — in which the run still reads as
+        // idle and the NEXT message goes straight out too. Here the fact is
+        // already known: the agent has been given work.
+        if (delivered && turn.deferredTerminal !== null) {
+          opts.logger?.debug?.(
+            `${opts.command}: releasing the hold — a follow-up was delivered into the held turn`,
+          );
+          turn.deferredTerminal = null;
+          turn.options.onEvent({ type: 'turn_held', open: 0 });
+          armSilenceDeadline(turn);
+        }
+        return delivered;
+      },
       setApprovalMode: (mode) =>
         // Same settle guard as the two writers above. It matters more here: a
         // true reported for a write the turn never read would tell the user

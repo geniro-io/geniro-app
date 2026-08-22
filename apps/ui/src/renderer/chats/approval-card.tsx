@@ -7,6 +7,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
 import { Input } from '../components/ui/input';
+import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf } from './diff-view';
@@ -34,6 +35,22 @@ const MAX_QUESTION_HEADER_LENGTH = 64;
 
 /** How long "Sending…" holds before the one-shot freeze re-arms for a retry. */
 const RESPONDED_RETRY_MS = 10_000;
+
+/**
+ * The sentence under a question saying how many of its options may be picked.
+ *
+ * Worded from the arity rather than from `multiSelect`, so the `none` case gets
+ * a line of its own: there, a click IS the submission, and the card's one-shot
+ * verdict means a mis-click cannot be taken back — which is worth a warning
+ * before the press, not a discovery after it.
+ */
+function arityHint(arity: OptionArity): string {
+  return arity === 'many'
+    ? 'Pick as many as apply.'
+    : arity === 'one'
+      ? 'Pick one.'
+      : 'Picking an option answers straight away.';
+}
 
 /** The tab title for one question — its header, or its position as a fallback. */
 function tabLabel(question: ParsedQuestion, index: number): string {
@@ -379,6 +396,15 @@ function QuestionCard({
   // and it takes exactly one pick; otherwise picks stage until Submit —
   // which is also what makes each of them re-answerable.
   const staged = questions.length > 1 || questions[0]!.multiSelect;
+  // What the ACTIVE tab's options are drawn as. Read off the tab rather than
+  // off the card, because a multi-question ask mixes the two freely: tab one
+  // may take several answers and tab two exactly one, and a card-wide shape
+  // would misdescribe whichever of them it was not built for.
+  const optionArity: OptionArity = !staged
+    ? 'none'
+    : active.multiSelect
+      ? 'many'
+      : 'one';
   // Each tab's answer: the labels it picked, plus whatever was typed there.
   // Both, so "Red, but a lighter shade" survives as one answer.
   const typedAt = (index: number): string =>
@@ -548,7 +574,7 @@ function QuestionCard({
     tabRefs.current[next]?.focus();
   };
   return (
-    <Card className="flex flex-col gap-2.5 border-primary/40 p-3">
+    <Card className="flex flex-col gap-2 border-primary/40 p-3">
       <div className="flex items-center gap-2">
         <MessageCircleQuestion
           aria-hidden="true"
@@ -626,29 +652,38 @@ function QuestionCard({
           }
           className="flex flex-col gap-1.5">
           <p className="m-0 text-sm whitespace-pre-wrap">{active.question}</p>
-          {active.multiSelect ? (
-            <p className="m-0 text-xs text-muted-foreground">
-              Pick as many as apply.
-            </p>
-          ) : null}
           {active.options.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {active.options.map((label, li) => {
-                const chosen = (picked[activeIndex] ?? []).includes(label);
-                return (
-                  <Button
-                    key={`${li}-${label}`}
-                    type="button"
-                    variant={staged && chosen ? 'secondary' : 'outline'}
-                    size="sm"
-                    disabled={responded}
-                    aria-pressed={staged ? chosen : undefined}
-                    onClick={() => pickOption(activeIndex, label)}>
-                    {label}
-                  </Button>
-                );
-              })}
-            </div>
+            <>
+              {/* The arity in words, under the question and above the options
+                  it describes — and it is said for EVERY arity, not only for
+                  multi-select. A single-pick tab used to carry no line at all,
+                  so "pick as many as apply" read as a property of that one
+                  question rather than as one of two possible answers to "how
+                  many may I choose", and its absence said nothing.
+
+                  The count rides the same line, and only where counting is a
+                  question: it is the running feedback a user two picks into a
+                  list of ten wants without counting the ticks themselves, and
+                  on a pick-one tab it is a line that can only ever say "1". */}
+              <p className="m-0 text-xs text-muted-foreground">
+                {arityHint(optionArity)}
+                {optionArity === 'many' && chosen.length > 0
+                  ? ` · ${chosen.length} selected`
+                  : ''}
+              </p>
+              <OptionList
+                options={active.options}
+                selected={chosen}
+                arity={optionArity}
+                disabled={responded}
+                label={
+                  questions.length > 1
+                    ? `Options: ${tabLabel(active, activeIndex)}`
+                    : 'Options'
+                }
+                onPick={(label) => pickOption(activeIndex, label)}
+              />
+            </>
           ) : null}
           {/* On EVERY tab, not just a lone question: it is the only way to
               answer one the agent offered no options for, and the only way
@@ -671,6 +706,11 @@ function QuestionCard({
             value={texts[activeIndex] ?? ''}
             maxLength={typedBudget}
             disabled={responded}
+            // Sized to the options above it rather than to a form field: at the
+            // default height it was the tallest thing on the card and read as
+            // the primary way to answer, when for a card that offers options it
+            // is the qualifier beside them.
+            className="h-8"
             onPaste={(event) => {
               // Only a paste carrying IMAGES is intercepted; plain text keeps
               // the field's own behaviour, which is what typing an answer is.
@@ -760,9 +800,15 @@ function QuestionCard({
           {blockedReason ? (
             <p className="m-0 text-xs text-warning">{blockedReason}</p>
           ) : null}
-          <div className="flex items-center gap-2">
+          {/* `sm` throughout: this is a row inside a transcript card, not a
+              form's own footer, and three default-height buttons under a
+              two-line question made the card's chrome taller than the question
+              it was asking. Decline is `ghost` for the same reason it is last —
+              it is the way out, not one of three equal choices. */}
+          <div className="flex items-center gap-1.5">
             <Button
               type="button"
+              size="sm"
               disabled={!canSubmit}
               onClick={() => respond(true, submission, attachments.toWire())}>
               {staged ? 'Submit answers' : 'Answer'}
@@ -773,6 +819,7 @@ function QuestionCard({
             {showTabs && nextTab !== null ? (
               <Button
                 type="button"
+                size="sm"
                 variant="outline"
                 disabled={responded}
                 onClick={() => focusTab(nextTab)}>
@@ -781,7 +828,9 @@ function QuestionCard({
             ) : null}
             <Button
               type="button"
-              variant="outline"
+              size="sm"
+              variant="ghost"
+              className="ml-auto text-muted-foreground"
               onClick={() => respond(false)}>
               Decline
             </Button>

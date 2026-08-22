@@ -89,6 +89,10 @@ describe('fetchLatestRelease', () => {
           url: 'https://example.test/download/SHA256SUMS.txt',
         },
       },
+      // The newest tag and the newest installable one are the same release
+      // here, which is the ordinary case — see the pair of tests below for the
+      // window in which they are not.
+      published: '1.4.0',
     });
   });
 
@@ -170,7 +174,7 @@ describe('fetchLatestRelease', () => {
     expect(lookup.ok && lookup.release.version).toBe('1.10.0');
   });
 
-  it('fails when NO release publishes a macOS archive', async () => {
+  it('fails when NO release publishes a macOS archive, naming the newest tag', async () => {
     mockFetch(() =>
       feedResponse([
         release('v1.4.0', ['notes.txt']),
@@ -180,10 +184,50 @@ describe('fetchLatestRelease', () => {
 
     const lookup = await fetchLatestRelease();
 
+    // "No release carries an archive" and "1.4.0's archive is still uploading"
+    // send the user to different places, and only the second is worth
+    // waiting out.
     expect(lookup).toEqual({
       ok: false,
-      error: 'no published release carries a macOS archive',
+      error: 'Geniro 1.4.0 is published, but carries no macOS archive',
     });
+  });
+
+  it('reports the newest PUBLISHED tag even when only an older one is installable', async () => {
+    // The window this exists for: publishing a release and uploading its macOS
+    // archive are two steps, and between them the newest tag carries nothing.
+    // Reading only the installable release, the caller cannot tell "you are on
+    // the latest" from "the latest is not downloadable yet" — REPORTED as
+    // "terminal not saying truth, there is a new version".
+    mockFetch(() =>
+      feedResponse([
+        release('v1.5.0', ['notes.txt']),
+        release('v1.4.0', macAssets('1.4.0')),
+      ]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup.ok).toBe(true);
+    expect(lookup.ok && lookup.release.version).toBe('1.4.0');
+    expect(lookup.ok && lookup.published).toBe('1.5.0');
+  });
+
+  it('ignores a draft or pre-release when naming the newest published tag', async () => {
+    // The published version must not report something the app would refuse to
+    // install anyway — a nightly pre-release would otherwise make every stable
+    // install permanently "behind".
+    mockFetch(() =>
+      feedResponse([
+        release('v2.0.0', macAssets('2.0.0'), { prerelease: true }),
+        release('v1.9.0', macAssets('1.9.0'), { draft: true }),
+        release('v1.4.0', macAssets('1.4.0')),
+      ]),
+    );
+
+    const lookup = await fetchLatestRelease();
+
+    expect(lookup.ok && lookup.published).toBe('1.4.0');
   });
 
   it('sends a User-Agent (GitHub rejects the API without one)', async () => {

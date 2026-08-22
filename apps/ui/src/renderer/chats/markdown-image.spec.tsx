@@ -125,4 +125,49 @@ describe('an image an agent referenced from its own markdown', () => {
     expect(src()).toBeNull();
     expect(container.textContent).toContain('chart');
   });
+
+  it('opens to full size when pressed, capped at 24rem in the flow', async () => {
+    // REPORTED as "all images should be clickable". In the transcript an image
+    // is capped so it cannot take over the thread, which is exactly why there
+    // has to be a way to see the rest of it.
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![shot](/tmp/shots/02-transcript.png)', load);
+
+    const img = container.querySelector('[data-slot="markdown-image"]')!;
+    expect(img.className).toContain('max-h-96');
+    const opener = img.closest('[data-slot="zoomable-image"]');
+    expect(opener).not.toBeNull();
+
+    act(() => {
+      opener!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const full = document.body.querySelector(
+      '[data-slot="image-viewer-image"]',
+    );
+    expect(full?.getAttribute('src')).toBe('data:image/png;base64,AAA');
+  });
+
+  it('heads the viewer with the reference, never the base64 it resolved to', async () => {
+    // An unlabelled image is the common case — an agent writing `![](x.png)`
+    // — and by the time it is on screen its `src` is a data URL. Without the
+    // reference the header would carry that string, or nothing.
+    const load = vi.fn(async () => 'data:image/png;base64,AAA');
+
+    await render('![](/tmp/shots/02-transcript.png)', load);
+
+    // Not merely the pre-load placeholder still being on screen — that stands
+    // in with the reference as its text, and would make the assertion below
+    // true with no viewer at all.
+    expect(document.body.textContent).not.toContain('/tmp/shots');
+
+    act(() => {
+      container
+        .querySelector('[data-slot="zoomable-image"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(document.body.textContent).toContain('/tmp/shots/02-transcript.png');
+  });
 });

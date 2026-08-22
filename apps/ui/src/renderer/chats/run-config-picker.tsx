@@ -13,6 +13,7 @@ import type { DaemonApis } from '../daemon-api';
 import { ApprovalModeSelect } from './approval-mode-select';
 import { BranchValueSelect } from './branch-select';
 import { ConfigDirSelect } from './config-dir-select';
+import { ContextWindowSelect } from './context-window-select';
 import { shortenPath } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
@@ -25,6 +26,7 @@ import {
 } from './run-config';
 import type { TargetWorkflow } from './target-select';
 import { TargetSelect } from './target-select';
+import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
 import { useAgentModels } from './use-agent-models';
 import { useGitInfo } from './use-git-info';
@@ -51,6 +53,7 @@ const EMPTY_DRAFT: RunConfigDraft = {
   target: 'claude',
   model: null,
   effort: null,
+  contextWindow: null,
   approval: null,
   configDir: null,
 };
@@ -467,6 +470,15 @@ function RunConfigEditor({
     vocabularyKind,
   );
   const efforts = useAgentEfforts(agentsApi, vocabularyKind);
+  // Asked WITH the draft's model, unlike the effort listing above: a window
+  // size belongs to the model outright, so there is no CLI-wide list to fall
+  // back on — asked without one the daemon answers "pick a model first", which
+  // is exactly what the chip then says.
+  const contextWindows = useAgentContextWindows(
+    agentsApi,
+    vocabularyKind,
+    draft.model,
+  );
   // Branches of the folder the DRAFT points at, not the composer's.
   const git = useGitInfo(draft.cwd === '' ? null : draft.cwd);
   const approvalModes = approvalModesFor(kind);
@@ -525,6 +537,7 @@ function RunConfigEditor({
                       target,
                       model: null,
                       effort: null,
+                      contextWindow: null,
                       approval: null,
                       configDir: null,
                     })
@@ -583,7 +596,11 @@ function RunConfigEditor({
                   models={models}
                   loading={modelsLoading}
                   value={draft.model}
-                  onChange={(model) => set({ model })}
+                  // The window belongs to the model that offered it, so a
+                  // model change clears it rather than carrying a size the new
+                  // model may not have — the same rule the daemon's settings
+                  // patch holds for an open chat.
+                  onChange={(model) => set({ model, contextWindow: null })}
                 />
               </SettingRow>
               <SettingRow label="Effort">
@@ -595,6 +612,14 @@ function RunConfigEditor({
                   unavailableReason={efforts.unavailableReason}
                   value={draft.effort}
                   onChange={(effort) => set({ effort })}
+                />
+              </SettingRow>
+              <SettingRow label="Context window">
+                <ContextWindowSelect
+                  windows={contextWindows.windows}
+                  unavailableReason={contextWindows.unavailableReason}
+                  value={draft.contextWindow}
+                  onChange={(contextWindow) => set({ contextWindow })}
                 />
               </SettingRow>
             </>

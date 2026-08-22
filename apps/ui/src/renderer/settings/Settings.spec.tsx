@@ -50,7 +50,6 @@ const geniro = {
 // The daemon client is mocked so Settings never issues a real fetch —
 // `createDaemonApis` hands back one object per launch handle, so a single factory
 // mock covers every client on it.
-const handoffApi = vi.hoisted(() => ({ resolveCliLogin: vi.fn() }));
 const cliAuthApi = vi.hoisted(() => ({
   cliLogout: vi.fn(),
   startCliLogin: vi.fn(),
@@ -70,7 +69,6 @@ const chatsApi = vi.hoisted(() => ({
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
-    handoff: handoffApi,
     cliAuth: cliAuthApi,
     capabilities: capabilitiesApi,
     chats: chatsApi,
@@ -141,7 +139,6 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ posted: true, shown: true, reason: null });
   geniro.openNotificationSettings.mockReset().mockResolvedValue(undefined);
-  handoffApi.resolveCliLogin.mockReset();
   cliAuthApi.cliLogout.mockReset().mockResolvedValue({
     agent: 'cursor-agent',
     ok: true,
@@ -175,6 +172,28 @@ describe('Settings notifications section', () => {
       (button) => button.textContent?.includes(text),
     );
   }
+
+  it('scrolls the PANE, not the reading column', async () => {
+    // REPORTED as "scroll should be for all page, not just in the middle". One
+    // element was both the centred 42rem column and the scroll container, so
+    // the scrollbar was drawn at the column's edge with dead page background
+    // either side — measured in a 1200px window, its right edge sat at x=1025,
+    // 175px short of where every other scrollbar on the machine lives.
+    //
+    // Structural, not geometric: jsdom computes no layout, so the position is
+    // unobservable here — but "which element scrolls, and is it the one that
+    // caps the width" is exactly the DOM fact that decides the position, and it
+    // is the fact that regressed.
+    await mount();
+
+    const scroller = container.querySelector('.overflow-y-auto');
+    expect(scroller).not.toBeNull();
+    expect(scroller!.className).not.toMatch(/\bmax-w-/);
+    expect(scroller!.className).not.toMatch(/\bmx-auto\b/);
+    // …and the column it scrolls is INSIDE it, still centred and still capped.
+    const column = scroller!.querySelector('.mx-auto');
+    expect(column?.className).toMatch(/\bmax-w-/);
+  });
 
   it('opens macOS’s own Notifications pane on one press', async () => {
     // The report: the app already KNEW where to send the user ("System Settings
@@ -749,7 +768,6 @@ describe('Settings — CLI sign-in', () => {
       agent: 'cursor-agent',
     });
     expect(geniro.openInTerminal).not.toHaveBeenCalled();
-    expect(handoffApi.resolveCliLogin).not.toHaveBeenCalled();
     // And the user is told what is happening, since the terminal used to be the
     // progress display.
     expect(container.textContent).toContain('Waiting for you to finish');

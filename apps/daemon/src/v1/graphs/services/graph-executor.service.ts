@@ -1075,6 +1075,11 @@ export class GraphExecutorService {
         // `listEfforts` at run start — a level it does not accept was dropped
         // there with a system item, so nothing unsupported reaches argv.
         effort: node.effort ?? null,
+        // Per NODE too, and deliberately NOT pre-checked at run start the way
+        // the effort is: the sizes belong to the model rather than to the CLI,
+        // so there is no list here to check against — the turn's own driver
+        // reports a size the model does not offer, against the live agent.
+        contextWindow: node.contextWindow ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
         // A PEER of the role rather than something joined into it: the two are

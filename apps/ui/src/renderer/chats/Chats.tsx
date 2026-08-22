@@ -25,8 +25,6 @@ import type {
 } from '../../shared/contracts';
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
-  AgentSession,
-  AgentSessionListingDto,
   AgentSkillDto as AgentSkill,
   HandoffTargetDto,
   ItemDto as ChatItem,
@@ -88,6 +86,7 @@ import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
+import { ContextWindowSelect } from './context-window-select';
 import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
@@ -132,6 +131,12 @@ import {
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { SessionPicker } from './session-picker';
+import type {
+  MergedSessions,
+  ProfileAnswer,
+  ProfiledSession,
+} from './session-search';
+import { mergeSessionListings, sessionProfiles } from './session-search';
 import {
   lastTerminalItemAt,
   settledRunStatus,
@@ -157,6 +162,7 @@ import {
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
+  subagentNamed,
   subagentTitle,
   withLiveText,
 } from './transcript-groups';
@@ -169,15 +175,18 @@ import {
   unanswerableRequestIds,
 } from './transcript-item';
 import {
+  parkWhileHeld,
   scanTurns,
   threadWorkedMs,
   TurnDurationContext,
 } from './turn-duration';
+import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useUnseenRuns } from './use-unseen-runs';
 
@@ -197,6 +206,46 @@ interface QueuedMessage {
   text: string;
   images: SendMessageDtoImagesInner[];
 }
+
+/**
+ * How long the session search waits for typing to stop.
+ *
+ * The ask is not a filter over rows the renderer already holds — the daemon
+ * reads the conversations themselves, and for cursor it spawns a process.
+ * Measured at ~900ms for a term matching nothing across a 3,029-session claude
+ * profile, so a request per keystroke would queue work the user has already
+ * typed past.
+ */
+const SESSION_SEARCH_DEBOUNCE_MS = 350;
+
+/**
+ * How many merged rows the picker shows.
+ *
+ * TWIN LIMIT: apps/daemon/src/v1/agents/services/cli-sessions.service.ts
+ * `SESSION_LIST_LIMIT`, which is per PROFILE. This is the cap on the fold of
+ * all of them, and it is the same number deliberately: a picker showing more
+ * rows than one profile's worth has stopped being a list somebody scrolls, and
+ * the search is what narrows it.
+ */
+const SESSION_LIST_LIMIT = 400;
+
+/**
+ * The start screen's content column — the greeting and the new-run composer.
+ *
+ * A string rather than a `max-w-*` class because the same value appears twice:
+ * as the column's own width and inside the expression that re-centres it on the
+ * window. Two spellings of one number is how the clamp comes to protect a width
+ * the column no longer has.
+ */
+const START_COLUMN_WIDTH = '42rem';
+
+/**
+ * The start screen's own padding — and so both the smallest gap re-centring may
+ * leave between its column and the sidebar, and the correction the re-centring
+ * expression owes: `100%` there is the padding BOX, which is narrower than the
+ * pane by exactly this on each side.
+ */
+const START_COLUMN_PAD = '1.5rem';
 
 /** Client-side only — this id never reaches the daemon. */
 const randomId = (): string => crypto.randomUUID();
@@ -386,8 +435,19 @@ export function Chats({
   // anyway.
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionAgent, setSessionAgent] = useState<CliKind>('claude');
-  const [sessionListing, setSessionListing] =
-    useState<AgentSessionListingDto | null>(null);
+  const [sessionListing, setSessionListing] = useState<MergedSessions | null>(
+    null,
+  );
+  /**
+   * What is in the search box, and the value the daemon has been asked about.
+   *
+   * TWO pieces of state and not one, because the search is now a question put
+   * to the daemon — it reads the conversations themselves — and one request per
+   * keystroke would spawn a cursor process per keystroke. The box stays
+   * instant; the ask lands once typing pauses.
+   */
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [sessionQueryAsked, setSessionQueryAsked] = useState('');
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [resumingSessionId, setResumingSessionId] = useState<string | null>(
@@ -414,6 +474,9 @@ export function Chats({
   // Per-CLI for the same reason as models: the levels are one CLI's own
   // vocabulary, and the other CLI has none at all.
   const [efforts, setEfforts] = useState<Partial<Record<CliKind, string>>>({});
+  const [contextWindows, setContextWindows] = useState<
+    Partial<Record<CliKind, string>>
+  >({});
   // Machine capabilities — gates the plan option; reading pre-warms the probe.
   // Working directory for the NEXT new chat. Seeded from the last-used folder
   // (persisted in settings); each chat records its own cwd, so this is only the
@@ -528,8 +591,26 @@ export function Chats({
    * like it stopped to work until it gets a notification from them… we should
    * not send the message to the queue while it's just waiting for listeners".
    */
-  const [holding, setHolding] = useState<ReadonlySet<string>>(new Set());
-  const holdingRef = useRef<ReadonlySet<string>>(holding);
+  /*
+   * A MAP, keyed run → when the hold was first seen, and the timestamp earns
+   * its place: the header's worked figure is not a wall clock, and a hold is
+   * exactly the kind of stretch it exists to exclude. `OpenTurn.openSince`
+   * already does this for a turn parked on an approval — "a turn parked
+   * overnight would otherwise report eight hours of work nobody did" — and an
+   * agent that stopped talking twenty minutes ago is the same claim from the
+   * other side. Measured on the reported screenshot: `44m 45s · worked 44m
+   * 45s`, of which the last twenty minutes were a dev server the turn was
+   * waiting on rather than any work.
+   *
+   * First SEEN, not first begun: a window opened mid-hold cannot know when it
+   * started, and dating it from now leaves the part it did not witness counted
+   * as work. That errs toward overstating the work, which is the direction that
+   * cannot invent a pause the agent never took.
+   */
+  const [holding, setHolding] = useState<ReadonlyMap<string, number>>(
+    new Map(),
+  );
+  const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
   useEffect(() => {
     holdingRef.current = holding;
   }, [holding]);
@@ -701,13 +782,12 @@ export function Chats({
           if (previewText !== null) {
             next.lastMessage = previewText;
           }
-          // The batch's own newest row, and only ever FORWARD: these rows are
-          // history to the renderer, so a live `run_status` that landed while
-          // the fetch was in flight already carries a fresher time than any of
-          // them and must not be rolled back to it.
-          if (lastItem.createdAt > next.updatedAt) {
-            next.updatedAt = lastItem.createdAt;
-          }
+          // `updatedAt` is deliberately NOT touched here, though the rows in
+          // hand are newer than it: this runs on ACTIVATION, so a time invented
+          // from them moves the thread in the list at the exact moment the user
+          // clicks it — which is the whole of the reported jump. The row's time
+          // is the daemon's, kept current for every thread alike by
+          // `RunStatusEvent.at`.
           return next;
         }),
       );
@@ -769,40 +849,33 @@ export function Chats({
     if (isAgentMessage(item)) {
       agentSpokeRef.current = true;
     }
-    // Mirror a streamed message into the sidebar row's preview + activity
-    // time, so the list stays live without a refetch.
+    // Mirror a streamed message into the sidebar row's preview line, so the
+    // list stays live without a refetch.
     //
     // LIVE items only, for exactly the reason the terminal-item mirror below is
     // gated: a replay carries EVERY message the thread has ever held, and each
     // one writing itself here left the line's owner decided by where the batch
     // ended. A replay takes ONE reading, in `reconcileFromTail`.
     //
-    // The two fields are written on DIFFERENT conditions, and collapsing them
-    // into one is a bug in each direction. The PREVIEW goes only to a message
-    // the rule would show (`previewMessageOf`): on a thread whose agent has
-    // replied, the user's next message must not take the line back, or it
-    // alternates owner every turn exactly as it did before. `updatedAt` goes to
-    // EVERY message, the user's included — it is the sidebar's "last activity",
-    // which is what orders the list (`sortRunsForSidebar`), so gating it on the
-    // preview rule would leave a thread you just wrote in sitting exactly where
-    // it was.
+    // The PREVIEW alone. This used to write the row's `updatedAt` too — the
+    // sidebar's ORDER — and that was the one field it had no business
+    // inventing: items reach this window for the OPEN chat only, so the thread
+    // being read crept up the list on every message while the threads working
+    // in the background stood still. The row's time is the daemon's, and it now
+    // arrives for every thread alike on `RunStatusEvent.at`.
     if (live && item.kind === 'message') {
       const text = payloadString(item.payload, 'text');
       const preview =
         text !== null && previewMessageOf([item], agentSpokeRef.current)
           ? text
           : null;
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === item.runId
-            ? {
-                ...run,
-                ...(preview === null ? {} : { lastMessage: preview }),
-                updatedAt: item.createdAt,
-              }
-            : run,
-        ),
-      );
+      if (preview !== null) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId ? { ...run, lastMessage: preview } : run,
+          ),
+        );
+      }
     }
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
@@ -831,11 +904,12 @@ export function Chats({
         setStreaming(false);
         // Mirror the daemon's settle write into the sidebar list — without this
         // a finished run keeps its stale 'running' badge until an app restart.
+        // The STATUS only: the same settle announces `RunStatusEvent.at`, which
+        // is where the row's time comes from for every thread rather than for
+        // whichever one this window happens to have open.
         setRuns((prev) =>
           prev.map((run) =>
-            run.id === item.runId
-              ? { ...run, status: settledStatus, updatedAt: item.createdAt }
-              : run,
+            run.id === item.runId ? { ...run, status: settledStatus } : run,
           ),
         );
       }
@@ -948,6 +1022,31 @@ export function Chats({
           next[kind] = effort;
         }
         void window.geniro.updateSettings({ lastEfforts: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * New-run context-window size for one CLI — remembered per CLI, like the
+   * effort, and cleared to the model's default the same way.
+   *
+   * Per CLI even though the sizes belong to the MODEL: a user who works at `1m`
+   * wants it on the next chat too, and a size the next model does not offer is
+   * drawn as unavailable by the chip rather than sent.
+   */
+  const changeContextWindow = useCallback(
+    (kind: CliKind, contextWindow: string | null): void => {
+      setContextWindows((current) => {
+        const next = { ...current };
+        if (contextWindow === null) {
+          // Absent, not empty — "no entry" IS the model's own window.
+          delete next[kind];
+        } else {
+          next[kind] = contextWindow;
+        }
+        void window.geniro.updateSettings({ lastContextWindows: next });
         return next;
       });
     },
@@ -1538,11 +1637,53 @@ export function Chats({
     () => configDirReasonFor(sessionAgent),
     [configDirReasonFor, sessionAgent],
   );
-  /** The profile to ask the picker's CLI about, or null when it takes none. */
-  const sessionConfigDir =
-    configDir !== null && sessionConfigDirUnavailableReason === null
-      ? configDir
-      : null;
+  /**
+   * EVERY profile to ask the picker's CLI about — see `session-search.ts`.
+   *
+   * The composer's own config directory is only one of them now, and it is here
+   * for the same reason the recents are: it is a profile this user has chosen,
+   * recorded in `settings.json`, which the daemon cannot enumerate.
+   */
+  const sessionProfileDirs = useMemo(
+    () =>
+      sessionProfiles(
+        configDir,
+        recentConfigDirs,
+        sessionConfigDirUnavailableReason === null,
+      ),
+    [configDir, recentConfigDirs, sessionConfigDirUnavailableReason],
+  );
+
+  /**
+   * Hold the typed query back until typing stops.
+   *
+   * `SESSION_SEARCH_DEBOUNCE_MS` rather than none: the ask reads session files
+   * on the daemon and, for cursor, spawns a process — measured at ~900ms for a
+   * term matching nothing across a 3,029-session profile — so a request per
+   * keystroke would queue work the user has already typed past.
+   */
+  useEffect(() => {
+    if (!sessionPickerOpen) {
+      return;
+    }
+    if (sessionQuery === sessionQueryAsked) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setSessionQueryAsked(sessionQuery),
+      SESSION_SEARCH_DEBOUNCE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [sessionPickerOpen, sessionQuery, sessionQueryAsked]);
+
+  // Cleared on every open rather than kept: a filter left over from last time
+  // is an empty list whose reason is off screen.
+  useEffect(() => {
+    if (sessionPickerOpen) {
+      setSessionQuery('');
+      setSessionQueryAsked('');
+    }
+  }, [sessionPickerOpen]);
 
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
@@ -1560,7 +1701,11 @@ export function Chats({
         // otherwise read a held run as a working agent and queue the user's
         // message behind delegates that have minutes left to run.
         setHolding(
-          new Set(all.filter((r) => r.holdingFor > 0).map((r) => r.id)),
+          new Map(
+            all
+              .filter((r) => r.holdingFor > 0)
+              .map((r) => [r.id, Date.now()] as const),
+          ),
         );
       })
       .catch((err: unknown) => setError(String(err)))
@@ -1701,6 +1846,7 @@ export function Chats({
       }
       setModels(s.lastModels ?? {});
       setEfforts(s.lastEfforts ?? {});
+      setContextWindows(s.lastContextWindows ?? {});
     });
     // Which CLIs are actually on this machine. The picker used to offer every
     // known kind unconditionally, so an agent that is not installed — or whose
@@ -1822,7 +1968,15 @@ export function Chats({
           return next;
         });
       }
-      if (status !== null || parked !== undefined) {
+      // The moment the daemon wrote the row, and the ONE thing that moves this
+      // list's order — see `RunStatusEvent.at`. Without it a thread working in
+      // the background kept the `updatedAt` it was loaded with for the whole
+      // session, and the first thing that corrected it was the user opening the
+      // thread: the reported "as soon as I click a thread it jumps to the top".
+      // Present only on an announce that really wrote the row, so this cannot
+      // run ahead of what the next refetch will say.
+      const at = event.at;
+      if (status !== null || parked !== undefined || at !== undefined) {
         setRuns((prev) =>
           prev.map((run) =>
             run.id === event.runId
@@ -1830,6 +1984,7 @@ export function Chats({
                   ...run,
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
+                  ...(at === undefined ? {} : { updatedAt: at }),
                 }
               : run,
           ),
@@ -1889,12 +2044,15 @@ export function Chats({
             : status !== null
               ? false
               : prev.has(event.runId);
+        // Unchanged means unchanged, and that is what preserves the START: a
+        // hold re-announces on every unit that reports, so rewriting the entry
+        // each time would restamp it and the parked stretch would never grow.
         if (held === prev.has(event.runId)) {
           return prev;
         }
-        const next = new Set(prev);
+        const next = new Map(prev);
         if (held) {
-          next.add(event.runId);
+          next.set(event.runId, Date.now());
         } else {
           next.delete(event.runId);
         }
@@ -2179,6 +2337,11 @@ export function Chats({
           // Same rule as the model: omitted entirely on the CLI default. A CLI
           // with no effort control never has an entry, since its chip is absent.
           ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
+          // Same rule again. A size the chosen model does not offer is drawn
+          // as unavailable by the chip and never reaches here.
+          ...(contextWindows[agentKind]
+            ? { contextWindow: contextWindows[agentKind] }
+            : {}),
           // Sent only when this CLI honours the composer's pick; otherwise
           // omitted so the daemon applies its own default for that agent —
           // which is also what happens while capabilities are still loading.
@@ -2223,6 +2386,7 @@ export function Chats({
       approval?: ChatApprovalMode;
       model?: string | null;
       effort?: string | null;
+      contextWindow?: string | null;
     }): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -2321,24 +2485,48 @@ export function Chats({
     let stale = false;
     setSessionsLoading(true);
     setSessionsError(null);
-    void agentsApi
-      .listAgentSessions({
-        agent: sessionAgent,
-        // The profile THIS CLI takes, so the list and the resume agree about
-        // which account they are talking about — an id listed under one
-        // profile is not resumable under another.
-        ...(sessionConfigDir === null ? {} : { configDir: sessionConfigDir }),
-      })
-      .then((listing) => {
-        if (!stale) {
-          setSessionListing(listing);
+    // One ask per PROFILE, folded into one list. Concurrent rather than in
+    // turn: they are independent questions to independent stores, and asking
+    // them sequentially would make opening the picker cost the sum of every
+    // account the user has.
+    void Promise.all(
+      sessionProfileDirs.map(async (profile): Promise<ProfileAnswer> =>
+        agentsApi
+          .listAgentSessions({
+            agent: sessionAgent,
+            // The profile is part of the QUESTION, and the answer's rows are
+            // tagged with it — an id listed under one profile is not
+            // resumable under another, so the import has to know which store
+            // the row the user pressed came out of.
+            ...(profile === null ? {} : { configDir: profile }),
+            // Searched on the daemon, which is the only side that can read
+            // what was SAID in a conversation. Absent for an empty box, so
+            // the unfiltered listing is exactly the request it always was.
+            ...(sessionQueryAsked === '' ? {} : { query: sessionQueryAsked }),
+          })
+          .then((listing) => ({ configDir: profile, listing, error: null }))
+          // Caught PER PROFILE: one directory the user has since moved away
+          // must cost its own rows and not the whole dialog, which is what a
+          // single rejected `Promise.all` would do.
+          .catch((err: unknown) => ({
+            configDir: profile,
+            listing: null,
+            error: daemonErrorDetail(err),
+          })),
+      ),
+    )
+      .then((answers) => {
+        if (stale) {
+          return;
         }
-      })
-      .catch((err: unknown) => {
-        if (!stale) {
-          setSessionListing(null);
-          setSessionsError(daemonErrorDetail(err));
-        }
+        setSessionListing(mergeSessionListings(answers, SESSION_LIST_LIMIT));
+        // Only when NOTHING answered. A profile that failed beside profiles
+        // that did is reported in the merged `partialReason`, under the rows —
+        // an error strip over a working list reads as the list being wrong.
+        const failed = answers.filter((answer) => answer.listing === null);
+        setSessionsError(
+          failed.length === answers.length ? (failed[0]?.error ?? null) : null,
+        );
       })
       .finally(() => {
         if (!stale) {
@@ -2348,7 +2536,13 @@ export function Chats({
     return () => {
       stale = true;
     };
-  }, [sessionPickerOpen, sessionAgent, sessionConfigDir, agentsApi]);
+  }, [
+    sessionPickerOpen,
+    sessionAgent,
+    sessionProfileDirs,
+    sessionQueryAsked,
+    agentsApi,
+  ]);
 
   /**
    * Take over one of those conversations: create a chat bound to it and open
@@ -2366,7 +2560,7 @@ export function Chats({
    * empty and fills in later is indistinguishable from one that failed.
    */
   const resumeSession = useCallback(
-    async (session: AgentSession): Promise<void> => {
+    async ({ session, configDir: profile }: ProfiledSession): Promise<void> => {
       if (session.cwd === null) {
         return;
       }
@@ -2384,9 +2578,13 @@ export function Chats({
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
-            ...(sessionConfigDir === null
-              ? {}
-              : { configDir: sessionConfigDir }),
+            ...(contextWindows[sessionAgent]
+              ? { contextWindow: contextWindows[sessionAgent] }
+              : {}),
+            // The profile the ROW was listed under, never the composer's:
+            // with several accounts on the list, resuming under the wrong one
+            // asks a CLI to continue a session that is not in its store.
+            ...(profile === null ? {} : { configDir: profile }),
           },
         });
         setRuns((prev) => [run, ...prev]);
@@ -2398,7 +2596,7 @@ export function Chats({
         setResumingSessionId(null);
       }
     },
-    [sessionAgent, models, efforts, sessionConfigDir, chatApi, activateRun],
+    [sessionAgent, models, efforts, chatApi, activateRun],
   );
 
   /**
@@ -3245,6 +3443,26 @@ export function Chats({
       : `Checking whether ${agent} can take a message mid-turn…`;
   }, [capabilities, activeRun]);
 
+  /**
+   * Whether sending one of those messages now STOPS what the agent is doing.
+   *
+   * From the daemon for the same reason the sentence above is, and it is a
+   * separate question rather than more of that sentence: both shipped CLIs take
+   * a message mid-turn, and only one of them keeps working on what it was
+   * doing. Cursor's channel is a second `session/prompt`, which cancels the
+   * first — so on that CLI a press costs the tool call in flight, and the
+   * control has to say so BEFORE it is pressed. False while the answer is
+   * loading: the milder claim is the safe one to make about a control the user
+   * cannot successfully press yet anyway.
+   */
+  const steerInterrupts = useMemo((): boolean => {
+    const agent = activeRun?.agentKind;
+    return agent
+      ? ((capabilities?.followUps ?? []).find((f) => f.agent === agent)
+          ?.interrupts ?? false)
+      : false;
+  }, [capabilities, activeRun]);
+
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
   // folder. A new-run workflow target resolves through its SELECTED trigger
@@ -3301,6 +3519,15 @@ export function Chats({
   // about, or none at all for a workflow target — narrowed to that composer's
   // own model, which is what makes the chip offer only what will apply.
   const agentEfforts = useAgentEfforts(agentsApi, modelKind, effortModel);
+  // The window sizes THIS composer's model offers, scoped exactly like the
+  // effort listing above and for a stronger version of the same reason: twelve
+  // of a cursor account's models carry the axis at all and their vocabularies
+  // differ, so a listing asked without the model has nothing to answer with.
+  const agentContextWindows = useAgentContextWindows(
+    agentsApi,
+    modelKind,
+    effortModel,
+  );
   // ONE git read: the landing composer's, following the folder picked for the
   // NEXT run — the only place a branch is chosen. The transcript composer used
   // to run a second read for a read-only branch chip beside its own cwd; that
@@ -3323,9 +3550,19 @@ export function Chats({
             configDir,
             models,
             efforts,
+            contextWindows,
             approval: approvalMode,
           }),
-    [folder, target, git.info, configDir, models, efforts, approvalMode],
+    [
+      folder,
+      target,
+      git.info,
+      configDir,
+      models,
+      efforts,
+      contextWindows,
+      approvalMode,
+    ],
   );
 
   /**
@@ -3373,6 +3610,7 @@ export function Chats({
         }
         changeModel(applied.agentKind, applied.model);
         changeEffort(applied.agentKind, applied.effort);
+        changeContextWindow(applied.agentKind, applied.contextWindow);
       }
 
       if (applied.branch === null) {
@@ -3743,14 +3981,12 @@ export function Chats({
    *
    * The item FIRST, and never the later of the two, which is what this used to
    * take. The argument for the max was that items do not touch `updatedAt`, so
-   * the row can sit before the stop it describes — true of the row the DAEMON
-   * writes, and not true of the one on screen: {@link addItem} mirrors every
-   * streamed message's timestamp onto `updatedAt` to keep the sidebar's "3m ago"
-   * live. So a delegate's own row pushes the row stamp past itself, and the max
-   * makes "has this delegate spoken since the run settled?" unanswerable — every
-   * delegate always reads as having spoken exactly no later than the settle.
-   * That is not a hypothetical: it is what the spec for the badge measured the
-   * moment the rule was asked about a `completed` run.
+   * the row can sit before the stop it describes — and the max answers that by
+   * making "has this delegate spoken since the run settled?" unanswerable, since
+   * a delegate's own row would push the stamp past itself and every delegate
+   * would read as having spoken exactly no later than the settle. That is not a
+   * hypothetical: it is what the spec for the badge measured the moment the rule
+   * was asked about a `completed` run.
    *
    * The fallback still matters, because the case the max was reaching for is
    * real in the other direction: a settle path that writes NO terminal item (a
@@ -3788,9 +4024,10 @@ export function Chats({
             streaming,
             awaitingAnswer: awaitingAnswer.size > 0,
             subagentRunning,
+            heldForBackgroundWork: holding.has(activeRun.id),
           })
         : 'idle',
-    [activeRun, streaming, awaitingAnswer, subagentRunning],
+    [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -3832,6 +4069,14 @@ export function Chats({
     [turnDurations],
   );
   /**
+   * What this thread has SPENT, for the header beside what it worked.
+   *
+   * Re-asked on `threadWorked.turns` — the count of settled turns — because
+   * that is the only thing that moves the total, and a count changes exactly
+   * once per turn rather than on every delta the turn streams.
+   */
+  const threadTotals = useChatTotals(chatApi, activeRunId, threadWorked.turns);
+  /**
    * What THIS run is doing, for the live rows — the same sentence the sidebar
    * badge carries, so the transcript and the badge cannot say different things
    * about one run.
@@ -3840,6 +4085,25 @@ export function Chats({
     activeRunId === null ? null : (activities.get(activeRunId) ?? null);
   /** This chat's turn is held for background work — see {@link holding}. */
   const activeRunHeld = activeRunId !== null && holding.has(activeRunId);
+  /**
+   * The open turn as the HEADER should measure it: the hold counted as a parked
+   * stretch, exactly like an approval card's wait.
+   *
+   * The header's figure is "how much work is in here", not how long the window
+   * has been open, and while a turn is held nobody is working — the agent has
+   * said its piece and the process is alive for its listeners. Folded in here
+   * rather than inside `scanTurns`, because a hold leaves NO transcript row to
+   * scan for (`turn_held` maps to no item, deliberately): it is a live fact
+   * about the run, and this is where the live facts are.
+   */
+  const openTurnForHeader = useMemo(
+    () =>
+      parkWhileHeld(
+        turnScan.open,
+        activeRunId === null ? undefined : holding.get(activeRunId),
+      ),
+    [turnScan.open, holding, activeRunId],
+  );
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -4098,52 +4362,6 @@ export function Chats({
     [resolveHandoff, openResolvedTarget],
   );
 
-  /**
-   * Sign one CLI itself back in, in the user's own terminal.
-   *
-   * The account, not one of its MCP servers — {@link signInToMcpServer} above
-   * fixes a server the CLI could not authenticate, this fixes the CLI's own
-   * lapsed session, and the wrong one sends the user to a command that cannot
-   * fix what they hit.
-   *
-   * No folder is passed: an account is machine-wide, and the row that offers
-   * this may belong to a run with no working directory at all. The `cwd` the
-   * daemon answers with is therefore the home directory it falls back to — a
-   * sign-in does not care where it runs, and the IPC contract takes a validated
-   * absolute path either way.
-   *
-   * The run's CONFIG DIRECTORY is passed, and it is the one thing here that is
-   * not machine-wide: credentials live in that folder, so a chat pointed at a
-   * second profile must be signed in THERE. Without it the user signs into
-   * their default account and watches the same turn fail again — which is
-   * exactly the failure this control exists to end.
-   */
-  const signInToCli = useCallback(
-    async (kind: CliKind, configDir: string | null) => {
-      await openResolvedTarget(
-        () =>
-          handoffApi.resolveCliLogin({
-            agent: kind,
-            ...(configDir ? { configDir } : {}),
-          }),
-        `${kind} cannot be signed in from here`,
-      );
-    },
-    [handoffApi, openResolvedTarget],
-  );
-
-  /**
-   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
-   * to. Null when there is no run, or when the run names no agent — an error
-   * row then renders without an action rather than with one that cannot know
-   * which CLI to open.
-   */
-  const signInToActiveCli = useMemo(() => {
-    const kind = activeRun?.agentKind;
-    const configDir = activeRun?.configDir ?? null;
-    return kind ? () => void signInToCli(kind, configDir) : null;
-  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
-
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
   /**
@@ -4154,8 +4372,12 @@ export function Chats({
    * control of its own; a published artifact even sprang it open, on a
    * baseline taken from the replay so a re-opened thread would not. All of
    * that was machinery for deciding when to show a panel that turned out to be
-   * wanted always. The one control that survives is the RESIZE handle, whose
-   * width is remembered — narrow is how someone puts it away now.
+   * wanted always.
+   *
+   * Putting it away is the PANEL's own business now, not this flag's: it folds
+   * to a rail it can be reopened from, so the column is always there and the
+   * control never has to be hosted anywhere else. See `collapsed` in
+   * `agents-panel.tsx`.
    */
   const showAgentsPanel = activeRunId !== null;
   /**
@@ -4209,28 +4431,42 @@ export function Chats({
   );
 
   /**
-   * A sign-in the DAEMON is running for one of this chat's MCP servers.
+   * A sign-in the DAEMON is running for this chat — one of its MCP servers, or
+   * the CLI's own lapsed account.
    *
    * The same controller the Settings account sign-in uses, deliberately: one
-   * lifecycle, one poll, one cancel. Its `onSettled` re-reads the LISTING,
-   * which is the only thing that can say whether the server is authenticated
-   * now — an exit status says the command finished, which is a different claim.
+   * lifecycle, one poll, one cancel. ONE INSTANCE for both of this screen's
+   * flows, for the reason the hook holds a single sign-in at all — two browser
+   * challenges open at once are indistinguishable in the browser, and the second
+   * reads as the first having failed.
+   *
+   * `onSettled` dispatches on which flow settled, because the two are answered
+   * by different reads: a server's by the LISTING, an account's by the CLI's own
+   * status. Neither is answered by an exit status, which only says the command
+   * finished.
    */
   // Read through a ref so the controller's `onSettled` is not re-created on
   // every render of the listing hook — the poll is keyed on identity, and a
   // fresh callback each tick is how one ends up never firing.
   const mcpRefreshRef = useRef<() => void>(() => undefined);
   mcpRefreshRef.current = mcp.refresh;
-  const mcpLogin = useCliLogin(apis, () => mcpRefreshRef.current());
+  const login = useCliLogin(apis, (settled) => {
+    if (settled.server !== null) {
+      mcpRefreshRef.current();
+    }
+    // An account sign-in re-reads nothing: what it changed lives in the CLI's
+    // own credential store, and this screen shows no account state to refresh.
+    // The panel's own last line is the report, and the next turn is the test.
+  });
   // A sign-in the daemon REFUSED never becomes a session, so the controller's
   // own panel — which only exists once there is one — has nowhere to show it.
   // Without this the press is silent: the button appears to do nothing, which
   // is precisely the failure the progress panel was added to end.
   useEffect(() => {
-    if (mcpLogin.error !== null) {
-      setError(mcpLogin.error);
+    if (login.error !== null) {
+      setError(login.error);
     }
-  }, [mcpLogin.error]);
+  }, [login.error]);
 
   /**
    * Sign one CLI in to one MCP server, WITHOUT opening a terminal window.
@@ -4270,7 +4506,7 @@ export function Chats({
         );
         return;
       }
-      await mcpLogin.startMcp({
+      await login.startMcp({
         kind,
         server,
         cwd,
@@ -4280,8 +4516,51 @@ export function Chats({
         configDir: activeRun?.configDir ?? null,
       });
     },
-    [mcpLogin, activeRun?.cwd, activeRun?.configDir],
+    [login, activeRun?.cwd, activeRun?.configDir],
   );
+
+  /**
+   * Sign one CLI itself back in, WITHOUT opening a terminal window.
+   *
+   * The account, not one of its MCP servers — {@link signInToMcpServer} above
+   * fixes a server the CLI could not authenticate, this fixes the CLI's own
+   * lapsed session, and the wrong one sends the user to a command that cannot
+   * fix what they hit.
+   *
+   * REPORTED as "after click on sign in - it will open terminal. and after
+   * redirect and auth nothing will happens". It used to resolve the invocation
+   * and hand it to the user's terminal, which put the only surface that knows
+   * how the sign-in is going outside the app entirely: nothing in geniro was
+   * watching that window, so a finished browser round-trip changed nothing on
+   * screen and the failed turn sat there looking exactly as it had. The daemon
+   * has run this flow itself since the Settings card stopped opening a shell
+   * (`/v1/auth/login` — it allocates the pty, reads the CLI's own output, and
+   * takes a pasted code); this was the last caller still going out to one.
+   *
+   * The run's CONFIG DIRECTORY is passed, and it is the one thing here that is
+   * not machine-wide: credentials live in that folder, so a chat pointed at a
+   * second profile must be signed in THERE. Without it the user signs into
+   * their default account and watches the same turn fail again — which is
+   * exactly the failure this control exists to end.
+   */
+  const signInToCli = useCallback(
+    async (kind: CliKind, configDir: string | null) => {
+      await login.start(kind, configDir);
+    },
+    [login],
+  );
+
+  /**
+   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
+   * to. Null when there is no run, or when the run names no agent — an error
+   * row then renders without an action rather than with one that cannot know
+   * which CLI to open.
+   */
+  const signInToActiveCli = useMemo(() => {
+    const kind = activeRun?.agentKind;
+    const configDir = activeRun?.configDir ?? null;
+    return kind ? () => void signInToCli(kind, configDir) : null;
+  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
@@ -4295,16 +4574,35 @@ export function Chats({
    * what stops a chat sitting on an unanswered question from showing a spinner
    * for as long as the user is looking elsewhere.
    */
+  /**
+   * That same reading taken WITHOUT the live plane — what the row would say if
+   * the user were looking somewhere else.
+   *
+   * Split out because the ORDER has to be computed from it (see
+   * `sortRunsForSidebar`): every input to the sort must mean the same thing for
+   * every run, or focusing a thread moves it. The badge keeps the focused
+   * reading, which is richer and is about ONE row rather than about where the
+   * rows go.
+   */
+  const unfocusedRunStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      displayRunStatus({
+        status: run.status,
+        streaming: false,
+        awaitingAnswer: run.awaiting !== null,
+        // The SAME set the focused branch reads, so a row cannot say one thing
+        // while the header beside it says another. It covers every run, not
+        // just this one: it is seeded from the run list's own `holdingFor` and
+        // then kept current by the live announce, which is what makes it right
+        // for a thread the user is not looking at.
+        heldForBackgroundWork: holding.has(run.id),
+      }),
+    [holding],
+  );
   const sidebarRunStatus = useCallback(
     (run: ChatRun): RunStatusKind =>
-      run.id === activeRunId
-        ? activeRunStatus
-        : displayRunStatus({
-            status: run.status,
-            streaming: false,
-            awaitingAnswer: run.awaiting !== null,
-          }),
-    [activeRunId, activeRunStatus],
+      run.id === activeRunId ? activeRunStatus : unfocusedRunStatus(run),
+    [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
 
   const notificationLabel = useCallback(
@@ -4367,8 +4665,8 @@ export function Chats({
   // shows from that same order, so sorting here is what puts a thread waiting
   // on an answer both at the top of its group AND above the "Show all" cut.
   const orderedRuns = useMemo(
-    () => sortRunsForSidebar(runs, { statusOf: sidebarRunStatus, unseen }),
-    [runs, sidebarRunStatus, unseen],
+    () => sortRunsForSidebar(runs, { statusOf: unfocusedRunStatus }),
+    [runs, unfocusedRunStatus],
   );
 
   const sections = useMemo(
@@ -4687,8 +4985,41 @@ export function Chats({
                   // targets, the folder it runs in, and the trigger the run starts from
                   // (a run only starts by firing one), with a round send control.
                   <section className="flex min-h-0 flex-col overflow-y-auto">
-                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-6">
-                      <div className="flex w-full max-w-2xl flex-col gap-5">
+                    <div
+                      className="flex min-h-0 flex-1 flex-col items-center justify-center"
+                      style={{ padding: START_COLUMN_PAD }}>
+                      {/* Centred on the WINDOW, not on the pane it lives in.
+                          Reported as "this content on the start screen should
+                          be in the middle of the screen", and measured: the
+                          card sat a constant 240px right of the window centre
+                          at every width — exactly half the 480px of chrome
+                          (nav rail + chat list) to its left, because
+                          `justify-center` centres it in what is left over.
+
+                          The shift is derived rather than hardcoded, which is
+                          the whole reason it is CSS and not a number: `100%`
+                          is this pane's width and `100vw` the window's, so
+                          their difference IS the chrome beside it — and it
+                          re-derives itself when the rail is collapsed or the
+                          chat list dragged wider, which a constant could not.
+                          In a `justify-center` box a right margin of M moves
+                          the child left by M/2, so M = chrome lands it dead
+                          centre.
+
+                          Clamped, because exact centring is not always
+                          geometrically possible: it needs the card to fit in
+                          `window − 2 × chrome`, which at 1440 is 480px against
+                          a 672px composer. The second term spends only the
+                          slack the pane actually has, keeping a gutter to the
+                          sidebar — so the card moves as far as it can and
+                          degrades to plain pane-centring when there is no room
+                          at all, instead of sliding under the chat list. */}
+                      <div
+                        className="flex w-full flex-col gap-5"
+                        style={{
+                          maxWidth: START_COLUMN_WIDTH,
+                          marginRight: `max(0px, min(calc(100vw - 100% - 2 * ${START_COLUMN_PAD}), calc(100% - ${START_COLUMN_WIDTH} - 2 * ${START_COLUMN_PAD})))`,
+                        }}>
                         <h2 className="text-center text-xl font-semibold tracking-tight">
                           What are we building?
                         </h2>
@@ -4862,6 +5193,16 @@ export function Chats({
                                       changeEffort(agentKind, effort)
                                     }
                                   />
+                                  <ContextWindowSelect
+                                    windows={agentContextWindows.windows}
+                                    value={contextWindows[agentKind] ?? null}
+                                    unavailableReason={
+                                      agentContextWindows.unavailableReason
+                                    }
+                                    onChange={(size) =>
+                                      changeContextWindow(agentKind, size)
+                                    }
+                                  />
                                 </>
                               ) : null}
                             </ComposerBottomRow>
@@ -4928,6 +5269,7 @@ export function Chats({
                         turnStartedAt={turnStartedAt}
                         workedMs={threadWorked.ms}
                         turnCount={threadWorked.turns}
+                        costUsd={threadTotals.costUsd}
                         // Only while the run is actually live. A transcript
                         // whose last row is a user message describes an open
                         // turn whether or not one is still running — a daemon
@@ -4939,7 +5281,7 @@ export function Chats({
                         openTurn={
                           isSettledRunStatus(activeRunStatus)
                             ? null
-                            : turnScan.open
+                            : openTurnForHeader
                         }
                         runningSubagents={sidePanelLive.subagents}
                         tasks={sidePanelLive.tasks}
@@ -5120,6 +5462,33 @@ export function Chats({
                       />
                     ) : null}
 
+                    {/* The ACCOUNT sign-in the transcript's error row started,
+                        pinned here rather than drawn on that row. The row is
+                        somewhere in a scrollback the user is free to leave, and
+                        this flow needs a place they can still see when the
+                        browser hands them back — including the code field claude
+                        asks for, which is unusable off-screen. Above the
+                        composer is where this chat already puts everything the
+                        user has to act on (the queue, the failure banner).
+
+                        The MCP half of the same controller renders in the dialog
+                        it was pressed in; `server` is which one this is. */}
+                    {login.login && login.login.server === null ? (
+                      // `px-4` for the panel's own `-mx-4` to cancel against:
+                      // it is built as a full-bleed band inside a card that
+                      // pads its content, and dropped into an unpadded column
+                      // the negative margin hangs it over both edges.
+                      <div className="shrink-0 px-4">
+                        <CliLoginProgress
+                          session={login.login.session}
+                          onSubmitCode={(code) => void login.submitCode(code)}
+                          onCancel={() => void login.cancel()}
+                          onDismiss={login.dismiss}
+                          error={login.error}
+                        />
+                      </div>
+                    ) : null}
+
                     {/* No rule above the composer. The card below already has
                         its own border and its own shadow, so the hairline was
                         a second edge a few pixels above the first — it read as
@@ -5130,6 +5499,7 @@ export function Chats({
                       <QueuedStrip
                         messages={queued}
                         steerUnavailableReason={steerUnavailableReason}
+                        steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
                         onEdit={editQueued}
                         onRemove={removeQueued}
@@ -5368,6 +5738,17 @@ export function Chats({
                                     void changeRunSettings({ effort })
                                   }
                                 />
+                                <ContextWindowSelect
+                                  windows={agentContextWindows.windows}
+                                  value={activeRun.contextWindow}
+                                  nextTurnOnly={streaming}
+                                  unavailableReason={
+                                    agentContextWindows.unavailableReason
+                                  }
+                                  onChange={(contextWindow) =>
+                                    void changeRunSettings({ contextWindow })
+                                  }
+                                />
                                 {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable
                           at any time — mid-turn included, since the daemon
@@ -5500,15 +5881,19 @@ export function Chats({
                     onSetMcpEnabled={mcp.setEnabled}
                     onSignInMcp={signInToMcpServer}
                     mcpLoginPanel={
-                      mcpLogin.login ? (
+                      // The SERVER half of the one controller. An account
+                      // sign-in shares its lifecycle but not its home: it is
+                      // started from a failed turn in the transcript and shown
+                      // there (see the band above the composer), so routing it
+                      // here would put the progress inside a dialog the user
+                      // never opened.
+                      login.login && login.login.server !== null ? (
                         <CliLoginProgress
-                          session={mcpLogin.login.session}
-                          onSubmitCode={(code) =>
-                            void mcpLogin.submitCode(code)
-                          }
-                          onCancel={() => void mcpLogin.cancel()}
-                          onDismiss={mcpLogin.dismiss}
-                          error={mcpLogin.error}
+                          session={login.login.session}
+                          onSubmitCode={(code) => void login.submitCode(code)}
+                          onCancel={() => void login.cancel()}
+                          onDismiss={login.dismiss}
+                          error={login.error}
                         />
                       ) : null
                     }
@@ -5528,8 +5913,14 @@ export function Chats({
                   open={detailSubagent !== null}
                   onClose={() => setDetailSubagentId(null)}
                   title={
+                    // The category prefix is dropped for a delegate that has no
+                    // name of its own, because the fallback title already opens
+                    // with it — reported as the title reading
+                    // `Sub-agent · sub-agent`, which names nothing twice.
                     detailSubagent
-                      ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                      ? subagentNamed(detailSubagent)
+                        ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                        : subagentTitle(detailSubagent)
                       : 'Sub-agent'
                   }
                   className="max-w-2xl">
@@ -5599,13 +5990,15 @@ export function Chats({
                   open={sessionPickerOpen}
                   agent={sessionAgent}
                   onAgentChange={setSessionAgent}
-                  configDir={sessionConfigDir}
+                  profiles={sessionProfileDirs}
+                  query={sessionQuery}
+                  onQueryChange={setSessionQuery}
                   listing={sessionListing}
                   loading={sessionsLoading}
                   error={sessionsError}
                   busyId={resumingSessionId}
                   onClose={() => setSessionPickerOpen(false)}
-                  onResume={(session) => void resumeSession(session)}
+                  onResume={(row) => void resumeSession(row)}
                 />
                 <RunConfigPicker
                   open={runConfigPickerOpen}

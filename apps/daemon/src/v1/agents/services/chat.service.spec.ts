@@ -4089,6 +4089,10 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       // Every status write says the run is parked on nothing: a settle sweeps
       // its cards first, and the only non-terminal write is a fresh turn's.
       awaiting: null,
+      // …and WHEN the row was written, which is what the sidebar orders on.
+      // Only a write carries it: the activity announce a few tests below
+      // asserts its own exact shape, and that one has no `at` in it.
+      at: expect.any(String) as unknown as string,
     });
 
     claude.emit({
@@ -4104,6 +4108,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
+      at: expect.any(String) as unknown as string,
       // A settle the agent said nothing on carries an explicit null, never a
       // missing field: the client holds the last sentence it was given, so an
       // absent one leaves the PREVIOUS turn's closing words standing and this
@@ -4186,6 +4191,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
+      at: expect.any(String) as unknown as string,
       summary: null,
       housekeeping: true,
     });
@@ -4232,6 +4238,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'completed',
       activity: null,
       awaiting: null,
+      at: expect.any(String) as unknown as string,
       summary: 'Fixed the parser — 3 tests green.',
     });
   });
@@ -4256,6 +4263,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'failed',
       activity: null,
       awaiting: null,
+      at: expect.any(String) as unknown as string,
       // The failure's OWN message rides the announcement: the client that has
       // to act on it is the one not looking at this chat, and a notification
       // saying only "the turn failed" sends the user to find out what did.
@@ -4273,6 +4281,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       status: 'cancelled',
       activity: null,
       awaiting: null,
+      at: expect.any(String) as unknown as string,
       summary: null,
     });
   });
@@ -4293,6 +4302,9 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       // The activity announce asserts NO status — it never read the run.
       status: null,
       activity: 'running Bash',
+      // Exact equality, so the ABSENT `at` is pinned here: this announce
+      // touches no row, and stamping it would put every client's sidebar order
+      // ahead of the database until the next refetch pulled it back.
     });
     claude.finish();
     await drain();
@@ -4553,14 +4565,18 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
-  it('announces that the conversation was compacted, and words it by trigger', async () => {
-    // C1's ONLY user-visible half. The two shipped specs pin the parse and the
-    // not-a-transcript-row drop; delete this announcement entirely and both
-    // stay green, so the one thing the user actually sees was unpinned.
+  it('takes the compaction phrase back DOWN when it finishes, rather than rewording it', async () => {
+    // It used to announce a past-tense sentence here, worded by trigger
+    // ("compacted the conversation", or "… to free up context"). The activity
+    // channel means "what this run is doing right now", and the transcript
+    // draws it as a spinning row with a climbing clock — so on a `/compact`,
+    // whose whole turn IS the compaction, nothing came along to replace it and
+    // the row read `⟳ compacted the conversation · 54s` directly beneath the
+    // durable summary that already said it was over.
     //
-    // It exists to explain a momentary event: the context meter dropping by
-    // most of the window between one request and the next, which with nothing
-    // said reads as the meter being broken.
+    // Nothing is lost: the CLI's own summary lands as a `system` row carrying
+    // the figures the phrase never had. Measured on the author's own database,
+    // 14 compactions produced 14 such rows.
     const { service, claude, statuses } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -4571,33 +4587,41 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
     claude.emit({
       type: 'context_compacted',
-      phase: 'finished',
-      trigger: 'auto',
-      preTokens: 180_000,
-      postTokens: 20_000,
+      phase: 'started',
+      trigger: 'manual',
+      preTokens: null,
+      postTokens: null,
     });
     await drain();
-    expect(statuses).toContainEqual({
+    expect(statuses.at(-1)).toEqual({
       runId: run.id,
       status: null,
-      activity: 'compacted the conversation to free up context',
+      activity: 'compacting the conversation',
     });
 
-    // A compaction the USER asked for is not explained as housekeeping — they
-    // know why it happened, so the reason is dropped rather than restated.
-    claude.emit({
-      type: 'context_compacted',
-      phase: 'finished',
-      trigger: 'manual',
-      preTokens: 180_000,
-      postTokens: 20_000,
-    });
-    await drain();
-    expect(statuses).toContainEqual({
-      runId: run.id,
-      status: null,
-      activity: 'compacted the conversation',
-    });
+    for (const trigger of ['manual', 'auto'] as const) {
+      claude.emit({
+        type: 'context_compacted',
+        phase: 'finished',
+        trigger,
+        preTokens: 180_000,
+        postTokens: 20_000,
+      });
+      await drain();
+      // Cleared, whichever asked for it — and asserted as the LAST announce
+      // rather than merely present, since the phrase standing is exactly the
+      // defect.
+      expect(statuses.at(-1)).toEqual({
+        runId: run.id,
+        status: null,
+        activity: null,
+      });
+    }
+
+    // And no past-tense wording anywhere on the channel.
+    expect(
+      statuses.filter((s) => (s.activity ?? '').startsWith('compacted')),
+    ).toEqual([]);
 
     claude.finish();
     await drain();

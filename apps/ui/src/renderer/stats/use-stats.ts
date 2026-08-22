@@ -6,6 +6,15 @@ import type { DaemonClient } from '../daemon-client';
 
 /** The periods the page offers, and how far back each one reaches. */
 export const STATS_PERIODS = [
+  // REPORTED as "we need to add today". It is the shortest period and the one
+  // asked most often — "what has this cost me so far today" — and the page had
+  // no way to ask it: the narrowest window was a week, in which today is one
+  // column of seven and the headline figure is six other days.
+  //
+  // `days: 1` is a whole day, not 24 hours: the range still starts at local
+  // midnight, so this is the calendar day the user is in rather than a window
+  // that slides backwards into yesterday as the afternoon wears on.
+  { id: 'today', label: 'Today', days: 1 },
   { id: '7d', label: '7 days', days: 7 },
   { id: '30d', label: '30 days', days: 30 },
   { id: '90d', label: '90 days', days: 90 },

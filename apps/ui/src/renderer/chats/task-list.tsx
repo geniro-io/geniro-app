@@ -6,10 +6,11 @@ import {
   CircleDotDashed,
   ListChecks,
 } from 'lucide-react';
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { revealWithinBox } from '../scroll-to-bottom';
 import { SectionLabel } from './block-shell';
 import { RunSettledContext } from './live-row';
 import {
@@ -77,7 +78,12 @@ function TaskRow({
   const tone =
     task.status === null ? 'text-muted-foreground' : STATUS_CLASS[task.status];
   return (
-    <li className="flex items-start gap-2 text-xs leading-relaxed">
+    <li
+      // The row's own state, on the element. It is what {@link TaskScrollRows}
+      // finds the row to follow by — and it is not derivable from the outside,
+      // since the drawn state folds `live` into the payload's own status.
+      data-task-status={task.status ?? 'unknown'}
+      className="flex items-start gap-2 text-xs leading-relaxed">
       <Icon
         aria-hidden="true"
         className={cn('mt-0.5 size-3.5 shrink-0', tone)}
@@ -123,6 +129,87 @@ export function TaskRows({
         <TaskRow key={task.id} task={task} live={live} />
       ))}
     </ul>
+  );
+}
+
+/**
+ * How tall the side panel's copy of a list may get before it scrolls itself.
+ *
+ * REPORTED as "also we need scroll for tasks list", against a card holding
+ * thirteen tasks: the panel has one scroller over every agent card, so a long
+ * list does not overflow — it makes its own card that tall, and everything
+ * below it (the next agent, the artifacts) is pushed a screen down. Measured on
+ * the reported list, the card ran past 1,000px in a 825px window with nothing
+ * else of that agent visible.
+ *
+ * 12rem ≈ eight one-line rows, or four that wrap — enough that a short list is
+ * untouched by this (a cap costs nothing until it is reached) and a long one
+ * still shows several rows of context around whatever is running.
+ */
+const PANEL_LIST_MAX_HEIGHT = 'max-h-48';
+
+/**
+ * The same rows, bounded and scrolling themselves, following the task that is
+ * RUNNING.
+ *
+ * The following is what makes the bound safe rather than merely tidy: a list of
+ * thirteen with the sixth in progress would otherwise show the five that are
+ * done and hide the one thing happening, which is a worse answer than the tall
+ * card. It moves only when the active row leaves the frame, so a reader who
+ * scrolled the box themselves keeps their place — see {@link revealWithinBox},
+ * and note that `scrollIntoView` is not an option here for the reason recorded
+ * there: this box sits inside the panel's scroller inside a clipped shell.
+ *
+ * Not used by {@link TaskListCard}. The transcript is a document a reader
+ * scrolls, and a nested scroll box in it takes the wheel away from the page for
+ * as long as the pointer is over the list.
+ */
+export function TaskScrollRows({
+  tasks,
+  live,
+  className,
+}: {
+  tasks: readonly AgentTaskRow[];
+  live: boolean;
+  className?: string;
+}): React.JSX.Element {
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  // The id, not the row: the effect must fire when the agent MOVES ON to the
+  // next task, and re-running it on every re-render would drag a box the reader
+  // had scrolled back to where the work is.
+  const activeId =
+    tasks.find((task) => task.status === 'in_progress')?.id ?? null;
+  useEffect(() => {
+    const box = boxRef.current;
+    if (box === null || activeId === null || !live) {
+      return;
+    }
+    const row = box.querySelector<HTMLElement>(
+      '[data-task-status="in_progress"]',
+    );
+    if (row === null) {
+      return;
+    }
+    const top = revealWithinBox(box, row);
+    if (top !== null) {
+      box.scrollTop = top;
+    }
+  }, [activeId, live]);
+  return (
+    <div
+      ref={boxRef}
+      data-slot="task-scroll-rows"
+      className={cn(
+        // `relative` is load-bearing, not decoration: the reveal above reads
+        // each row's `offsetTop`, which is measured against the nearest
+        // POSITIONED ancestor — without it the numbers belong to some box
+        // further up the tree and the arithmetic silently addresses the wrong
+        // element.
+        'relative overflow-y-auto overscroll-contain',
+        PANEL_LIST_MAX_HEIGHT,
+      )}>
+      <TaskRows tasks={tasks} live={live} className={className} />
+    </div>
   );
 }
 

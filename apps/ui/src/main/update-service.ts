@@ -216,12 +216,17 @@ export class UpdateService {
       return;
     }
     const interval = this.deps.intervalMs ?? CHECK_INTERVAL_MS;
+    // Both SILENT: nobody pressed anything, so a check that changes nothing must
+    // leave the renderer alone entirely — see {@link check}'s `announce`.
     this.launchTimer = setTimeout(() => {
       this.launchTimer = null;
-      void this.check();
+      void this.check({ announce: false });
     }, this.deps.launchDelayMs ?? LAUNCH_CHECK_DELAY_MS);
     this.launchTimer.unref?.();
-    this.timer = setInterval(() => void this.check(), interval);
+    this.timer = setInterval(
+      () => void this.check({ announce: false }),
+      interval,
+    );
     // Never the reason this process stays alive.
     this.timer.unref?.();
   }
@@ -238,18 +243,46 @@ export class UpdateService {
     }
   }
 
-  /** Ask the release feed now. Resolves with the state the check produced. */
-  async check(): Promise<UpdateState> {
+  /**
+   * Ask the release feed now. Resolves with the state the check produced.
+   *
+   * `announce` is what separates the two callers. A check the USER pressed has
+   * to say it started — the Settings button reads "Checking…" and disables
+   * itself, and a button that answers a press with nothing visible reads as
+   * broken. The SCHEDULED check has no press to acknowledge and nothing to
+   * show: `footerUpdate` maps `checking` to `{kind:'none'}`, so the phase was
+   * pushed at every window, re-rendered the whole renderer from `App` down —
+   * the transcript with it — and drew exactly nothing. REPORTED as the app
+   * seeming to re-render itself every so often, which was the one event on
+   * that cadence.
+   */
+  async check({
+    announce = true,
+  }: { announce?: boolean } = {}): Promise<UpdateState> {
     if (!this.deps.isPackaged()) {
       return this.state;
     }
     if (this.busy) {
       return this.state;
     }
+    // `ready` is an ENDING, and the only one a check can undo. The version this
+    // service compares against is the RUNNING app's, which does not change when
+    // a bundle is swapped — it changes at the relaunch. So every check after a
+    // finished install re-discovers the release that is already sitting on
+    // disk, and puts the app back to `available`: the Restart button turns into
+    // an Update button, and pressing it downloads and swaps in the same release
+    // again. REPORTED as an update that installs itself endlessly, which is
+    // literally what it did — once per press, forever, until the user
+    // restarted and the running version finally caught up.
+    if (this.state.phase === 'ready') {
+      return this.state;
+    }
     const deadline = this.deps.checkDeadlineMs ?? CHECK_DEADLINE_MS;
     const attempt = this.begin(deadline, checkTimedOut(deadline));
     try {
-      this.emit({ phase: 'checking', message: null, progress: null });
+      if (announce) {
+        this.emit({ phase: 'checking', message: null, progress: null });
+      }
       const lookup = await this.deps.fetchLatest();
       if (this.abandoned(attempt)) {
         return this.state;
@@ -261,12 +294,30 @@ export class UpdateService {
         return this.emit({ phase: 'error', message: lookup.error });
       }
       const { release } = lookup;
-      if (!isNewerVersion(release.version, this.deps.currentVersion())) {
+      const current = this.deps.currentVersion();
+      if (!isNewerVersion(release.version, current)) {
         this.release = null;
+        // "Up to date" is only half true when a NEWER tag is published whose
+        // macOS archive has not been uploaded yet: this app is on the latest it
+        // can install, and a version it cannot install exists. Reported as
+        // "terminal not saying truth — there is a new version", and the release
+        // side of the same race is what `26e2e6f` fixed in the workflow.
+        //
+        // Still `up-to-date` rather than `available`: nothing here is
+        // downloadable, so a phase that offers an Update button would put a
+        // control on screen with nothing behind it. The phase says what the app
+        // can do; the message says what the world looks like.
+        const pending =
+          lookup.published !== null && isNewerVersion(lookup.published, current)
+            ? lookup.published
+            : null;
         return this.emit({
           phase: 'up-to-date',
-          version: this.deps.currentVersion(),
-          message: null,
+          version: current,
+          message:
+            pending === null
+              ? null
+              : `Geniro ${pending} is published, but its macOS build has not been uploaded yet.`,
         });
       }
       this.release = release;
@@ -562,12 +613,30 @@ export class UpdateService {
     return this.deps.canWrite(bundlePath);
   }
 
-  /** Merge a patch into the state and push it at every window. */
+  /**
+   * Merge a patch into the state and push it at every window — unless nothing
+   * about it changed.
+   *
+   * The patch is always a fresh object, so without this comparison "the state
+   * did not change" and "the state changed" are the same event as far as the
+   * renderer is concerned: `setState` on a new identity re-renders whether or
+   * not the value differs. A scheduled check on an up-to-date app produced
+   * exactly that — `up-to-date` written over `up-to-date`, every five minutes,
+   * re-rendering the app to say the same sentence. The state is six flat
+   * fields, so identity of value is the whole question and a shallow compare
+   * answers it.
+   */
   private emit(
     patch: Partial<UpdateState> & { phase?: UpdatePhase },
   ): UpdateState {
-    this.state = { ...this.state, ...patch };
-    this.deps.broadcast(this.state);
+    const next = { ...this.state, ...patch };
+    const changed = (Object.keys(next) as (keyof UpdateState)[]).some(
+      (key) => next[key] !== this.state[key],
+    );
+    this.state = next;
+    if (changed) {
+      this.deps.broadcast(this.state);
+    }
     return this.state;
   }
 }

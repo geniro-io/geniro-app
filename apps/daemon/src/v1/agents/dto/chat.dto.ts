@@ -6,6 +6,7 @@ import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
   ChatMetricsWireSchema,
+  ChatTotalsResponseSchema,
   CustomInstructionsSchema,
   ItemWireSchema,
   LocalImageWireSchema,
@@ -42,6 +43,19 @@ export const createChatSchema = z.object({
    * CLI's levels into the shared schema.
    */
   effort: z.string().min(1).optional(),
+  /**
+   * Which of the model's context-window sizes to run at, in the CLI's own
+   * vocabulary; omitted = the model's own default.
+   *
+   * A plain string, like `effort`, and for the identical reason — the sizes are
+   * a per-MODEL vocabulary the adapter owns (`300k`, `1m`, `272k`), so an enum
+   * would pin one CLI's words into the shared schema. Unlike effort it is NOT
+   * checked up front: there is no CLI-wide superset to check against (a size
+   * means nothing apart from its model), and the turn's own driver reports on
+   * the transcript when a value does not apply — which is per turn, against
+   * the live agent, rather than against a constant that goes stale.
+   */
+  contextWindow: z.string().min(1).optional(),
   /**
    * The agent config directory this chat's turns run under — the folder
    * holding that CLI's credentials, settings and plugins, so one chat can run
@@ -93,13 +107,17 @@ export const updateChatSettingsSchema = z
     model: z.string().min(1).nullable().optional(),
     /** Same null-vs-omitted contract as `model` above. */
     effort: z.string().min(1).nullable().optional(),
+    /** Same again — and cleared to null whenever the MODEL changes, since a
+     * window size belongs to the model that offered it. */
+    contextWindow: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) =>
       dto.approval !== undefined ||
       dto.model !== undefined ||
-      dto.effort !== undefined,
-    'a settings patch must change the approval mode, the model or the effort',
+      dto.effort !== undefined ||
+      dto.contextWindow !== undefined,
+    'a settings patch must change the approval mode, the model, the effort or the context window',
   );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
@@ -236,3 +254,6 @@ export class DeletedDto extends createZodDto(
  * object literal.
  */
 export class ChatMetricsDto extends createZodDto(ChatMetricsWireSchema) {}
+
+/** The thread's spend alone — see `ChatTotalsResponseSchema` for why wrapped. */
+export class ChatTotalsDto extends createZodDto(ChatTotalsResponseSchema) {}

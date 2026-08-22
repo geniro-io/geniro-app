@@ -30,8 +30,16 @@ export interface CliLoginState {
 
 export interface CliLoginController {
   login: CliLoginState | null;
-  /** Start one. Resolves when the daemon has answered, not when it finishes. */
-  start: (kind: CliKind) => Promise<void>;
+  /**
+   * Start one. Resolves when the daemon has answered, not when it finishes.
+   *
+   * `configDir` is the run's PROFILE, and it is the one thing about an account
+   * that is not machine-wide: credentials live in that folder, so a chat pointed
+   * at a second profile signed into the default one watches the same turn fail
+   * again. Omitted where the caller is configuring the CLI itself (Settings),
+   * which always means the default profile.
+   */
+  start: (kind: CliKind, configDir?: string | null) => Promise<void>;
   /**
    * Start a sign-in to ONE MCP server — the same flow, the same polling, the
    * same cancel, differing only in what the daemon spawns.
@@ -67,10 +75,16 @@ export interface CliLoginController {
  * the caller re-probes detection — the daemon's `succeeded` means only "the
  * command completed cleanly", and whether the user is actually signed in is a
  * question only the CLI's own status command answers.
+ *
+ * It is handed the sign-in that settled, because ONE controller serves both
+ * flows and they are re-probed by different reads: an MCP server's answer is in
+ * the server LISTING, an account's is in CLI detection. A caller driving both
+ * (the chat screen does) dispatches on `server`; one driving a single flow
+ * ignores the argument.
  */
 export function useCliLogin(
   apis: DaemonApis | null,
-  onSettled: () => void,
+  onSettled: (settled: CliLoginState) => void,
 ): CliLoginController {
   const [login, setLogin] = useState<CliLoginState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +115,7 @@ export function useCliLogin(
           }
           setLogin({ kind, session, server });
           if (isOver(session)) {
-            settledRef.current();
+            settledRef.current({ kind, session, server });
           }
         })
         .catch((err: unknown) => {
@@ -121,7 +135,7 @@ export function useCliLogin(
   }, [apis, login?.session.id, login === null || isOver(login.session)]);
 
   const start = useCallback(
-    async (kind: CliKind): Promise<void> => {
+    async (kind: CliKind, configDir?: string | null): Promise<void> => {
       if (!apis) {
         return;
       }
@@ -129,10 +143,11 @@ export function useCliLogin(
       try {
         const session = await apis.cliAuth.startCliLogin({
           agent: kind as AgentKind,
+          ...(configDir ? { configDir } : {}),
         });
         setLogin({ kind, session, server: null });
         if (isOver(session)) {
-          settledRef.current();
+          settledRef.current({ kind, session, server: null });
         }
       } catch (err) {
         setError(String(err));
@@ -161,7 +176,11 @@ export function useCliLogin(
         });
         setLogin({ kind: input.kind, session, server: input.server });
         if (isOver(session)) {
-          settledRef.current();
+          settledRef.current({
+            kind: input.kind,
+            session,
+            server: input.server,
+          });
         }
       } catch (err) {
         setError(String(err));
@@ -201,7 +220,7 @@ export function useCliLogin(
         id: login.session.id,
       });
       setLogin({ kind: login.kind, session, server: login.server });
-      settledRef.current();
+      settledRef.current({ kind: login.kind, session, server: login.server });
     } catch (err) {
       setError(String(err));
     }

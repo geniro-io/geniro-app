@@ -118,6 +118,10 @@ export function readAcpSessionList(stdout: string): AgentSessionRecord[] {
       cwd: asString(record.cwd) || null,
       title: asString(record.title) || null,
       updatedAt: readTimestamp(record.updatedAt),
+      // Nothing to quote: `session/list` returns labels, and the conversation
+      // itself lives in the agent's own store. See
+      // `AdapterConfig.sessions.contentSearchUnavailableReason`.
+      snippet: null,
     });
   }
   rows.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));

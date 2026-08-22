@@ -42,7 +42,11 @@ function build(overrides: Partial<UpdateServiceDeps> = {}): UpdateService {
     bundlePath: () => '/Applications/Geniro.app',
     workDir: () => '/tmp/updates',
     fetchLatest: (): Promise<ReleaseLookup> =>
-      Promise.resolve({ ok: true, release: RELEASE }),
+      Promise.resolve({
+        ok: true,
+        release: RELEASE,
+        published: RELEASE.version,
+      }),
     install: async (input) => {
       installed.push(input);
     },
@@ -84,10 +88,48 @@ describe('UpdateService.check', () => {
   it('reports up-to-date when the feed is not ahead of this build', async () => {
     const service = build({ currentVersion: () => '1.4.0' });
 
-    expect(await service.check()).toMatchObject({
-      phase: 'up-to-date',
-      version: '1.4.0',
+    const state = await service.check();
+
+    expect(state).toMatchObject({ phase: 'up-to-date', version: '1.4.0' });
+    // Genuinely current: nothing newer is published either, so there is nothing
+    // to add. The message is what the next test is about.
+    expect(state.message).toBeNull();
+  });
+
+  it('does not claim to be current while a newer tag is waiting on its archive', async () => {
+    // REPORTED as "terminal not saying truth — there is a new version". A
+    // release and its macOS archive are published in two steps, so between them
+    // the newest INSTALLABLE release is an older one — and reading only that,
+    // the app told a user on 1.4.0 they were up to date while 1.5.0 was on the
+    // releases page. The publishing side of the same race is what `26e2e6f`
+    // fixed; this is the reading side.
+    const service = build({
+      currentVersion: () => '1.4.0',
+      fetchLatest: () =>
+        Promise.resolve({ ok: true, release: RELEASE, published: '1.5.0' }),
     });
+
+    const state = await service.check();
+
+    // Still `up-to-date`: nothing is downloadable, so a phase that offers an
+    // Update button would put a control on screen with nothing behind it.
+    expect(state.phase).toBe('up-to-date');
+    expect(state.message).toContain('1.5.0');
+    expect(state.message).toContain('has not been uploaded yet');
+  });
+
+  it('says nothing extra when the newest published tag is the one running', async () => {
+    // The guard is on `isNewerVersion`, not on "published differs from the
+    // installable release": an EQUAL tag is the ordinary case every check
+    // takes, and announcing it would put a permanent notice about the running
+    // version on the Settings screen.
+    const service = build({
+      currentVersion: () => '1.4.0',
+      fetchLatest: () =>
+        Promise.resolve({ ok: true, release: RELEASE, published: '1.4.0' }),
+    });
+
+    expect((await service.check()).message).toBeNull();
   });
 
   it('carries the lookup failure through verbatim', async () => {
@@ -143,6 +185,43 @@ describe('UpdateService.install', () => {
 
     service.relaunch();
     expect(relaunched).toBe(1);
+  });
+
+  it('does not re-offer a release it has already installed and is waiting to restart into', async () => {
+    // REPORTED as an update that installs itself endlessly. `currentVersion` is
+    // the RUNNING app's and does not change when a bundle is swapped — it
+    // changes at the relaunch — so every check after a finished install finds
+    // the same release still ahead of it and puts the app back to `available`.
+    // The Restart button turns into an Update button, pressing it downloads and
+    // swaps in the identical release, and the cycle repeats until the user
+    // restarts by hand.
+    let feeds = 0;
+    const service = build({
+      fetchLatest: (): Promise<ReleaseLookup> => {
+        feeds += 1;
+        return Promise.resolve({
+          ok: true,
+          release: RELEASE,
+          published: RELEASE.version,
+        });
+      },
+    });
+    await service.check();
+    expect(await service.install()).toMatchObject({ phase: 'ready' });
+    const before = feeds;
+
+    const state = await service.check();
+
+    // Untouched — not merely "still offering 1.4.0", which `available` would
+    // also satisfy while having replaced the only control that finishes the job.
+    expect(state.phase).toBe('ready');
+    expect(state.currentVersion).toBe('1.4.0');
+    // And the feed was not even asked: there is nothing an answer could change
+    // while a bundle is already on disk waiting for the restart.
+    expect(feeds).toBe(before);
+    // The install is still the one that ran, not one the check talked the app
+    // into running again.
+    expect(installed).toHaveLength(1);
   });
 
   it('will not restart when there is nothing installed to restart into', async () => {
@@ -250,7 +329,11 @@ describe('UpdateService scheduling', () => {
   it('checks on launch and on the interval, and stops when switched off', async () => {
     vi.useFakeTimers();
     const fetchLatest = vi.fn((): Promise<ReleaseLookup> =>
-      Promise.resolve({ ok: true, release: RELEASE }),
+      Promise.resolve({
+        ok: true,
+        release: RELEASE,
+        published: RELEASE.version,
+      }),
     );
     const service = build({
       fetchLatest,
@@ -271,10 +354,54 @@ describe('UpdateService scheduling', () => {
     expect(fetchLatest).toHaveBeenCalledTimes(2);
   });
 
+  it('says NOTHING to the renderer for a scheduled check that changes nothing', async () => {
+    // REPORTED as the app appearing to re-render itself every so often. An
+    // automatic check pushed `checking` and then its outcome at every window,
+    // and `App` holds the subscription — so the whole renderer, transcript
+    // included, re-rendered twice every five minutes to display a phase that
+    // draws nothing (`footerUpdate` maps `checking` to `{kind:'none'}`) and
+    // then a sentence identical to the one already on screen.
+    vi.useFakeTimers();
+    const service = build({
+      intervalMs: 1000,
+      launchDelayMs: 100,
+      // Nothing new out there — the ordinary case, and the one that must be
+      // completely silent.
+      currentVersion: () => '1.4.0',
+    });
+
+    service.start(true);
+    await vi.advanceTimersByTimeAsync(100);
+    // The FIRST scheduled check still reports: `idle` → `up-to-date` is a real
+    // change, and it is what fills in the version readout at launch.
+    expect(broadcasts.map((s) => s.phase)).toEqual(['up-to-date']);
+
+    await vi.advanceTimersByTimeAsync(5000);
+
+    // Five more checks, all landing on the state already published. Not one of
+    // them reaches a window.
+    expect(broadcasts.map((s) => s.phase)).toEqual(['up-to-date']);
+  });
+
+  it('still tells the renderer a check the USER pressed has started', async () => {
+    // The other half of the same rule: the Settings button reads "Checking…"
+    // and disables itself off this phase, so suppressing it for every check
+    // would answer a press with nothing visible.
+    const service = build({ currentVersion: () => '1.4.0' });
+
+    await service.check();
+
+    expect(broadcasts.map((s) => s.phase)).toEqual(['checking', 'up-to-date']);
+  });
+
   it('schedules nothing when the user has switched automatic checks off', async () => {
     vi.useFakeTimers();
     const fetchLatest = vi.fn((): Promise<ReleaseLookup> =>
-      Promise.resolve({ ok: true, release: RELEASE }),
+      Promise.resolve({
+        ok: true,
+        release: RELEASE,
+        published: RELEASE.version,
+      }),
     );
     const service = build({ fetchLatest, intervalMs: 1000, launchDelayMs: 10 });
 
@@ -323,7 +450,11 @@ describe('UpdateService deadlines', () => {
           ? new Promise<ReleaseLookup>((resolve) => {
               answer = resolve;
             })
-          : Promise.resolve({ ok: true, release: RELEASE }),
+          : Promise.resolve({
+              ok: true,
+              release: RELEASE,
+              published: RELEASE.version,
+            }),
     });
 
     void service.check();
@@ -336,7 +467,7 @@ describe('UpdateService deadlines', () => {
 
     // The abandoned call answering late must not overwrite the failure the
     // user has already been shown — and may already have acted on.
-    answer({ ok: true, release: RELEASE });
+    answer({ ok: true, release: RELEASE, published: RELEASE.version });
     await vi.advanceTimersByTimeAsync(0);
     expect(service.getState().phase).toBe('error');
 

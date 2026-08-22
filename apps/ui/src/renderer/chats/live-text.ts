@@ -35,6 +35,16 @@ export interface LiveTextEvent {
    * Per stretch, not cumulative over the turn.
    */
   thinkingTokens: number | null;
+  /**
+   * What the agent is thinking, as it thinks it — the WHOLE tail of the current
+   * stretch — or null when there is nothing to show.
+   *
+   * The alternative to {@link LiveTextEvent.thinkingTokens} rather than its
+   * companion, and which one arrives is a property of the CLI: claude redacts
+   * its thinking and sends a token count, cursor streams the words. So null
+   * here means "no text", never "not thinking".
+   */
+  thinkingText: string | null;
   /** Epoch ms the CURRENT stretch began, or null when not thinking. */
   thinkingSince: number | null;
   /**
@@ -53,6 +63,7 @@ export interface LiveTextEvent {
 export interface LiveState {
   text: string;
   thinkingTokens: number | null;
+  thinkingText: string | null;
   thinkingSince: number | null;
   thinkingStretch: number | null;
   contextTokens: number | null;
@@ -83,6 +94,13 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
     // had nothing to show for the wait. Whether the agent IS thinking is
     // `thinkingStretch`'s job, not this field's.
     thinkingTokens: nonNegativeNumber(record.thinkingTokens),
+    // An EMPTY string reads as null on purpose: it is what a stretch with
+    // nothing said yet and a CLI that redacts its thinking both amount to, and
+    // treating it as text would draw an empty reasoning bubble for both.
+    thinkingText:
+      typeof record.thinkingText === 'string' && record.thinkingText !== ''
+        ? record.thinkingText
+        : null,
     thinkingSince: positiveNumber(record.thinkingSince),
     thinkingStretch: positiveNumber(record.thinkingStretch),
     contextTokens: positiveNumber(record.contextTokens),
@@ -130,6 +148,7 @@ export function applyLiveText(
     next.set(key, {
       text: event.text,
       thinkingTokens: event.thinkingTokens,
+      thinkingText: event.thinkingText,
       thinkingSince: event.thinkingSince,
       thinkingStretch: event.thinkingStretch,
       contextTokens: event.contextTokens,

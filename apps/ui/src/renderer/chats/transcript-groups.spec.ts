@@ -931,6 +931,7 @@ describe('withLiveText', () => {
   const live = (over: Partial<LiveState> = {}): LiveState => ({
     text: '',
     thinkingTokens: null,
+    thinkingText: null,
     thinkingSince: null,
     thinkingStretch: null,
     contextTokens: null,
@@ -967,6 +968,42 @@ describe('withLiveText', () => {
       ]),
     );
     expect(liveRowKind(liveRowPayload(entries))).toBe('thinking');
+  });
+
+  it('carries the reasoning TEXT onto the thinking row', () => {
+    // The row is what shows it: without this the words a CLI streams reach the
+    // transcript only when the block closes, which on cursor is minutes of a
+    // screen saying nothing while thought chunks arrive.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [
+          CHAT_LIVE_KEY,
+          live({ thinkingStretch: 1, thinkingText: 'weighing the options' }),
+        ],
+      ]),
+    );
+    expect(liveRowPayload(entries)).toMatchObject({
+      thinkingText: 'weighing the options',
+    });
+  });
+
+  it('carries no reasoning text when the CLI redacts its thinking', () => {
+    // claude ships the block empty and reports a token count instead, so the
+    // row must keep that shape for it — a text row with nothing in it would be
+    // strictly worse than the count.
+    const entries = withLiveText(
+      [],
+      new Map([
+        [CHAT_LIVE_KEY, live({ thinkingStretch: 1, thinkingTokens: 250 })],
+      ]),
+    );
+    const payload = liveRowPayload(entries) as {
+      thinkingTokens?: unknown;
+      thinkingText?: unknown;
+    };
+    expect(payload.thinkingTokens).toBe(250);
+    expect(payload.thinkingText ?? null).toBeNull();
   });
 
   it('draws a working row for an agent with nothing to say yet', () => {

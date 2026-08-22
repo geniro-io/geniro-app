@@ -103,43 +103,55 @@ export function Onboarding({
   };
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-xl flex-col gap-6 overflow-y-auto px-6 py-10">
-      <header className="flex flex-col items-center gap-3 text-center">
-        <Logo size="hero" />
-        <p className="text-muted-foreground">
-          A local-first studio for teams of CLI coding agents.
+    // The pane scrolls, the column is what it scrolls — see the note on the
+    // twin split in `settings/Settings.tsx`. Fixed here too although the report
+    // screenshotted Settings: it is the same one element doing both jobs, and
+    // this is the first screen anybody ever sees.
+    <div
+      className="h-full overflow-y-auto"
+      style={{ scrollbarGutter: 'stable' }}>
+      {/* `min-h-full` so the column still fills the pane when the content is
+          short — the footer below is `mt-auto`, and without it "Get started"
+          would ride up under the last card on a machine where both CLIs are
+          already installed. */}
+      <div className="mx-auto flex min-h-full w-full max-w-xl flex-col gap-6 px-6 py-10">
+        <header className="flex flex-col items-center gap-3 text-center">
+          <Logo size="hero" />
+          <p className="text-muted-foreground">
+            A local-first studio for teams of CLI coding agents.
+          </p>
+        </header>
+
+        <p className="text-sm text-muted-foreground">
+          Set up the CLI agents Geniro will drive. You can change this anytime
+          in Settings.
         </p>
-      </header>
 
-      <p className="text-sm text-muted-foreground">
-        Set up the CLI agents Geniro will drive. You can change this anytime in
-        Settings.
-      </p>
+        <AgentConfigList
+          clis={clis}
+          open={open}
+          onToggle={toggle}
+          binaryPaths={binaryPaths}
+          onBinaryPathChange={(kind, value) =>
+            setBinaryPaths((prev) => ({ ...prev, [kind]: value }))
+          }
+          onBrowse={(kind) => void browse(kind)}
+        />
 
-      <AgentConfigList
-        clis={clis}
-        open={open}
-        onToggle={toggle}
-        binaryPaths={binaryPaths}
-        onBinaryPathChange={(kind, value) =>
-          setBinaryPaths((prev) => ({ ...prev, [kind]: value }))
-        }
-        onBrowse={(kind) => void browse(kind)}
-      />
-
-      <footer className="mt-auto flex items-center gap-3 pt-2">
-        {error ? <ErrorText className="mr-auto">{error}</ErrorText> : null}
-        <Button
-          type="button"
-          variant="ghost"
-          className={error ? '' : 'ml-auto'}
-          onClick={() => void refreshClis()}>
-          Re-check
-        </Button>
-        <Button type="button" disabled={busy} onClick={() => void finish()}>
-          {busy ? 'Finishing…' : 'Get started'}
-        </Button>
-      </footer>
+        <footer className="mt-auto flex items-center gap-3 pt-2">
+          {error ? <ErrorText className="mr-auto">{error}</ErrorText> : null}
+          <Button
+            type="button"
+            variant="ghost"
+            className={error ? '' : 'ml-auto'}
+            onClick={() => void refreshClis()}>
+            Re-check
+          </Button>
+          <Button type="button" disabled={busy} onClick={() => void finish()}>
+            {busy ? 'Finishing…' : 'Get started'}
+          </Button>
+        </footer>
+      </div>
     </div>
   );
 }

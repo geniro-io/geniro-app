@@ -37,6 +37,7 @@ const api = vi.hoisted(() => ({
   updateChatSettings: vi.fn(),
   setRunGroup: vi.fn(),
   readChatMetrics: vi.fn(),
+  readChatTotals: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -83,11 +84,7 @@ const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
-const handoffApi = vi.hoisted(() => ({
-  resolveHandoff: vi.fn(),
-  resolveMcpLogin: vi.fn(),
-  resolveCliLogin: vi.fn(),
-}));
+const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -197,6 +194,7 @@ const run1: ChatRun = {
   model: null,
   approval: null,
   effort: null,
+  contextWindow: null,
   configDir: null,
   groupId: null,
   createdAt: 'now',
@@ -280,6 +278,7 @@ function makeClient(): {
  * all of them, so a literal that omitted them would not be a real payload.
  */
 const LIVE_DELTA_REST = {
+  thinkingText: null,
   thinkingSince: null,
   thinkingStretch: null,
   contextTokens: null,
@@ -477,6 +476,19 @@ beforeEach(() => {
       workedMs: null,
     },
   });
+  api.readChatTotals.mockReset().mockResolvedValue({
+    totals: {
+      turns: 0,
+      costedTurns: 0,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      thinkingTokens: null,
+      workedMs: null,
+    },
+  });
   agentsApi.listAgentSkills.mockReset().mockResolvedValue([]);
   agentsApi.listAgentMcpServers.mockReset().mockResolvedValue({
     servers: [],
@@ -588,8 +600,10 @@ beforeEach(() => {
     ],
   });
   handoffApi.resolveHandoff.mockReset();
-  handoffApi.resolveMcpLogin.mockReset();
-  handoffApi.resolveCliLogin.mockReset();
+  // The sign-in spies too: `toHaveBeenCalledWith` accumulates across tests, so
+  // an un-reset spy lets a later test pass on an earlier one's press.
+  cliAuthApi.startCliLogin.mockReset();
+  cliAuthApi.startMcpLogin.mockReset();
 });
 
 afterEach(async () => {
@@ -2421,6 +2435,7 @@ describe('Chats workflow runs', () => {
     model: null,
     approval: null,
     effort: null,
+    contextWindow: null,
     configDir: null,
     groupId: null,
     createdAt: 'later',
@@ -2971,6 +2986,7 @@ describe('Chats — handing a conversation to the user', () => {
       model: null,
       approval: null,
       effort: null,
+      contextWindow: null,
       configDir: null,
       groupId: null,
       createdAt: 'later',
@@ -4267,6 +4283,39 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
+  });
+
+  it('stops the BADGE saying running once the turn is only held', async () => {
+    // The composer already knew about the hold — the two tests around this one
+    // are about it — and the badge above the same thread went on spinning
+    // `running` anyway, which is the reported "done but showing like it's
+    // working". Asserted on the sidebar ROW and the transcript header together:
+    // they are two call sites of one rule, and the defect was that the fact
+    // reached one of them (the composer) and neither of these.
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const row = (): HTMLElement =>
+      [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].find(
+        (el) => el.textContent?.includes('My chat'),
+      )!;
+    expect(row().textContent).toContain('running');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: 'waiting on 2 background tasks',
+        holdingFor: 2,
+      });
+    });
+
+    expect(row().textContent).not.toContain('running');
+    expect(row().textContent).toContain('idle');
+    // And the sentence stays: the badge says the agent has stopped, the line
+    // under it says what the process is still waiting for. Neither alone is
+    // the answer.
+    expect(container.textContent).toContain('waiting on 2 background tasks');
   });
 
   it('goes back to queueing once the hold is over and the agent works again', async () => {
@@ -5799,6 +5848,7 @@ describe('Chats sidebar list', () => {
         nodeId: 'w-b',
         text: '',
         thinkingTokens: null,
+        thinkingText: null,
         thinkingSince: null,
         thinkingStretch: null,
         contextTokens: 120_000,
@@ -6394,23 +6444,28 @@ describe('Chats — signing a server in', () => {
 
 describe('Chats — signing the CLI itself back in from a failed turn', () => {
   const SIGN_IN_TITLE =
-    'Open this agent’s CLI sign-in in your terminal, then send the message again';
+    'Sign this agent back in — it runs here and opens your browser';
 
   const signInOnRow = (container: HTMLElement): HTMLButtonElement | null =>
     container.querySelector<HTMLButtonElement>(
       `button[title="${SIGN_IN_TITLE}"]`,
     );
 
-  it('offers Sign in on the row, and opens that CLI’s own sign-in', async () => {
+  /** A sign-in the daemon has started and is still driving. */
+  const waitingSession = {
+    id: 'login-9',
+    agent: 'claude' as const,
+    status: 'waiting' as const,
+    url: 'https://claude.com/cai/oauth/authorize?x=1',
+    message: 'Waiting for you to finish in the browser…',
+  };
+
+  it('runs the sign-in HERE, opening no terminal, and shows it', async () => {
+    // The reported defect: pressing Sign in opened a shell, and the browser
+    // round-trip that followed changed nothing on screen — the app was not
+    // watching the window it had handed the flow to. The daemon runs it now.
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), authError(1)]);
-    handoffApi.resolveCliLogin.mockResolvedValue({
-      kind: 'command',
-      command: 'claude',
-      args: ['auth', 'login'],
-      cwd: '/home/me',
-      display: 'claude auth login',
-      unavailableReason: null,
-    });
+    cliAuthApi.startCliLogin.mockResolvedValue(waitingSession);
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -6421,15 +6476,39 @@ describe('Chats — signing the CLI itself back in from a failed turn', () => {
       );
     });
 
-    // No folder is sent: an account is machine-wide, and the daemon answers
-    // with the home directory the terminal contract needs.
-    expect(handoffApi.resolveCliLogin).toHaveBeenCalledWith({
-      agent: 'claude',
+    // No `configDir`: this run carries none, and an account is otherwise
+    // machine-wide.
+    expect(cliAuthApi.startCliLogin).toHaveBeenCalledWith({ agent: 'claude' });
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
+    // And it is VISIBLE while it runs, which is the half the terminal window
+    // used to supply: the browser tab opens behind the app, so a press with no
+    // panel behind it reads as one that did nothing.
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
+  });
+
+  it('signs into the run’s OWN profile when it has one', async () => {
+    // Credentials live in the config directory, so a chat on a second profile
+    // signed into the default one watches the same turn fail again.
+    api.listChats.mockResolvedValue([
+      { ...run1, configDir: '/profiles/work', status: 'completed' as const },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), authError(1)]);
+    cliAuthApi.startCliLogin.mockResolvedValue(waitingSession);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      signInOnRow(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
     });
-    expect(window.geniro.openInTerminal).toHaveBeenCalledWith({
-      command: 'claude',
-      args: ['auth', 'login'],
-      cwd: '/home/me',
+
+    expect(cliAuthApi.startCliLogin).toHaveBeenCalledWith({
+      agent: 'claude',
+      configDir: '/profiles/work',
     });
   });
 
@@ -6451,16 +6530,17 @@ describe('Chats — signing the CLI itself back in from a failed turn', () => {
     expect(signInOnRow(container)).toBeNull();
   });
 
-  it('shows the daemon’s reason instead of opening a terminal it cannot fill', async () => {
+  it('says why a refused sign-in went nowhere', async () => {
+    // A refusal never becomes a session, so the progress panel — which only
+    // exists once there is one — has nothing to show it in. Without the
+    // screen's own error slot the press is silent, which is the exact failure
+    // the panel was added to end.
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), authError(1)]);
-    handoffApi.resolveCliLogin.mockResolvedValue({
-      kind: 'unavailable',
-      command: null,
-      args: [],
-      cwd: null,
-      display: null,
-      unavailableReason: 'this CLI has no account sign-in',
-    });
+    cliAuthApi.startCliLogin.mockRejectedValue(
+      new Error(
+        'daemon POST /v1/auth/login failed (400): this CLI has no account sign-in',
+      ),
+    );
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
@@ -7366,16 +7446,9 @@ describe('Chats — background sub-agents', () => {
     const panel = container.querySelector('aside[aria-label="Run agents"]');
     expect(panel).not.toBeNull();
     // The chat's agent now has TWO threads — its own conversation and the
-    // delegate — so the card is expandable and lists them behind its control.
-    // Selected by LABEL: the context meter and the MCP control are both
-    // aria-expanded buttons in the same row and either would match first.
-    const card = panel?.querySelector<HTMLButtonElement>(
-      'button[aria-label$=" threads"]',
-    );
-    expect(card).not.toBeNull();
-    await act(async () => {
-      card?.click();
-    });
+    // delegate — and the card lists them with nothing to press first: the
+    // control that used to hide them is gone.
+    expect(panel?.querySelector('button[aria-label$=" threads"]')).toBeNull();
 
     // The delegate is still working, so it is listed OUTRIGHT rather than
     // counted behind the finished-sub-agents disclosure.
@@ -7426,6 +7499,36 @@ describe('Chats — background sub-agents', () => {
     expect(icon?.getAttribute('class')).toContain('text-muted-foreground');
     expect(icon?.getAttribute('class')).not.toContain('text-primary');
     expect(icon?.getAttribute('class')).not.toContain('animate-spin');
+  });
+
+  it('titles an UNNAMED delegate’s dialog once, not twice', async () => {
+    // REPORTED as a dialog headed `Sub-agent · sub-agent`, which names nothing
+    // and names it twice. A delegate whose launching call is outside the loaded
+    // window — here, rows arriving with no `Task` call in front of them — has
+    // no description and no type, so the title falls back to its identity, and
+    // the category prefix in front of it becomes a stutter.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'find the bug'),
+      delegated(2, 'reading the diff now'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label^="Open Sub-agent "][aria-label$=" in a panel"]',
+        )
+        ?.click();
+    });
+
+    const title = container.querySelector(
+      '[role="dialog"] .text-sm.font-semibold',
+    )?.textContent;
+    expect(title).toBe('Sub-agent task-1');
+    expect(title).not.toContain('·');
   });
 
   it('opens the delegate detail dialog from the block, following the live fold', async () => {
@@ -8481,6 +8584,149 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     const container = await mount(client);
 
     expect(container.querySelector('[data-slot="unseen-dot"]')).toBeNull();
+  });
+});
+
+describe('Chats — the sidebar reorders on activity, never on a click', () => {
+  // REPORTED: "как только я кликаю на какой-то тред, он скачет наверх, только
+  // после того как я на него кликаю" — the list was right about a thread only
+  // once the user opened it, so opening one was what moved it.
+  const T1 = '2026-01-01T00:00:00.000Z';
+  const T2 = '2026-02-01T00:00:00.000Z';
+  const T3 = '2026-03-01T00:00:00.000Z';
+  const T4 = '2026-04-01T00:00:00.000Z';
+
+  // `running`, so that a settle broadcast below is a real TRANSITION — the
+  // unseen mark rides one, and a list that opened already settled would leave
+  // the mark assertions vacuous.
+  const older: ChatRun = {
+    ...run1,
+    status: 'running',
+    createdAt: T1,
+    updatedAt: T1,
+  };
+  const newer: ChatRun = {
+    ...older,
+    id: 'r2',
+    title: 'Second chat',
+    createdAt: T2,
+    updatedAt: T2,
+  };
+  const third: ChatRun = {
+    ...older,
+    id: 'r3',
+    title: 'Third chat',
+    createdAt: T1,
+    updatedAt: T1,
+  };
+
+  const titles = (container: HTMLElement): string[] =>
+    [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')].map(
+      (el) => el.querySelector('span')?.textContent ?? '',
+    );
+
+  const marked = (container: HTMLElement, title: string): boolean =>
+    [...container.querySelectorAll<HTMLElement>('li[draggable="true"]')]
+      .find((el) => el.textContent?.includes(title))!
+      .querySelector('[data-slot="unseen-dot"]') !== null;
+
+  it('leaves the order alone when a thread is OPENED, however new its rows', async () => {
+    // The transcript that arrives on activation is newer than anything the list
+    // knows — which is exactly why it must not be read as the row's time. It is
+    // loaded for the open chat alone, so a thread would climb the list purely
+    // for having been looked at.
+    api.listChats.mockResolvedValue([older, newer]);
+    api.listRunItems.mockResolvedValue([
+      { ...msg(1, 'user', 'question'), createdAt: T4 },
+      { ...msg(2, 'assistant', 'answer'), createdAt: T4 },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    expect(titles(container)).toEqual(['Second chat', 'My chat']);
+
+    await clickRun(container, 'My chat');
+    expect(titles(container)).toEqual(['Second chat', 'My chat']);
+  });
+
+  it('climbs a thread nobody is watching, the moment the daemon writes its row', async () => {
+    // The other half of the same rule: if a click may not move a row, then the
+    // announce has to — a background turn is the activity the order is FOR, and
+    // `RunStatusEvent.at` is the only thing that reports it to a client that
+    // never sees that run's items.
+    api.listChats.mockResolvedValue([older, newer]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    expect(titles(container)).toEqual(['Second chat', 'My chat']);
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: null,
+        at: T3,
+      });
+    });
+    expect(titles(container)).toEqual(['My chat', 'Second chat']);
+  });
+
+  it('leaves the order alone on an announce that did NOT write the row', async () => {
+    // An activity announce fires on every tool call and touches no row, so
+    // stamping one would put this list ahead of the database — and the next
+    // refetch would drag the thread back down. Absent asserts nothing.
+    api.listChats.mockResolvedValue([older, newer]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, activity: 'running Bash' });
+    });
+    expect(titles(container)).toEqual(['Second chat', 'My chat']);
+  });
+
+  it('draws the unseen mark without letting it decide where the row sits', async () => {
+    // The second thing a click changed: opening a thread clears its mark by
+    // definition, so while the mark was a sort TIER every visit demoted its own
+    // row past everything else carrying one.
+    api.listChats.mockResolvedValue([older, newer, third]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // Two threads report while the user reads a third, then the open one ends
+    // last — so the newest row is the ONLY one with no mark on it.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        at: T2,
+      });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r3',
+        status: 'completed',
+        activity: null,
+        at: T3,
+      });
+    });
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: 'completed',
+        activity: null,
+        at: T4,
+      });
+    });
+    expect(marked(container, 'Third chat')).toBe(true);
+    expect(marked(container, 'Second chat')).toBe(true);
+    expect(marked(container, 'My chat')).toBe(false);
+
+    expect(titles(container)).toEqual(['My chat', 'Third chat', 'Second chat']);
+    // And the click that clears a mark moves nothing.
+    await clickRun(container, 'Third chat');
+    expect(marked(container, 'Third chat')).toBe(false);
+    expect(titles(container)).toEqual(['My chat', 'Third chat', 'Second chat']);
   });
 });
 

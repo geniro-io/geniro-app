@@ -99,12 +99,36 @@ describe('readSettings', () => {
       target: 'claude',
       model: 'claude-opus-5',
       effort: 'high',
+      contextWindow: '1m',
       approval: 'acceptEdits',
       configDir: '/Users/dev/.config/work',
     };
     writeRaw({ runConfigs: [config] });
 
     expect(readSettings().runConfigs).toEqual([config]);
+  });
+
+  it('reads a configuration written BEFORE the context-window field existed', () => {
+    // The file on disk predates the field and `runConfigSchema` is strict, so
+    // required it would fail to parse — and the entry-by-entry salvage this
+    // suite exists for would then drop every configuration the user had. It
+    // reads as "no size chosen", which is what those entries mean.
+    const legacy = {
+      id: 'rc-old',
+      name: 'From an older build',
+      cwd: '/Users/dev/geniro-app',
+      branch: null,
+      target: 'claude',
+      model: null,
+      effort: null,
+      approval: null,
+      configDir: null,
+    };
+    writeRaw({ runConfigs: [legacy] });
+
+    expect(readSettings().runConfigs).toEqual([
+      { ...legacy, contextWindow: null },
+    ]);
   });
 
   it('one unparseable run configuration costs only that entry — the others survive in order', () => {

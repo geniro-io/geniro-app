@@ -13,6 +13,7 @@ const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   nodeId: null,
   text: '',
   thinkingTokens: null,
+  thinkingText: null,
   thinkingSince: null,
   thinkingStretch: null,
   contextTokens: null,
@@ -37,11 +38,39 @@ describe('parseLiveText', () => {
       nodeId: 'node-a',
       text: 'hello',
       thinkingTokens: 120,
+      thinkingText: null,
       thinkingSince: null,
       thinkingStretch: 2,
       contextTokens: 45_200,
       contextWindowTokens: 200_000,
     });
+  });
+
+  it('reads the reasoning TEXT a CLI that discloses its thinking sends', () => {
+    expect(
+      parseLiveText({
+        runId: 'run-1',
+        nodeId: null,
+        text: '',
+        thinkingText: 'listing the primes',
+        thinkingStretch: 1,
+      })?.thinkingText,
+    ).toBe('listing the primes');
+  });
+
+  it('reads an EMPTY reasoning text as none at all', () => {
+    // '' and "this CLI redacts its thinking" are the same reading — neither has
+    // anything to show — and letting the empty string through would draw a
+    // reasoning bubble with no words in it.
+    expect(
+      parseLiveText({
+        runId: 'run-1',
+        nodeId: null,
+        text: '',
+        thinkingText: '',
+        thinkingStretch: 1,
+      })?.thinkingText,
+    ).toBeNull();
   });
 
   it('rejects a ZERO or negative number as "not reported"', () => {
@@ -63,6 +92,7 @@ describe('parseLiveText', () => {
       nodeId: null,
       text: '',
       thinkingTokens: null,
+      thinkingText: null,
       thinkingSince: null,
       thinkingStretch: null,
       contextTokens: null,

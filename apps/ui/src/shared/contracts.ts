@@ -75,6 +75,8 @@ export interface RunConfig {
   target: string;
   model: string | null;
   effort: string | null;
+  /** Which of the model's context-window sizes; null = the model's own. */
+  contextWindow: string | null;
   /** The daemon's `ChatApprovalMode`. */
   approval: string | null;
   /** Plugin/profile directory, or null for the CLI's own account. */
@@ -129,6 +131,17 @@ export interface Settings {
    * that CLI's own default — which is also every CLI that has no such control.
    */
   lastEfforts: Partial<Record<CliKind, string>>;
+  /**
+   * The new-run composer's last context-window size per CLI, on exactly the
+   * terms `lastEfforts` is remembered — keyed per CLI, opaque here, and a
+   * missing entry meaning the model's own default.
+   *
+   * Remembered even though the sizes belong to the MODEL rather than the CLI:
+   * a user who works at `1m` wants `1m` on the next chat too, and a size the
+   * next model does not offer costs nothing — the chip re-fetches that model's
+   * own list and draws the stored value as unavailable rather than sending it.
+   */
+  lastContextWindows: Partial<Record<CliKind, string>>;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -264,6 +277,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastApprovalMode: null,
   lastModels: {},
   lastEfforts: {},
+  lastContextWindows: {},
   cliPaths: {},
   checkForUpdates: true,
   sidebarCollapsed: false,

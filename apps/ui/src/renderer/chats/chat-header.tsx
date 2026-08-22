@@ -109,6 +109,50 @@ function WorkedTime({
 }
 
 /**
+ * What this thread has SPENT — the reported ask, beside what it worked.
+ *
+ * Null renders NOTHING rather than `$0.00`, and the distinction is the whole
+ * rule the figures obey end to end: cursor-agent reports no cost unless its
+ * currency is USD, so a thread on it has not spent nothing — it has not been
+ * measured. Writing `$0.00` there would be the app inventing a number the CLI
+ * refused to give.
+ *
+ * Its own component so a spend that arrives after the header first painted
+ * re-renders this span alone, not the identity line beside it.
+ */
+function ThreadSpend({
+  costUsd,
+}: {
+  costUsd: number | null;
+}): React.JSX.Element | null {
+  if (costUsd === null) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="thread-spend"
+      className="shrink-0 text-xs tabular-nums text-muted-foreground"
+      title="What this thread has cost, summed over every turn that reported one">
+      · {formatUsd(costUsd)}
+    </span>
+  );
+}
+
+/**
+ * A spend, in the smallest number of digits that still distinguishes two turns.
+ *
+ * Cents for anything a user would recognise as an amount, and four decimals
+ * below one cent — a thread that has cost $0.0003 must not round to `$0.00`,
+ * which is the same "we measured nothing" claim the null case is careful to
+ * avoid making.
+ */
+function formatUsd(costUsd: number): string {
+  return costUsd > 0 && costUsd < 0.01
+    ? `$${costUsd.toFixed(4)}`
+    : `$${costUsd.toFixed(2)}`;
+}
+
+/**
  * The open transcript's header: the same identity the sidebar row carries —
  * label, live status (spinning while running), last activity. The run's
  * working directory lives in the composer's folder chip below, not here.
@@ -132,6 +176,7 @@ export function ChatHeader({
   turnStartedAt = null,
   workedMs = 0,
   turnCount = 0,
+  costUsd = null,
   openTurn = null,
   runningSubagents = 0,
   tasks = null,
@@ -187,6 +232,14 @@ export function ChatHeader({
   workedMs?: number;
   /** How many settled turns {@link workedMs} is the sum of. */
   turnCount?: number;
+  /**
+   * What this thread has spent in USD, or null when nothing measured it.
+   *
+   * Summed by the DAEMON over the run's own turns rather than folded from the
+   * transcript on screen — see `use-chat-totals.ts`. Null is a real answer and
+   * renders nothing: a CLI that reports no cost has not made this thread free.
+   */
+  costUsd?: number | null;
   /**
    * The turn still in flight, so the total keeps MOVING while one is — null
    * when nothing is running.
@@ -269,6 +322,10 @@ export function ChatHeader({
           turnCount={turnCount}
           openTurn={openTurn}
         />
+        {/* The reported ask: what the thread COST, next to what it worked. The
+            pair is the point — a price with no sense of the work behind it is
+            the same half-answer the duration was on its own. */}
+        <ThreadSpend costUsd={costUsd} />
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-1.5">
         {/* What the agents panel is holding, at a glance. It used to BE that

@@ -226,10 +226,8 @@ describe('ToolGroup', () => {
       ]),
     );
 
-    click(container.querySelector('button[aria-expanded]'));
-    const rows = [...container.querySelectorAll('button[aria-expanded]')];
-    click(rows[1] ?? null);
-
+    // No presses: an edit shows its diff on arrival — see the auto-open tests
+    // below for why.
     const diff = container.querySelector('[data-slot="diff"]');
     expect(diff).not.toBeNull();
     expect(diff?.textContent).toContain('-');
@@ -450,5 +448,136 @@ describe('ToolGroup — a run that has stopped', () => {
     // The result still renders — withholding the ARGUMENTS must not withhold the
     // output the call actually produced.
     expect(container.textContent).toContain('ok');
+  });
+});
+
+describe('a file edit shows itself', () => {
+  // REPORTED: "I wanna see all file edits, so it should be automatically open,
+  // like claude cli. I mean no need to change design, but it should be
+  // visible." Two folds stood between a diff and the reader, and unfolding
+  // either alone still shows nothing — so both are tested, and the assertion
+  // is always on the DIFF, never on an `aria-expanded` a caller could satisfy
+  // while rendering nothing.
+  const editGroup = (): ToolGroupEntry =>
+    makeGroup([
+      toolItem('tool_call', {
+        id: 'e1',
+        name: 'Edit',
+        input: {
+          file_path: '/proj/a.ts',
+          old_string: 'const a = 1;',
+          new_string: 'const a = 2;',
+        },
+      }),
+    ]);
+
+  it('is on screen with nothing pressed', () => {
+    render(editGroup());
+
+    expect(container.querySelector('[data-slot="diff"]')).not.toBeNull();
+  });
+
+  it('brings the calls AROUND it along, the way the CLI prints them', () => {
+    // The group opens as a whole — its reads and commands become the one-line
+    // rows they already were. Pinned because the alternative implementation
+    // (open the row, leave the group shut) renders the diff into a closed box.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 'r1',
+          name: 'Read',
+          input: { file_path: '/proj/a.ts' },
+        }),
+        toolItem('tool_call', {
+          id: 'e1',
+          name: 'Edit',
+          input: {
+            file_path: '/proj/a.ts',
+            old_string: 'const a = 1;',
+            new_string: 'const a = 2;',
+          },
+        }),
+      ]),
+    );
+
+    expect(container.querySelector('[data-slot="diff"]')).not.toBeNull();
+    expect(container.textContent).toContain('Read');
+  });
+
+  it('opens for an ACP agent, which reports its change on the RESULT', () => {
+    // cursor discloses no arguments at all and returns `diffs` when the call
+    // comes back. Keying auto-open on the call's input alone would open every
+    // claude edit and none of cursor's.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 'c1',
+          name: 'Edit File',
+          toolKind: 'edit',
+        }),
+        toolItem('tool_result', {
+          id: 'c1',
+          result: {
+            diffs: [
+              {
+                path: '/proj/b.ts',
+                oldText: 'let x = 1;',
+                newText: 'let x = 2;',
+              },
+            ],
+          },
+        }),
+      ]),
+    );
+
+    const diff = container.querySelector('[data-slot="diff"]');
+    expect(diff?.textContent).toContain('let x = 2;');
+  });
+
+  it('leaves a turn that changed NOTHING folded', () => {
+    // The fold is what keeps a transcript readable; unfolding reads, greps and
+    // command output too would bury the diff in the wall it exists to prevent.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 'b1',
+          name: 'Bash',
+          input: { command: 'npm test' },
+        }),
+        toolItem('tool_result', { id: 'b1', name: null, result: 'all green' }),
+      ]),
+    );
+
+    expect(container.textContent).not.toContain('npm test');
+    expect(container.textContent).not.toContain('all green');
+  });
+
+  it('stays shut once the user shuts it, edit or no edit', () => {
+    render(editGroup());
+
+    click(container.querySelector('button[aria-expanded]'));
+
+    expect(container.querySelector('[data-slot="diff"]')).toBeNull();
+  });
+
+  it('opens an edit that arrives AFTER the group was first drawn', () => {
+    // The state is derived, not seeded: a group is mounted on its first call
+    // and a `useState(hasEdit)` would read `false` there and stay false for the
+    // edit that follows — which is most edits, since a turn reads before it
+    // writes.
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 'r1',
+          name: 'Read',
+          input: { file_path: '/proj/a.ts' },
+        }),
+      ]),
+    );
+    expect(container.querySelector('[data-slot="diff"]')).toBeNull();
+
+    render(editGroup());
+
+    expect(container.querySelector('[data-slot="diff"]')).not.toBeNull();
   });
 });

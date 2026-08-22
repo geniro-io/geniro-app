@@ -303,6 +303,7 @@ describe('subagentThreadsByAgent', () => {
       label: 'Review the diff',
       prompt: null,
       returned: false,
+      resultIsOwn: false,
       failed: false,
       result: null,
       model: null,
@@ -331,7 +332,7 @@ describe('subagentThreadsByAgent', () => {
     expect(byAgent.get('coder')?.map((t) => t.id)).toEqual(['b', 'c']);
   });
 
-  it('names a thread by the delegate description, then its type, then generically', () => {
+  it('names a thread by the delegate description, then its type, then by its id', () => {
     const labelOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
       subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY).get(
         CHAT_AGENT_KEY,
@@ -339,7 +340,19 @@ describe('subagentThreadsByAgent', () => {
 
     expect(labelOf({})).toBe('Review the diff');
     expect(labelOf({ label: null })).toBe('code-reviewer');
-    expect(labelOf({ label: null, kind: null })).toBe('sub-agent');
+    // NOT a constant. Reported against a panel of seven identical `sub-agent`
+    // rows: a delegate whose launching call is outside the loaded window has no
+    // description and no type, and every one of them then rendered as the same
+    // row — so "which spinner is which piece of work" had no answer on screen.
+    expect(
+      labelOf({ id: 'toolu_01ADkfzGRTjn5M6mo', label: null, kind: null }),
+    ).toBe('Sub-agent n5M6mo');
+    // Two unnamed delegates are two DIFFERENT rows, which is the whole point.
+    expect(
+      labelOf({ id: 'toolu_01ADkfzGRTjn5M6mo', label: null, kind: null }),
+    ).not.toBe(
+      labelOf({ id: 'toolu_01XYqrstuvwxyzAB', label: null, kind: null }),
+    );
   });
 
   it('translates each block state into the panel status vocabulary', () => {

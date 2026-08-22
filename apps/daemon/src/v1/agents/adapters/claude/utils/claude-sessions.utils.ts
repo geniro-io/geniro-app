@@ -8,9 +8,13 @@ import type {
   AgentSessionHistory,
   AgentSessionRecord,
 } from '../../adapter.types';
+import { searchTerms, unmatchedTerms } from '../../utils/session-search.utils';
 import {
   CLAUDE_SESSION_FILE_SUFFIX,
   CLAUDE_SESSION_HEAD_BUDGET_BYTES,
+  CLAUDE_SESSION_SEARCH_BUDGET_BYTES,
+  CLAUDE_SESSION_SEARCH_FILE_LIMIT,
+  CLAUDE_SESSION_SNIPPET_MAX_CHARS,
   CLAUDE_SESSION_TITLE_MAX_CHARS,
   CLAUDE_SESSIONS_DIR_NAME,
 } from '../claude.const';
@@ -122,12 +126,28 @@ export async function listClaudeSessions(input: {
   profileDir: string;
   cwd: string | null;
   limit: number;
-}): Promise<AgentSessionRecord[]> {
+  query: string | null;
+}): Promise<{ sessions: AgentSessionRecord[]; searchTruncated: boolean }> {
   const files = await collectSessionFiles(input.profileDir);
   files.sort((a, b) => b.updatedAt - a.updatedAt);
 
+  const terms = searchTerms(input.query);
+  const searching = terms.length > 0;
+  // Two phases when searching, and the split is what keeps the answer the same
+  // whatever order the disk happens to serve the reads in. Phase A is the
+  // listing as it has always been — stat, head, folder filter — and it stops on
+  // a DIFFERENT cap, since it can no longer tell which of its candidates the
+  // search will keep. Phase B then opens bodies, in the candidates' own order,
+  // and applies `limit`. Doing the body read inside phase A instead would work,
+  // but its file cap would be spent in completion order rather than in
+  // newest-first order — so which sessions a large profile searched would
+  // change from one keystroke to the next.
+  const candidateCap = searching
+    ? CLAUDE_SESSION_SEARCH_FILE_LIMIT
+    : input.limit;
+
   const wanted = input.cwd === null ? null : await canonical(input.cwd);
-  const rows: AgentSessionRecord[] = [];
+  const rows: Candidate[] = [];
   /** Folder per project directory, learned from its first readable file. */
   const dirCwd = new Map<string, string | null>();
   // Heads are read a BATCH at a time and then decided over IN ORDER. Both
@@ -152,7 +172,7 @@ export async function listClaudeSessions(input: {
   // this size would otherwise open thousands of file handles at once.
   for (
     let start = 0;
-    start < files.length && rows.length < input.limit;
+    start < files.length && rows.length < candidateCap;
     start += HEAD_READ_BATCH
   ) {
     const batch = files.slice(start, start + HEAD_READ_BATCH);
@@ -173,7 +193,7 @@ export async function listClaudeSessions(input: {
       }),
     );
     for (const [index, file] of batch.entries()) {
-      if (rows.length >= input.limit) {
+      if (rows.length >= candidateCap) {
         break;
       }
       if (wanted !== null && dirCwd.get(file.dir) === null) {
@@ -208,10 +228,174 @@ export async function listClaudeSessions(input: {
         cwd: head.cwd,
         title: head.title,
         updatedAt: file.updatedAt,
+        // Filled only by a body match — a row the title or the folder already
+        // explains has nothing to add.
+        snippet: null,
+        path: file.path,
       });
     }
   }
-  return rows;
+  if (!searching) {
+    return {
+      sessions: rows.map(toRecord),
+      searchTruncated: false,
+    };
+  }
+  return {
+    sessions: await searchCandidates(rows, terms, input.limit),
+    // Only when the cap is what stopped it. A profile with fewer sessions than
+    // the cap searched every one of them, and saying otherwise would put a
+    // permanent "this is not everything" under a list that IS everything.
+    searchTruncated: rows.length >= CLAUDE_SESSION_SEARCH_FILE_LIMIT,
+  };
+}
+
+/** A session that passed the folder filter, with the file still to be opened. */
+interface Candidate extends AgentSessionRecord {
+  path: string;
+}
+
+function toRecord(candidate: Candidate): AgentSessionRecord {
+  return {
+    id: candidate.id,
+    cwd: candidate.cwd,
+    title: candidate.title,
+    updatedAt: candidate.updatedAt,
+    snippet: candidate.snippet,
+  };
+}
+
+/**
+ * Keep the candidates that answer every term, opening bodies only where the row
+ * itself does not already say so.
+ *
+ * The cheap half first, and it is not merely an optimization: a term matching
+ * the TITLE or the FOLDER is answered without opening anything, which is what
+ * makes searching by project name cost the same as it did before this existed.
+ * Only the terms still unaccounted for are carried into the file.
+ */
+async function searchCandidates(
+  candidates: Candidate[],
+  terms: string[],
+  limit: number,
+): Promise<AgentSessionRecord[]> {
+  const kept: AgentSessionRecord[] = [];
+  for (
+    let start = 0;
+    start < candidates.length && kept.length < limit;
+    start += HEAD_READ_BATCH
+  ) {
+    const batch = candidates.slice(start, start + HEAD_READ_BATCH);
+    const found = await Promise.all(
+      batch.map(async (candidate) => {
+        const missing = unmatchedTerms(terms, candidate);
+        if (missing.length === 0) {
+          return candidate;
+        }
+        const snippet = await searchSessionBody(candidate.path, missing);
+        return snippet === null ? null : { ...candidate, snippet };
+      }),
+    );
+    // Decided IN ORDER after the batch, like the head reads above: the results
+    // arrive in whatever order the disk answered, and a picker whose newest
+    // match is not its first row is a picker that looks broken.
+    for (const candidate of found) {
+      if (kept.length >= limit) {
+        break;
+      }
+      if (candidate !== null) {
+        kept.push(toRecord(candidate));
+      }
+    }
+  }
+  return kept;
+}
+
+/**
+ * Read one session looking for every term, and answer with the line that shows
+ * why it matched.
+ *
+ * Bounded twice — the byte budget here, the file count in the caller — and
+ * abandoned the instant the last term lands, so the budget is only ever paid in
+ * full by a session that does NOT match. Which is the common case, and is why
+ * the caller's file cap exists at all.
+ *
+ * Searches what was SAID, not everything the file holds. A session's tool
+ * inputs and outputs are most of its bytes — every file read, every command's
+ * output — so including them would make ordinary words match nearly every
+ * conversation, which is a search that returns the whole list.
+ */
+async function searchSessionBody(
+  path: string,
+  terms: string[],
+): Promise<string | null> {
+  const outstanding = new Set(terms);
+  let snippet: string | null = null;
+  await eachJsonLine(path, CLAUDE_SESSION_SEARCH_BUDGET_BYTES, (line) => {
+    const text = spokenText(line);
+    if (text === null) {
+      return true;
+    }
+    const haystack = text.toLowerCase();
+    let hit: string | null = null;
+    for (const term of outstanding) {
+      if (haystack.includes(term)) {
+        outstanding.delete(term);
+        hit ??= term;
+      }
+    }
+    // The FIRST line that answered anything, kept rather than replaced: a later
+    // line completing the last term is not more relevant, and a snippet that
+    // moves as the read goes on is one the user cannot predict.
+    if (hit !== null && snippet === null) {
+      snippet = toSnippet(text, hit);
+    }
+    return outstanding.size > 0;
+  });
+  return outstanding.size === 0 ? snippet : null;
+}
+
+/** What a person or an agent SAID on one line, or null for anything else. */
+function spokenText(line: Record<string, unknown>): string | null {
+  if (line.type === 'user') {
+    return userText(line);
+  }
+  if (line.type !== 'assistant') {
+    return null;
+  }
+  const message = line.message;
+  if (typeof message !== 'object' || message === null) {
+    return null;
+  }
+  const text = joinTextBlocks(
+    (message as Record<string, unknown>).content,
+  ).trim();
+  return text === '' ? null : text;
+}
+
+/**
+ * One matching line, short enough for a picker row and WINDOWED ON THE MATCH.
+ *
+ * Not the line's first 160 characters, which is what it was: measured against
+ * the real profile, a search for `asar` quoted a paragraph whose match sat 400
+ * characters in, so the row displayed a sentence with no visible connection to
+ * what had been typed — a quote that does not show the searched word explains
+ * a match no better than no quote at all. A third of the budget is kept ahead
+ * of the term so the result reads as a sentence rather than starting on it.
+ */
+function toSnippet(text: string, term: string): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line.length <= CLAUDE_SESSION_SNIPPET_MAX_CHARS) {
+    return line;
+  }
+  const at = line.toLowerCase().indexOf(term);
+  const lead =
+    at < 0
+      ? 0
+      : Math.max(0, at - Math.floor(CLAUDE_SESSION_SNIPPET_MAX_CHARS / 3));
+  const cut = line.slice(lead, lead + CLAUDE_SESSION_SNIPPET_MAX_CHARS).trim();
+  const tail = lead + CLAUDE_SESSION_SNIPPET_MAX_CHARS < line.length ? '…' : '';
+  return `${lead > 0 ? '…' : ''}${cut}${tail}`;
 }
 
 /**
@@ -303,7 +487,7 @@ function mapHistoryLine(
  * (`<system-reminder>`). All observed in this profile's own files.
  */
 const ENVELOPE_BLOCK =
-  /<(command-[a-z-]+|local-command-[a-z-]+|system-reminder)>([\s\S]*?)<\/\1>/g;
+  /<(command-[a-z-]+|local-command-[a-z-]+|system-reminder|task-notification)>([\s\S]*?)<\/\1>/g;
 /** The slash command itself, which IS what the user typed. */
 const COMMAND_NAME = /<command-name>([\s\S]*?)<\/command-name>/;
 const COMMAND_ARGS = /<command-args>([\s\S]*?)<\/command-args>/;

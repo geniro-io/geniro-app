@@ -106,6 +106,21 @@ afterEach(async () => {
 });
 
 describe('Onboarding', () => {
+  it('scrolls the PANE, not the reading column', async () => {
+    // The twin of the Settings pin — same one element doing both jobs, and this
+    // is the first screen anybody ever sees. `min-h-full` on the column rides
+    // with it: the footer is `mt-auto`, so without it "Get started" rides up
+    // under the last card on a machine where both CLIs are already installed.
+    await mount();
+
+    const scroller = container.querySelector('.overflow-y-auto');
+    expect(scroller).not.toBeNull();
+    expect(scroller!.className).not.toMatch(/\bmax-w-/);
+    const column = scroller!.querySelector('.mx-auto');
+    expect(column?.className).toMatch(/\bmax-w-/);
+    expect(column?.className).toMatch(/\bmin-h-full\b/);
+  });
+
   it('backfills detected paths into empty fields only — a later scan never overwrites a seeded field', async () => {
     geniro.detectClis
       .mockResolvedValueOnce([

@@ -54,8 +54,11 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // CLI's own housekeeping, and a permanent line saying it started and
       // another saying it finished, wedged between the user's messages, is noise
       // in the conversation they actually came for. It rides the ephemeral
-      // activity channel instead, where it names the pause while the pause is
-      // happening and explains the meter's drop as it drops, then goes away.
+      // activity channel instead, where it names the pause WHILE the pause is
+      // happening and then goes away — which the finished phase now does by
+      // announcing nothing at all, rather than leaving a past-tense sentence
+      // standing in a spinning row (see `context_compacted` in
+      // `chat.service.ts`).
       //
       // What DOES earn a durable row is the part with content: the CLI's own
       // summary of what it compacted, and a compaction that FAILED. Both arrive
@@ -78,6 +81,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
     case 'thinking_progress':
     case 'context_progress':
     case 'text_delta':
+    case 'reasoning_delta':
       // The EPHEMERAL live plane. This switch has no `default` on purpose:
       // adding an AgentEvent arm breaks the build until someone decides,
       // here, whether it becomes a durable row — which is what stops a

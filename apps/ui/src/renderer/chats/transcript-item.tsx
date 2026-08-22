@@ -130,6 +130,7 @@ export const TranscriptItem = memo(function TranscriptItem({
           <ThinkingRow
             since={payloadNumber(item.payload, 'thinkingSince') ?? Date.now()}
             tokens={payloadNumber(item.payload, 'thinkingTokens') ?? 0}
+            text={payloadString(item.payload, 'thinkingText')}
           />
         );
       }

@@ -174,6 +174,33 @@ export interface OpenTurn {
 }
 
 /**
+ * The open turn with a HOLD counted as a parked stretch — the turn as it should
+ * be MEASURED once the agent has stopped talking.
+ *
+ * A hold is the daemon keeping the turn open for background work the agent
+ * launched: it has said its piece, and the process is alive only for its
+ * listeners. That is the same non-work as a turn parked on an approval card,
+ * and `openSince` is already how such a stretch stops the live total — so this
+ * adds the hold to it rather than inventing a second mechanism.
+ *
+ * A separate function rather than a branch inside {@link scanTurns}, because a
+ * hold leaves NO transcript row to scan for: `turn_held` maps to no item, on
+ * purpose. It is a live fact about the run, and it arrives from the run-status
+ * channel.
+ *
+ * `heldSince` undefined means not held, and the turn passes through untouched.
+ */
+export function parkWhileHeld(
+  open: OpenTurn | null,
+  heldSince: number | undefined,
+): OpenTurn | null {
+  if (open === null || heldSince === undefined) {
+    return open;
+  }
+  return { ...open, openSince: [...open.openSince, heldSince] };
+}
+
+/**
  * What the in-flight turn has worked as of `now` — 0 when nothing is running.
  *
  * Measured the same way the wall-clock fallback measures a settled turn, so the
@@ -188,8 +215,17 @@ export function openTurnWorkedMs(open: OpenTurn | null, now: number): number {
     return 0;
   }
   let parked = open.parkedMs;
-  for (const since of open.openSince) {
-    parked += Math.max(0, now - since);
+  // The UNION of the open stretches, not their sum — and they all end at `now`,
+  // so the union is simply the earliest of them to here.
+  //
+  // Summing was wrong the moment two of them overlapped, which they routinely
+  // do: a turn can hold several approval cards at once (`openSince` is a list
+  // for that reason), and a hold sits on top of whatever is already open. Two
+  // stretches of ten minutes inside a ten-minute turn subtracted twenty and the
+  // figure pinned itself at 0 — a turn that had worked reporting that it had
+  // not. Found by a test written for the hold; it was reachable before that.
+  if (open.openSince.length > 0) {
+    parked += Math.max(0, now - Math.min(...open.openSince));
   }
   return Math.max(0, now - open.startedAt - parked);
 }

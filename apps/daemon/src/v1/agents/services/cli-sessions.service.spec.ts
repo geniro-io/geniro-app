@@ -29,7 +29,11 @@ function setup(over: Partial<FakeAdapter> = {}): {
   const adapter: FakeAdapter = {
     listSessions: (input) => {
       listed.push(input);
-      return Promise.resolve({ sessions: [], unavailableReason: null });
+      return Promise.resolve({
+        sessions: [],
+        unavailableReason: null,
+        partialReason: null,
+      });
     },
     prepareSessionImport: () => Promise.resolve(),
     readSessionHistory: () =>
@@ -41,6 +45,7 @@ function setup(over: Partial<FakeAdapter> = {}): {
           listingUnavailableReason: null,
           listingPartialReason: null,
           historyUnavailableReason: null,
+          contentSearchUnavailableReason: null,
         },
       }) as AdapterConfig,
     ...over,
@@ -68,7 +73,7 @@ describe('CliSessionsService.list', () => {
         }) as AdapterConfig,
     });
     return expect(
-      service.list(AgentKind.CursorAgent, null, null),
+      service.list(AgentKind.CursorAgent, null, null, null),
     ).resolves.toMatchObject({
       partialReason: 'a second store is not reached',
     });
@@ -86,11 +91,13 @@ describe('CliSessionsService.list', () => {
             cwd: '/w',
             title: null,
             updatedAt: null,
+            snippet: null,
           })),
           unavailableReason: null,
+          partialReason: null,
         }),
     });
-    const listing = await service.list(AgentKind.Claude, null, null);
+    const listing = await service.list(AgentKind.Claude, null, null, null);
     expect(listing.partialReason).toMatch(/most recent sessions/);
     // The overflow row is asked for so the two cases can be told apart, and
     // dropped before the answer goes out — the cap is still the cap.
@@ -110,12 +117,14 @@ describe('CliSessionsService.list', () => {
             cwd: '/w',
             title: null,
             updatedAt: null,
+            snippet: null,
           })),
           unavailableReason: null,
+          partialReason: null,
         }),
     });
 
-    const listing = await service.list(AgentKind.Claude, null, null);
+    const listing = await service.list(AgentKind.Claude, null, null, null);
 
     expect(listing.sessions).toHaveLength(400);
     expect(listing.partialReason).toBeNull();
@@ -124,7 +133,7 @@ describe('CliSessionsService.list', () => {
   it('claims nothing about a list that fitted', async () => {
     const { service } = setup();
     await expect(
-      service.list(AgentKind.Claude, null, null),
+      service.list(AgentKind.Claude, null, null, null),
     ).resolves.toMatchObject({ partialReason: null });
   });
 
@@ -137,19 +146,24 @@ describe('CliSessionsService.list', () => {
         calls += 1;
         return new Promise((resolve) =>
           setTimeout(
-            () => resolve({ sessions: [], unavailableReason: null }),
+            () =>
+              resolve({
+                sessions: [],
+                unavailableReason: null,
+                partialReason: null,
+              }),
             5,
           ),
         );
       },
     });
     await Promise.all([
-      service.list(AgentKind.Claude, '/w', null),
-      service.list(AgentKind.Claude, '/w', null),
+      service.list(AgentKind.Claude, '/w', null, null),
+      service.list(AgentKind.Claude, '/w', null, null),
     ]);
     expect(calls).toBe(1);
     // A DIFFERENT question is its own ask, not a served cache hit.
-    await service.list(AgentKind.Claude, '/other', null);
+    await service.list(AgentKind.Claude, '/other', null, null);
     expect(calls).toBe(2);
   });
 });
@@ -240,5 +254,103 @@ describe('CliSessionsService.importHistory', () => {
     expect(events).toEqual([]);
     expect(notice).toContain('not shown here');
     warn.mockRestore();
+  });
+});
+
+describe('searching the conversations', () => {
+  // REPORTED as "improve search bu threads - by content as well". The search
+  // is a QUESTION for the adapter, which is the only side that can read what
+  // was said inside a conversation — never a filter this service applies to an
+  // answer it was given.
+  it('hands the query to the adapter rather than filtering its answer', async () => {
+    const { service, listed } = setup();
+
+    await service.list(AgentKind.Claude, null, null, 'asar geniro');
+
+    expect(listed[0]?.query).toBe('asar geniro');
+  });
+
+  it('asks for EVERYTHING when the box is empty', async () => {
+    const { service, listed } = setup();
+
+    await service.list(AgentKind.Claude, null, null, null);
+
+    expect(listed[0]?.query).toBeNull();
+  });
+
+  it('does not answer a search with a listing taken for a DIFFERENT one', async () => {
+    // The in-flight join exists so two callers asking the same thing launch one
+    // read. The query is part of the thing being asked, so a search typed while
+    // the unfiltered listing was still out must not be joined to it and handed
+    // back the whole list.
+    let release: (listing: AgentSessionListing) => void = () => {};
+    const { service, listed } = setup({
+      listSessions: (input) => {
+        listed.push(input);
+        return new Promise<AgentSessionListing>((resolve) => {
+          release = resolve;
+        });
+      },
+    });
+
+    void service.list(AgentKind.Claude, null, null, null);
+    void service.list(AgentKind.Claude, null, null, 'asar');
+    release({ sessions: [], unavailableReason: null, partialReason: null });
+
+    expect(listed.map((input) => input.query)).toEqual([null, 'asar']);
+  });
+
+  it('carries what THIS call could not reach, beside the standing fact', async () => {
+    // Two independently true things — a bounded content search, and a store
+    // the CLI cannot open at all — and dropping either leaves a partial answer
+    // reading as a complete one.
+    const { service } = setup({
+      listSessions: () =>
+        Promise.resolve({
+          sessions: [],
+          unavailableReason: null,
+          partialReason: 'Searched the 600 most recent conversations.',
+        }),
+      getConfig: () =>
+        ({
+          kind: AgentKind.Claude,
+          sessions: {
+            listingUnavailableReason: null,
+            listingPartialReason: 'Only ACP sessions are listed.',
+            historyUnavailableReason: null,
+            contentSearchUnavailableReason: null,
+          },
+        }) as AdapterConfig,
+    });
+
+    const listing = await service.list(AgentKind.Claude, null, null, 'asar');
+
+    expect(listing.partialReason).toContain('Only ACP sessions');
+    expect(listing.partialReason).toContain('600 most recent');
+  });
+
+  it('says a CLI searches titles only WHILE searching, and not before', async () => {
+    // A limitation of searching, stated over a list nobody has searched, is a
+    // caveat about a feature the user has not reached for.
+    const build = (): ReturnType<typeof setup> =>
+      setup({
+        getConfig: () =>
+          ({
+            kind: AgentKind.Claude,
+            sessions: {
+              listingUnavailableReason: null,
+              listingPartialReason: null,
+              historyUnavailableReason: null,
+              contentSearchUnavailableReason: 'titles and folders only',
+            },
+          }) as AdapterConfig,
+      });
+
+    await expect(
+      build().service.list(AgentKind.Claude, null, null, 'asar'),
+    ).resolves.toMatchObject({ partialReason: 'titles and folders only' });
+    await expect(
+      build().service.list(AgentKind.Claude, null, null, null),
+    ).resolves.toMatchObject({ partialReason: null });
   });
 });

@@ -142,7 +142,7 @@ describe('DisclosureRow', () => {
 
   describe('the recovery action', () => {
     const TITLE =
-      'Open this agent’s CLI sign-in in your terminal, then send the message again';
+      'Sign this agent back in — it runs here and opens your browser';
     const signInButton = (): HTMLButtonElement =>
       container.querySelector<HTMLButtonElement>(`button[title="${TITLE}"]`)!;
     const expanded = (): string | null =>

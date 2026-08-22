@@ -20,6 +20,17 @@ identical.
   A raw hex/`rgb()`/`hsl()`/`oklch()` — including inside a Tailwind arbitrary
   value like `bg-[#fff]` — is an **eslint error** (the `no-restricted-syntax`
   override scoped to `apps/ui/src/renderer/**` in `eslint.config.mjs`).
+- **A FLOATING panel is lifted, not outlined** — `shadow-panel-lg` (the
+  two-layer float: a tight contact shadow plus a wide ambient one) over a
+  `border-border/60` hairline, and both come from the one `popoverSurface`
+  constant in `components/ui/popover.tsx` that `Menu` and `Popover` share.
+  Reported as a menu whose border "выглядит очень странно… топорно": on this
+  warm near-white palette a full-strength border over `shadow-panel-md` made
+  the border the strongest line on screen, so the panel read as a wireframe
+  rectangle drawn on the page instead of a surface above it. `shadow-panel-md`
+  stays for panels that sit IN the page (the dialog). The border is not
+  dropped: no shadow reaches a panel's top edge, and near-white on near-white
+  needs something there.
 - **Non-colour arbitrary values are fine**: `ring-[3px]`, `size-[26px]`,
   `w-[220px]`, `shadow-[0_0_0_1px_var(--border)]`, `transition-[width]`.
 - **Adding a token** = add it ONCE in `styles/global.css` (both `:root` and

@@ -508,3 +508,74 @@ describe('PartialStreamService — a window belongs to an OWNER, not to a run', 
     expect(lastFor(BIG).contextWindowTokens).toBe(500_000);
   });
 });
+
+describe('PartialStreamService — a CLI that DISCLOSES what it is thinking', () => {
+  it('opens a stretch on the first thought chunk, with no token count to show', () => {
+    // The reported defect: cursor streams `agent_thought_chunk` and no stretch
+    // was ever opened for them, so the transcript drew its generic "the agent
+    // has shown nothing" row for the whole wait — measured at three minutes on
+    // the chat this came from.
+    service.reasoning(RUN, OWNER, null, 'Let me work through');
+
+    expect(last().thinkingStretch).toBe(1);
+    expect(last().thinkingText).toBe('Let me work through');
+    // Null rather than 0: this CLI reports no reasoning token count at all, and
+    // a zero would render as "Thinking… 0 tokens" — a figure nobody measured.
+    expect(last().thinkingTokens).toBeNull();
+  });
+
+  it('publishes the WHOLE tail on every chunk, never the increment', () => {
+    // REPLACE semantics, the same contract the text tail carries: a client that
+    // missed one event is correct again on the very next one.
+    service.reasoning(RUN, OWNER, null, 'first ');
+    service.reasoning(RUN, OWNER, null, 'second');
+
+    expect(last().thinkingText).toBe('first second');
+    // Still ONE stretch — a second chunk is more of the same wait, so the row
+    // must not remount with a clock starting again at zero.
+    expect(last().thinkingStretch).toBe(1);
+    expect(published.at(-2)?.thinkingSince).toBe(last().thinkingSince);
+  });
+
+  it('drops the text the moment the agent starts writing words', () => {
+    service.reasoning(RUN, OWNER, null, 'thinking about it');
+    service.append(RUN, OWNER, null, 'Here is the answer');
+
+    expect(last().text).toBe('Here is the answer');
+    expect(last().thinkingText).toBeNull();
+    expect(last().thinkingStretch).toBeNull();
+  });
+
+  it('closes a text-only stretch on the next durable event', () => {
+    // `endThinking` fires at the persist seam, and its early return used to ask
+    // only about the TOKEN total — so a stretch opened by text alone was
+    // invisible to it and stayed open for the whole tool call that followed,
+    // exactly the defect the token path was fixed for.
+    service.reasoning(RUN, OWNER, null, 'about to call a tool');
+    service.endThinking(RUN, OWNER, null);
+
+    expect(last().thinkingText).toBeNull();
+    expect(last().thinkingStretch).toBeNull();
+
+    // …and the NEXT stretch is a fresh one rather than the old one resumed.
+    service.reasoning(RUN, OWNER, null, 'now what');
+    expect(last().thinkingStretch).toBe(2);
+  });
+
+  it('announces the empty state when the turn ends mid-thought', () => {
+    // Deleting the state locally says nothing on the wire, so the client would
+    // keep a thinking bubble whose clock ticked on under a settled chat.
+    service.reasoning(
+      RUN,
+      OWNER,
+      null,
+      'still going when the user pressed Stop',
+    );
+    published.length = 0;
+
+    service.clearRun(RUN);
+
+    expect(last().thinkingText).toBeNull();
+    expect(last().thinkingStretch).toBeNull();
+  });
+});

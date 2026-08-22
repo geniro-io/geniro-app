@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { Menu } from './menu';
 import { Popover } from './popover';
 
 /**
@@ -79,6 +80,38 @@ function Harness({
     </span>
   );
 }
+
+describe('the shared floating surface', () => {
+  it('is the SAME surface under the menu and the popover', () => {
+    // `popoverSurface` exists so elevation, radius and border cannot drift
+    // between two things the user reads as one object — the claim its own doc
+    // comment makes. Asserting the constant's text would only restate the
+    // source; what this compares is two independently rendered components,
+    // so a hand-rolled panel on either side breaks it.
+    //
+    // It has teeth because that drift is what was reported: the menu read as an
+    // outlined wireframe rather than a lifted surface, and the fix was to move
+    // the separation off the border and onto a real shadow — in ONE place, for
+    // both.
+    const popover = render(<Harness />).querySelector('[role="dialog"]')!;
+    const menu = render(
+      <Menu
+        open
+        groups={[{ items: [{ value: 'a', label: 'A' }] }]}
+        onSelect={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    ).querySelector('[role="listbox"]')!;
+
+    for (const surface of [popover, menu]) {
+      const classes = surface.className.split(/\s+/);
+      expect(classes).toContain('shadow-panel-lg');
+      expect(classes).toContain('border-border/60');
+      expect(classes).toContain('rounded-xl');
+      expect(classes).toContain('bg-popover');
+    }
+  });
+});
 
 describe('Popover — anchor="ancestor" (the default)', () => {
   it('places itself with absolute offsets and no inline box', () => {

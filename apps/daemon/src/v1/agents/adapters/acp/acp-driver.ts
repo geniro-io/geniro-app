@@ -5,6 +5,7 @@ import type {
   AgentTask,
   AgentTurnInput,
   AgentUsage,
+  FollowUpMessage,
   TurnDriver,
   TurnIo,
 } from '../adapter.types';
@@ -265,6 +266,12 @@ export interface AcpDriverOptions {
    * the adapter's business; what the driver owns is WHEN to take one, which is
    * why this is a function of the session id and not a value.
    *
+   * It reaches BOTH planes — the live `context_progress` while the turn runs,
+   * and the turn's own `turn_complete` usage after it ends (see
+   * {@link AcpTurnDriver.contextReading}). Live alone was the first version and
+   * was reported straight back: that plane is dropped on settle, so the ring it
+   * feeds was filled during a turn and empty between turns.
+   *
    * SYNCHRONOUS on purpose: it is consulted from the two handlers that build an
    * event list and return it, so an async reading would have to be published
    * out of band, past the ordering every other event in the turn is subject to.
@@ -342,6 +349,28 @@ export interface AcpModelParameter {
   value: string;
   /** Other ids this SAME setting is known by, most-preferred first. */
   alternateIds?: readonly string[];
+  /**
+   * Whether the prompt must WAIT for this frame's reply.
+   *
+   * Every other frame this driver sends before a prompt is pipelined, on the
+   * reasoning that one ordered stdio stream already puts them in order — see
+   * {@link AcpTurnDriver.applyModel}. That holds for anything the agent reads
+   * per REQUEST, and it does not hold for a setting the agent binds when the
+   * TURN begins.
+   *
+   * Measured on cursor-agent 2026.08.11-e8db854, same profile, same frames,
+   * same values, only the waiting differing: with the `context` reply awaited
+   * the CLI's own accounting reports a 1,000,000-token window; with the frame
+   * and the prompt sent back to back it reports 300,000 — the model's default —
+   * even though the reply confirms `context = 1m`. So the option was set and
+   * the turn had already started without it.
+   *
+   * The cost is one round trip on the turns that ask, and only those. It is not
+   * set on the effort axis: nothing has measured that one to bind at turn
+   * start, and the deferral was priced at ~1.4s per turn when it was considered
+   * for the model frame.
+   */
+  applyBeforePrompt?: boolean;
 }
 
 function textOf(content: unknown): string | null {
@@ -487,6 +516,28 @@ export class AcpTurnDriver implements TurnDriver {
   private io: TurnIo | null = null;
   private nextRequestId = 1;
   private readonly pending = new Map<JsonRpcId, PendingKind>();
+  /**
+   * Parameter frames whose reply the PROMPT is waiting on, and the prompt held
+   * behind them.
+   *
+   * Only for a parameter the adapter marked `applyBeforePrompt` — see that
+   * field for the measurement. Zero on every other turn, which is almost all of
+   * them, and the prompt goes out pipelined exactly as before.
+   */
+  private promptBlockers = 0;
+  private promptHeld = false;
+  /**
+   * How many `session/prompt` requests this turn has out and unanswered.
+   *
+   * One, almost always. It goes to two while a mid-turn message is being
+   * delivered ({@link sendFollowUp}), and that is the whole reason it is
+   * counted: this CLI answers the SUPERSEDED prompt with its own reply, and a
+   * turn that emitted its terminal there would settle the run in the middle of
+   * answering the message the user had just pushed through — under
+   * `stopReason: "cancelled"`, reading as a Stop nobody pressed. Only the last
+   * outstanding prompt ends the turn.
+   */
+  private promptsOutstanding = 0;
   private capabilities: AcpAgentCapabilities = {
     loadSession: false,
     mcpHttp: false,
@@ -524,6 +575,19 @@ export class AcpTurnDriver implements TurnDriver {
     costAmount: null,
     costCurrency: null,
   };
+  /**
+   * The last off-protocol context reading this turn took, or null.
+   *
+   * KEPT rather than merely emitted, and that is the fix for the reported "the
+   * panel says 70% and the circle beside it is empty". A reading rides the
+   * EPHEMERAL live plane, which the client drops when the run settles — so the
+   * ring was fed for the length of a turn and lost its only figure the moment
+   * the turn ended, while the readout behind it kept answering off the same
+   * file on demand. Held here, the same number also reaches `turn_complete`
+   * (see {@link buildUsage}), which is the durable half every other CLI's ring
+   * is drawn from between turns.
+   */
+  private contextReading: AcpContextReading | null = null;
   private readonly textChunks: string[] = [];
   /**
    * The assistant-text or thought block being streamed right now, not yet
@@ -696,12 +760,13 @@ export class AcpTurnDriver implements TurnDriver {
 
   // --- outbound -----------------------------------------------------------
 
+  /** Send one request, answering whether it actually went out. */
   private request(
     method: string,
     params: unknown,
     kind: PendingKind,
     events: AgentEvent[],
-  ): void {
+  ): boolean {
     const id = this.nextRequestId++;
     this.pending.set(id, kind);
     if (this.io?.write(encodeRequest(id, method, params)) !== true) {
@@ -710,7 +775,9 @@ export class AcpTurnDriver implements TurnDriver {
         type: 'error',
         message: `acp: failed to send ${method} (the agent's stdin is closed)`,
       });
+      return false;
     }
+    return true;
   }
 
   private reply(id: JsonRpcId, result: unknown): void {
@@ -738,10 +805,12 @@ export class AcpTurnDriver implements TurnDriver {
         // arrives as an error reply instead (see onErrorReply).
         return [];
       case 'set_model':
-      case 'set_model_parameter':
         // Same contract as `set_mode` above: silence on acceptance, and a
         // `notice` from `onErrorReply` on a refusal.
         return [];
+      case 'set_model_parameter':
+        // Silent too — but it may be the frame the prompt is waiting on.
+        return this.releasePrompt();
       case 'prompt':
         return this.onPromptComplete(result);
     }
@@ -831,6 +900,10 @@ export class AcpTurnDriver implements TurnDriver {
           severity: 'warning',
           message: `the agent declined '${this.requestedParameter ?? ''}' (${message}) — the turn keeps its own value for it`,
         },
+        // A refusal releases the prompt too: the setting did not apply, and a
+        // turn must not be stranded behind a frame that was never going to
+        // land. The notice above is what says so.
+        ...this.releasePrompt(),
       ];
     }
     return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
@@ -1003,15 +1076,125 @@ export class AcpTurnDriver implements TurnDriver {
 
     this.applyModel(root, events);
 
-    this.request(
+    // HELD when a parameter must be in force before the turn begins, and
+    // released by its reply (`releasePrompt`). Everything else about the
+    // ordering is unchanged: with no such parameter this is the same
+    // back-to-back send it has always been.
+    if (this.promptBlockers > 0) {
+      this.promptHeld = true;
+      return events;
+    }
+    this.sendPrompt(events);
+    return events;
+  }
+
+  /** The turn's prompt — composed once, whether it goes now or after a reply. */
+  private sendPrompt(events: AgentEvent[]): void {
+    if (this.sessionId === null) {
+      return;
+    }
+    if (
+      this.request(
+        ACP_AGENT_METHODS.sessionPrompt,
+        {
+          sessionId: this.sessionId,
+          prompt: this.composePromptBlocks(events),
+        },
+        'prompt',
+        events,
+      )
+    ) {
+      this.promptsOutstanding += 1;
+    }
+  }
+
+  /**
+   * Deliver a user message into the turn already running — {@link
+   * TurnDriver.sendFollowUp}.
+   *
+   * **This CLI has no frame that ADDS to a prompt in flight, and a second
+   * `session/prompt` is not one: it CANCELS the first.** Probed on
+   * 2026.08.11-e8db854 — a counting turn interrupted twelve seconds in answered
+   * `{"stopReason":"cancelled"}` while the injected prompt ran to `end_turn`
+   * and plainly held the conversation ("STOP counting, reply BANANA" got
+   * `BANANA`). The adapter declares that as `followUp.interrupts`, so the user
+   * is told what a press does before they make it; nothing here decides it.
+   *
+   * The words the interrupted stretch already produced are NOT lost: they
+   * streamed as ordinary chunks and the open block is closed when its own reply
+   * lands, exactly as a cancel closes one.
+   */
+  sendFollowUp(message: FollowUpMessage): boolean {
+    // No session yet, or a prompt still held behind a parameter frame: in both
+    // the turn's OWN prompt has not gone out, so there is nothing to interrupt
+    // and a follow-up would race it. False leaves the message queued, which is
+    // the safe answer.
+    if (this.sessionId === null || this.promptHeld) {
+      return false;
+    }
+    const events: AgentEvent[] = [];
+    const images = buildAcpImageBlocks(message.images);
+    // Gated on the agent's OWN advertised capability, the same check the turn's
+    // opening prompt passes through: an unadvertised image block earns an error
+    // reply, which here would lose the message rather than merely the picture.
+    const withImages = images.length > 0 && this.capabilities.promptImage;
+    if (images.length > 0 && !withImages) {
+      events.push({
+        type: 'notice',
+        message: `agent does not accept image prompts — ${images.length} attached image${images.length === 1 ? ' was' : 's were'} not sent with this message`,
+      });
+    }
+    const blocks: AcpContentBlock[] = [
+      ...(withImages ? images : []),
+      { type: 'text', text: message.text },
+    ];
+    const sent = this.request(
       ACP_AGENT_METHODS.sessionPrompt,
-      {
-        sessionId: this.sessionId,
-        prompt: this.composePromptBlocks(events),
-      },
+      { sessionId: this.sessionId, prompt: blocks },
       'prompt',
       events,
     );
+    if (sent) {
+      this.promptsOutstanding += 1;
+      // Close the open block HERE rather than leaving it to the superseded
+      // reply: what the agent had already said is finished the moment we
+      // interrupt it, and closing at the interrupt is what keeps it ONE row
+      // instead of a blob merged with whatever the agent emits in the window
+      // between our frame and its own cancel.
+      //
+      // It does NOT decide where the row lands relative to the user's message.
+      // The turn's events are persisted through a serialized chain while
+      // `deliverIntoRunningTurn` reserves its own seq directly, so the user row
+      // wins and the interrupted text is filed under it — measured end to end.
+      // Changing that needs an ordering seam on the turn handle, not a flush
+      // moved earlier.
+      events.push(...this.flushPending());
+    }
+    for (const event of events) {
+      this.io?.emit(event);
+    }
+    return sent;
+  }
+
+  /**
+   * One awaited parameter frame has been answered — send the prompt once the
+   * last of them is in.
+   *
+   * Called for a REFUSAL as well as an acceptance: a turn must not be stranded
+   * because a setting did not apply. The refusal itself is already narrated by
+   * `onErrorReply`, so the turn runs on whatever the agent kept, which is what
+   * it would have done had the frame never been sent.
+   */
+  private releasePrompt(): AgentEvent[] {
+    if (this.promptBlockers > 0) {
+      this.promptBlockers -= 1;
+    }
+    if (this.promptBlockers > 0 || !this.promptHeld) {
+      return [];
+    }
+    this.promptHeld = false;
+    const events: AgentEvent[] = [];
+    this.sendPrompt(events);
     return events;
   }
 
@@ -1193,6 +1376,7 @@ export class AcpTurnDriver implements TurnDriver {
         continue;
       }
       this.requestedParameter = `${configId}=${parameter.value}`;
+      const before = this.pending.size;
       this.request(
         ACP_AGENT_METHODS.sessionSetConfigOption,
         {
@@ -1203,6 +1387,12 @@ export class AcpTurnDriver implements TurnDriver {
         'set_model_parameter',
         events,
       );
+      // Counted only for a frame that really went out — `request` un-pends one
+      // it could not write, and a blocker with no reply coming would hold the
+      // prompt for ever.
+      if (parameter.applyBeforePrompt && this.pending.size > before) {
+        this.promptBlockers += 1;
+      }
     }
   }
 
@@ -1416,6 +1606,24 @@ export class AcpTurnDriver implements TurnDriver {
   }
 
   private onPromptComplete(result: unknown): AgentEvent[] {
+    if (this.promptsOutstanding > 0) {
+      this.promptsOutstanding -= 1;
+    }
+    if (this.promptsOutstanding > 0) {
+      // A LATER prompt is still running, so this reply belongs to one we
+      // superseded ourselves — `sendFollowUp` sent a second `session/prompt`,
+      // which this CLI answers by cancelling the first. The turn is not over:
+      // emitting the terminal here would settle the run while the message the
+      // user just pushed through is being answered, and `stopReason:
+      // "cancelled"` would badge it as a Stop nobody pressed.
+      //
+      // The open block is still CLOSED, exactly as a real cancel closes one.
+      // Usually there is nothing left to close — `sendFollowUp` flushes at the
+      // moment it interrupts, so the row lands above the message that caused
+      // it — and what this catches is the chunks the agent emits between our
+      // frame and its own cancel.
+      return this.flushPending();
+    }
     const root = asRecord(result);
     const rawStopReason = root ? asString(root.stopReason) : null;
     const stopReason = (ACP_STOP_REASONS as readonly string[]).includes(
@@ -1481,6 +1689,9 @@ export class AcpTurnDriver implements TurnDriver {
     if (reading === null || reading.usedTokens === null) {
       return;
     }
+    // Remembered before it is published, so the turn's own `turn_complete`
+    // carries it too — see the field.
+    this.contextReading = reading;
     events.push({
       type: 'context_progress',
       contextTokens: reading.usedTokens,
@@ -1542,15 +1753,31 @@ export class AcpTurnDriver implements TurnDriver {
       cacheCreationTokens: null,
       thinkingTokens: null,
       // ACP reports context occupancy directly (`UsageUpdate.used`), so unlike
-      // the claude adapter there are no cache counters to sum. Fall back to the
-      // plain input count when the agent never sent a usage_update.
-      contextTokens: this.usage.contextUsed ?? this.usage.inputTokens,
+      // the claude adapter there are no cache counters to sum.
+      //
+      // Then the OFF-PROTOCOL reading, and only then the plain input count.
+      // The order is by what each figure actually measures: `used` and the
+      // reading are both the window's occupancy — one stated on the wire, one
+      // read out of the CLI's own accounting — while `inputTokens` is the
+      // prompt of a single request, which is a different quantity that merely
+      // beats nothing. Putting the reading here is what keeps the ring drawn
+      // between turns rather than only during one; see {@link contextReading}.
+      contextTokens:
+        this.usage.contextUsed ??
+        this.contextReading?.usedTokens ??
+        this.usage.inputTokens,
       // ACP never reports the model's window size — `UsageUpdate` carries only
-      // occupancy — so the consumer shows the count with no denominator rather
-      // than this client claiming a window no agent stated. With no window
-      // there is nothing for a model id to describe either.
-      contextWindowTokens: null,
-      contextModel: null,
+      // occupancy — so a denominator can only come from the off-protocol
+      // reading. Absent that, the consumer shows the count with no denominator
+      // rather than this client claiming a window no agent stated.
+      contextWindowTokens: this.contextReading?.windowTokens ?? null,
+      // From the same reading as the window and never on its own: a model id
+      // here is a label ON that denominator, so one without the other names
+      // something no figure is being measured against.
+      contextModel:
+        this.contextReading?.windowTokens == null
+          ? null
+          : this.contextReading.model,
       // The field is `costUsd`: report an amount only when the agent priced the
       // turn in USD, rather than silently relabelling another currency.
       costUsd:
@@ -1853,9 +2080,21 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         const text = textOf(update.content);
-        // No ephemeral twin: `thinking_progress` carries a token COUNT, which
-        // is claude's answer to redacted thinking and cannot express text.
-        return text === null ? [] : this.appendPending('reasoning', text);
+        if (text === null) {
+          return [];
+        }
+        // The ephemeral twin is `reasoning_delta`, NOT `thinking_progress`:
+        // that event carries a token COUNT, which is claude's answer to
+        // redacted thinking and cannot express text. Without a live twin here
+        // a thinking stretch emitted nothing at all — `appendPending` buffers
+        // until the block closes — so the transcript sat on `Working…` for the
+        // whole of it while chunks were arriving. Measured on a real turn:
+        // thought chunks at 16.8–20.0s and again at 32.1–34.4s, none of it on
+        // screen until the block closed.
+        return [
+          ...this.appendPending('reasoning', text),
+          { type: 'reasoning_delta', text },
+        ];
       }
       case 'tool_call': {
         if (this.replaying) {

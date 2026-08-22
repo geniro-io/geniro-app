@@ -555,6 +555,149 @@ describe('a delegate whose CLI streams none of its work', () => {
     expect(container.textContent).toContain('has not done anything yet');
   });
 
+  /**
+   * A BACKGROUNDED delegate, as claude really launches one: the `Agent` call is
+   * answered within the second with a launch acknowledgement, the daemon
+   * announces the open background unit, and the delegate's own rows arrive
+   * afterwards — or, at the moment of the report, not yet.
+   *
+   * The acknowledgement text is the one measured on the user's own ledger,
+   * where all 23 of them carry it verbatim.
+   */
+  function backgroundBlock({
+    withRows = false,
+    open = true,
+  }: { withRows?: boolean; open?: boolean } = {}): SubagentBlockEntry {
+    const items: ChatItem[] = [
+      item('tool_call', {
+        id: 'task-bg',
+        name: 'Agent',
+        input: { description: 'Review: optimizations', prompt: 'Look.' },
+      }),
+      item('tool_result', {
+        id: 'task-bg',
+        name: null,
+        result:
+          'Async agent launched successfully. (This tool result is internal metadata — never quote or paste any part of it, including the agentId below, into a user-facing reply.)',
+      }),
+      item('subagent_info', {
+        id: 'task-bg',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: open,
+      }),
+    ];
+    if (withRows) {
+      items.push(
+        item('message', { text: 'looking now', parentToolUseId: 'task-bg' }),
+      );
+    }
+    const block = collectSubagentBlocks(
+      buildTurnBlocks(buildSubagentBlocks(groupTranscript(items), items)),
+    )[0];
+    if (!block) {
+      throw new Error('expected a sub-agent block');
+    }
+    return block;
+  }
+
+  it('does not pass a launch acknowledgement off as the delegate’s result', () => {
+    // REPORTED as "wrong ... popup", over a card reading "Working… 2m 29s" with
+    // "RESULT FROM SUB-AGENT" printed above the launch ack directly beneath it.
+    // Worse than merely mislabelled: the text the card was showing is the CLI's
+    // own internal metadata, and it says in so many words that it must never be
+    // put in front of the user.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={backgroundBlock()} chatAgentName="claude" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.textContent).not.toContain('Result from');
+    expect(container.textContent).toContain('Reply to the launching call');
+    // …and the line explaining the empty thread is BACK. It was suppressed by
+    // `returned`, which an acknowledgement sets a second after the launch — so
+    // it went missing on exactly the delegates whose thread is empty for that
+    // reason.
+    expect(container.textContent).toContain('has not done anything yet');
+  });
+
+  it('still calls it an acknowledgement once the delegate has spoken', () => {
+    // The seq test rather than the status one: this delegate's background unit
+    // has CLOSED, so it no longer reads as running — but its rows arrived after
+    // its call was answered, which is what proves the answer was not its
+    // report. Without this arm the falsehood simply moves to the end state,
+    // where it is the ordinary one: every finished background delegate.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail
+            block={backgroundBlock({ withRows: true, open: false })}
+            chatAgentName="claude"
+          />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.textContent).toContain('looking now');
+    expect(container.textContent).toContain('Reply to the launching call');
+    expect(container.textContent).not.toContain('Result from');
+  });
+
+  it('does not pass a RESUME receipt off as a delegate’s result either', () => {
+    // Transcribed from the user's own ledger, and the exact card in the report:
+    // a `SendMessage` to an already-running agent, which the daemon declares
+    // background work against — so the fold adopts it as a delegate launch —
+    // and whose reply is a routing receipt. It arrives with no description, no
+    // prompt, no rows and a settled background unit, so every "did it speak
+    // afterwards" test says yes-this-is-its-report. What actually settles it is
+    // that the call was never a DELEGATION: `SendMessage` resumes an agent, it
+    // does not launch one.
+    const items: ChatItem[] = [
+      item('tool_call', {
+        id: 'toolu_send',
+        name: 'SendMessage',
+        input: { to: 'a3249b7c8f0b195f8', summary: 'Write the mockup' },
+      }),
+      item('tool_result', {
+        id: 'toolu_send',
+        name: null,
+        result:
+          '{"success":true,"message":"Resuming agent a3249b7","resumedAgentId":"a3249b7c8f0b195f8"}',
+      }),
+      item('subagent_info', {
+        id: 'toolu_send',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: null,
+        backgroundOpen: false,
+      }),
+    ];
+    const block = collectSubagentBlocks(
+      buildTurnBlocks(buildSubagentBlocks(groupTranscript(items), items)),
+    )[0]!;
+
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={block} chatAgentName="claude" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.textContent).not.toContain('Result from');
+    expect(container.textContent).toContain('Reply to the launching call');
+  });
+
   it('withholds the generic line from a delegate that RETURNED with no thread', () => {
     // Beside a result, "has not done anything yet" is simply false — it was
     // legible only under the `Timeline` heading it used to sit below, where it

@@ -65,6 +65,13 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
         "How hard this agent thinks, in its own CLI's vocabulary; empty = the CLI default.",
     },
     {
+      key: 'contextWindow',
+      type: 'string',
+      required: false,
+      description:
+        "Which of the model's context-window sizes this node runs at, in its own CLI's vocabulary; empty = the model's default.",
+    },
+    {
       key: 'description',
       type: 'string',
       required: false,

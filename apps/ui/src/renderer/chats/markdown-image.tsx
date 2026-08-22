@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
+import { ZoomableImage } from '../components/ui/image-viewer';
+
 /** Reads one agent-referenced local image back as a `data:` URL. */
 export type MarkdownImageLoader = (path: string) => Promise<string>;
 
@@ -124,11 +126,16 @@ export function MarkdownImage({
     );
   }
   return (
-    <img
-      data-slot="markdown-image"
+    <ZoomableImage
+      imgSlot="markdown-image"
       src={url}
-      alt={alt ?? ''}
-      className="my-1 max-h-96 max-w-full rounded-lg border border-border object-contain"
+      alt={alt}
+      // The reference the agent wrote, not the resolved `data:` URL — a
+      // 200KB base64 string is not a caption. `alt` is preferred where the
+      // agent supplied one, and the inline case has no path to fall back on.
+      title={alt || (inline ? undefined : reference)}
+      className="my-1 inline-block max-w-full align-middle"
+      imgClassName="max-h-96 max-w-full rounded-lg border border-border object-contain"
     />
   );
 }

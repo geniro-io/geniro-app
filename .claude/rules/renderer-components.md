@@ -24,6 +24,20 @@ paths:
      headers/icons/checkmarks/search, and is invisible to the DOM, so it can be
      neither screenshotted nor asserted on. Pass `groups`, never `<option>`
      children; a test opens `[data-menu-trigger]` and reads `[role="option"]`.
+   - **Every image the user can look at goes through `image-viewer`'s
+     `ZoomableImage`** — the transcript's attachments, the composer's staged
+     strip, an agent's markdown image. Three surfaces draw the same picture at
+     three sizes, two of them `object-cover` crops, so "can I see the whole
+     thing" has to be answered once. It is built ON `dialog` (Escape, backdrop,
+     focus trap) and PORTALLED, since it opens from inside a transcript where
+     `position: fixed` may be resolved against a transformed ancestor. A bare
+     `<img>` is for chrome the user never inspects (`logo`).
+   - `option-list` is the ONE way a set of pickable answer options is drawn,
+     and its `arity` (`many` / `one` / `none`) is what decides the drawing —
+     square boxes in a column for a checklist, round dots in a flow for a
+     pick-one, and NO indicator at all where the click is itself the
+     submission. Never reach for `chip` here: chips are `whitespace-nowrap`
+     footer controls, and an option label is routinely a whole sentence.
    - **A container that CLIPS declares it, rather than each picker inside it
      coping.** `menu`/`popover` place panels absolutely, which any scrolling
      ancestor cuts — and `overflow-x: visible` cannot be restored on a box that
@@ -43,6 +57,20 @@ paths:
    - `copy-button` is the app's ONE clipboard control — it owns the
      copied-tick feedback and the write itself, so no caller re-implements
      either.
+   - `mcp-dialog-button` is the ONE way an MCP listing is reached: a trigger
+     (`icon` on a control row, `chip` beside other chips) opening
+     `mcp-section` in a modal `dialog`. Ten server rows each able to carry a
+     paragraph of connection-failure text do not fit in a panel band or a
+     popover — both were tried. The OPEN state is the caller's, never the
+     button's: the Agents panel keeps one open at a time across every card.
+   - `use-persisted-flag` is the ONE way a boolean the user SET is remembered
+     — a panel folded shut, a section left open. It reads like `useState`,
+     updater form included, and keeps the value in localStorage beside the
+     widths `panel-resize` already stores there. Reach for it whenever the
+     owning component is remounted by its parent (the builder unmounts on every
+     nav change; the agents panel is keyed by run id), which is exactly when
+     `useState` silently forgets. A stored `'0'` is a CHOICE, not an absent
+     key — that distinction is the hook's, so no call site re-derives it.
    - `nav-list-item` is an activatable sidebar row; its `suspendActivation`
      prop drops the full-row overlay while a nested control — the chat row's
      inline rename field — owns the row's clicks and focus.

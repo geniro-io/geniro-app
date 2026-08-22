@@ -487,3 +487,73 @@ describe('QueuedStrip — the editor is a block, with its own controls', () => {
     expect(editor(1)).not.toBeNull();
   });
 });
+
+describe('QueuedStrip — what "send now" costs, per CLI', () => {
+  const message = { id: 'q1', text: 'status?', images: [] };
+
+  it('warns that the press stops the agent, where it does', () => {
+    // REPORTED as the send-now control not working on cursor — the channel was
+    // declared absent and turned out to exist, but it INTERRUPTS: a second
+    // prompt cancels the one in flight. That is worth knowing before the press,
+    // since there is nothing to undo after it.
+    const container = render(
+      <QueuedStrip
+        messages={[message]}
+        steerUnavailableReason={null}
+        steerInterrupts
+        steerStatus={null}
+        onEdit={() => {}}
+        onRemove={() => {}}
+        onSteer={() => {}}
+      />,
+    );
+
+    expect(
+      container
+        .querySelector('[aria-label="Send queued message 1 now"]')
+        ?.getAttribute('title'),
+    ).toContain('stops what the agent is doing');
+  });
+
+  it('promises nothing of the sort where the message merely JOINS the turn', () => {
+    const container = render(
+      <QueuedStrip
+        messages={[message]}
+        steerUnavailableReason={null}
+        steerInterrupts={false}
+        steerStatus={null}
+        onEdit={() => {}}
+        onRemove={() => {}}
+        onSteer={() => {}}
+      />,
+    );
+
+    const title = container
+      .querySelector('[aria-label="Send queued message 1 now"]')
+      ?.getAttribute('title');
+    expect(title).toContain('into the turn already running');
+    expect(title).not.toContain('stops');
+  });
+
+  it('still shows the daemon’s REFUSAL ahead of either sentence', () => {
+    // A CLI with no channel at all is a third state, and it outranks both: the
+    // control cannot be pressed, so describing what a press would do is wrong.
+    const container = render(
+      <QueuedStrip
+        messages={[message]}
+        steerUnavailableReason="this CLI takes one prompt per turn"
+        steerInterrupts
+        steerStatus={null}
+        onEdit={() => {}}
+        onRemove={() => {}}
+        onSteer={() => {}}
+      />,
+    );
+
+    expect(
+      container
+        .querySelector('[aria-label="Send queued message 1 now"]')
+        ?.getAttribute('title'),
+    ).toBe('this CLI takes one prompt per turn');
+  });
+});

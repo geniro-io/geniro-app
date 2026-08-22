@@ -108,6 +108,7 @@ export function displayRunStatus({
   streaming,
   awaitingAnswer,
   subagentRunning = false,
+  heldForBackgroundWork = false,
 }: {
   /** The status on the run row, as the daemon last reported it. */
   status: RunStatusKind;
@@ -129,6 +130,31 @@ export function displayRunStatus({
    * background row, a workflow node) are unaffected.
    */
   subagentRunning?: boolean;
+  /**
+   * This run's turn is merely HELD: the agent has said its piece and stopped,
+   * and the process is alive only until background work it launched reports
+   * back (the daemon's `turn_held` → `holdingFor` on the run row).
+   *
+   * Ranked BELOW a live delegate and ABOVE `streaming`, which is the whole of
+   * the rule. A delegate that is demonstrably producing rows is work, and the
+   * run is running; a task that is merely outstanding is not, and the live
+   * plane cannot tell the difference — it is still open in both cases, because
+   * holding it open is exactly what a hold does.
+   *
+   * The reported "done but showing like it's working", and it is a different
+   * defect from the one that phrase last named: the sentence under the badge
+   * was fixed to say `waiting on 2 background tasks`, and the BADGE went on
+   * spinning `running` above it. A background task with no end — a dev server,
+   * a tailed log — holds the turn until the 30-minute silence deadline, so the
+   * screenshot that came back showed `running · 20m 18s` under an answer the
+   * agent had finished writing twenty minutes earlier.
+   *
+   * `idle` is the app's own word for this state — the composer already says
+   * "the agent is idle, waiting on its background tasks" — and it is not a
+   * SETTLED status, so nothing downstream reads the run as finished: the turn
+   * is genuinely still open and its late rows still land.
+   */
+  heldForBackgroundWork?: boolean;
 }): RunStatusKind {
   if (awaitingAnswer) {
     return 'needs-input';
@@ -137,12 +163,23 @@ export function displayRunStatus({
   // that can arrive while the live plane has yet to be torn down, and painting
   // a cancelled run as running would hide the very thing the user just asked
   // for. A still-running sub-agent does not earn an exception — a cancelled run
-  // is precisely where a delegate's last rows are still landing.
-  if (
-    (streaming || subagentRunning) &&
-    status !== 'failed' &&
-    status !== 'cancelled'
-  ) {
+  // is precisely where a delegate's last rows are still landing. Nor does a
+  // hold: a run that failed is not idle, it is failed.
+  if (status === 'failed' || status === 'cancelled') {
+    return status;
+  }
+  // A delegate still producing rows is WORK, and it outranks a hold — it is
+  // what the hold is waiting for.
+  if (subagentRunning) {
+    return 'running';
+  }
+  // Held: the agent has stopped and only listeners keep the turn open. Above
+  // `streaming` because the live plane is open in both cases — keeping it open
+  // is what a hold IS — so it cannot tell them apart.
+  if (heldForBackgroundWork) {
+    return 'idle';
+  }
+  if (streaming) {
     return 'running';
   }
   return status;
@@ -164,6 +201,27 @@ export function awaitingPhrase(kind: RunAwaiting): string {
     ? 'waiting for your answer'
     : 'waiting for approval';
 }
+
+/**
+ * What a RUNNING run is doing when the daemon has named nothing.
+ *
+ * A null activity does not mean "nothing is happening" — the daemon says so at
+ * its own `idleActivity`, "null leaves the run's own Working… standing, which
+ * is the honest phrase for an agent that is simply thinking". That was only
+ * ever true of ONE of the two consumers: the transcript's live row carried this
+ * fallback and the sidebar row carried none, so the sidebar ERASED the phrase
+ * every time a tool returned and drew it again on the next call.
+ *
+ * REPORTED as "фанин статус на треде постоянно прыгает… то появляется, то
+ * исчезает. Блинкует… там всегда должен быть последний его статус". A turn is a
+ * run of tool calls, so that is a flicker per tool, and it is entirely the
+ * missing fallback — the daemon was announcing exactly what it meant.
+ *
+ * ONE constant, read by both surfaces, because that is the actual fix: the
+ * blink was two renderings of one null disagreeing about what it meant, and a
+ * second literal is how they would come to disagree again.
+ */
+export const STANDING_ACTIVITY = 'Working…';
 
 /**
  * This run has stopped for good — nothing further will arrive for it.

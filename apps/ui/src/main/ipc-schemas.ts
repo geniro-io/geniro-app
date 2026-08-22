@@ -84,6 +84,14 @@ const runConfigSchema = z.strictObject({
   target: chatTarget,
   model: z.string().min(1).max(64).nullable(),
   effort: z.string().min(1).max(64).nullable(),
+  // `.default(null)` and not a bare `.nullable()`, unlike its neighbours: this
+  // field arrived after users already had saved configurations on disk, and
+  // `runConfigSchema` is strict — required, every entry written before it
+  // would fail to parse and `salvageRunConfigs` would drop the lot. A
+  // configuration is hand-made and unrecoverable, which is the whole reason
+  // that salvage is entry-by-entry. The default reads an older file as "no
+  // size chosen", which is what those entries mean.
+  contextWindow: z.string().min(1).max(64).nullable().default(null),
   approval: z.string().min(1).max(32).nullable(),
   configDir: absolutePath.nullable(),
 });
@@ -116,6 +124,11 @@ export const settingsPatchSchema = z.strictObject({
   // Effort levels are likewise the CLIs' own vocabulary (claude accepts one
   // its --help does not even list), so they are bounded, never enumerated.
   lastEfforts: z.partialRecord(cliKind, z.string().min(1).max(64)).optional(),
+  // Window sizes are the CLIs' own words too (`300k`, `1m`, `272k`), and
+  // per MODEL rather than per CLI — bounded here, never enumerated.
+  lastContextWindows: z
+    .partialRecord(cliKind, z.string().min(1).max(64))
+    .optional(),
   // partialRecord, not record: in zod v4 z.record over an enum key is
   // exhaustive (would require every CliKind present); cliPaths is sparse.
   cliPaths: z.partialRecord(cliKind, absolutePath).optional(),

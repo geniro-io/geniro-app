@@ -149,6 +149,24 @@ export const WorkflowAgentNodeSchema = z
       .optional()
       .describe('Reasoning-effort level; omitted = CLI default'),
     /**
+     * Which of the model's context-window sizes this node's turns run at, in
+     * the CLI's own vocabulary (`300k`, `1m`); omitted = the model's own
+     * default.
+     *
+     * Beside `effort` because it is the same kind of thing — a per-MODEL
+     * parameter the adapter owns the vocabulary of — and it fails the same way:
+     * a size the node's model does not offer is answered `-32602` by cursor,
+     * so the turn's own driver reports it on the transcript rather than a
+     * constant here refusing it at save time. A workflow runs for months and
+     * its model's sizes can change under it, which is exactly why the check
+     * belongs against the live agent.
+     */
+    contextWindow: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Context-window size; omitted = the model's own default"),
+    /**
      * The node's PUBLIC blurb: what this agent is for, written for the agents
      * wired to call it. It is the only thing a caller is told about a callee
      * (see `calleeSummary`) — it rides the call_agent tool description and the
@@ -520,6 +538,18 @@ export const AgentFollowUpCapabilitySchema = z
      * for the turn to end rather than being ignored.
      */
     unavailableReason: z.string().nullable(),
+    /**
+     * Whether delivering it STOPS what the agent is currently doing.
+     *
+     * The two shipped CLIs differ, so the control cannot describe itself from
+     * one sentence: claude's message joins the turn and is picked up at the
+     * next tool boundary, while a second `session/prompt` cancels cursor's
+     * current work and answers the new message instead. The renderer says which
+     * before the press, not after.
+     */
+    interrupts: z
+      .boolean()
+      .describe('Whether a mid-turn message stops what the agent is doing'),
   })
   .meta({ id: 'AgentFollowUpCapability' });
 export type AgentFollowUpCapability = z.infer<

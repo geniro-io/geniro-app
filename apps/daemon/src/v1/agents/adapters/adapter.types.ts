@@ -459,14 +459,41 @@ type AgentEventBody =
     }
   | {
       /**
+       * An INCREMENT of the model's REASONING text — the live plane behind a
+       * thinking stretch, for a CLI that discloses what it is thinking.
+       *
+       * The twin of `text_delta`, and separate from it for the reason the
+       * durable `reasoning` event is separate from `text`: these words are the
+       * agent working something out, not the answer, and merging them would
+       * put its scratch notes in the assistant's own bubble.
+       *
+       * It exists because {@link AgentEvent} `thinking_progress` cannot carry
+       * them. That event answers the same question for a CLI whose thinking is
+       * REDACTED (headless claude), where a running token total is all there
+       * is — so a CLI that does disclose the text had no channel at all, and
+       * its reasoning reached the transcript only when the block closed. On
+       * cursor that is measured at up to several minutes of a screen showing
+       * nothing but `Working…` while thought chunks were arriving the whole
+       * time.
+       *
+       * EPHEMERAL, exactly like `text_delta`: never persisted, never allocated
+       * a `seq`, never replayed. The `reasoning` event that follows is the
+       * durable record of the same words.
+       */
+      type: 'reasoning_delta';
+      text: string;
+    }
+  | {
+      /**
        * The model is REASONING, with the tokens it has spent so far.
        *
-       * There is no text to show: headless claude redacts thinking entirely
-       * (probe-verified — the block ships an encrypted `signature` and an
-       * empty body, and `--include-partial-messages` does not reveal it), so
-       * a running total is the only honest signal that the agent is working
-       * during an otherwise silent stretch. EPHEMERAL, exactly like
-       * {@link AgentEvent} `text_delta`: never persisted, never replayed.
+       * For a CLI that REDACTS its thinking: headless claude ships the block
+       * with an encrypted `signature` and an empty body (probe-verified —
+       * `--include-partial-messages` does not reveal it), so a running total is
+       * the only honest signal that the agent is working during an otherwise
+       * silent stretch. A CLI that discloses the words sends `reasoning_delta`
+       * instead. EPHEMERAL, exactly like {@link AgentEvent} `text_delta`: never
+       * persisted, never replayed.
        */
       type: 'thinking_progress';
       tokens: number;
@@ -1007,6 +1034,42 @@ export interface AgentEffortListing {
 }
 
 /**
+ * One context-window size a model can be run at, as that CLI names it.
+ *
+ * The same shape as {@link AgentEffort} and for the same reason: `id` is the
+ * CLI's own vocabulary, passed through verbatim (`300k`, `1m`, `272k`), and
+ * `label` is what the picker shows. Deliberately NOT a token count — geniro
+ * does not translate the CLI's word into a number, because the number that
+ * matters is the one the agent then reports about its own window, and a table
+ * here would be a second answer to that question with nothing keeping it true.
+ */
+export interface AgentContextWindow {
+  id: string;
+  label: string;
+}
+
+/**
+ * The window sizes available for ONE model, and the reason when there are none.
+ *
+ * Per model, necessarily: probed 2026-08-21 on cursor-agent 2026.08.11-e8db854
+ * across all 34 models the account offers, twelve carry the setting and their
+ * vocabularies differ — `claude-opus-5` is `300k|1m`, `gpt-5.5` is `272k|1m`,
+ * `claude-sonnet-4-6` is `200k|1m` — while the other twenty-two have no such
+ * axis at all. So a CLI-wide list would offer sizes a given model refuses,
+ * which is the defect `AgentEffortListing` already carries the scars of.
+ *
+ * `unavailableReason` obeys the same contract as the effort listing's: a
+ * SENTENCE whenever the list is empty, because a picker that silently
+ * disappears is indistinguishable from a broken one.
+ */
+export interface AgentContextWindowListing {
+  windows: AgentContextWindow[];
+  unavailableReason: string | null;
+  /** True when this is the NAMED MODEL's own answer — see {@link AgentEffortListing.exact}. */
+  exact: boolean;
+}
+
+/**
  * One skill / slash command a CLI can be invoked with (`/name …`).
  *
  * `kind` separates a skill directory from a plain command file; `source` says
@@ -1189,6 +1252,17 @@ export interface AgentSessionRecord {
   title: string | null;
   /** When it was last written, epoch ms; null when the CLI records none. */
   updatedAt: number | null;
+  /**
+   * The line of the conversation that answered the search, or null.
+   *
+   * Only ever set for a match found in the BODY rather than in the title or the
+   * folder, and it exists because without it a content search is unreadable:
+   * the row still shows the conversation's opening prompt, which has nothing to
+   * do with the words that were typed, so a list of correct matches looks like
+   * a list of irrelevant ones. Null when a query named nothing this session's
+   * body had to answer for — the title or the path already says why it is here.
+   */
+  snippet: string | null;
 }
 
 /**
@@ -1204,6 +1278,16 @@ export interface AgentSessionRecord {
 export interface AgentSessionListing {
   sessions: AgentSessionRecord[];
   unavailableReason: string | null;
+  /**
+   * What THIS listing did not reach, or null when it reached everything.
+   *
+   * The dynamic twin of `AdapterConfig.sessions.listingPartialReason`, which is
+   * a standing fact about the CLI. This one is a fact about the call: a content
+   * search is bounded in files and in bytes per file, so on a large profile it
+   * genuinely stops short — and a search that quietly gives up looks exactly
+   * like a search that found everything there was.
+   */
+  partialReason: string | null;
 }
 
 /** Everything an adapter needs to list the conversations it holds. */
@@ -1223,6 +1307,23 @@ export interface AgentSessionsInput {
   configDir: string | null;
   /** Most rows to return, newest first. */
   limit: number;
+  /**
+   * What the user typed into the picker's search box, or null for none.
+   *
+   * Answered HERE rather than filtered by the caller, and that is the whole
+   * point of it being on the input: only the adapter can reach what its CLI
+   * actually stores, so only the adapter can match on what was SAID in a
+   * conversation rather than on the one line the row happens to show. An
+   * adapter that cannot reach the body still honours the query against the
+   * title and the folder — every implementation must apply it, or a search
+   * would silently widen back to everything on that CLI — and declares the
+   * shortfall in `AdapterConfig.sessions.contentSearchUnavailableReason`.
+   *
+   * Whitespace-separated terms, ALL of which must match, each anywhere in the
+   * session: that is how somebody actually remembers a thread from last week —
+   * in fragments, one from the project and one from what was said.
+   */
+  query: string | null;
 }
 
 /** Which conversation is being taken over, and from where. */
@@ -1565,6 +1666,17 @@ export interface AgentTurnInput {
    * adapter whose CLI has no such control ignores the field entirely.
    */
   effort?: string | null;
+  /**
+   * Which of the model's context-window sizes to run at, spelled as the CLI
+   * spells it (one of {@link AgentAdapter.listModelContextWindows});
+   * null/undefined = whatever the model's own default is.
+   *
+   * A per-model PARAMETER rather than a property of the conversation, exactly
+   * like `effort` and carried the same way for the same reason — the vocabulary
+   * belongs to the CLI, and an adapter whose CLI has no such control ignores
+   * the field.
+   */
+  contextWindow?: string | null;
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
   /**
@@ -1612,6 +1724,21 @@ export interface AgentTurnInput {
    * A user-project turn NEVER sets it.
    */
   internalProbe?: boolean;
+  /**
+   * This turn IS the command-list probe (`AgentAdapter.listReportedCommands`).
+   *
+   * Says what the turn is, never what a CLI should do about it: an adapter
+   * whose CLI announces its commands unasked ignores this, and one that has to
+   * ASK reads it as its cue. Claude is the second kind — its `system/init`
+   * names every command and describes none, and only a `reload_skills` control
+   * request gets the sentences — so a flag was needed that the probe can set
+   * without knowing why any particular CLI wants it.
+   *
+   * Deliberately NOT folded into {@link internalProbe}, which several probes
+   * set: reading it as "the command probe" would have the permission-mode
+   * probe reload the user's skills as a side effect of asking about modes.
+   */
+  commandListProbe?: boolean;
   /**
    * The caller's "May call" awareness block, naming each callee reachable
    * through `mcpEndpoint`'s tools. Kept SEPARATE from `systemPrompt` because
@@ -1868,6 +1995,29 @@ export interface TurnDriver {
     allow: boolean,
     updatedInput?: unknown,
   ): string | undefined;
+  /**
+   * Deliver a user message into the turn this driver is running, answering
+   * whether the CLI actually got it.
+   *
+   * The counterpart of `AgentAdapter.buildFollowUpPayload` for a CLI whose
+   * delivery is not one stdin LINE but a request in a stateful protocol: the
+   * driver holds the session id and the request-id counter, so only it can
+   * build the frame, and it must record the frame it sent to understand the
+   * reply. That is also why this writes for itself rather than returning a
+   * payload — the existing send path already unregisters a frame whose write
+   * failed, and a builder that registered one before an unwritten write would
+   * leave the turn waiting on a reply that can never come.
+   *
+   * Undefined = this driver has no such channel, and the adapter's own
+   * `buildFollowUpPayload` is used instead (the default of which is "this CLI
+   * cannot be told anything more once its prompt is in").
+   *
+   * **Honest in both directions**, exactly like the payload builder it stands
+   * beside: a `true` for a message the agent never received has the chat commit
+   * a user row nobody will answer, and a `false` leaves it queued, which is
+   * always safe.
+   */
+  sendFollowUp?(message: FollowUpMessage): boolean;
 }
 
 /** Handle to an in-flight turn. */
@@ -2170,6 +2320,20 @@ export interface AdapterConfig {
    */
   readonly effortsAreExhaustive: boolean;
 
+  // ── Context window ──────────────────────────────────────────────────────
+  /**
+   * Why this CLI offers no context-window PICKER, or `null` when it does and
+   * {@link AgentAdapter.listModelContextWindows} answers for real.
+   *
+   * There is no static superset beside it, unlike {@link efforts}, and that
+   * asymmetry is deliberate: a window size is meaningless without the model it
+   * belongs to (`1m` on a model that has no such axis is not a weaker version
+   * of anything), so there is nothing a CLI-wide union could usefully stand in
+   * for. A CLI answers per model or it declares this sentence and offers
+   * nothing.
+   */
+  readonly contextWindowsUnavailableReason: string | null;
+
   // ── Models ──────────────────────────────────────────────────────────────
   /**
    * The documented alias / fallback set — the FLOOR of `listModels`, never the
@@ -2292,12 +2456,13 @@ export interface AdapterConfig {
      * no such command, and then {@link loginUnavailableReason} says so.
      *
      * A VALUE, not a method: what differs per CLI is the words, not the
-     * mechanism, so `AgentAdapter.mcpLoginTarget` is concrete over this.
+     * mechanism, so `AgentAdapter.runMcpLogin` is concrete over this.
      *
-     * The daemon RUNS this, and the terminal handoff (`mcpLoginTarget`) is the
-     * fallback — which is a REVERSAL of what this block said for two
-     * milestones, on a measurement that was right about the fact and wrong
-     * about the conclusion.
+     * The daemon RUNS this — which is a REVERSAL of what this block said for
+     * two milestones, on a measurement that was right about the fact and wrong
+     * about the conclusion. The terminal handoff it reversed was kept a while
+     * as the fallback and is now GONE, unused by any caller once every sign-in
+     * moved in-app.
      *
      * What was measured (claude 2.1.223, re-confirmed on 2.1.232): with stdin a
      * pipe, `claude mcp login <name>` answers "stdin isn't a terminal, so
@@ -2358,13 +2523,16 @@ export interface AdapterConfig {
      * command, and then {@link loginUnavailableReason} says so.
      *
      * A VALUE, not a method: what differs per CLI is the words, not the
-     * mechanism, so `AgentAdapter.loginTarget` is concrete over this.
+     * mechanism, so `AgentAdapter.runLogin` is concrete over this.
      *
-     * The daemon RESOLVES this and never runs it, for the reason the MCP
-     * sibling above records at length: a sign-in is an interactive browser
-     * flow that wants a TTY, and a headless spawn of one either refuses
-     * outright or strands a callback nobody can complete. It goes to the
-     * user's own terminal through the handoff module.
+     * The daemon RUNS this. It resolved it for a terminal to run for two
+     * milestones, on the reasoning the MCP sibling above records at length —
+     * an interactive browser flow wants a TTY — and the account login turned
+     * out not to want even that: re-probed on claude 2.1.228 and cursor-agent
+     * 2026.08.11, neither refuses a closed stdin. Both print a usable URL and
+     * open the browser themselves, claude then accepting a pasted code and
+     * cursor polling to completion. The resolve-only path is gone with its
+     * last caller.
      */
     readonly loginArgs: readonly string[] | null;
     /** Why this CLI cannot be signed in to from here, or null when it can. */
@@ -2485,6 +2653,20 @@ export interface AdapterConfig {
      * silently did nothing.
      */
     readonly historyUnavailableReason: string | null;
+    /**
+     * Why a search of these conversations reaches only their titles and
+     * folders, or null when it reaches what was SAID in them.
+     *
+     * A picker's search is only as good as the text behind it, and a title here
+     * is one line — for claude, the conversation's opening prompt. Somebody
+     * looking for the thread where a bug was diagnosed remembers the diagnosis,
+     * not how they opened the conversation, so a title-only search finds
+     * nothing and reads as a broken feature rather than as a narrow one. What
+     * makes the difference is whether the transcript is READABLE: claude keeps
+     * one JSONL per session in its own profile, while cursor's lives inside an
+     * ACP server whose `session/list` has no search parameter at all.
+     */
+    readonly contentSearchUnavailableReason: string | null;
   };
 
   // ── Config directory (which profile / account the CLI runs as) ──────────
@@ -2537,6 +2719,24 @@ export interface AdapterConfig {
      * refusal these fields exist to replace.
      */
     readonly unavailableReason: string | null;
+    /**
+     * Whether delivering that message STOPS what the agent is currently doing.
+     *
+     * The two shipped CLIs answer this differently and the difference is what
+     * the user is about to do, so it cannot be left to a shared sentence.
+     * Claude's stream-json stdin is a conversation: the message joins the turn
+     * and the agent picks it up at its next tool boundary, having finished what
+     * it was on. Cursor's ACP has no such frame, and a second `session/prompt`
+     * on a live session CANCELS the first — probe-verified on
+     * 2026.08.11-e8db854, where a counting turn twelve seconds in answered
+     * `{"stopReason":"cancelled"}` while the injected prompt ran to `end_turn`
+     * with the conversation intact.
+     *
+     * So a press means "add this" on one CLI and "drop what you are doing and
+     * answer this" on the other — a tool call in flight is lost on the second.
+     * The renderer says which before the press rather than after.
+     */
+    readonly interrupts: boolean;
   };
 
   // ── What a turn cost ───────────────────────────────────────────────────────

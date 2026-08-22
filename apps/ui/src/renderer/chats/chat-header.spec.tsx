@@ -338,3 +338,45 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
     expect(el.textContent).not.toContain('turns');
   });
 });
+
+describe('ChatHeader — what this thread SPENT', () => {
+  it('states the thread total beside what it worked', () => {
+    // The reported ask. The per-turn price was already on each `turn_complete`
+    // row; what the header had no answer for is what the whole thread cost.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+        costUsd={12.3456}
+      />,
+    );
+
+    expect(el.textContent).toContain('$12.35');
+    // An addition, not a swap: the worked figure is still there.
+    expect(el.textContent).toContain('worked 4m 12s');
+  });
+
+  it('renders NOTHING when nothing measured a cost, rather than $0.00', () => {
+    // cursor-agent reports no cost unless its currency is USD. `$0.00` would
+    // state that the thread was free, which is a different claim from "we were
+    // not told" — and the one the user would act on.
+    const el = render(
+      <ChatHeader {...baseProps} status="completed" costUsd={null} />,
+    );
+
+    expect(el.querySelector('[data-slot="thread-spend"]')).toBeNull();
+    expect(el.textContent).not.toContain('$');
+  });
+
+  it('keeps a sub-cent thread out of the $0.00 trap', () => {
+    // A cheap thread has still been measured, and rounding it to `$0.00` makes
+    // it indistinguishable from the case above that means the opposite.
+    const el = render(
+      <ChatHeader {...baseProps} status="completed" costUsd={0.0003} />,
+    );
+
+    expect(el.textContent).toContain('$0.0003');
+  });
+});

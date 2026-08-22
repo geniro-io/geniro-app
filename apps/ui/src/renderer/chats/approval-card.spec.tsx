@@ -723,7 +723,12 @@ describe('ApprovalCard', () => {
     // a single click cannot be the whole answer here.
     click(buttonNamed(el, 'a.ts'));
     expect(onRespond).not.toHaveBeenCalled();
+    // The running count is what tells a user mid-list how far they have got
+    // without re-reading every box — a multi-select is the only arity where
+    // that is a question at all.
+    expect(el.textContent).toContain('1 selected');
     click(buttonNamed(el, 'c.ts'));
+    expect(el.textContent).toContain('2 selected');
     click(buttonNamed(el, 'b.ts'));
     click(buttonNamed(el, 'b.ts')); // toggles back off
     expect(buttonNamed(el, 'b.ts').getAttribute('aria-pressed')).toBe('false');
@@ -779,6 +784,55 @@ describe('ApprovalCard', () => {
     expect(el.textContent).not.toContain('Pick as many as apply.');
     click(buttonNamed(el, 'Red'));
     expect(onRespond).toHaveBeenCalledWith(true, 'Red');
+  });
+
+  it('warns that a click answers outright when a click IS the answer', () => {
+    // One question, single-pick: `pickOption` sends immediately, and the
+    // verdict is one-shot — so the press cannot be taken back. That was drawn
+    // exactly like a staged pick and said nowhere, which is the one arity of
+    // the three where getting it wrong costs the user their answer.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [{ question: 'Ship it?', options: [{ label: 'Yes' }] }],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain(
+      'Picking an option answers straight away.',
+    );
+    // …and nothing is drawn as checkable, because nothing is ever checked here.
+    expect(buttonNamed(el, 'Yes').hasAttribute('aria-pressed')).toBe(false);
+  });
+
+  it('says "pick one" on a staged single-select tab, and counts nothing there', () => {
+    // A staged single-select tab used to carry no hint line at all, so "pick as
+    // many as apply" read as a fact about that one question rather than as one
+    // of two answers to "how many may I choose".
+    //
+    // The running count belongs to multi-select alone: on a pick-one tab it is
+    // a line that can only ever say "1 selected", which is the tick restated.
+    const el = render(
+      <ApprovalCard
+        toolName="AskUserQuestion"
+        input={{
+          questions: [
+            { question: 'Colour?', options: [{ label: 'Red' }] },
+            { question: 'Size?', options: [{ label: 'Large' }] },
+          ],
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Pick one.');
+    click(buttonNamed(el, 'Red'));
+    click(tabsOf(el)[0]!);
+    expect(buttonNamed(el, 'Red').getAttribute('aria-pressed')).toBe('true');
+    expect(el.textContent).not.toContain('selected');
   });
 
   it('a pick moves to the next unanswered question by itself', () => {

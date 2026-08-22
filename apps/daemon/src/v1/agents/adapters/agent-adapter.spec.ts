@@ -20,6 +20,7 @@ import type {
   AgentModel,
   AgentTurnInput,
   FollowUpMessage,
+  TurnDriver,
 } from './adapter.types';
 import { AgentAdapter } from './agent-adapter';
 import { ClaudeAdapter } from './claude/claude.adapter';
@@ -254,9 +255,9 @@ describe('AgentAdapter.mcp.interactiveOnlyNote', () => {
   });
 });
 
-describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => {
+describe('AgentAdapter.followUp declares what the adapter can actually do', () => {
   /**
-   * `buildFollowUpPayload` is protected and per-turn, so the renderer can only
+   * The delivery mechanism is protected and per-turn, so the renderer can only
    * learn about it through `config.followUp`. That makes the two a promise and
    * its implementation, in different files, with nothing in the type system
    * tying them together — so this is the tie.
@@ -265,6 +266,13 @@ describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => 
    * that matters: the composer would offer "send now", the daemon would answer
    * RUN_BUSY, and the message would silently sit in the queue the button said
    * it was skipping.
+   *
+   * There are TWO mechanisms and either satisfies the promise — a CLI whose
+   * channel is one stdin LINE overrides `buildFollowUpPayload`, while one whose
+   * channel is a request in a stateful protocol puts `sendFollowUp` on its
+   * per-turn driver, since the frame needs session state to build. Asking about
+   * the payload builder alone is what this pin used to do, and it fails the
+   * ACP adapter for having the channel in the other place.
    */
   const payloadFor = (adapter: AgentAdapter): string | undefined =>
     (
@@ -273,21 +281,35 @@ describe('AgentAdapter.followUp declares what buildFollowUpPayload does', () => 
       }
     ).buildFollowUpPayload({ text: 'a follow-up', images: undefined });
 
+  /** Does this adapter's per-turn driver own the channel instead? */
+  const driverSends = (adapter: AgentAdapter): boolean =>
+    typeof (
+      adapter as unknown as {
+        createTurnDriver(input: AgentTurnInput): TurnDriver;
+      }
+    ).createTurnDriver({ prompt: 'a turn', cwd: '/proj' }).sendFollowUp ===
+    'function';
+
   for (const { name, adapter } of ADAPTERS) {
     it(`${name} says the same thing in its config and in its code`, () => {
       const configSaysItCan =
         adapter.getConfig().followUp.unavailableReason === null;
 
-      expect(payloadFor(adapter) !== undefined).toBe(configSaysItCan);
+      expect(payloadFor(adapter) !== undefined || driverSends(adapter)).toBe(
+        configSaysItCan,
+      );
     });
   }
 
-  it('is not vacuous — the shipped pair covers BOTH answers', () => {
-    // Without this the loop above passes if every adapter answers "cannot",
-    // which is exactly what a careless `followUp` copy-paste onto a new
-    // adapter would produce.
+  it('is not vacuous — the shipped pair covers BOTH answers about INTERRUPTING', () => {
+    // The `unavailableReason` half stopped covering both the moment cursor's
+    // channel was found (it had been declared absent on the strength of the ACP
+    // spec, and the binary accepts a second `session/prompt`). What genuinely
+    // differs between the two CLIs now is what a press DOES — claude adds to
+    // the turn, cursor cancels it — so that is what a careless copy-paste onto
+    // a third adapter would flatten, and what this guards.
     const answers = ADAPTERS.map(
-      ({ adapter }) => adapter.getConfig().followUp.unavailableReason === null,
+      ({ adapter }) => adapter.getConfig().followUp.interrupts,
     );
 
     expect(new Set(answers)).toEqual(new Set([true, false]));
@@ -484,162 +506,120 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
   });
 });
 
-describe('AgentAdapter.mcpLoginTarget', () => {
-  /** A CLI with no sign-in command — the shape neither shipped adapter has. */
-  class NoLoginAdapter extends ClaudeAdapter {
-    override getConfig(): AdapterConfig {
-      const base = super.getConfig();
-      return { ...base, mcp: { ...base.mcp, loginArgs: null } };
-    }
-  }
-
-  for (const { name, adapter } of ADAPTERS) {
-    it(`builds ${name}'s own sign-in invocation, ending in the server name`, () => {
-      const target = adapter.mcpLoginTarget('probe-linear');
-
-      // Composed from the adapter's OWN declared argv, never a spelled
-      // `['mcp','login']` here: a spec that retypes the words passes even when
-      // the adapter stops carrying them.
-      expect(target).toEqual({
-        ok: true,
-        kind: 'command',
-        command: expect.any(String),
-        args: [...(adapter.getConfig().mcp.loginArgs ?? []), 'probe-linear'],
-        // No profile was asked for, so none is stated — an empty env, never a
-        // var set to the CLI's default path, which would be this app inventing
-        // a profile the caller never chose.
-        env: {},
-      });
-    });
-  }
-
-  it('refuses for a CLI that declares no sign-in command', () => {
-    // The defensive arm, entered deliberately. Both shipped CLIs have `mcp
-    // login`, so nothing else reaches it — and a `loginArgs: null` that spread
-    // an empty argv instead would compose `claude probe-linear`, opening a
-    // terminal that runs the server name as a prompt.
-    expect(new NoLoginAdapter().mcpLoginTarget('probe-linear')).toEqual({
-      ok: false,
-      reason: 'unsupported',
-    });
-  });
-});
-
-describe('AgentAdapter.loginTarget', () => {
-  /** A CLI with no account sign-in — the shape neither shipped adapter has. */
-  class NoAuthAdapter extends ClaudeAdapter {
-    override getConfig(): AdapterConfig {
-      const base = super.getConfig();
-      return { ...base, auth: { ...base.auth, loginArgs: null } };
-    }
-  }
-
-  // The LITERAL argv each CLI's sign-in is, probe-read from its own `--help`
+describe('AgentAdapter — the sign-in and sign-out argv each CLI declares', () => {
+  // The LITERAL argv of each command, probe-read from the binaries' own help
   // (claude 2.1.227 `claude auth --help`; cursor-agent 2026.08.04-aaa8809
-  // `--help`). Spelled here ON PURPOSE, unlike the mcp-login spec above which
-  // composes from config: both sides reading `getConfig().auth.loginArgs` means
-  // only a wrong FIELD is caught, and a wrong probe-derived VALUE — the thing
-  // that actually sends the user to a command that does not exist — ships green.
-  const EXPECTED_LOGIN: Record<string, { command: string; args: string[] }> = {
-    claude: { command: 'claude', args: ['auth', 'login'] },
-    'cursor-agent': { command: 'cursor-agent', args: ['login'] },
+  // `--help` and `logout --help`). Spelled here ON PURPOSE: these values are
+  // the whole of what the daemon knows about how to sign a CLI in, and a spec
+  // that read them back out of `getConfig()` would catch only a wrong FIELD —
+  // a wrong probe-derived VALUE, which is what actually runs a subcommand the
+  // binary does not have, would ship green.
+  const EXPECTED: Record<
+    string,
+    { login: string[]; logout: string[]; mcpLogin: string[] }
+  > = {
+    claude: {
+      login: ['auth', 'login'],
+      logout: ['auth', 'logout'],
+      mcpLogin: ['mcp', 'login'],
+    },
+    'cursor-agent': {
+      login: ['login'],
+      logout: ['logout'],
+      mcpLogin: ['mcp', 'login'],
+    },
+  };
+
+  /**
+   * Throws rather than falling back, so an adapter added without a probe record
+   * fails loudly here instead of being asserted against `undefined` — which
+   * `toEqual` would accept from a config field that had gone missing too.
+   */
+  const expectedFor = (
+    name: string,
+  ): { login: string[]; logout: string[]; mcpLogin: string[] } => {
+    const found = EXPECTED[name];
+    if (!found) {
+      throw new Error(`no probe-read argv recorded for ${name}`);
+    }
+    return found;
   };
 
   for (const { name, adapter } of ADAPTERS) {
-    it(`builds ${name}'s own account sign-in invocation`, () => {
-      expect(adapter.loginTarget()).toEqual({
-        ok: true,
-        kind: 'command',
-        ...EXPECTED_LOGIN[name],
-        env: {},
-      });
+    it(`carries ${name}'s probe-read account argv`, () => {
+      const { auth, mcp } = adapter.getConfig();
+      const expected = expectedFor(name);
+      expect(auth.loginArgs).toEqual(expected.login);
+      expect(auth.logoutArgs).toEqual(expected.logout);
+      expect(mcp.loginArgs).toEqual(expected.mcpLogin);
     });
 
-    it(`signs ${name} in to the CLI, not to one of its MCP servers`, () => {
-      // The two commands are different and are reached by different failures.
-      // An `auth` block that merely aliased the MCP one would send a user whose
-      // ACCOUNT session expired to a command that cannot fix it.
-      //
-      // Compared as a PREFIX, not with `not.toEqual`: `mcpLoginTarget` appends
-      // a server name, so its argv is always one element longer and the two
-      // results can never be deep-equal — which left the aliasing this test is
-      // named for passing. `['mcp','login']` in `auth.loginArgs` fails here.
-      const mcpArgs = adapter.mcpLoginTarget('probe-linear');
-      const loginArgs = adapter.loginTarget();
-      expect(mcpArgs.ok && loginArgs.ok).toBe(true);
-      if (!mcpArgs.ok || !loginArgs.ok) {
-        return;
-      }
-      expect(loginArgs.args.slice(0, 2)).not.toEqual(mcpArgs.args.slice(0, 2));
+    it(`keeps ${name}'s three sign-in commands apart`, () => {
+      // They are reached by three different failures and are one config field
+      // apart. An `auth.loginArgs` that aliased the MCP one sends a user whose
+      // ACCOUNT session expired to a command that cannot fix it; a
+      // `logoutArgs` copied from `loginArgs` signs them back IN under a button
+      // that says the opposite.
+      const { auth, mcp } = adapter.getConfig();
+      expect(auth.loginArgs).not.toEqual(auth.logoutArgs);
+      expect(auth.loginArgs).not.toEqual(mcp.loginArgs);
     });
   }
 
-  it('refuses for a CLI that declares no account sign-in', () => {
-    // The defensive arm, entered deliberately: a `loginArgs: null` that spread
-    // an empty argv instead would compose a bare `claude`, opening a terminal
-    // on an ordinary interactive session rather than on a sign-in.
-    expect(new NoAuthAdapter().loginTarget()).toEqual({
-      ok: false,
-      reason: 'unsupported',
-    });
-  });
-});
-
-describe('AgentAdapter.logoutTarget', () => {
-  /** A CLI with no account sign-out — the shape neither shipped adapter has. */
-  class NoLogoutAdapter extends ClaudeAdapter {
-    override getConfig(): AdapterConfig {
-      const base = super.getConfig();
-      return { ...base, auth: { ...base.auth, logoutArgs: null } };
+  it('runs nothing for a CLI that declares no account sign-in', async () => {
+    // The defensive arm, entered deliberately. Neither shipped CLI reaches it,
+    // and a `loginArgs: null` that spread an empty argv instead would spawn a
+    // bare `claude` — an ordinary interactive session, held open by a service
+    // that believes it is watching a sign-in.
+    class NoAuthAdapter extends ClaudeAdapter {
+      override getConfig(): AdapterConfig {
+        const base = super.getConfig();
+        return { ...base, auth: { ...base.auth, loginArgs: null } };
+      }
     }
-  }
+    const onSpawn = vi.fn();
+    await expect(
+      new NoAuthAdapter().runLogin({ timeoutMs: 1_000, onSpawn }),
+    ).resolves.toBeNull();
+    expect(onSpawn).not.toHaveBeenCalled();
+  });
 
-  // The LITERAL argv each CLI's sign-out is, probe-read from its own `--help`
-  // (claude 2.1.227 `claude auth --help`; cursor-agent 2026.08.04-aaa8809
-  // `cursor-agent logout --help` — "Sign out and clear stored authentication").
-  // Spelled here for the reason its login sibling above is: both sides reading
-  // the same config field would catch only a wrong FIELD, and a wrong
-  // probe-derived VALUE is what actually sends the user to a subcommand the
-  // binary does not have.
-  const EXPECTED_LOGOUT: Record<string, { command: string; args: string[] }> = {
-    claude: { command: 'claude', args: ['auth', 'logout'] },
-    'cursor-agent': { command: 'cursor-agent', args: ['logout'] },
-  };
-
-  for (const { name, adapter } of ADAPTERS) {
-    it(`builds ${name}'s own account sign-out invocation`, () => {
-      expect(adapter.logoutTarget()).toEqual({
-        ok: true,
-        kind: 'command',
-        ...EXPECTED_LOGOUT[name],
-        env: {},
-      });
-    });
-
-    it(`does not sign ${name} out with its SIGN-IN command`, () => {
-      // The two are one config field apart and are composed by two methods that
-      // differ in one word. A `logoutArgs` that copied `loginArgs` — or a
-      // `logoutTarget` reading the wrong field — returns `ok` either way and
-      // opens a terminal that signs the user back IN, which is the opposite of
-      // what the button they pressed said.
-      const login = adapter.loginTarget();
-      const logout = adapter.logoutTarget();
-      expect(login.ok && logout.ok).toBe(true);
-      if (!login.ok || !logout.ok) {
-        return;
+  it('runs nothing for a CLI that declares no account sign-out', async () => {
+    // Same arm on the destructive half, and it is the one that matters more: a
+    // bare `claude` here would leave the user signed IN while the card reported
+    // the sign-out done.
+    class NoLogoutAdapter extends ClaudeAdapter {
+      override getConfig(): AdapterConfig {
+        const base = super.getConfig();
+        return { ...base, auth: { ...base.auth, logoutArgs: null } };
       }
-      expect(logout.args).not.toEqual(login.args);
-    });
-  }
+    }
+    const onSpawn = vi.fn();
+    await expect(
+      new NoLogoutAdapter().runLogout({ timeoutMs: 1_000, onSpawn }),
+    ).resolves.toBe(false);
+    expect(onSpawn).not.toHaveBeenCalled();
+  });
 
-  it('carries the config directory, so it signs out of THAT profile', () => {
-    // A sign-out that dropped the directory would clear the DEFAULT account's
-    // credentials — destructive, and aimed at an account the user was not
-    // looking at. Asserted on the base rather than per adapter: `configDirEnv`
-    // is the shared mechanism, and a CLI that has no env var for it declares
-    // that in its own config.
-    const target = new ClaudeAdapter().logoutTarget('/profiles/work');
-    expect(target.ok && Object.keys(target.env).length).toBeGreaterThan(0);
+  it('runs nothing for a CLI that declares no MCP sign-in', async () => {
+    // And on the server half, where an empty argv would compose `claude
+    // <server-name>` — the server's name run as a PROMPT.
+    class NoMcpLoginAdapter extends ClaudeAdapter {
+      override getConfig(): AdapterConfig {
+        const base = super.getConfig();
+        return { ...base, mcp: { ...base.mcp, loginArgs: null } };
+      }
+    }
+    const onSpawn = vi.fn();
+    await expect(
+      new NoMcpLoginAdapter().runMcpLogin({
+        server: 'probe-linear',
+        cwd: process.cwd(),
+        timeoutMs: 1_000,
+        onSpawn,
+      }),
+    ).resolves.toBeNull();
+    expect(onSpawn).not.toHaveBeenCalled();
   });
 
   it('reads each CLI’s OWN code-prompt answer, which is not the same answer', () => {
@@ -664,17 +644,6 @@ describe('AgentAdapter.logoutTarget', () => {
       ),
     ).toBe(false);
     expect(cursor.loginWantsCode('Paste code here if prompted > ')).toBe(false);
-  });
-
-  it('refuses for a CLI that declares no account sign-out', () => {
-    // The defensive arm, entered deliberately — and it is the arm that matters
-    // most in this pair: a `logoutArgs: null` that spread an empty argv would
-    // compose a bare `claude`, so a button labelled "Sign out" would open an
-    // ordinary interactive session and leave the user signed in.
-    expect(new NoLogoutAdapter().logoutTarget()).toEqual({
-      ok: false,
-      reason: 'unsupported',
-    });
   });
 });
 

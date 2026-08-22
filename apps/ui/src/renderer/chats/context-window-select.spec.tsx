@@ -95,7 +95,6 @@ describe('ContextWindowSelect', () => {
     );
     expect(trigger(el)).toBeNull();
     expect(el.textContent).toContain('pick a model');
-    expect(el.textContent).not.toContain('one window');
     // The full sentence still rides the hover title, unabridged.
     expect(el.querySelector('[title]')?.getAttribute('title')).toBe(
       REASON_NO_MODEL,
@@ -107,8 +106,12 @@ describe('ContextWindowSelect', () => {
     ['a probe that could not be taken', REASON_PROBE_FAILED, 'unreadable'],
     ['a CLI with no such axis at all', REASON_NO_AXIS, 'no-axis'],
   ] as const)(
-    'labels %s "one window", with the full reason on hover',
+    'keeps %s on the PICKER at the model’s own default, never an inert word',
     (_, reason, kind) => {
+      // The reported shape: on claude — no such axis on any model — this was a
+      // dead grey chip reading "one window" on every chat. All three of these
+      // describe a turn that runs at the model's default, which is a thing the
+      // picker can already say, so it says it.
       const el = render(
         <ContextWindowSelect
           windows={[]}
@@ -118,12 +121,40 @@ describe('ContextWindowSelect', () => {
           onChange={() => {}}
         />,
       );
-      expect(trigger(el)).toBeNull();
-      expect(el.textContent).toContain('one window');
-      expect(el.textContent).not.toContain('pick a model');
-      expect(el.querySelector('[title]')?.getAttribute('title')).toBe(reason);
+      const control = trigger(el);
+      expect(control).not.toBeNull();
+      expect(control!.disabled).toBe(false);
+      expect(control!.textContent).toContain('default window');
+      // The daemon's sentence is what the label stopped carrying, so it has to
+      // be reachable: it is the chip's own hover title, in place of the plain
+      // "Context window" a chip with rows shows.
+      expect(control!.getAttribute('title')).toBe(reason);
+      // And the menu opens on the one row that is true — no fabricated sizes.
+      expect(optionValues(el)).toEqual(['default window']);
     },
   );
+
+  it('keeps a stored size on screen even when the model reports no sizes at all', () => {
+    // A chat moved onto a model with no window axis: the stored word is still
+    // what is on the run, and the chip's fallback to "default window" must not
+    // be the only trace of it. The empty-list path reaches the same disabled
+    // add-back row as a model that offers a choice.
+    const el = render(
+      <ContextWindowSelect
+        windows={[]}
+        value="1m"
+        unavailableReason={REASON_NO_AXIS}
+        unavailableKind="no-axis"
+        onChange={() => {}}
+      />,
+    );
+    const rows = optionValues(el);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('1m');
+    expect(rows[0]).toContain('unavailable');
+    expect(rows[1]).toBe('default window');
+    expect(trigger(el)!.textContent).toContain('default window');
+  });
 
   it('follows the KIND, not the wording of the reason', () => {
     // The one assertion that actually discriminates. The component used to
@@ -141,8 +172,9 @@ describe('ContextWindowSelect', () => {
         onChange={() => {}}
       />,
     );
+    expect(trigger(el)).toBeNull();
     expect(el.textContent).toContain('pick a model');
-    expect(el.textContent).not.toContain('one window');
+    expect(el.textContent).not.toContain('default window');
   });
 
   it('offers exactly the sizes the daemon reported, plus a default row', () => {

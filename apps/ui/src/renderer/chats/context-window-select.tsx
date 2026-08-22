@@ -21,15 +21,6 @@ const DEFAULT_LABEL = 'default window';
 const NO_MODEL_LABEL = 'pick a model';
 
 /**
- * The inert-chip label for every OTHER unavailable kind — the CLI has no such
- * control at all, this model has one fixed size, or the CLI could not be
- * asked. All three describe a turn that will in fact run at exactly one
- * window, so the generic label stays accurate for them; only the no-model case
- * says something else is true.
- */
-const FIXED_WINDOW_LABEL = 'one window';
-
-/**
  * The context-window chip: which of the model's window sizes a turn runs at.
  *
  * REPORTED as "cursor also has a model size, that is 1 million, 300k … I
@@ -47,21 +38,26 @@ const FIXED_WINDOW_LABEL = 'one window';
  * in step. (Measured end to end: `1m` makes cursor report a 1,000,000-token
  * window, `300k` a 300,000-token one, on the same model and the same prompt.)
  *
- * WITH NO SIZES THERE IS NO PICKER — but not silence either, when the daemon
- * says why. Four cases reach this: no model has been picked yet, the CLI has
- * no such control at all (claude runs each model at its own window), this
- * MODEL has one fixed size, or the CLI could not be asked. Each renders as an
- * inert chip carrying the full sentence on hover, on the rule the effort chip
- * already holds: a control that simply vanishes is indistinguishable from a
- * broken one. The VISIBLE word is not the same for all four: only `no-model`
- * says something a turn will not actually do (there being no model, there is
- * no window to report on), so it alone gets its own label — the other three
- * all describe a turn that runs at exactly one window.
+ * WITH NO SIZES IT IS STILL THE PICKER, reading `default window` — the size
+ * the turn does in fact run at. It was an INERT chip labelled `one window`,
+ * and that is the shape this rewrite exists to remove: on claude, which has no
+ * such axis at all, every model shows it, so the commonest rendering of this
+ * control was a dead grey word that answers nothing and cannot be pressed
+ * ("we need to keep it as default then if there is no other options … it
+ * shouldn't be just inactive button like that"). One rendering for every
+ * model is also what stops the row rearranging itself as the model changes:
+ * the chip keeps its shape and its vocabulary, and only the rows behind it
+ * differ. The daemon's sentence is not dropped with the label — it becomes the
+ * chip's hover title, which is where the four cases (no model yet, no such
+ * axis, one fixed size, the CLI could not be asked) are told apart in words.
  *
- * Which case it is comes from `unavailableKind`, never from reading the
- * sentence: the prose is what a USER reads, so recognising a case by matching
- * those words means improving the wording silently changes what the control
- * says.
+ * The ONE case that is still inert is `no-model`, and it says `pick a model`:
+ * nothing has been asked yet, so there is no default window to report either —
+ * a picker there would offer the user a row standing for a model nobody has
+ * chosen. Which case it is comes from `unavailableKind`, never from reading
+ * the sentence: the prose is what a USER reads, so recognising a case by
+ * matching those words means improving the wording silently changes what the
+ * control says.
  */
 export function ContextWindowSelect({
   windows,
@@ -80,14 +76,15 @@ export function ContextWindowSelect({
   /** A turn is running — this pick lands on the NEXT one. */
   nextTurnOnly?: boolean;
   /**
-   * Why there are no sizes to choose from, from the daemon. Shown on an inert
-   * chip when {@link windows} is empty; `null` means there IS a picker (so this
-   * is never read) and `undefined` means the answer has not landed.
+   * Why there are no sizes to choose from, from the daemon. Becomes the chip's
+   * hover title when {@link windows} is empty; `null` means there IS a picker
+   * (so this is never read) and `undefined` means the answer has not landed.
    */
   unavailableReason?: string | null;
   /**
    * WHICH case {@link unavailableReason} describes. Only `no-model` renders
-   * differently; everything else means the turn runs at one fixed window.
+   * differently — as the one inert chip; everything else keeps the picker at
+   * the model's own default.
    */
   unavailableKind?: AgentContextWindowUnavailableKind | null;
   onChange: (contextWindow: string | null) => void;
@@ -101,13 +98,27 @@ export function ContextWindowSelect({
   id?: string;
 }): React.JSX.Element | null {
   if (windows.length === 0) {
-    return unavailableReason ? (
-      <Chip tone="muted" className={className} title={unavailableReason}>
-        <Maximize2 aria-hidden="true" />
-        {unavailableKind === 'no-model' ? NO_MODEL_LABEL : FIXED_WINDOW_LABEL}
-      </Chip>
-    ) : null;
+    // No report yet: a chip whose only explanation is still in flight would
+    // read as a control that is simply broken.
+    if (!unavailableReason) {
+      return null;
+    }
+    if (unavailableKind === 'no-model') {
+      return (
+        <Chip tone="muted" className={className} title={unavailableReason}>
+          <Maximize2 aria-hidden="true" />
+          {NO_MODEL_LABEL}
+        </Chip>
+      );
+    }
   }
+  /**
+   * The daemon's sentence when there is nothing to choose from — the chip's
+   * hover title in place of the plain name, since "why can I not pick a size
+   * here" is the only question left once the rows are gone. Null whenever
+   * there ARE rows, where it is not read at all.
+   */
+  const fixedReason = windows.length === 0 ? unavailableReason : null;
   const known = windows.some((window) => window.id === value);
   // A size the CURRENT model does not offer — a chat carried over to another
   // model, or a workflow node whose model changed under it. Always model-
@@ -128,9 +139,10 @@ export function ContextWindowSelect({
       id={id}
       aria-label="Context window"
       title={
-        nextTurnOnly
+        fixedReason ??
+        (nextTurnOnly
           ? 'Context window — applies to your next message'
-          : 'Context window'
+          : 'Context window')
       }
       className={className}
       leadingIcon={<Maximize2 />}

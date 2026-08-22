@@ -107,14 +107,32 @@ function BlockStatusMark({
   );
 }
 
-/** Geniro web's SectionLabel. */
+/**
+ * Geniro web's SectionLabel — the transcript's section caption (`INPUT`,
+ * `RESULT`, `TASK LIST`).
+ *
+ * The `[&_button]` half is load-bearing, not defensive. `styles/global.css`
+ * gives every `<button>` `font-size: var(--text-base)` and
+ * `font-weight: medium` as a BASE rule, so a button in here sets its own type
+ * and inherits none of this — the caption's 10px reached the text around the
+ * button and not the button's own label. That is how the one interactive
+ * caption in the app, the task list's heading, came to render at 15px/500
+ * inside a 10px/400 caption: half again the size of every tool row beside it,
+ * and the reported "task list title should be smaller". Measured, not
+ * inferred — the `<p>` computed to 10px and the `<button>` inside it to 15px.
+ *
+ * Stated HERE rather than at the call site because it is this component's
+ * promise that is being kept: it is the one definition of what a section
+ * caption looks like, and a second interactive one would otherwise escape it
+ * exactly the same way, silently.
+ */
 export function SectionLabel({
   children,
 }: {
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <p className="m-0 mb-1 text-[10px] tracking-wide text-muted-foreground uppercase">
+    <p className="m-0 mb-1 text-[10px] tracking-wide text-muted-foreground uppercase [&_button]:text-[10px] [&_button]:font-normal">
       {children}
     </p>
   );

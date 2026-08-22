@@ -90,6 +90,7 @@ export function runToWire(
     model: run.model,
     approval: run.approval,
     effort: run.effort,
+    contextWindow: run.contextWindow,
     configDir: run.configDir,
     groupId: run.groupId,
     createdAt: run.createdAt.toISOString(),

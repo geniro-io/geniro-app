@@ -59,6 +59,29 @@ function hoveredDay(props: TooltipProps): DayPoint | null {
     : null;
 }
 
+/**
+ * The marker a curve shows only when it has ONE point, and `false` otherwise.
+ *
+ * A line and an area are both drawn BETWEEN points, so a series holding a single
+ * day has nothing to draw: the panel rendered as bare axes, which reads as "no
+ * data" about a day that may well have cost money. The bar chart beside them was
+ * unaffected, so one card in a row of three sat visibly empty.
+ *
+ * Reachable long before the Today period made it routine — the daemon clamps a
+ * range to what its ledger holds, so a fresh install's first day answers every
+ * period with one bucket.
+ *
+ * A dot only in that case, never as a general option: at 30 points the same
+ * markers are a beaded string over a curve whose shape is the thing being read,
+ * which is why `dot` was false to begin with.
+ */
+export function loneDot(
+  points: readonly DayPoint[],
+  color: string,
+): { r: number; strokeWidth: number; fill: string } | false {
+  return points.length === 1 ? { r: 3, strokeWidth: 0, fill: color } : false;
+}
+
 /** Shared axis pair — same ticks, same gridlines, so the charts stack legibly. */
 function Axes({
   points,
@@ -158,6 +181,7 @@ export function DailySeriesChart({
           strokeWidth={2}
           fill="url(#stats-spend-fill)"
           connectNulls={false}
+          dot={loneDot(points, SERIES.spend)}
           activeDot={{ r: 4, strokeWidth: 0 }}
           isAnimationActive={false}
         />
@@ -213,7 +237,7 @@ export function CumulativeSpendChart({
           dataKey="cumulativeUsd"
           stroke={SERIES.cumulative}
           strokeWidth={2}
-          dot={false}
+          dot={loneDot(points, SERIES.cumulative)}
           activeDot={{ r: 4, strokeWidth: 0 }}
           isAnimationActive={false}
         />

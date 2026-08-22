@@ -58,6 +58,72 @@ const RM_RETRIES = 5;
 const RM_RETRY_DELAY_MS = 100;
 
 /**
+ * How many deletions are currently running with asar support switched off.
+ *
+ * `process.noAsar` is a single global flag, and the sweep deletes its trees
+ * concurrently — so the first one to finish must not switch the flag back on
+ * under the others. Counted rather than set-and-restore per call for exactly
+ * that reason.
+ */
+let asarSuspended = 0;
+
+/**
+ * Run a filesystem deletion with Electron's asar support switched OFF.
+ *
+ * MEASURED, electron 42.5.1 vs node 24.14.0, on a tree holding one 111KB
+ * `app.asar`:
+ *
+ * | runtime  | `lstat(app.asar).isDirectory()` | `fs.rm(tree, {recursive})` |
+ * |----------|---------------------------------|----------------------------|
+ * | node     | `false`                         | resolved in **1ms**        |
+ * | electron | `true`                          | **still running at 30s**   |
+ *
+ * That difference is the whole bug. Electron patches `fs` so a path INSIDE an
+ * archive resolves — which is what makes `require('…/app.asar/main.js')` work —
+ * and the archive itself therefore stats as a directory. `fs.rm({recursive})`
+ * believes it, walks into the archive's virtual contents, and tries to unlink
+ * tens of thousands of entries that do not exist on disk, retrying each one
+ * {@link RM_RETRIES} times with a backoff. It does not fail; it does not
+ * finish.
+ *
+ * REPORTED as an update that installs "endlessly" — the loader never ends. It
+ * never ended because {@link installUpdate}'s cleanup never returned, so the
+ * install never resolved and the phase never left `installing`, on an update
+ * whose bundle was already swapped in and working. The same call in the launch
+ * sweep is why a user had `Geniro.app.old-*` eroded down to exactly its two
+ * `.asar` files: every real file around them was deleted, and the walk then
+ * disappeared into the archive.
+ *
+ * Node-environment tests cannot see any of this — the UI suite runs under node,
+ * where the same code is the 1ms row. So the pin in the spec is on the FLAG,
+ * which is the part that behaves identically in both.
+ */
+async function withoutAsar<T>(run: () => Promise<T>): Promise<T> {
+  if (asarSuspended++ === 0) {
+    process.noAsar = true;
+  }
+  try {
+    return await run();
+  } finally {
+    if (--asarSuspended === 0) {
+      process.noAsar = false;
+    }
+  }
+}
+
+/** `fs.rm`, with this file's retry policy and no asar layer under it. */
+function removeTree(path: string): Promise<void> {
+  return withoutAsar(() =>
+    rm(path, {
+      recursive: true,
+      force: true,
+      maxRetries: RM_RETRIES,
+      retryDelay: RM_RETRY_DELAY_MS,
+    }),
+  );
+}
+
+/**
  * The two names an update writes beside the things it is replacing.
  *
  * Declared once because they are read by two parties that must agree: the code
@@ -92,14 +158,17 @@ function withDeadline(ms: number, signal?: AbortSignal): AbortSignal {
  * — the reported error, on an update that had already succeeded, which then
  * skipped the relaunch and left the user on the old code with the new app
  * beside it. Leftovers cost disk; a false failure costs the feature.
+ *
+ * Answers whether the tree is actually GONE, because one caller reports what it
+ * removed and a swallowed failure would otherwise be reported as a removal.
  */
-async function discard(path: string): Promise<void> {
-  await rm(path, {
-    recursive: true,
-    force: true,
-    maxRetries: RM_RETRIES,
-    retryDelay: RM_RETRY_DELAY_MS,
-  }).catch(() => undefined);
+async function discard(path: string): Promise<boolean> {
+  try {
+    await removeTree(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** How the caller is told about a running download. */
@@ -315,8 +384,12 @@ export async function sweepUpdateDebris({
     staleBackups(bundlePath),
   ]);
   const paths = [...scratch, ...backups];
-  await Promise.all(paths.map(discard));
-  return paths;
+  const gone = await Promise.all(paths.map(discard));
+  // What was REMOVED, not what was attempted. The caller logs this line, and it
+  // is the only record a user has of the sweep — a path it names while the
+  // directory is still sitting there turns the one diagnostic into a reason to
+  // look somewhere else.
+  return paths.filter((_, i) => gone[i]);
 }
 
 /**
@@ -414,13 +487,10 @@ async function swapBundle(
   const backup = `${bundlePath}${BACKUP_SUFFIX}${process.pid}`;
   // This one is BEFORE the commit point, so a failure here is a genuine refusal
   // to start — renaming onto a leftover would be the destructive kind of
-  // surprise. It still retries, for the reason `discard` documents.
-  await rm(backup, {
-    recursive: true,
-    force: true,
-    maxRetries: RM_RETRIES,
-    retryDelay: RM_RETRY_DELAY_MS,
-  });
+  // surprise. It still retries, for the reason `discard` documents, and it
+  // still runs under {@link withoutAsar}: a leftover backup is a bundle, so
+  // this is the same walk-into-the-archive hang, one step earlier.
+  await removeTree(backup);
   await rename(bundlePath, backup);
   try {
     await execFileAsync(DITTO, [staged, bundlePath], { signal });

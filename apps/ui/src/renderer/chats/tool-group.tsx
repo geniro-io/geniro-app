@@ -8,6 +8,7 @@ import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { ToolBodyView } from './tool-body-view';
 import { ToolCallIcon, ToolOperationIcon } from './tool-icon';
+import { toolOperationOf } from './tool-kind';
 import { formatToolName, toolInputBody, toolResultBody } from './tool-render';
 import {
   toolCallSummary,
@@ -35,6 +36,49 @@ export function toolPairStatus(pair: ToolPair, settled: boolean): BlockStatus {
 }
 
 /**
+ * Does this call have a CHANGE TO A FILE to show?
+ *
+ * REPORTED as "I wanna see all file edits, so it should be automatically open,
+ * like claude cli" — the transcript folded every edit behind two presses (the
+ * group's chevron, then the row's), so the one part of a turn a reader has to
+ * check by eye was the part hidden hardest. Nothing else about the transcript
+ * changes: this decides what is OPEN, never what is drawn.
+ *
+ * Only file changes, and deliberately not "everything". A turn's reads, greps
+ * and command output are the material an agent worked FROM; unfolding those
+ * too would bury the diff in the wall of text this fold exists to prevent.
+ *
+ * Asked of BOTH directions, because the two shipped transports report a change
+ * at opposite ends of one call: claude discloses it in the arguments
+ * (`Edit`'s `old_string`/`new_string`, `Write`'s `content`), while an ACP agent
+ * discloses no arguments at all and returns `diffs` on the result. Keying on
+ * either alone would open the diffs of one CLI and none of the other's.
+ *
+ * The last clause is the guard rather than the rule: a tool this classifies as
+ * an edit but nothing renders as a diff (`MultiEdit`, whose arguments are a
+ * list) still has arguments worth reading, but a row with NO body opens onto
+ * blank space and would read as a broken disclosure.
+ */
+export function showsFileChange(pair: ToolPair): boolean {
+  const payload: unknown = pair.call.payload;
+  const name = payloadString(payload, 'name') ?? 'tool';
+  const input = (payload as { input?: unknown } | null)?.input;
+  const body = toolInputBody(name, input);
+  if (body?.kind === 'diff') {
+    return true;
+  }
+  if (pair.result !== null) {
+    const result =
+      (pair.result.payload as { result?: unknown } | null)?.result ?? null;
+    if (toolResultBody(input, result).kind === 'diff') {
+      return true;
+    }
+  }
+  const operation = toolOperationOf(payload);
+  return (operation === 'edit' || operation === 'create') && body !== null;
+}
+
+/**
  * One expandable tool invocation inside a group — geniro web's `ToolBlock`
  * shape: a bordered pill carrying a status glyph and the tool's own name in
  * mono, over the input and result it expands into.
@@ -52,7 +96,13 @@ function ToolRow({
   pair: ToolPair;
   settled: boolean;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  // DERIVED from the call, with the user's own press layered over it — never
+  // seeded into `useState`, which only reads its argument at mount. A row is
+  // mounted the moment the CALL streams in and its diff can arrive later (on
+  // the result, for an ACP agent), so a seeded row would stay shut on exactly
+  // the edits this exists to show. Same shape as `TaskListCard`'s `latest`.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? showsFileChange(pair);
   // Annotated `unknown` rather than inheriting the generated DTO's `any`: the
   // payload is untyped on the wire BY DESIGN (each item kind carries a different
   // shape), and every reader below is written to narrow it defensively. Without
@@ -78,7 +128,7 @@ function ToolRow({
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOverride(!open)}
         className={cn(
           'flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors',
           status === 'error'
@@ -133,7 +183,13 @@ export const ToolGroup = memo(function ToolGroup({
 }: {
   group: ToolGroupEntry;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  // Both folds have to give way together, or neither shows anything: opening
+  // the edit ROW behind a shut group leaves the diff exactly as invisible as
+  // before. So a group holding a file change opens itself, and its other calls
+  // — the reads and commands that led to it — come along as the one-line rows
+  // they already were, which is what the CLI prints too.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? group.pairs.some(showsFileChange);
   // Only the FACT here, not the moment: a tool call is a single round trip, so
   // "has it spoken since the run stopped" is the same question as "did it
   // return", which `pair.result` already answers. The sub-agent block is where
@@ -156,7 +212,7 @@ export const ToolGroup = memo(function ToolGroup({
       <button
         type="button"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOverride(!open)}
         className="flex items-center gap-1.5 text-left text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
         <ChevronRight
           aria-hidden="true"

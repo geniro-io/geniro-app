@@ -44,14 +44,16 @@ interface LoginRun {
 /**
  * Signs a CLI in and out WITHOUT opening a terminal window.
  *
- * The sibling of `HandoffService`'s `loginTarget`/`logoutTarget`, and deliberately
- * not a replacement for them: that pair RESOLVES an invocation for the user's own
- * terminal and stays the fallback here — for a CLI this cannot drive, for a flow
- * that stalls, and for anyone who would rather watch it happen. This service is
- * what makes the ordinary case windowless.
+ * The ONLY way a CLI is signed in or out. `HandoffService` carried a
+ * `loginTarget`/`logoutTarget`/`mcpLoginTarget` trio that RESOLVED an invocation
+ * for the user's own terminal, kept as "the fallback" while this service took the
+ * ordinary case. Every caller has since moved here, and a fallback nothing can
+ * reach is not a fallback — it is a second sign-in mechanism free to drift from
+ * the one that runs. It went with the last caller; `v1/handoff` now resolves one
+ * thing only, a conversation.
  *
- * Why the daemon may run these at all, when `AdapterConfig.auth.loginArgs` says
- * it resolves and never runs: that instruction generalised a probe of `mcp
+ * Why the daemon may run these at all, when `AdapterConfig.auth.loginArgs` once
+ * said it resolves and never runs: that instruction generalised a probe of `mcp
  * login`, which refuses a non-TTY stdin outright. Re-probed on claude 2.1.228 and
  * cursor-agent 2026.08.11-e8db854, the ACCOUNT commands do not — `auth logout`
  * exits 0 with stdin closed, and both logins print a usable URL, open the browser

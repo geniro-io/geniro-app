@@ -126,6 +126,35 @@ describe('Stats', () => {
     });
   });
 
+  it('puts the measured figures above the charts, not below them', async () => {
+    // REPORTED as "move those to the top". They qualify the headline figure, so
+    // they belong under it — before, the split of the hero's own token count
+    // was the LAST thing on the page, three sections and a scroll away from the
+    // number it belonged to.
+    //
+    // Read off DOCUMENT ORDER rather than a class name: jsdom computes no
+    // layout, so where a card is on screen is unobservable here, but which of
+    // two nodes comes first is exactly what the grid order is made of.
+    const el = await render(<Stats handle={HANDLE} />);
+
+    const tokensIn = [...el.querySelectorAll('[data-slot="stat-label"]')].find(
+      (node) => node.textContent === 'Tokens in',
+    )!;
+    const titled = (text: string): Element =>
+      [...el.querySelectorAll('h3, [data-slot="card-title"]')].find(
+        (node) => node.textContent === text,
+      )!;
+    const perDay = titled('Per day');
+    const byAgent = titled('By agent');
+
+    for (const later of [perDay, byAgent]) {
+      expect(
+        tokensIn.compareDocumentPosition(later) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
   it('renders an unreported figure as not-measured, never as zero', async () => {
     // The cursor-agent shape. A "$0.00" here would be a false statement about
     // money, and it is the single thing this page must never say.
@@ -174,6 +203,29 @@ describe('Stats', () => {
     // "All time" is the only period that names no lower bound, so a 7-day pick
     // must carry one.
     expect(mocks.readUsageStats.mock.calls[1]![0]).toHaveProperty('from');
+  });
+
+  it('offers Today, and asks for that one calendar day', async () => {
+    // REPORTED as "we need to add today". The narrowest period used to be a
+    // week, in which today is one column of seven and the headline figure is
+    // six other days — so "what has this cost me so far today" had no answer.
+    const el = await render(<Stats handle={HANDLE} />);
+
+    await act(async () => {
+      buttonNamed(el, 'Today').click();
+    });
+
+    const asked = mocks.readUsageStats.mock.calls[1]![0] as {
+      from?: string;
+      to: string;
+    };
+    // A whole calendar day, not a rolling 24 hours: the lower bound is this
+    // morning's local midnight, so the period does not slide into yesterday as
+    // the afternoon wears on.
+    const from = new Date(asked.from!);
+    expect(from.getHours()).toBe(0);
+    expect(from.getMinutes()).toBe(0);
+    expect(from.toDateString()).toBe(new Date(asked.to).toDateString());
   });
 
   it('asks for the whole history when All time is picked', async () => {

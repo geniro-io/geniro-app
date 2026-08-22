@@ -3,6 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { formatTokens } from './agent-activity';
 import { MessageBubble } from './message-bubble';
+import { STANDING_ACTIVITY } from './run-status';
 import { NestedThreadContext } from './subagent-context';
 import type { RunSettleAt } from './transcript-groups';
 
@@ -127,28 +128,58 @@ export function formatElapsed(ms: number): string {
 }
 
 /**
- * One reasoning stretch: how much thinking it has cost, and for how long.
+ * One reasoning stretch: what the agent is thinking, or — where its CLI will
+ * not say — how much that thinking has cost, and for how long either way.
  *
- * Both numbers are per STRETCH. A turn that thinks, runs tools, then thinks
+ * Everything here is per STRETCH. A turn that thinks, runs tools, then thinks
  * again is two separate waits, and each gets its own row — the daemon's
  * stretch id is what keys them apart, so a new stretch mounts a fresh
  * component with a clock starting at zero.
+ *
+ * TWO SHAPES, because the CLIs genuinely differ and neither reading can stand
+ * in for the other. Headless claude REDACTS the block, so a running token total
+ * is all there is and the row is the one-line note it has always been. Cursor
+ * streams the words, and showing them is the whole point: the row is then the
+ * same muted italic bubble the durable `reasoning` item becomes, so the text a
+ * user watches appear and the text that lands are one thing rendered one way.
+ *
+ * Reported as a chat that sat on `Working…` for three minutes with nothing
+ * happening — while thought chunks were arriving the entire time, buffered by
+ * the driver and shown only when the block closed.
  */
 export function ThinkingRow({
   since,
   tokens,
+  text = null,
 }: {
   /** Epoch ms this stretch began. */
   since: number;
   /** Reasoning tokens spent in this stretch so far. */
   tokens: number;
+  /** What the agent is thinking, when its CLI discloses it. */
+  text?: string | null;
 }): React.JSX.Element {
   useSecondsTick();
+  const elapsed = formatElapsed(Date.now() - since);
+  if (text === null) {
+    return (
+      <LiveRow
+        text={`Thinking… ${formatTokens(tokens)} tokens`}
+        elapsed={elapsed}
+      />
+    );
+  }
   return (
-    <LiveRow
-      text={`Thinking… ${formatTokens(tokens)} tokens`}
-      elapsed={formatElapsed(Date.now() - since)}
-    />
+    <MessageBubble variant="reasoning" role="thinking">
+      <div className="whitespace-pre-wrap italic break-words">{text}</div>
+      {/* The state line the durable row does not need: this text is still
+          being written, and without the spinner and the clock a stretch that
+          goes quiet is indistinguishable from one that finished. */}
+      <div className="text-muted-foreground mt-1.5 flex items-center gap-1.5 text-xs not-italic">
+        <Spinner />
+        <span>Thinking… · {elapsed}</span>
+      </div>
+    </MessageBubble>
   );
 }
 
@@ -194,7 +225,7 @@ export function WorkingRow({
   useSecondsTick();
   return (
     <LiveRow
-      text={activity ?? 'Working…'}
+      text={activity ?? STANDING_ACTIVITY}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
     />
   );

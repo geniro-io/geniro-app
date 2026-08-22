@@ -67,6 +67,7 @@ describe('NODE_TYPE_SCHEMAS', () => {
       'agent',
       'model',
       'effort',
+      'contextWindow',
       'description',
       'role',
       'approval',

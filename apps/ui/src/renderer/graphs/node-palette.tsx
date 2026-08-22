@@ -6,7 +6,7 @@ import {
   SquareTerminal,
   Zap,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
@@ -16,6 +16,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { cn } from '../components/ui/utils';
+import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { NodeKind } from './node-schema';
 import { TRIGGER_KINDS } from './node-schema';
 import {
@@ -119,11 +120,6 @@ const LS_WIDTH = 'geniro.builder.paletteWidth';
 const LS_COLLAPSED = 'geniro.builder.paletteCollapsed';
 const LS_AGENTS_OPEN = 'geniro.builder.paletteAgentsOpen';
 const LS_TRIGGERS_OPEN = 'geniro.builder.paletteTriggersOpen';
-
-function readBool(key: string, fallback: boolean): boolean {
-  const value = localStorage.getItem(key);
-  return value === null ? fallback : value === '1';
-}
 
 /**
  * One connection rule row in the info dialog: the port dot (input/output
@@ -268,9 +264,7 @@ export function NodePalette({
   /** Position-less add (the canvas stacks it to the right) — the keyboard path. */
   onAdd?: (item: PaletteItem) => void;
 }): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState(() =>
-    readBool(LS_COLLAPSED, false),
-  );
+  const [collapsed, setCollapsed] = usePersistedFlag(LS_COLLAPSED, false);
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: LS_WIDTH,
     defaultWidth: 240,
@@ -278,23 +272,12 @@ export function NodePalette({
     maxWidth: 400,
     handleEdge: 'right',
   });
-  const [agentsOpen, setAgentsOpen] = useState(() =>
-    readBool(LS_AGENTS_OPEN, true),
-  );
-  const [triggersOpen, setTriggersOpen] = useState(() =>
-    readBool(LS_TRIGGERS_OPEN, true),
+  const [agentsOpen, setAgentsOpen] = usePersistedFlag(LS_AGENTS_OPEN, true);
+  const [triggersOpen, setTriggersOpen] = usePersistedFlag(
+    LS_TRIGGERS_OPEN,
+    true,
   );
   const [infoItem, setInfoItem] = useState<PaletteItem | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem(LS_COLLAPSED, collapsed ? '1' : '0');
-  }, [collapsed]);
-  useEffect(() => {
-    localStorage.setItem(LS_AGENTS_OPEN, agentsOpen ? '1' : '0');
-  }, [agentsOpen]);
-  useEffect(() => {
-    localStorage.setItem(LS_TRIGGERS_OPEN, triggersOpen ? '1' : '0');
-  }, [triggersOpen]);
 
   const closeInfo = useCallback(() => setInfoItem(null), []);
 

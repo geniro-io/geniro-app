@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatListItem } from './chat-list-item';
+import { STANDING_ACTIVITY } from './run-status';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -347,5 +348,40 @@ describe('ChatListItem', () => {
       <ChatListItem {...props({ lastMessage: null })} />,
     );
     expect(container.textContent).not.toContain('All checks passed');
+  });
+});
+
+describe('ChatListItem — the running row never goes phrase-less', () => {
+  it('falls back to the standing phrase when the daemon has named nothing', async () => {
+    // REPORTED as the status "blinking" on a thread. The daemon announces
+    // `running Bash` on a tool call and NULL on its result, meaning "working,
+    // nothing named" — the transcript's live row has always read it that way,
+    // and this row read it as "erase", so the phrase vanished once per tool.
+    const container = await mount(
+      <ChatListItem {...props({ status: 'running', activity: null })} />,
+    );
+
+    expect(container.textContent).toContain(STANDING_ACTIVITY);
+  });
+
+  it('prefers the daemon’s phrase whenever there is one', async () => {
+    const container = await mount(
+      <ChatListItem
+        {...props({ status: 'running', activity: 'running Bash' })}
+      />,
+    );
+
+    expect(container.textContent).toContain('running Bash');
+    expect(container.textContent).not.toContain(STANDING_ACTIVITY);
+  });
+
+  it('says nothing of the sort once the run has STOPPED', async () => {
+    // The fallback describes work in progress. A settled row showing it would
+    // claim the run was still going — worse than the blink it replaces.
+    const container = await mount(
+      <ChatListItem {...props({ status: 'completed', activity: null })} />,
+    );
+
+    expect(container.textContent).not.toContain(STANDING_ACTIVITY);
   });
 });

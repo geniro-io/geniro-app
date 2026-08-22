@@ -63,6 +63,22 @@ export class Run extends TimestampsEntity {
   effort: string | null = null;
 
   /**
+   * Which of the model's context-window sizes this run's next turn asks for,
+   * spelled as its CLI spells it (`300k`, `1m`); null = the model's own
+   * default, which is also every row predating the chip and every CLI with no
+   * such control.
+   *
+   * A plain string for the reason `effort` is one, and NOT validated up front
+   * for the reason it partly is: the sizes belong to the MODEL, so there is no
+   * CLI-wide list to check against — a value the chosen model does not offer is
+   * reported by the turn's own driver, against the live agent.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'string', nullable: true })
+  contextWindow: string | null = null;
+
+  /**
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin

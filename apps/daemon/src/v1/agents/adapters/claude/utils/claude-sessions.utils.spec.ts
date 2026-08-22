@@ -11,12 +11,33 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import type { AgentSessionRecord } from '../../adapter.types';
 import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './claude-sessions.utils';
 
 const roots: string[] = [];
+
+/**
+ * The listing's rows alone, with no search.
+ *
+ * `listClaudeSessions` answers with the rows AND how far a search reached; the
+ * cases below are about the rows, so the envelope is unwrapped once here rather
+ * than at every assertion. The search's own cases open it deliberately.
+ */
+async function listSessions(input: {
+  profileDir: string;
+  cwd: string | null;
+  limit: number;
+  query?: string | null;
+}): Promise<AgentSessionRecord[]> {
+  const { sessions } = await listClaudeSessions({
+    ...input,
+    query: input.query ?? null,
+  });
+  return sessions;
+}
 
 /**
  * A fixed epoch-seconds mark the ordered fixtures are stamped around.
@@ -80,7 +101,7 @@ describe('listClaudeSessions', () => {
     ]);
 
     // Asked about the LINK, answered from a file that recorded the target.
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: link,
       limit: 10,
@@ -93,7 +114,7 @@ describe('listClaudeSessions', () => {
       { dir: 'a', id: 'mine', lines: [userLine('/tmp/mine', 'here')] },
       { dir: 'b', id: 'theirs', lines: [userLine('/tmp/theirs', 'elsewhere')] },
     ]);
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: '/tmp/mine',
       limit: 10,
@@ -119,7 +140,7 @@ describe('listClaudeSessions', () => {
         ],
       },
     ]);
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: null,
       limit: 10,
@@ -138,7 +159,7 @@ describe('listClaudeSessions', () => {
       },
       { dir: 'proj', id: 'real', lines: [userLine('/tmp/proj', 'hello')] },
     ]);
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: null,
       limit: 10,
@@ -163,7 +184,7 @@ describe('listClaudeSessions', () => {
       utimesSync(file, new Date(1_000 + i), new Date(1_000 + i));
     }
 
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: null,
       limit: 12,
@@ -233,7 +254,7 @@ describe('listClaudeSessions', () => {
     // assertion cannot pass by the rejection merely reaching it in time.
     utimesSync(minePath, TS_BASE + 1, TS_BASE + 1);
 
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: '/tmp/mine',
       limit: 10,
@@ -279,7 +300,7 @@ describe('listClaudeSessions', () => {
       // A second directory the collision does not touch, so neither answer can
       // be empty and the assertion below has something to be wrong about.
       write(join(own, 'm1.jsonl'), '/tmp/mine', 'mine, on its own');
-      const rows = await listClaudeSessions({
+      const rows = await listSessions({
         profileDir: root,
         cwd: '/tmp/mine',
         limit: 10,
@@ -323,7 +344,7 @@ describe('listClaudeSessions', () => {
       JSON.stringify(userLine('/tmp/proj', 'said at once')),
     );
 
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: null,
       limit: 10,
@@ -358,7 +379,7 @@ describe('listClaudeSessions', () => {
       { dir: 'proj', id: 'real', lines: [userLine('/tmp/proj', 'typed')] },
     ]);
 
-    const rows = await listClaudeSessions({
+    const rows = await listSessions({
       profileDir: root,
       cwd: null,
       limit: 10,
@@ -369,7 +390,7 @@ describe('listClaudeSessions', () => {
 
   it('answers an absent profile with an empty list rather than throwing', async () => {
     await expect(
-      listClaudeSessions({
+      listSessions({
         profileDir: join(tmpdir(), 'claude-sessions-spec-nope'),
         cwd: null,
         limit: 10,
@@ -554,5 +575,210 @@ describe('readClaudeSessionHistory', () => {
     });
 
     expect(history?.events).toEqual([{ type: 'text', text: 'two' }]);
+  });
+});
+
+describe('searching what was SAID in a conversation', () => {
+  // REPORTED as "WE need to improve search bu threads - by content as well".
+  // A row's title is the conversation's OPENING PROMPT, so a picker that
+  // filtered on titles could only find a thread by how it was started — and
+  // nobody remembers that. Every case below asserts on the ROWS, never on a
+  // count of files opened, because what the user gets is the list.
+  const talkedAboutAsar = (): string =>
+    profile([
+      {
+        dir: 'proj',
+        id: 'found',
+        lines: [
+          userLine('/w', 'help me with the updater'),
+          assistantLine('/w', 'The app.asar archive is never deleted.'),
+        ],
+      },
+      {
+        dir: 'proj',
+        id: 'other',
+        lines: [
+          userLine('/w', 'help me with the updater'),
+          assistantLine('/w', 'The release feed is fine.'),
+        ],
+      },
+    ]);
+
+  it('finds a thread by a line from the MIDDLE of it', async () => {
+    const rows = await listSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+    });
+
+    // Both sessions open with the same prompt, so a title search cannot tell
+    // them apart at all — which is the defect, stated as a fixture.
+    expect(rows.map((row) => row.id)).toEqual(['found']);
+  });
+
+  it('quotes the line that answered, since the title does not', async () => {
+    const rows = await listSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+    });
+
+    expect(rows[0]?.snippet).toContain('app.asar archive');
+    // The row still shows its own title — the quote is additional, not a
+    // replacement, or a search result would stop naming the conversation.
+    expect(rows[0]?.title).toBe('help me with the updater');
+  });
+
+  it('quotes NOTHING when the title or the folder already explains the row', async () => {
+    // Otherwise every row of a folder search carries a redundant quote of a
+    // line the user can already see one line above.
+    const rows = await listSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'updater',
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.snippet)).toEqual([null, null]);
+  });
+
+  it('requires EVERY term, across the row and the conversation together', async () => {
+    // How somebody actually remembers a thread: one fragment from the project,
+    // one from what was said. Neither half alone identifies it, and the two
+    // live in different places — so a search that could only match one source
+    // at a time would find nothing.
+    const root = profile([
+      {
+        dir: 'a',
+        id: 'mine',
+        lines: [
+          userLine('/work/geniro', 'the updater'),
+          assistantLine(
+            '/work/geniro',
+            'The app.asar archive is never deleted.',
+          ),
+        ],
+      },
+      {
+        dir: 'b',
+        id: 'theirs',
+        lines: [
+          userLine('/work/other', 'the updater'),
+          assistantLine(
+            '/work/other',
+            'The app.asar archive is never deleted.',
+          ),
+        ],
+      },
+    ]);
+
+    const rows = await listSessions({
+      profileDir: root,
+      cwd: null,
+      limit: 10,
+      query: 'asar geniro',
+    });
+
+    expect(rows.map((row) => row.id)).toEqual(['mine']);
+  });
+
+  it("does not match the CLI's own injected blocks", async () => {
+    // Found by searching the author's real profile: `asar` matched inside
+    // `toolu_01YAsarpjpgHChBKeKgbDV`, a tool-use id inside a
+    // `<task-notification>` envelope — a hit on a random identifier, quoted
+    // back at the user as though somebody had said it.
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'noise',
+        lines: [
+          userLine('/w', 'hello'),
+          userLine(
+            '/w',
+            '<task-notification><tool-use-id>toolu_01YAsarpjpgH</tool-use-id></task-notification>',
+          ),
+        ],
+      },
+    ]);
+
+    const rows = await listSessions({
+      profileDir: root,
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+    });
+
+    expect(rows).toEqual([]);
+  });
+
+  it('says nothing was truncated when the cap was never reached', async () => {
+    // A bounded search that stays silent is indistinguishable from one that
+    // read every conversation there was.
+    const small = await listClaudeSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+    });
+
+    expect(small.searchTruncated).toBe(false);
+  });
+
+  it('says the cap DID bite once the candidate count reaches it', async () => {
+    // The real cap is 600 files, and arranging that many fixtures just to
+    // exercise the true branch would be its own liability. `searchFileLimit`
+    // exists for exactly this: the same two-session profile, with the cap
+    // lowered until it is the thing that stops the scan.
+    const truncated = await listClaudeSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+      searchFileLimit: 1,
+    });
+
+    expect(truncated.searchTruncated).toBe(true);
+  });
+
+  it('leaves an unsearched listing exactly as it was', async () => {
+    const rows = await listSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+    });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.snippet === null)).toBe(true);
+  });
+
+  it('quotes the part of a long line the search actually matched', async () => {
+    // The row is 160 characters wide and a paragraph is not. Windowed on the
+    // term rather than truncated from the start: measured against the author's
+    // own profile, `asar` matched 400 characters into an answer, so the quote
+    // showed a sentence with no visible connection to what had been typed.
+    const padding = 'x'.repeat(400);
+    const root = profile([
+      {
+        dir: 'proj',
+        id: 'buried',
+        lines: [
+          userLine('/w', 'hello'),
+          assistantLine('/w', `${padding} the app.asar archive ${padding}`),
+        ],
+      },
+    ]);
+
+    const rows = await listSessions({
+      profileDir: root,
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+    });
+
+    expect(rows[0]?.snippet).toContain('asar');
+    expect(rows[0]?.snippet?.length).toBeLessThanOrEqual(162);
   });
 });

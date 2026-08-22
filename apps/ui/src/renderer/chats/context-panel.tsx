@@ -148,10 +148,20 @@ function Breakdown({
           is a different measurement, so a user comparing the two figures needs
           to know which is which — and a tooltip says that to a pointer alone,
           which is the same gap `ErrorText` was brought in to close two blocks
-          down. The ring's own `aria-label` carries the reciprocal sentence. */}
+          down. The ring's own `aria-label` carries the reciprocal sentence.
+
+          WORDED FOR EVERY CLI, which it was not: it said "/context" and "the
+          ring measures the last request", both of which describe claude alone.
+          An ACP agent has no such command — cursor's figures are read out of
+          its own session store — and since that reading now rides the turn it
+          IS what the ring draws, so the old sentence told a cursor user the two
+          measured different things when they measure the same one. What is
+          still true of both, and is the whole reason the note exists, is WHEN
+          each was taken. */}
       <p className="text-[11px] text-muted-foreground">
-        Reported by the agent&rsquo;s own /context. The ring measures the last
-        request instead, so the two can differ.
+        Reported by the agent&rsquo;s own accounting, re-read each time this
+        opens. The ring carries the last turn&rsquo;s reading, so the two can
+        differ.
       </p>
       {/* One bar, segments proportional to the WINDOW where there is one — so
           the empty tail is the room left, which is the thing being asked

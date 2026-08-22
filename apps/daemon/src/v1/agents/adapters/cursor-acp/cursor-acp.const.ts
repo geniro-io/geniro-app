@@ -88,6 +88,22 @@ export const CURSOR_EFFORT_PARAMETER_IDS = ['effort', 'reasoning'] as const;
  */
 export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
 
+/**
+ * The parameter that selects which CONTEXT WINDOW a model runs at.
+ *
+ * ONE spelling, unlike the effort axis, and that is a measurement rather than
+ * an assumption: swept across all 34 models on 2026-08-21 (2026.08.11-e8db854),
+ * every model that offers the axis at all spells it `context` under the
+ * category `model_config` — the twelve that do differ in their VALUES
+ * (`300k|1m`, `272k|1m`, `200k|1m`) and not in the key. Re-check by re-running
+ * that sweep; a second spelling appearing turns this into a list, exactly as
+ * {@link CURSOR_EFFORT_PARAMETER_IDS} already is.
+ *
+ * Named rather than inline because three readers spell it: the listing probe,
+ * the turn's selection builder, and the driver that sends it.
+ */
+export const CURSOR_CONTEXT_WINDOW_PARAMETER_ID = 'context';
+
 // ── The per-turn config directory ─────────────────────────────────────────
 //
 // Applying a model or an effort over ACP PERSISTS into the config directory, so

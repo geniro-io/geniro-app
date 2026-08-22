@@ -83,6 +83,7 @@ import {
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
   CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
   CLAUDE_PROJECT_SETTINGS_FILES,
+  CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
@@ -92,6 +93,7 @@ import {
 } from './claude.const';
 import type { ClaudeAdapterOptions } from './claude.types';
 import { ClaudeTurnDriver } from './claude-turn.driver';
+import { reloadCommandsRequestLine } from './utils/claude-commands.utils';
 import {
   contextUsageRequestLine,
   readContextUsageReply,
@@ -264,6 +266,16 @@ export class ClaudeAdapter extends AgentAdapter {
        */
       effortsAreExhaustive: true,
       /**
+       * A model's window is a property OF THE MODEL here, with no flag to
+       * change it: `--help` on 2.1.237 offers nothing of the kind, and the
+       * window this CLI reports back per turn (`modelUsage[].contextWindow`)
+       * is the one the model has. So the sentence names where the size
+       * actually comes from rather than saying only "claude cannot" — the rule
+       * every `unavailableReason` on this config follows.
+       */
+      contextWindowsUnavailableReason:
+        'claude runs each model at its own context window — pick a different model to change it',
+      /**
        * The aliases `claude --model` documents: each resolves to the latest
        * model of its tier, so they stay correct across releases without an app
        * update. This is the floor of the list, never the whole of it.
@@ -401,6 +413,9 @@ export class ClaudeAdapter extends AgentAdapter {
         // That same JSONL IS the transcript, in the very envelope this CLI's
         // stream-json output uses — see `readSessionHistory`.
         historyUnavailableReason: null,
+        // The transcript is a plain JSONL file in the profile, so a search can
+        // read what was actually said rather than only the row's own label.
+        contentSearchUnavailableReason: null,
       },
       configDir: {
         /**
@@ -425,6 +440,12 @@ export class ClaudeAdapter extends AgentAdapter {
          * this null promises — the two are pinned together by spec.
          */
         unavailableReason: null,
+        /**
+         * False: the message JOINS the running turn and is acted on at the next
+         * tool boundary, so nothing in flight is lost. The opposite of cursor's
+         * answer, which is why this is a field rather than one shared sentence.
+         */
+        interrupts: false,
       },
       usage: {
         /**
@@ -670,12 +691,22 @@ export class ClaudeAdapter extends AgentAdapter {
   override async listSessions(
     input: AgentSessionsInput,
   ): Promise<AgentSessionListing> {
-    const sessions = await listClaudeSessions({
-      profileDir: this.profileDir(input.configDir),
-      cwd: input.cwd,
-      limit: input.limit,
-    });
-    return { sessions, unavailableReason: null };
+    const { sessions, searchTruncated, searchFileLimit } =
+      await listClaudeSessions({
+        profileDir: this.profileDir(input.configDir),
+        cwd: input.cwd,
+        limit: input.limit,
+        query: input.query,
+      });
+    return {
+      sessions,
+      unavailableReason: null,
+      // A bounded search that says nothing is indistinguishable from one that
+      // read every conversation and found these — see the file cap's own note.
+      partialReason: searchTruncated
+        ? `Searched what was said in the ${searchFileLimit} most recent conversations.`
+        : null,
+    };
   }
 
   /**
@@ -1145,7 +1176,14 @@ export class ClaudeAdapter extends AgentAdapter {
   }
 
   protected override keepStdinOpen(input: AgentTurnInput): boolean {
-    return this.spawnsOnPermissionDialogue(input);
+    // The command probe needs stdin for ONE request and nothing else: this CLI
+    // names its commands on `system/init` and describes none of them, and the
+    // sentences only come back when it is asked to reload. It carries no
+    // approval mode, so without this arm it spawns with a closed stdin and has
+    // no way to ask. See `createTurnDriver`.
+    return input.commandListProbe === true
+      ? true
+      : this.spawnsOnPermissionDialogue(input);
   }
 
   protected override buildApprovalResponse(
@@ -1233,6 +1271,29 @@ export class ClaudeAdapter extends AgentAdapter {
    * one adapter instance drives N concurrent turns under graph fan-out.
    */
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
+    if (input.commandListProbe === true) {
+      // The command probe, and ONLY it. One `reload_skills` request makes the
+      // CLI announce its whole command list with each entry's own sentence —
+      // the 64 descriptionless rows in the composer's `/` autocomplete are
+      // built-ins and plugin commands that exist nowhere on disk to be
+      // scanned. See `CLAUDE_RELOAD_COMMANDS_SUBTYPE` in `claude.const.ts`.
+      //
+      // Not on a user's turn, and the reason is the word `reload`: it re-reads
+      // the user's own skills and plugins on a live session. The probe is a
+      // throwaway process in a temp directory that is cancelled the moment the
+      // list lands, so there is nothing there to disturb.
+      return {
+        onStdinReady: (io) => {
+          // Written straight away rather than after `init`, which was measured
+          // rather than assumed: the announcement comes back BEFORE that line,
+          // so the probe settles sooner than it did on `init` alone.
+          io.write(
+            reloadCommandsRequestLine(CLAUDE_RELOAD_COMMANDS_REQUEST_ID),
+          );
+        },
+        onMessage: (obj) => this.mapMessage(obj),
+      };
+    }
     if (!this.waitsForMcpServers(input)) {
       // The base's stateless literal, which has no `awaitPromptReady` at all —
       // absence is what keeps the opening write SYNCHRONOUS for a turn with

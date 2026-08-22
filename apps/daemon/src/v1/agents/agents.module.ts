@@ -31,6 +31,7 @@ import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
 import { ContextWindowStore } from './services/context-window.store';
+import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
@@ -136,6 +137,18 @@ import { defaultSpawn } from './utils/spawn-cli';
         processes: ProcessRegistry,
         versions: AgentVersionService,
       ) => new EffortsService(adapters, processes, versions),
+      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
+    },
+    {
+      // Its twin, and a factory for the identical reason: asking a model's
+      // window sizes spawns the same handshake, so it carries the same version
+      // key, TTL and single-flight (`ModelVocabularyCache`, shared with it).
+      provide: ContextWindowsService,
+      useFactory: (
+        adapters: AgentAdapterRegistry,
+        processes: ProcessRegistry,
+        versions: AgentVersionService,
+      ) => new ContextWindowsService(adapters, processes, versions),
       inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
     },
     AgentEventBus,

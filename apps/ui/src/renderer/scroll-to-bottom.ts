@@ -29,3 +29,36 @@ export function scrollToBottom(
 ): void {
   scroller.scrollTo({ top: scroller.scrollHeight, behavior });
 }
+
+/**
+ * The `scrollTop` that brings one row fully inside its own box — or null when
+ * it is already there and nothing should be written.
+ *
+ * The second half of the rule above, for the other shape of the same want: not
+ * "follow the tail" but "keep THIS row visible". `row.scrollIntoView()` is the
+ * obvious answer and carries the identical defect — it walks every scrollable
+ * ancestor, so a bounded list inside a scrolling panel inside a transcript
+ * moves all three. Arithmetic on the box's own `scrollTop` cannot reach past
+ * the box.
+ *
+ * Null for a row already in view is what keeps this from fighting the reader:
+ * the caller writes nothing, so a list somebody has scrolled by hand stays
+ * where they put it until the row they are meant to be watching actually
+ * leaves the frame.
+ *
+ * Structurally typed, like its neighbour, because jsdom lays nothing out — a
+ * test supplies the four numbers directly.
+ */
+export function revealWithinBox(
+  box: { scrollTop: number; clientHeight: number },
+  row: { offsetTop: number; offsetHeight: number },
+): number | null {
+  if (row.offsetTop < box.scrollTop) {
+    return row.offsetTop;
+  }
+  const overshoot = row.offsetTop + row.offsetHeight - box.clientHeight;
+  // The row's BOTTOM edge against the box's, so a row taller than the box is
+  // shown from its own top rather than scrolled past — `Math.max` with the
+  // first case's answer.
+  return overshoot > box.scrollTop ? Math.min(overshoot, row.offsetTop) : null;
+}

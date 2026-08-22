@@ -96,18 +96,23 @@ export class CliSessionsService {
     agent: AgentKind,
     cwd: string | null,
     configDir: string | null,
+    query: string | null,
   ): Promise<AgentSessionListingWire> {
     // NUL joins the three parts because no path can hold one, so no two
     // different questions can collide into one key. Written as the ESCAPE and
     // never as the byte itself: a raw NUL in the source makes git classify this
     // whole file as binary, which costs every later reader its diff, every
     // review its inline comments, and every concurrent edit its 3-way merge.
-    const key = `${agent}\u0000${cwd ?? ''}\u0000${configDir ?? ''}`;
+    // The QUERY is part of the question rather than a filter over its answer —
+    // the adapters search their own stores — so it belongs in the key. Without
+    // it, a search typed while the unfiltered listing was still out would be
+    // JOINED to that listing and answered with the whole list.
+    const key = `${agent}\u0000${cwd ?? ''}\u0000${configDir ?? ''}\u0000${query ?? ''}`;
     const running = this.inFlight.get(key);
     if (running) {
       return running;
     }
-    const pending = this.listNow(agent, cwd, configDir).finally(() => {
+    const pending = this.listNow(agent, cwd, configDir, query).finally(() => {
       this.inFlight.delete(key);
     });
     this.inFlight.set(key, pending);
@@ -118,6 +123,7 @@ export class CliSessionsService {
     agent: AgentKind,
     cwd: string | null,
     configDir: string | null,
+    query: string | null,
   ): Promise<AgentSessionListingWire> {
     const adapter = this.adapters.for(agent);
     // One MORE than the cap, so a full page and an overflowing one are
@@ -125,7 +131,7 @@ export class CliSessionsService {
     // profile holding exactly `SESSION_LIST_LIMIT` sessions was then told its
     // list had been cut when the user was looking at all of it.
     const listing = await adapter.listSessions(
-      { cwd, configDir, limit: SESSION_LIST_LIMIT + 1 },
+      { cwd, configDir, query, limit: SESSION_LIST_LIMIT + 1 },
       this.spawnOptions(`sessions:${agent}`),
     );
     const truncated = listing.sessions.length > SESSION_LIST_LIMIT;
@@ -138,6 +144,7 @@ export class CliSessionsService {
         cwd: session.cwd,
         title: session.title,
         updatedAt: session.updatedAt,
+        snippet: session.snippet,
       })),
       unavailableReason: listing.unavailableReason,
       // Two independent halves of "this is not everything": what the CLI
@@ -147,6 +154,17 @@ export class CliSessionsService {
       partialReason:
         [
           adapter.getConfig().sessions.listingPartialReason,
+          // Only while something is being SEARCHED. It is a fact about
+          // searching, and stated over an unsearched list it is a limitation of
+          // a feature nobody has reached for yet.
+          query === null
+            ? null
+            : adapter.getConfig().sessions.contentSearchUnavailableReason,
+          // What THIS call could not reach — a bounded content search — beside
+          // the standing fact about the CLI. Both, and in that order: they are
+          // independently true, and a search on cursor is both narrow (titles
+          // only) and taken over a store that is not all of its history.
+          listing.partialReason,
           truncated ? SESSION_LIST_TRUNCATED : null,
         ]
           .filter((reason): reason is string => reason !== null)

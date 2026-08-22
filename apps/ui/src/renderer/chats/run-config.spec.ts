@@ -19,6 +19,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     target: 'claude',
     model: null,
     effort: null,
+    contextWindow: null,
     approval: null,
     configDir: null,
     ...over,
@@ -67,6 +68,7 @@ describe('captureRunConfig', () => {
       configDir: '/Users/dev/.config/work',
       models: { claude: 'claude-opus-5', 'cursor-agent': 'auto-smart' },
       efforts: { claude: 'high', 'cursor-agent': 'low' },
+      contextWindows: { claude: '1m', 'cursor-agent': '300k' },
       approval: 'acceptEdits',
     });
 
@@ -84,6 +86,7 @@ describe('captureRunConfig', () => {
         configDir: null,
         models: {},
         efforts: {},
+        contextWindows: {},
         approval: null,
       }).name,
     ).toBe('Padded');
@@ -101,12 +104,14 @@ describe('captureRunConfig', () => {
       configDir: '/Users/dev/.config/work',
       models: { claude: 'claude-opus-5' },
       efforts: { claude: 'high' },
+      contextWindows: { claude: '1m' },
       approval: 'acceptEdits',
     });
 
     expect(draft).toMatchObject({
       model: null,
       effort: null,
+      contextWindow: null,
       approval: null,
       configDir: null,
     });
@@ -120,6 +125,7 @@ describe('applyRunConfig', () => {
         target: 'cursor-agent',
         model: 'auto-smart',
         effort: 'low',
+        contextWindow: '1m',
         approval: ChatApprovalMode.AcceptEdits,
         configDir: '/Users/dev/.config/work',
         branch: 'feat/x',
@@ -134,6 +140,7 @@ describe('applyRunConfig', () => {
       configDir: '/Users/dev/.config/work',
       model: 'auto-smart',
       effort: 'low',
+      contextWindow: '1m',
       approval: ChatApprovalMode.AcceptEdits,
       branch: 'feat/x',
     });
@@ -178,6 +185,7 @@ describe('applyRunConfig', () => {
       agentKind: 'claude',
       model: null,
       effort: null,
+      contextWindow: null,
       approval: null,
       configDir: null,
     });

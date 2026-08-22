@@ -25,8 +25,6 @@ import type {
 } from '../../shared/contracts';
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
-  AgentSession,
-  AgentSessionListingDto,
   AgentSkillDto as AgentSkill,
   HandoffTargetDto,
   ItemDto as ChatItem,
@@ -80,7 +78,6 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
-import { isAgentMessage, previewMessageOf } from './chat-preview';
 import { CliLoginContext } from './cli-login-context';
 import { compactionOnlyTurnEnds } from './compaction-payload';
 import { ComposerCard } from './composer-card';
@@ -88,17 +85,13 @@ import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
+import { ContextWindowSelect } from './context-window-select';
 import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { RunActivityContext, RunSettledContext } from './live-row';
-import {
-  applyLiveText,
-  CHAT_LIVE_KEY,
-  type LiveState,
-  liveTextKey,
-} from './live-text';
+import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
 import { MarkdownImageLoaderContext } from './markdown-image';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -132,11 +125,18 @@ import {
 import { nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { SessionPicker } from './session-picker';
+import type {
+  MergedSessions,
+  ProfileAnswer,
+  ProfiledSession,
+} from './session-search';
 import {
-  lastTerminalItemAt,
-  settledRunStatus,
-  TERMINAL_KINDS,
-} from './settled-status';
+  mapWithLimit,
+  mergeSessionListings,
+  SESSION_SEARCH_CONCURRENCY,
+  sessionProfiles,
+} from './session-search';
+import { lastTerminalItemAt, TERMINAL_KINDS } from './settled-status';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -157,6 +157,7 @@ import {
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
+  subagentNamed,
   subagentTitle,
   withLiveText,
 } from './transcript-groups';
@@ -169,15 +170,19 @@ import {
   unanswerableRequestIds,
 } from './transcript-item';
 import {
+  parkWhileHeld,
   scanTurns,
   threadWorkedMs,
   TurnDurationContext,
 } from './turn-duration';
+import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatRun } from './use-chat-run';
+import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useUnseenRuns } from './use-unseen-runs';
 
@@ -198,51 +203,48 @@ interface QueuedMessage {
   images: SendMessageDtoImagesInner[];
 }
 
-/** Client-side only — this id never reaches the daemon. */
-const randomId = (): string => crypto.randomUUID();
+/**
+ * How long the session search waits for typing to stop.
+ *
+ * The ask is not a filter over rows the renderer already holds — the daemon
+ * reads the conversations themselves, and for cursor it spawns a process.
+ * Measured at ~900ms for a term matching nothing across a 3,029-session claude
+ * profile, so a request per keystroke would queue work the user has already
+ * typed past.
+ */
+const SESSION_SEARCH_DEBOUNCE_MS = 350;
 
 /**
- * May a REPLAYED transcript release this run's queue?
+ * How many merged rows the picker shows.
  *
- * The one rule, in one place. A replay carries every past turn's terminal item,
- * so no individual row may fire the drain — but a replay is also the only
- * signal that a turn ended while this client was not listening (another chat
- * was open, or the socket was down), and a queue owed its send must not wait
- * forever for a live event that already happened.
- *
- * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
- * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
- * alone reads `undefined` as idle, which would send into a run this client
- * knows nothing about; erring toward not sending costs a delay the next
- * activation clears, while erring the other way delivers into a live turn.
- *
- * The status row alone cannot decide it either: three writers touch it and it
- * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
- * That is why a terminal tail authorizes even while the row still says running.
- *
- * A CANCELLED turn authorizes nothing, from either witness. Stop is the user
- * asking the thread to stop, and a queue released by it starts a fresh turn in
- * answer — which is the same defect the live path has, just deferred to the
- * next time the chat is opened.
+ * TWIN LIMIT: apps/daemon/src/v1/agents/services/cli-sessions.service.ts
+ * `SESSION_LIST_LIMIT`, which is per PROFILE. This is the cap on the fold of
+ * all of them, and it is the same number deliberately: a picker showing more
+ * rows than one profile's worth has stopped being a list somebody scrolls, and
+ * the search is what narrows it.
  */
-function queueMayDrainAfterReplay(
-  run: ChatRun | undefined,
-  lastItem: ChatItem | undefined,
-): boolean {
-  if (run === undefined) {
-    return false;
-  }
-  const tailSettledAs =
-    lastItem === undefined ? null : settledRunStatus(lastItem);
-  if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
-    return false;
-  }
-  const endedOnTerminal =
-    lastItem !== undefined &&
-    TERMINAL_KINDS.has(lastItem.kind) &&
-    lastItem.nodeId === null;
-  return endedOnTerminal || run.status !== 'running';
-}
+const SESSION_LIST_LIMIT = 400;
+
+/**
+ * The start screen's content column — the greeting and the new-run composer.
+ *
+ * A string rather than a `max-w-*` class because the same value appears twice:
+ * as the column's own width and inside the expression that re-centres it on the
+ * window. Two spellings of one number is how the clamp comes to protect a width
+ * the column no longer has.
+ */
+const START_COLUMN_WIDTH = '42rem';
+
+/**
+ * The start screen's own padding — and so both the smallest gap re-centring may
+ * leave between its column and the sidebar, and the correction the re-centring
+ * expression owes: `100%` there is the padding BOX, which is narrower than the
+ * pane by exactly this on each side.
+ */
+const START_COLUMN_PAD = '1.5rem';
+
+/** Client-side only — this id never reaches the daemon. */
+const randomId = (): string => crypto.randomUUID();
 
 /**
  * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
@@ -302,11 +304,8 @@ async function currentCustomInstructions(): Promise<{
   return customInstructions.trim() ? { customInstructions } : {};
 }
 
-/** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
 /** Draft key for the landing composer, which has no run id of its own. */
 const NEW_CHAT_DRAFT = '__new__';
-
-const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 
 export function Chats({
   client,
@@ -337,13 +336,6 @@ export function Chats({
     handoff: handoffApi,
   } = apis;
 
-  const [runs, setRuns] = useState<ChatRun[]>([]);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChatItem[]>([]);
-  // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
-  // never replayed, and cleared whenever the durable transcript is refetched.
-  const [liveText, setLiveText] =
-    useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   const [input, setInput] = useState('');
   /**
    * The unsent message each thread is holding, with its staged images.
@@ -386,8 +378,19 @@ export function Chats({
   // anyway.
   const [sessionPickerOpen, setSessionPickerOpen] = useState(false);
   const [sessionAgent, setSessionAgent] = useState<CliKind>('claude');
-  const [sessionListing, setSessionListing] =
-    useState<AgentSessionListingDto | null>(null);
+  const [sessionListing, setSessionListing] = useState<MergedSessions | null>(
+    null,
+  );
+  /**
+   * What is in the search box, and the value the daemon has been asked about.
+   *
+   * TWO pieces of state and not one, because the search is now a question put
+   * to the daemon — it reads the conversations themselves — and one request per
+   * keystroke would spawn a cursor process per keystroke. The box stays
+   * instant; the ask lands once typing pauses.
+   */
+  const [sessionQuery, setSessionQuery] = useState('');
+  const [sessionQueryAsked, setSessionQueryAsked] = useState('');
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
   const [resumingSessionId, setResumingSessionId] = useState<string | null>(
@@ -414,6 +417,9 @@ export function Chats({
   // Per-CLI for the same reason as models: the levels are one CLI's own
   // vocabulary, and the other CLI has none at all.
   const [efforts, setEfforts] = useState<Partial<Record<CliKind, string>>>({});
+  const [contextWindows, setContextWindows] = useState<
+    Partial<Record<CliKind, string>>
+  >({});
   // Machine capabilities — gates the plan option; reading pre-warms the probe.
   // Working directory for the NEXT new chat. Seeded from the last-used folder
   // (persisted in settings); each chat records its own cwd, so this is only the
@@ -445,26 +451,7 @@ export function Chats({
   const [runConfigBranchNotice, setRunConfigBranchNotice] = useState<
     string | null
   >(null);
-  const [streaming, setStreaming] = useState(false);
-  // Live mirror, so a callback that must not be rebuilt on every delta can
-  // still ask whether a turn was in flight BEFORE it started one of its own —
-  // which is what tells a failed send whether the working state is its to
-  // clear. Assigned during render like `inputRef`, never from an effect.
-  const streamingRef = useRef(false);
-  streamingRef.current = streaming;
-  const [error, setError] = useState<string | null>(null);
-
-  // Held in a ref so the long-lived onItem subscription always filters against
-  // the current run without re-subscribing.
-  const activeRunIdRef = useRef<string | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  // Set when a run is opened, cleared by the first render that has its items.
-  // Opening a run must land on the NEWEST message, and the at-bottom gate below
-  // cannot decide that: activateRun empties the transcript first, which clamps
-  // the scroller to 0, so when the history renders the gate correctly reads
-  // "not at bottom" and would suppress the scroll — leaving the user at the
-  // oldest message of every chat they open.
-  const pendingScrollRef = useRef(false);
   /**
    * Whether the transcript is currently glued to its tail.
    *
@@ -475,96 +462,6 @@ export function Chats({
   const followingRef = useRef(true);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
-  // Highest seq rendered for the active run — the replay cursor used to fetch
-  // only the items missed during a disconnect.
-  const lastSeqRef = useRef(-1);
-  const reconnectAfterSeqRef = useRef(-1);
-  // Mirror `runs` into a ref so the stable activateRun callback can read the
-  // active run's current status without being re-created on every list change.
-  const runsRef = useRef<ChatRun[]>([]);
-  // First list fetch settled (either way) — gates the "No chats yet" claim.
-  // A boolean rather than Graphs' `| null` sentinel deliberately: `runs` has
-  // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
-  // null union would force to re-guard.
-  const [runsLoaded, setRunsLoaded] = useState(false);
-  useEffect(() => {
-    runsRef.current = runs;
-  }, [runs]);
-  // True once a terminal item has been seen for the active run since the last
-  // activateRun. Guards the post-replay streaming derive from re-arming Stop on a
-  // turn that already ended — e.g. a terminal WS item that lands during the
-  // history fetch while the cached run.status is still 'running' and the history
-  // snapshot predates that terminal item.
-  const sawTerminalRef = useRef(false);
-  /**
-   * The same thing, but LIVE items only.
-   *
-   * `sawTerminalRef` answers "has any turn ended since this run was activated",
-   * which a fail-fast run needs (its terminal item is in the replayed history).
-   * It cannot answer the question the activation below actually has — "did a
-   * turn end while I was fetching" — because every chat past its first turn
-   * replays a `turn_complete` and would set it. That made re-opening a working
-   * multi-turn chat show Send instead of Stop, which is the opposite of what
-   * that code promises.
-   */
-  const sawLiveTerminalRef = useRef(false);
-
-  /**
-   * What each running run is DOING right now, keyed by run id — "running
-   * Bash", "waiting for your answer". Ephemeral: it describes the moment, so
-   * it is never fetched, only pushed, and an unknown run simply has no entry.
-   */
-  const [activities, setActivities] = useState<ReadonlyMap<string, string>>(
-    new Map(),
-  );
-  /**
-   * Runs whose turn is HELD — the agent has finished and the process is alive
-   * only until the delegates it launched report back.
-   *
-   * It is deliberately not folded into `activities`: that map holds a sentence
-   * to display, and this is a fact the composer ACTS on. While a run is held
-   * the CLI is idle, so a message typed then goes straight out instead of into
-   * the queue — reported as "if claude is running agents in background it's
-   * like it stopped to work until it gets a notification from them… we should
-   * not send the message to the queue while it's just waiting for listeners".
-   */
-  const [holding, setHolding] = useState<ReadonlySet<string>>(new Set());
-  const holdingRef = useRef<ReadonlySet<string>>(holding);
-  useEffect(() => {
-    holdingRef.current = holding;
-  }, [holding]);
-  /**
-   * What each run SAID as it last settled — the agent's closing words, or the
-   * failure's message, as the daemon announced them.
-   *
-   * Its own map beside {@link activities} rather than a field on the run row:
-   * it describes a MOMENT (this settle) and not the row's current state, and it
-   * arrives on the same push channel — a background thread's row is only as
-   * fresh as the last list fetch, so writing it there would mix a live fact
-   * into stale ones. Read by the notification rules, which is the one place
-   * that has to tell the user what happened without opening the chat.
-   */
-  const [settleSummaries, setSettleSummaries] = useState<
-    ReadonlyMap<string, string | null>
-  >(new Map());
-  /**
-   * The runs whose LAST settle is not worth interrupting the user for.
-   *
-   * Two daemon flags feed it and they are different statements: `housekeeping`
-   * says the turn produced nothing but the CLI's own compaction, `restored`
-   * says the status is being handed BACK — a delegate lease expiring over a run
-   * that had already settled, which crosses non-terminal→terminal a second time
-   * for a turn that ended minutes ago. Both would otherwise earn a banner and a
-   * sidebar mark for an ending the user has already seen.
-   *
-   * A set beside the summaries and updated from the same announce, because it
-   * describes the same moment: whether that ending was worth interrupting the
-   * user for. Both notification surfaces read it, so the banner and the sidebar
-   * mark cannot disagree about one turn.
-   */
-  const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
   // Keyed PER RUN and kept for the whole session: switching transcripts or
@@ -637,235 +534,88 @@ export function Chats({
   }, []);
 
   /**
-   * Has the ACTIVE thread's agent ever spoken? — the one thing the preview rule
-   * needs that a single item, or a reconnect delta, cannot see for itself (see
-   * {@link previewMessageOf}). Reset by `activateRun`, since it describes one
-   * thread and would otherwise carry the previous one's answer into a chat
-   * whose agent has said nothing.
-   */
-  const agentSpokeRef = useRef(false);
-
-  /**
-   * A replay's one reading of the sidebar row — the run's status, taken from
-   * the LAST item it replayed (the only terminal item that can describe the
-   * present), and the preview line, taken from the last `message` row in the
-   * same batch.
+   * Park the composer's contents under `from`, and put `to`'s back.
    *
-   * It exists because the alternative (letting each replayed row mirror itself)
-   * writes a past turn's ending over a run that is working right now; see the
-   * `live` gate in {@link addItem}. Applied only when the row still says
-   * `running`, so a replay can settle a stale row but never contradict a
-   * fresher `run_status` broadcast that arrived while the fetch was in flight.
-   *
-   * The PREVIEW is here for the same reason and against a symptom of its own:
-   * mirrored per row, every replayed message wrote itself into the sidebar's
-   * one preview line, so the line's final owner was decided by whatever the
-   * batch happened to end on rather than by any rule. It picks by
-   * {@link previewMessageOf} — the same rule the daemon's run list uses, so the
-   * two sources cannot write different owners into one line — takes the WHOLE
-   * batch rather than its tail (which is routinely a `turn_complete`), and
-   * writes nothing at all when the batch holds no message it should preview: a
-   * reconnect delta carrying only tool rows must not blank a preview the run
-   * list already has right.
+   * One helper for both directions (thread → thread and thread → landing card)
+   * so the two cannot drift into saving different things. Called BEFORE the
+   * switch commits, since it reads what is still on screen. `null` is the
+   * landing card, which has no run id to key its draft by.
    */
-  const reconcileFromTail = useCallback(
-    (runId: string, replayed: readonly ChatItem[]): void => {
-      // Every row must BELONG to the run being reconciled. The two arrive from
-      // different places — the id from the activation, the rows from a fetch
-      // that may have been in flight across a run switch — and applying one
-      // run's ending to another's row is the same class of cross-contamination
-      // `activateRun`'s own stale-fetch guard exists for.
-      const own = replayed.filter((item) => item.runId === runId);
-      const lastItem = own.at(-1);
-      if (lastItem === undefined) {
-        return;
+  const swapDraft = useCallback(
+    (from: string | null, to: string | null): void => {
+      const text = inputRef.current;
+      const images = attachmentsRef.current;
+      const fromKey = from ?? NEW_CHAT_DRAFT;
+      if (text.length > 0 || images.length > 0) {
+        draftsRef.current.set(fromKey, { text, images });
+      } else {
+        // An emptied composer is not a draft — keeping one would restore text
+        // the user had deliberately cleared.
+        draftsRef.current.delete(fromKey);
       }
-      const settled = settledRunStatus(lastItem);
-      const lastMessage = previewMessageOf(own, agentSpokeRef.current);
-      const previewText =
-        lastMessage === undefined
-          ? null
-          : payloadString(lastMessage.payload, 'text');
-      if (settled === null && previewText === null) {
-        return;
-      }
-      setRuns((prev) =>
-        prev.map((run) => {
-          if (run.id !== runId) {
-            return run;
-          }
-          const next = { ...run };
-          if (settled !== null && run.status === 'running') {
-            next.status = settled;
-          }
-          if (previewText !== null) {
-            next.lastMessage = previewText;
-          }
-          // The batch's own newest row, and only ever FORWARD: these rows are
-          // history to the renderer, so a live `run_status` that landed while
-          // the fetch was in flight already carries a fresher time than any of
-          // them and must not be rolled back to it.
-          if (lastItem.createdAt > next.updatedAt) {
-            next.updatedAt = lastItem.createdAt;
-          }
-          return next;
-        }),
-      );
+      const incoming = draftsRef.current.get(to ?? NEW_CHAT_DRAFT);
+      setInput(incoming?.text ?? '');
+      attachments.restore(incoming?.images ?? []);
     },
-    [],
+    [attachments],
   );
 
   /**
-   * `live` says this item arrived on the wire as it happened, rather than out
-   * of a history replay.
-   *
-   * REQUIRED, with no default — and that is the guard, not the prose. A default
-   * made the dangerous call the natural one: `forEach(addItem)` passes the
-   * ARRAY INDEX as the flag, falsy for the first item and truthy for every one
-   * after, which is exactly the replayed-drain bug this parameter exists to
-   * prevent. Requiring it moves the rule from a comment a reader may skip to an
-   * error the compiler raises.
+   * Does this run hold follow-ups the drain still owes it? Read off the ref so
+   * the run lifecycle's own stable callbacks see the CURRENT queue rather than
+   * the one that existed when they were built.
    */
-  const addItem = useCallback((item: ChatItem, live: boolean): void => {
-    if (item.runId !== activeRunIdRef.current) {
-      return;
-    }
-    setItems((prev) => {
-      const last = prev[prev.length - 1];
-      // Fast path: items carry a monotonic seq and are emitted persist-first,
-      // so a strictly-newer item just appends. `items` stays seq-sorted, so a
-      // full copy+resort per stream item (O(N² log N) to build a run) is only
-      // needed on the rare out-of-order case below.
-      if (last === undefined || item.seq > last.seq) {
-        return [...prev, item];
-      }
-      // The replay/live seam (or a reconnect delta) can re-deliver an item:
-      // de-dupe, then insert in seq order.
-      //
-      // BY ID, never by seq. Identity is what `id` means and what the seam
-      // actually re-delivers — the same row twice — while `seq` is only the
-      // ORDER. Treating a repeated seq as a repeated item made this the second
-      // half of the duplicate-seq defect: the daemon issued one value to two
-      // different rows, and this silently dropped whichever arrived second,
-      // which was reliably the agent's reply ("it deletes its last message").
-      // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
-      // transcript written before that fix still holds such a pair, and an
-      // ordering number is the wrong thing to establish identity with in any
-      // case: this way those rows come back on the next replay instead of
-      // staying invisible forever.
-      if (prev.some((existing) => existing.id === item.id)) {
-        return prev;
-      }
-      // A stable sort keeps two rows that DO share a seq in arrival order,
-      // rather than letting their relative position flip between renders.
-      return [...prev, item].sort((a, b) => a.seq - b.seq);
-    });
-    if (item.seq > lastSeqRef.current) {
-      lastSeqRef.current = item.seq;
-    }
-    // This thread's agent has now spoken — recorded for EVERY message row, live
-    // or replayed, because the preview rule's fallback asks about the whole
-    // conversation rather than about the batch in hand.
-    if (isAgentMessage(item)) {
-      agentSpokeRef.current = true;
-    }
-    // Mirror a streamed message into the sidebar row's preview + activity
-    // time, so the list stays live without a refetch.
-    //
-    // LIVE items only, for exactly the reason the terminal-item mirror below is
-    // gated: a replay carries EVERY message the thread has ever held, and each
-    // one writing itself here left the line's owner decided by where the batch
-    // ended. A replay takes ONE reading, in `reconcileFromTail`.
-    //
-    // The two fields are written on DIFFERENT conditions, and collapsing them
-    // into one is a bug in each direction. The PREVIEW goes only to a message
-    // the rule would show (`previewMessageOf`): on a thread whose agent has
-    // replied, the user's next message must not take the line back, or it
-    // alternates owner every turn exactly as it did before. `updatedAt` goes to
-    // EVERY message, the user's included — it is the sidebar's "last activity",
-    // which is what orders the list (`sortRunsForSidebar`), so gating it on the
-    // preview rule would leave a thread you just wrote in sitting exactly where
-    // it was.
-    if (live && item.kind === 'message') {
-      const text = payloadString(item.payload, 'text');
-      const preview =
-        text !== null && previewMessageOf([item], agentSpokeRef.current)
-          ? text
-          : null;
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === item.runId
-            ? {
-                ...run,
-                ...(preview === null ? {} : { lastMessage: preview }),
-                updatedAt: item.createdAt,
-              }
-            : run,
-        ),
-      );
-    }
-    // Only a RUN-level terminal item ends the working state — a workflow's
-    // per-node turn_complete/error (nodeId set) must not re-enable the composer
-    // while sibling branches are still running.
-    const settledStatus = settledRunStatus(item);
-    if (settledStatus !== null) {
-      sawTerminalRef.current = true;
-      if (live) {
-        sawLiveTerminalRef.current = true;
-      }
-      // LIVE items only — for the status and the working state alike, and for
-      // the same reason the drain below is gated: a replayed transcript carries
-      // EVERY past turn's terminal item, and the last of those is routinely not
-      // the run's current state. Mirroring one wrote `completed` onto a run whose
-      // next turn was in flight, and the write outlived the visit: the row stayed
-      // wrong in `runs`, so the next activation read it as settled, left
-      // `streaming` false, and the transcript's live row disappeared with it.
-      // Measured on the real app — a chat with a blocked tool call read
-      // `running · Working… 3m 39s`, and after switching to another chat and back
-      // read `completed` with no live row, while the daemon still said `running`.
-      //
-      // A replay's own reading is taken ONCE by the caller, from the LAST item
-      // (see `activateRun` and the reconnect delta), which is the only terminal
-      // item that can describe the present.
-      if (live) {
-        setStreaming(false);
-        // Mirror the daemon's settle write into the sidebar list — without this
-        // a finished run keeps its stale 'running' badge until an app restart.
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId
-              ? { ...run, status: settledStatus, updatedAt: item.createdAt }
-              : run,
-          ),
-        );
-      }
-      // The turn ended — fire the next queued message into this chat (the
-      // early return above guarantees item.runId IS the active run).
-      //
-      // LIVE items only. A replayed transcript carries every past turn's
-      // terminal item, so re-opening a chat that is still working used to
-      // drain the queue straight into the turn in flight — and claude accepts
-      // a mid-turn follow-up, so it genuinely went. That is the exact
-      // behaviour the queue exists to prevent, and Steer is the only sanctioned
-      // way to reach a running turn. A replay's own drain decision is made once
-      // by the caller, from the run's settled status.
-      //
-      // …and NEVER on a CANCEL. Stop is the user asking for the thread to stop,
-      // and the drain answered it by starting a fresh turn on the spot — the
-      // reported "I stopped the thread, but see it continue working", with the
-      // `cancelled` row and the new turn's `Working…` one under it in the same
-      // transcript. The message stays at the head of the queue, where Send-now,
-      // Edit and Remove all still reach it; what it no longer does is let itself
-      // out through the door the user just closed.
-      if (
-        live &&
-        settledStatus !== 'cancelled' &&
-        (queuesRef.current[item.runId]?.length ?? 0) > 0
-      ) {
-        drainQueueRef.current(item.runId);
-      }
-    }
-  }, []);
+  const hasQueuedMessages = useCallback(
+    (runId: string): boolean => (queuesRef.current[runId]?.length ?? 0) > 0,
+    [],
+  );
+  const resetSteerStatus = useCallback((): void => setSteerStatus(null), []);
+
+  const {
+    runs,
+    setRuns,
+    runsLoaded,
+    runsRef,
+    activeRunId,
+    activeRunIdRef,
+    items,
+    liveText,
+    streaming,
+    setStreaming,
+    error,
+    setError,
+    activities,
+    holding,
+    settleSummaries,
+    quietSettles,
+    deadRequestKeys,
+    pendingScrollRef,
+    sawTerminalRef,
+    addItem,
+    refreshRuns,
+    activateRun,
+    handleActivateRun,
+    deactivateRun,
+  } = useChatRun({
+    client,
+    chatApi,
+    workflowApi,
+    swapDraft,
+    resetSteerStatus,
+    hasQueuedMessages,
+    drainQueueRef,
+  });
+
+  // Live mirror, so a callback that must not be rebuilt on every delta can
+  // still ask whether a turn was in flight BEFORE it started one of its own —
+  // which is what tells a failed send whether the working state is its to
+  // clear. Assigned during render like `inputRef`, never from an effect.
+  const streamingRef = useRef(false);
+  streamingRef.current = streaming;
+  const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
+  useEffect(() => {
+    holdingRef.current = holding;
+  }, [holding]);
 
   // The workflow library is editable on the Graphs page while this tab stays
   // mounted (hidden), so refetch it every time the tab becomes visible — a
@@ -932,6 +682,23 @@ export function Chats({
         void window.geniro.updateSettings({ lastModels: next });
         return next;
       });
+      // A window size belongs to the MODEL that offered it: only some models
+      // carry the axis at all, and those that do differ in what they list, so a
+      // size remembered from the previous model is one the new one may simply
+      // refuse. The daemon already drops it on a patch that changes model
+      // (`ChatService`); a NEW run has to be told the same thing here, or it is
+      // created carrying a size the model declines — and the chip, reading the
+      // new model's list, draws the default while the stored word is still what
+      // gets sent.
+      setContextWindows((current) => {
+        if (current[kind] === undefined) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[kind];
+        void window.geniro.updateSettings({ lastContextWindows: next });
+        return next;
+      });
     },
     [],
   );
@@ -948,6 +715,31 @@ export function Chats({
           next[kind] = effort;
         }
         void window.geniro.updateSettings({ lastEfforts: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * New-run context-window size for one CLI — remembered per CLI, like the
+   * effort, and cleared to the model's default the same way.
+   *
+   * Per CLI even though the sizes belong to the MODEL: a user who works at `1m`
+   * wants it on the next chat too, and a size the next model does not offer is
+   * drawn as unavailable by the chip rather than sent.
+   */
+  const changeContextWindow = useCallback(
+    (kind: CliKind, contextWindow: string | null): void => {
+      setContextWindows((current) => {
+        const next = { ...current };
+        if (contextWindow === null) {
+          // Absent, not empty — "no entry" IS the model's own window.
+          delete next[kind];
+        } else {
+          next[kind] = contextWindow;
+        }
+        void window.geniro.updateSettings({ lastContextWindows: next });
         return next;
       });
     },
@@ -1538,150 +1330,53 @@ export function Chats({
     () => configDirReasonFor(sessionAgent),
     [configDirReasonFor, sessionAgent],
   );
-  /** The profile to ask the picker's CLI about, or null when it takes none. */
-  const sessionConfigDir =
-    configDir !== null && sessionConfigDirUnavailableReason === null
-      ? configDir
-      : null;
-
-  /** Reload the sidebar's run list from the daemon (statuses included) —
-   *  live items only reach the ACTIVE run's room, so other runs' settles are
-   *  picked up by refetching at natural moments (mount, pressing +). */
-  const refreshRuns = useCallback((): void => {
-    void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
-      .then(([chats, workflowRuns]) => {
-        const all = [...chats, ...workflowRuns].sort((a, b) =>
-          b.createdAt.localeCompare(a.createdAt),
-        );
-        setRuns(all);
-        // Seeded from the SNAPSHOT, not only from the live announce. The hold
-        // starts with one broadcast and then lasts as long as the delegates do,
-        // so a window opened after it — or one that just reconnected — would
-        // otherwise read a held run as a working agent and queue the user's
-        // message behind delegates that have minutes left to run.
-        setHolding(
-          new Set(all.filter((r) => r.holdingFor > 0).map((r) => r.id)),
-        );
-      })
-      .catch((err: unknown) => setError(String(err)))
-      // Either way the first fetch settled — "No chats yet" is reserved for a
-      // resolved-but-empty list, never shown while the fetch is in flight.
-      .finally(() => setRunsLoaded(true));
-  }, [chatApi, workflowApi]);
+  /**
+   * EVERY profile to ask the picker's CLI about — see `session-search.ts`.
+   *
+   * The composer's own config directory is only one of them now, and it is here
+   * for the same reason the recents are: it is a profile this user has chosen,
+   * recorded in `settings.json`, which the daemon cannot enumerate.
+   */
+  const sessionProfileDirs = useMemo(
+    () =>
+      sessionProfiles(
+        configDir,
+        recentConfigDirs,
+        sessionConfigDirUnavailableReason === null,
+      ),
+    [configDir, recentConfigDirs, sessionConfigDirUnavailableReason],
+  );
 
   /**
-   * Park the composer's contents under `from`, and put `to`'s back.
+   * Hold the typed query back until typing stops.
    *
-   * One helper for both directions (thread → thread and thread → landing card)
-   * so the two cannot drift into saving different things. Called BEFORE the
-   * switch commits, since it reads what is still on screen.
+   * `SESSION_SEARCH_DEBOUNCE_MS` rather than none: the ask reads session files
+   * on the daemon and, for cursor, spawns a process — measured at ~900ms for a
+   * term matching nothing across a 3,029-session profile — so a request per
+   * keystroke would queue work the user has already typed past.
    */
-  const swapDraft = useCallback(
-    (from: string, to: string): void => {
-      const text = inputRef.current;
-      const images = attachmentsRef.current;
-      if (text.length > 0 || images.length > 0) {
-        draftsRef.current.set(from, { text, images });
-      } else {
-        // An emptied composer is not a draft — keeping one would restore text
-        // the user had deliberately cleared.
-        draftsRef.current.delete(from);
-      }
-      const incoming = draftsRef.current.get(to);
-      setInput(incoming?.text ?? '');
-      attachments.restore(incoming?.images ?? []);
-    },
-    [attachments],
-  );
+  useEffect(() => {
+    if (!sessionPickerOpen) {
+      return;
+    }
+    if (sessionQuery === sessionQueryAsked) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setSessionQueryAsked(sessionQuery),
+      SESSION_SEARCH_DEBOUNCE_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [sessionPickerOpen, sessionQuery, sessionQueryAsked]);
 
-  const activateRun = useCallback(
-    async (runId: string): Promise<void> => {
-      const previous = activeRunIdRef.current;
-      if (previous && previous !== runId) {
-        client.leaveRun(previous);
-      }
-      // Only on a genuine CHANGE of thread. `activateRun` is also called to
-      // re-open the thread already showing (a refresh, a re-select), and
-      // swapping a draft out and back through that path would hand the
-      // composer whatever the map held rather than what is on screen.
-      if (previous !== runId) {
-        swapDraft(previous ?? NEW_CHAT_DRAFT, runId);
-      }
-      // The steer outcome belongs to the run the user pressed it in.
-      setSteerStatus(null);
-      activeRunIdRef.current = runId;
-      lastSeqRef.current = -1;
-      sawTerminalRef.current = false;
-      sawLiveTerminalRef.current = false;
-      // A NEW thread has its own answer to "has the agent spoken" — carrying
-      // the previous one's forward would withhold the preview from a chat whose
-      // first message is still the only one in it.
-      agentSpokeRef.current = false;
-      pendingScrollRef.current = true;
-      setActiveRunId(runId);
-      setItems([]);
-      setLiveText(EMPTY_LIVE_TEXT);
-      setStreaming(false);
-      setError(null);
-      // Join FIRST so any live item published during the history fetch is
-      // buffered through addItem; the seq de-dupe reconciles the overlap.
-      try {
-        await client.joinRun(runId);
-        const history = await chatApi.listRunItems({ runId });
-        // The user may have switched runs while this fetch was in flight —
-        // a stale completion must not replay items or re-arm Stop/streaming
-        // (and cross-contaminate errors) for the CURRENTLY active run.
-        if (activeRunIdRef.current !== runId) {
-          return;
-        }
-        history.forEach((item) => addItem(item, false));
-        // Reconnecting/switching to an in-flight run must show the working state
-        // (Stop), not an enabled Send that a second message would race into a
-        // RUN_BUSY. Derive it from the run's status + whether the replayed
-        // transcript already ended on a terminal item.
-        const run = runsRef.current.find((r) => r.id === runId);
-        const last = history.at(-1);
-        const endedOnTerminal =
-          last !== undefined && settledRunStatus(last) !== null;
-        // The replay's ONE reading of its own tail — only the LAST item can say
-        // what the run is now, which is why no individual replayed row is allowed
-        // to (see `addItem`). It covers the turn that ended while the user was
-        // looking at another chat, where the row they are carrying still says
-        // running and nothing else will correct it.
-        reconcileFromTail(runId, history);
-        if (
-          run?.status === 'running' &&
-          !sawLiveTerminalRef.current &&
-          !endedOnTerminal
-        ) {
-          setStreaming(true);
-        } else if (
-          queueMayDrainAfterReplay(run, last) &&
-          (queuesRef.current[runId]?.length ?? 0) > 0
-        ) {
-          // The ONE drain decision a replay is allowed to make, and it is taken
-          // from the daemon's own run status rather than from any transcript
-          // row: the turn this chat was on finished while the user was looking
-          // at another one, so the queue is owed its send. While the run is
-          // still `running` nothing is sent — Steer is the only way into a live
-          // turn.
-          drainQueueRef.current(runId);
-        }
-      } catch (err) {
-        if (activeRunIdRef.current === runId) {
-          setError(String(err));
-        }
-      }
-    },
-    [client, chatApi, addItem],
-  );
-
-  // Stable id-keyed activation for the memoized ChatListItem rows (see
-  // handleRenameRun above).
-  const handleActivateRun = useCallback(
-    (runId: string): void => void activateRun(runId),
-    [activateRun],
-  );
+  // Cleared on every open rather than kept: a filter left over from last time
+  // is an empty list whose reason is off screen.
+  useEffect(() => {
+    if (sessionPickerOpen) {
+      setSessionQuery('');
+      setSessionQueryAsked('');
+    }
+  }, [sessionPickerOpen]);
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {
@@ -1701,243 +1396,14 @@ export function Chats({
       }
       setModels(s.lastModels ?? {});
       setEfforts(s.lastEfforts ?? {});
+      setContextWindows(s.lastContextWindows ?? {});
     });
     // Which CLIs are actually on this machine. The picker used to offer every
     // known kind unconditionally, so an agent that is not installed — or whose
     // binary is too old to be driven — looked exactly like a working one and
     // failed only AFTER a run had been created, as "exited with code 1".
     void window.geniro.detectClis().then(setCliDetections);
-    refreshRuns();
     refreshGroups();
-    // Wrapped, not passed bare: this is the one site that means LIVE, and an
-    // arrow pins the arity so a future emitter argument cannot land on the
-    // `live` flag.
-    const unsubscribeItem = client.onItem((item) => addItem(item, true));
-    const unsubscribeLiveText = client.onLiveText((event) => {
-      // Throwaway by design — only ever shown for the run on screen, and
-      // dropped wholesale on a run switch or a disconnect.
-      if (event.runId !== activeRunIdRef.current) {
-        return;
-      }
-      setLiveText((prev) => applyLiveText(prev, event));
-    });
-    const unsubscribeDisconnect = client.onDisconnect(() => {
-      reconnectAfterSeqRef.current = lastSeqRef.current;
-      // The daemon kept streaming while we were away and the tail we hold is
-      // now arbitrarily stale; the durable replay below is complete on its own.
-      setLiveText(EMPTY_LIVE_TEXT);
-    });
-    // On reconnect the WS missed any items streamed while offline (the room
-    // buffers nothing for an absent member); fetch just the delta past the last
-    // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
-    // is harmless.
-    const unsubscribeReconnect = client.onReconnect((joinError) => {
-      const active = activeRunIdRef.current;
-      if (!active) {
-        return;
-      }
-      if (joinError) {
-        setError(joinError.message);
-        return;
-      }
-      void chatApi
-        .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
-        // A replay, not live: no individual row here may fire the drain, or a
-        // transcript several turns long would send into the turn in flight.
-        //
-        // But this delta is ALSO the only place a turn that ended while the
-        // socket was down is ever seen, so the same single decision the
-        // activation replay takes has to be taken here too. An earlier version
-        // of this comment claimed the queue would go out "on the next live
-        // terminal item, or on the next activation" — neither fires when the
-        // turn already ended offline, so the queue simply stopped forever, and
-        // on cursor there is not even a Steer control to release it by hand.
-        .then((items) => {
-          items.forEach((item) => addItem(item, false));
-          // Same single reading the activation replay takes, and needed here for
-          // the same reason it is needed there: these rows are historical to the
-          // renderer (no individual one may mirror its status) but they are the
-          // only sighting of a turn that ended while the socket was down.
-          reconcileFromTail(active, items);
-          const run = runsRef.current.find((r) => r.id === active);
-          if (
-            queueMayDrainAfterReplay(run, items.at(-1)) &&
-            (queuesRef.current[active]?.length ?? 0) > 0
-          ) {
-            drainQueueRef.current(active);
-          }
-        })
-        // Same stale-run guard as activateRun's catch: if the user switched
-        // runs while this delta-fetch was in flight, A's error must not paint
-        // over B (addItem is already run-scoped by item.runId; setError is not).
-        .catch((err: unknown) => {
-          if (activeRunIdRef.current === active) {
-            setError(String(err));
-          }
-        });
-    });
-    // Broadcast to every client, for every run — this is what keeps the badge
-    // of a chat the user is NOT looking at honest. Live items only reach the
-    // focused run's room, so before this a background run's settle was
-    // invisible until the next refetch.
-    const unsubscribeRunStatus = client.onRunStatus((event) => {
-      const status = event.status;
-      // An activity-only announce carries no status and must not touch the
-      // badge. It fires on every tool call without reading the run, so while
-      // it asserted `running` one straggler after a cancel flipped the row
-      // back to running and nothing announced again to correct it.
-      // `awaiting` rides the SAME row as the status rather than a map of its
-      // own, because the snapshot already carries it: `GET /v1/chats` answers
-      // it per run, so a window that reconnects after the transition learns it
-      // from the row it just loaded, and this event only has to keep that row
-      // current. A parallel map would need seeding from the snapshot anyway,
-      // and would then be a second place for the same fact to go stale.
-      //
-      // `undefined` means the announce said nothing about waiting — the field
-      // is left exactly as it was, which is what lets a tool-call announce
-      // fire during a parked turn without unparking it.
-      const parked = event.awaiting;
-      // Recorded BEFORE the row update below, so the notification rules — which
-      // run off that row changing — already have the sentence when they fire.
-      if (event.summary !== undefined) {
-        const said = event.summary;
-        setSettleSummaries((prev) => new Map(prev).set(event.runId, said));
-      }
-      // Recorded on the same terms and for the same reason: only a SETTLE says
-      // anything about this, and every settle says it — so an absent field is
-      // an activity announce and must leave the reading alone, while a settle
-      // that did real work clears the flag its predecessor may have set.
-      if (event.status !== null && isSettledRunStatus(event.status)) {
-        const quiet = event.housekeeping === true || event.restored === true;
-        setQuietSettles((prev) => {
-          if (prev.has(event.runId) === quiet) {
-            return prev;
-          }
-          const next = new Set(prev);
-          if (quiet) {
-            next.add(event.runId);
-          } else {
-            next.delete(event.runId);
-          }
-          return next;
-        });
-      }
-      // The title the daemon gave this run once its first turn ended. It rides
-      // the same row update as the status because it is the same kind of fact —
-      // a column of the run the sidebar is already showing — and it arrives
-      // while the user is typically looking somewhere else, which is why it is
-      // a broadcast rather than a message to the run's room.
-      const named = event.title;
-      if (status !== null || parked !== undefined || named !== undefined) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === event.runId
-              ? {
-                  ...run,
-                  ...(status !== null ? { status } : {}),
-                  ...(parked !== undefined ? { awaiting: parked } : {}),
-                  // Applied only to a run that has none: the daemon guards this
-                  // too, but the two decide from different snapshots — a rename
-                  // typed while the naming was in flight is on screen HERE
-                  // first, and it must not be replaced by the title that read
-                  // the row a moment before it.
-                  ...(named !== undefined && run.title === null
-                    ? { title: named }
-                    : {}),
-                }
-              : run,
-          ),
-        );
-      }
-      // A queue in a thread the user is NOT looking at is released HERE, and
-      // nowhere else. Live items are delivered to the run's own room and the
-      // client joins one room at a time, so `addItem` — which fires the drain
-      // for the open chat — never sees a background turn end at all. Until
-      // this, such a queue waited for the user to OPEN that chat again: the
-      // reported "after compacting it will not send message that was in queue
-      // — only after i will choose thread", where the compaction ran for two
-      // minutes and the user read another thread while it did. Reproduced
-      // without any compaction: queue a follow-up, switch chats, and the turn
-      // that ends 20 seconds later leaves the message undelivered.
-      //
-      // The ACTIVE run is deliberately left to its terminal ITEM. This
-      // broadcast and that item race, and one drain per settle is the whole
-      // contract — the item is the finer-grained witness (it carries the
-      // stopReason a workflow's roll-up rides), so it stays the authority
-      // wherever it is available.
-      //
-      // `cancelled` is refused on the same grounds as the live path: Stop is
-      // the user closing the door, not a cue to open a fresh turn behind it.
-      if (
-        status !== null &&
-        status !== 'cancelled' &&
-        isSettledRunStatus(status) &&
-        event.runId !== activeRunIdRef.current &&
-        (queuesRef.current[event.runId]?.length ?? 0) > 0
-      ) {
-        drainQueueRef.current(event.runId);
-      }
-      setActivities((prev) => {
-        // An announce carrying no activity key at all says nothing about it —
-        // the naming announce is the first such producer — and must leave the
-        // phrase standing, or it blanks the badge and the transcript's live row
-        // of a turn that is running. A terminal status still clears, since a
-        // stopped run is doing nothing whatever the announce carried.
-        const stopped = status !== null && status !== 'running';
-        if (event.activity === undefined && !stopped) {
-          return prev;
-        }
-        const next = new Map(prev);
-        // A run that is no longer RUNNING has no current activity, whatever
-        // the announce carried. A null activity was the only thing that ever
-        // cleared this map, so a terminal status arriving alongside a non-null
-        // one left the entry behind — and the badge went on naming a tool that
-        // finished, for as long as the row lived.
-        if (!event.activity || stopped) {
-          next.delete(event.runId);
-        } else {
-          next.set(event.runId, event.activity);
-        }
-        return next;
-      });
-      setHolding((prev) => {
-        // A real STATUS transition ends whatever hold was in effect — a turn
-        // that settled is not held, and a new turn starting has no hold yet.
-        // An activity-only announce carrying no `holdingFor` says nothing and
-        // must leave the reading alone.
-        const held =
-          event.holdingFor !== undefined
-            ? event.holdingFor > 0
-            : status !== null
-              ? false
-              : prev.has(event.runId);
-        if (held === prev.has(event.runId)) {
-          return prev;
-        }
-        const next = new Set(prev);
-        if (held) {
-          next.add(event.runId);
-        } else {
-          next.delete(event.runId);
-        }
-        return next;
-      });
-    });
-    const selectedRun = activeRunIdRef.current;
-    if (selectedRun) {
-      void activateRun(selectedRun);
-    }
-    return () => {
-      unsubscribeItem();
-      unsubscribeLiveText();
-      unsubscribeDisconnect();
-      unsubscribeReconnect();
-      unsubscribeRunStatus();
-      const active = activeRunIdRef.current;
-      if (active) {
-        client.leaveRun(active);
-      }
-    };
   }, [client, chatApi, addItem, activateRun, refreshRuns, refreshGroups]);
 
   useEffect(() => {
@@ -2201,6 +1667,14 @@ export function Chats({
           // Same rule as the model: omitted entirely on the CLI default. A CLI
           // with no effort control never has an entry, since its chip is absent.
           ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
+          // Same rule again. Held true by `changeModel`, which clears the
+          // remembered size whenever the model changes — the chip's own
+          // rendering does not, since it draws the default sentinel for a size
+          // the new model does not list while the stored word is still what
+          // would be sent.
+          ...(contextWindows[agentKind]
+            ? { contextWindow: contextWindows[agentKind] }
+            : {}),
           // Sent only when this CLI honours the composer's pick; otherwise
           // omitted so the daemon applies its own default for that agent —
           // which is also what happens while capabilities are still loading.
@@ -2245,6 +1719,7 @@ export function Chats({
       approval?: ChatApprovalMode;
       model?: string | null;
       effort?: string | null;
+      contextWindow?: string | null;
     }): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -2343,24 +1818,51 @@ export function Chats({
     let stale = false;
     setSessionsLoading(true);
     setSessionsError(null);
-    void agentsApi
-      .listAgentSessions({
-        agent: sessionAgent,
-        // The profile THIS CLI takes, so the list and the resume agree about
-        // which account they are talking about — an id listed under one
-        // profile is not resumable under another.
-        ...(sessionConfigDir === null ? {} : { configDir: sessionConfigDir }),
-      })
-      .then((listing) => {
-        if (!stale) {
-          setSessionListing(listing);
+    // One ask per PROFILE, folded into one list. Concurrent rather than in
+    // turn: they are independent questions to independent stores, and asking
+    // them sequentially would make opening the picker cost the sum of every
+    // account the user has. Bounded rather than all at once, because each ask
+    // is a full-profile scan and nothing cancels a superseded one — see
+    // `SESSION_SEARCH_CONCURRENCY`.
+    void mapWithLimit(
+      sessionProfileDirs,
+      SESSION_SEARCH_CONCURRENCY,
+      async (profile): Promise<ProfileAnswer> =>
+        agentsApi
+          .listAgentSessions({
+            agent: sessionAgent,
+            // The profile is part of the QUESTION, and the answer's rows are
+            // tagged with it — an id listed under one profile is not
+            // resumable under another, so the import has to know which store
+            // the row the user pressed came out of.
+            ...(profile === null ? {} : { configDir: profile }),
+            // Searched on the daemon, which is the only side that can read
+            // what was SAID in a conversation. Absent for an empty box, so
+            // the unfiltered listing is exactly the request it always was.
+            ...(sessionQueryAsked === '' ? {} : { query: sessionQueryAsked }),
+          })
+          .then((listing) => ({ configDir: profile, listing, error: null }))
+          // Caught PER PROFILE: one directory the user has since moved away
+          // must cost its own rows and not the whole dialog, which is what a
+          // single rejected `Promise.all` would do.
+          .catch((err: unknown) => ({
+            configDir: profile,
+            listing: null,
+            error: daemonErrorDetail(err),
+          })),
+    )
+      .then((answers) => {
+        if (stale) {
+          return;
         }
-      })
-      .catch((err: unknown) => {
-        if (!stale) {
-          setSessionListing(null);
-          setSessionsError(daemonErrorDetail(err));
-        }
+        setSessionListing(mergeSessionListings(answers, SESSION_LIST_LIMIT));
+        // Only when NOTHING answered. A profile that failed beside profiles
+        // that did is reported in the merged `partialReason`, under the rows —
+        // an error strip over a working list reads as the list being wrong.
+        const failed = answers.filter((answer) => answer.listing === null);
+        setSessionsError(
+          failed.length === answers.length ? (failed[0]?.error ?? null) : null,
+        );
       })
       .finally(() => {
         if (!stale) {
@@ -2370,7 +1872,13 @@ export function Chats({
     return () => {
       stale = true;
     };
-  }, [sessionPickerOpen, sessionAgent, sessionConfigDir, agentsApi]);
+  }, [
+    sessionPickerOpen,
+    sessionAgent,
+    sessionProfileDirs,
+    sessionQueryAsked,
+    agentsApi,
+  ]);
 
   /**
    * Take over one of those conversations: create a chat bound to it and open
@@ -2388,7 +1896,7 @@ export function Chats({
    * empty and fills in later is indistinguishable from one that failed.
    */
   const resumeSession = useCallback(
-    async (session: AgentSession): Promise<void> => {
+    async ({ session, configDir: profile }: ProfiledSession): Promise<void> => {
       if (session.cwd === null) {
         return;
       }
@@ -2406,9 +1914,13 @@ export function Chats({
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
-            ...(sessionConfigDir === null
-              ? {}
-              : { configDir: sessionConfigDir }),
+            ...(contextWindows[sessionAgent]
+              ? { contextWindow: contextWindows[sessionAgent] }
+              : {}),
+            // The profile the ROW was listed under, never the composer's:
+            // with several accounts on the list, resuming under the wrong one
+            // asks a CLI to continue a session that is not in its store.
+            ...(profile === null ? {} : { configDir: profile }),
           },
         });
         setRuns((prev) => [run, ...prev]);
@@ -2420,7 +1932,7 @@ export function Chats({
         setResumingSessionId(null);
       }
     },
-    [sessionAgent, models, efforts, sessionConfigDir, chatApi, activateRun],
+    [sessionAgent, models, efforts, chatApi, activateRun],
   );
 
   /**
@@ -2454,19 +1966,9 @@ export function Chats({
   /** The sidebar's + : back to the new-run composer. Nothing is created —
    *  the run (chat or workflow) is only seeded when the composer sends. */
   const newChat = useCallback((): void => {
-    const previous = activeRunIdRef.current;
-    if (previous) {
-      client.leaveRun(previous);
-    }
-    swapDraft(previous ?? NEW_CHAT_DRAFT, NEW_CHAT_DRAFT);
-    activeRunIdRef.current = null;
-    setActiveRunId(null);
-    setItems([]);
-    setLiveText(EMPTY_LIVE_TEXT);
-    setStreaming(false);
-    setError(null);
+    deactivateRun();
     refreshRuns();
-  }, [client, refreshRuns]);
+  }, [deactivateRun, refreshRuns]);
 
   const confirmDelete = useCallback(async (): Promise<void> => {
     if (!deleting) {
@@ -3065,26 +2567,6 @@ export function Chats({
     [client, startTurn, enqueueMessage],
   );
 
-  // Requests the daemon reported as already settled — invalid answers remain
-  // retryable, while expired cards stop retrying forever.
-  const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
-    new Set(),
-  );
-  useEffect(
-    () =>
-      client.onVerdictAck((ack) => {
-        if (
-          ack.status === 'expired' &&
-          ack.runId === activeRunIdRef.current &&
-          ack.requestId
-        ) {
-          const requestKey = `${ack.runId}:${ack.requestId}`;
-          setDeadRequestKeys((prev) => new Set(prev).add(requestKey));
-        }
-      }),
-    [client],
-  );
-
   const verdicts = useMemo(() => collectVerdicts(items), [items]);
   // Memoized so the set is referentially stable across composer keystrokes —
   // a fresh Set per render would re-render every memoized row shell below.
@@ -3267,6 +2749,26 @@ export function Chats({
       : `Checking whether ${agent} can take a message mid-turn…`;
   }, [capabilities, activeRun]);
 
+  /**
+   * Whether sending one of those messages now STOPS what the agent is doing.
+   *
+   * From the daemon for the same reason the sentence above is, and it is a
+   * separate question rather than more of that sentence: both shipped CLIs take
+   * a message mid-turn, and only one of them keeps working on what it was
+   * doing. Cursor's channel is a second `session/prompt`, which cancels the
+   * first — so on that CLI a press costs the tool call in flight, and the
+   * control has to say so BEFORE it is pressed. False while the answer is
+   * loading: the milder claim is the safe one to make about a control the user
+   * cannot successfully press yet anyway.
+   */
+  const steerInterrupts = useMemo((): boolean => {
+    const agent = activeRun?.agentKind;
+    return agent
+      ? ((capabilities?.followUps ?? []).find((f) => f.agent === agent)
+          ?.interrupts ?? false)
+      : false;
+  }, [capabilities, activeRun]);
+
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
   // folder. A new-run workflow target resolves through its SELECTED trigger
@@ -3323,6 +2825,15 @@ export function Chats({
   // about, or none at all for a workflow target — narrowed to that composer's
   // own model, which is what makes the chip offer only what will apply.
   const agentEfforts = useAgentEfforts(agentsApi, modelKind, effortModel);
+  // The window sizes THIS composer's model offers, scoped exactly like the
+  // effort listing above and for a stronger version of the same reason: twelve
+  // of a cursor account's models carry the axis at all and their vocabularies
+  // differ, so a listing asked without the model has nothing to answer with.
+  const agentContextWindows = useAgentContextWindows(
+    agentsApi,
+    modelKind,
+    effortModel,
+  );
   // ONE git read: the landing composer's, following the folder picked for the
   // NEXT run — the only place a branch is chosen. The transcript composer used
   // to run a second read for a read-only branch chip beside its own cwd; that
@@ -3345,9 +2856,19 @@ export function Chats({
             configDir,
             models,
             efforts,
+            contextWindows,
             approval: approvalMode,
           }),
-    [folder, target, git.info, configDir, models, efforts, approvalMode],
+    [
+      folder,
+      target,
+      git.info,
+      configDir,
+      models,
+      efforts,
+      contextWindows,
+      approvalMode,
+    ],
   );
 
   /**
@@ -3395,6 +2916,7 @@ export function Chats({
         }
         changeModel(applied.agentKind, applied.model);
         changeEffort(applied.agentKind, applied.effort);
+        changeContextWindow(applied.agentKind, applied.contextWindow);
       }
 
       if (applied.branch === null) {
@@ -3765,14 +3287,12 @@ export function Chats({
    *
    * The item FIRST, and never the later of the two, which is what this used to
    * take. The argument for the max was that items do not touch `updatedAt`, so
-   * the row can sit before the stop it describes — true of the row the DAEMON
-   * writes, and not true of the one on screen: {@link addItem} mirrors every
-   * streamed message's timestamp onto `updatedAt` to keep the sidebar's "3m ago"
-   * live. So a delegate's own row pushes the row stamp past itself, and the max
-   * makes "has this delegate spoken since the run settled?" unanswerable — every
-   * delegate always reads as having spoken exactly no later than the settle.
-   * That is not a hypothetical: it is what the spec for the badge measured the
-   * moment the rule was asked about a `completed` run.
+   * the row can sit before the stop it describes — and the max answers that by
+   * making "has this delegate spoken since the run settled?" unanswerable, since
+   * a delegate's own row would push the stamp past itself and every delegate
+   * would read as having spoken exactly no later than the settle. That is not a
+   * hypothetical: it is what the spec for the badge measured the moment the rule
+   * was asked about a `completed` run.
    *
    * The fallback still matters, because the case the max was reaching for is
    * real in the other direction: a settle path that writes NO terminal item (a
@@ -3810,9 +3330,10 @@ export function Chats({
             streaming,
             awaitingAnswer: awaitingAnswer.size > 0,
             subagentRunning,
+            heldForBackgroundWork: holding.has(activeRun.id),
           })
         : 'idle',
-    [activeRun, streaming, awaitingAnswer, subagentRunning],
+    [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -3854,6 +3375,14 @@ export function Chats({
     [turnDurations],
   );
   /**
+   * What this thread has SPENT, for the header beside what it worked.
+   *
+   * Re-asked on `threadWorked.turns` — the count of settled turns — because
+   * that is the only thing that moves the total, and a count changes exactly
+   * once per turn rather than on every delta the turn streams.
+   */
+  const threadTotals = useChatTotals(chatApi, activeRunId, threadWorked.turns);
+  /**
    * What THIS run is doing, for the live rows — the same sentence the sidebar
    * badge carries, so the transcript and the badge cannot say different things
    * about one run.
@@ -3862,6 +3391,25 @@ export function Chats({
     activeRunId === null ? null : (activities.get(activeRunId) ?? null);
   /** This chat's turn is held for background work — see {@link holding}. */
   const activeRunHeld = activeRunId !== null && holding.has(activeRunId);
+  /**
+   * The open turn as the HEADER should measure it: the hold counted as a parked
+   * stretch, exactly like an approval card's wait.
+   *
+   * The header's figure is "how much work is in here", not how long the window
+   * has been open, and while a turn is held nobody is working — the agent has
+   * said its piece and the process is alive for its listeners. Folded in here
+   * rather than inside `scanTurns`, because a hold leaves NO transcript row to
+   * scan for (`turn_held` maps to no item, deliberately): it is a live fact
+   * about the run, and this is where the live facts are.
+   */
+  const openTurnForHeader = useMemo(
+    () =>
+      parkWhileHeld(
+        turnScan.open,
+        activeRunId === null ? undefined : holding.get(activeRunId),
+      ),
+    [turnScan.open, holding, activeRunId],
+  );
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -4120,52 +3668,6 @@ export function Chats({
     [resolveHandoff, openResolvedTarget],
   );
 
-  /**
-   * Sign one CLI itself back in, in the user's own terminal.
-   *
-   * The account, not one of its MCP servers — {@link signInToMcpServer} above
-   * fixes a server the CLI could not authenticate, this fixes the CLI's own
-   * lapsed session, and the wrong one sends the user to a command that cannot
-   * fix what they hit.
-   *
-   * No folder is passed: an account is machine-wide, and the row that offers
-   * this may belong to a run with no working directory at all. The `cwd` the
-   * daemon answers with is therefore the home directory it falls back to — a
-   * sign-in does not care where it runs, and the IPC contract takes a validated
-   * absolute path either way.
-   *
-   * The run's CONFIG DIRECTORY is passed, and it is the one thing here that is
-   * not machine-wide: credentials live in that folder, so a chat pointed at a
-   * second profile must be signed in THERE. Without it the user signs into
-   * their default account and watches the same turn fail again — which is
-   * exactly the failure this control exists to end.
-   */
-  const signInToCli = useCallback(
-    async (kind: CliKind, configDir: string | null) => {
-      await openResolvedTarget(
-        () =>
-          handoffApi.resolveCliLogin({
-            agent: kind,
-            ...(configDir ? { configDir } : {}),
-          }),
-        `${kind} cannot be signed in from here`,
-      );
-    },
-    [handoffApi, openResolvedTarget],
-  );
-
-  /**
-   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
-   * to. Null when there is no run, or when the run names no agent — an error
-   * row then renders without an action rather than with one that cannot know
-   * which CLI to open.
-   */
-  const signInToActiveCli = useMemo(() => {
-    const kind = activeRun?.agentKind;
-    const configDir = activeRun?.configDir ?? null;
-    return kind ? () => void signInToCli(kind, configDir) : null;
-  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
-
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
   /**
@@ -4176,8 +3678,12 @@ export function Chats({
    * control of its own; a published artifact even sprang it open, on a
    * baseline taken from the replay so a re-opened thread would not. All of
    * that was machinery for deciding when to show a panel that turned out to be
-   * wanted always. The one control that survives is the RESIZE handle, whose
-   * width is remembered — narrow is how someone puts it away now.
+   * wanted always.
+   *
+   * Putting it away is the PANEL's own business now, not this flag's: it folds
+   * to a rail it can be reopened from, so the column is always there and the
+   * control never has to be hosted anywhere else. See `collapsed` in
+   * `agents-panel.tsx`.
    */
   const showAgentsPanel = activeRunId !== null;
   /**
@@ -4231,28 +3737,42 @@ export function Chats({
   );
 
   /**
-   * A sign-in the DAEMON is running for one of this chat's MCP servers.
+   * A sign-in the DAEMON is running for this chat — one of its MCP servers, or
+   * the CLI's own lapsed account.
    *
    * The same controller the Settings account sign-in uses, deliberately: one
-   * lifecycle, one poll, one cancel. Its `onSettled` re-reads the LISTING,
-   * which is the only thing that can say whether the server is authenticated
-   * now — an exit status says the command finished, which is a different claim.
+   * lifecycle, one poll, one cancel. ONE INSTANCE for both of this screen's
+   * flows, for the reason the hook holds a single sign-in at all — two browser
+   * challenges open at once are indistinguishable in the browser, and the second
+   * reads as the first having failed.
+   *
+   * `onSettled` dispatches on which flow settled, because the two are answered
+   * by different reads: a server's by the LISTING, an account's by the CLI's own
+   * status. Neither is answered by an exit status, which only says the command
+   * finished.
    */
   // Read through a ref so the controller's `onSettled` is not re-created on
   // every render of the listing hook — the poll is keyed on identity, and a
   // fresh callback each tick is how one ends up never firing.
   const mcpRefreshRef = useRef<() => void>(() => undefined);
   mcpRefreshRef.current = mcp.refresh;
-  const mcpLogin = useCliLogin(apis, () => mcpRefreshRef.current());
+  const login = useCliLogin(apis, (settled) => {
+    if (settled.server !== null) {
+      mcpRefreshRef.current();
+    }
+    // An account sign-in re-reads nothing: what it changed lives in the CLI's
+    // own credential store, and this screen shows no account state to refresh.
+    // The panel's own last line is the report, and the next turn is the test.
+  });
   // A sign-in the daemon REFUSED never becomes a session, so the controller's
   // own panel — which only exists once there is one — has nowhere to show it.
   // Without this the press is silent: the button appears to do nothing, which
   // is precisely the failure the progress panel was added to end.
   useEffect(() => {
-    if (mcpLogin.error !== null) {
-      setError(mcpLogin.error);
+    if (login.error !== null) {
+      setError(login.error);
     }
-  }, [mcpLogin.error]);
+  }, [login.error]);
 
   /**
    * Sign one CLI in to one MCP server, WITHOUT opening a terminal window.
@@ -4292,7 +3812,7 @@ export function Chats({
         );
         return;
       }
-      await mcpLogin.startMcp({
+      await login.startMcp({
         kind,
         server,
         cwd,
@@ -4302,8 +3822,51 @@ export function Chats({
         configDir: activeRun?.configDir ?? null,
       });
     },
-    [mcpLogin, activeRun?.cwd, activeRun?.configDir],
+    [login, activeRun?.cwd, activeRun?.configDir],
   );
+
+  /**
+   * Sign one CLI itself back in, WITHOUT opening a terminal window.
+   *
+   * The account, not one of its MCP servers — {@link signInToMcpServer} above
+   * fixes a server the CLI could not authenticate, this fixes the CLI's own
+   * lapsed session, and the wrong one sends the user to a command that cannot
+   * fix what they hit.
+   *
+   * REPORTED as "after click on sign in - it will open terminal. and after
+   * redirect and auth nothing will happens". It used to resolve the invocation
+   * and hand it to the user's terminal, which put the only surface that knows
+   * how the sign-in is going outside the app entirely: nothing in geniro was
+   * watching that window, so a finished browser round-trip changed nothing on
+   * screen and the failed turn sat there looking exactly as it had. The daemon
+   * has run this flow itself since the Settings card stopped opening a shell
+   * (`/v1/auth/login` — it allocates the pty, reads the CLI's own output, and
+   * takes a pasted code); this was the last caller still going out to one.
+   *
+   * The run's CONFIG DIRECTORY is passed, and it is the one thing here that is
+   * not machine-wide: credentials live in that folder, so a chat pointed at a
+   * second profile must be signed in THERE. Without it the user signs into
+   * their default account and watches the same turn fail again — which is
+   * exactly the failure this control exists to end.
+   */
+  const signInToCli = useCallback(
+    async (kind: CliKind, configDir: string | null) => {
+      await login.start(kind, configDir);
+    },
+    [login],
+  );
+
+  /**
+   * The transcript's own sign-in, bound to the CLI the ACTIVE run is talking
+   * to. Null when there is no run, or when the run names no agent — an error
+   * row then renders without an action rather than with one that cannot know
+   * which CLI to open.
+   */
+  const signInToActiveCli = useMemo(() => {
+    const kind = activeRun?.agentKind;
+    const configDir = activeRun?.configDir ?? null;
+    return kind ? () => void signInToCli(kind, configDir) : null;
+  }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
@@ -4317,16 +3880,35 @@ export function Chats({
    * what stops a chat sitting on an unanswered question from showing a spinner
    * for as long as the user is looking elsewhere.
    */
+  /**
+   * That same reading taken WITHOUT the live plane — what the row would say if
+   * the user were looking somewhere else.
+   *
+   * Split out because the ORDER has to be computed from it (see
+   * `sortRunsForSidebar`): every input to the sort must mean the same thing for
+   * every run, or focusing a thread moves it. The badge keeps the focused
+   * reading, which is richer and is about ONE row rather than about where the
+   * rows go.
+   */
+  const unfocusedRunStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      displayRunStatus({
+        status: run.status,
+        streaming: false,
+        awaitingAnswer: run.awaiting !== null,
+        // The SAME set the focused branch reads, so a row cannot say one thing
+        // while the header beside it says another. It covers every run, not
+        // just this one: it is seeded from the run list's own `holdingFor` and
+        // then kept current by the live announce, which is what makes it right
+        // for a thread the user is not looking at.
+        heldForBackgroundWork: holding.has(run.id),
+      }),
+    [holding],
+  );
   const sidebarRunStatus = useCallback(
     (run: ChatRun): RunStatusKind =>
-      run.id === activeRunId
-        ? activeRunStatus
-        : displayRunStatus({
-            status: run.status,
-            streaming: false,
-            awaitingAnswer: run.awaiting !== null,
-          }),
-    [activeRunId, activeRunStatus],
+      run.id === activeRunId ? activeRunStatus : unfocusedRunStatus(run),
+    [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
 
   const notificationLabel = useCallback(
@@ -4389,8 +3971,8 @@ export function Chats({
   // shows from that same order, so sorting here is what puts a thread waiting
   // on an answer both at the top of its group AND above the "Show all" cut.
   const orderedRuns = useMemo(
-    () => sortRunsForSidebar(runs, { statusOf: sidebarRunStatus, unseen }),
-    [runs, sidebarRunStatus, unseen],
+    () => sortRunsForSidebar(runs, { statusOf: unfocusedRunStatus }),
+    [runs, unfocusedRunStatus],
   );
 
   const sections = useMemo(
@@ -4592,7 +4174,7 @@ export function Chats({
                             // the target off the header alone left the body of an
                             // expanded group inert: a chat dragged into it lit
                             // nothing up and landed nowhere, which is the reported
-                            // "выделяется, но не перетаскивается". `dragover`
+                            // "gets selected, but doesn't drag". `dragover`
                             // bubbles, so one handler here covers every child and
                             // the rows need none of their own.
                             <li
@@ -4709,8 +4291,41 @@ export function Chats({
                   // targets, the folder it runs in, and the trigger the run starts from
                   // (a run only starts by firing one), with a round send control.
                   <section className="flex min-h-0 flex-col overflow-y-auto">
-                    <div className="flex min-h-0 flex-1 flex-col items-center justify-center p-6">
-                      <div className="flex w-full max-w-2xl flex-col gap-5">
+                    <div
+                      className="flex min-h-0 flex-1 flex-col items-center justify-center"
+                      style={{ padding: START_COLUMN_PAD }}>
+                      {/* Centred on the WINDOW, not on the pane it lives in.
+                          Reported as "this content on the start screen should
+                          be in the middle of the screen", and measured: the
+                          card sat a constant 240px right of the window centre
+                          at every width — exactly half the 480px of chrome
+                          (nav rail + chat list) to its left, because
+                          `justify-center` centres it in what is left over.
+
+                          The shift is derived rather than hardcoded, which is
+                          the whole reason it is CSS and not a number: `100%`
+                          is this pane's width and `100vw` the window's, so
+                          their difference IS the chrome beside it — and it
+                          re-derives itself when the rail is collapsed or the
+                          chat list dragged wider, which a constant could not.
+                          In a `justify-center` box a right margin of M moves
+                          the child left by M/2, so M = chrome lands it dead
+                          centre.
+
+                          Clamped, because exact centring is not always
+                          geometrically possible: it needs the card to fit in
+                          `window − 2 × chrome`, which at 1440 is 480px against
+                          a 672px composer. The second term spends only the
+                          slack the pane actually has, keeping a gutter to the
+                          sidebar — so the card moves as far as it can and
+                          degrades to plain pane-centring when there is no room
+                          at all, instead of sliding under the chat list. */}
+                      <div
+                        className="flex w-full flex-col gap-5"
+                        style={{
+                          maxWidth: START_COLUMN_WIDTH,
+                          marginRight: `max(0px, min(calc(100vw - 100% - 2 * ${START_COLUMN_PAD}), calc(100% - ${START_COLUMN_WIDTH} - 2 * ${START_COLUMN_PAD})))`,
+                        }}>
                         <h2 className="text-center text-xl font-semibold tracking-tight">
                           What are we building?
                         </h2>
@@ -4884,6 +4499,19 @@ export function Chats({
                                       changeEffort(agentKind, effort)
                                     }
                                   />
+                                  <ContextWindowSelect
+                                    windows={agentContextWindows.windows}
+                                    value={contextWindows[agentKind] ?? null}
+                                    unavailableReason={
+                                      agentContextWindows.unavailableReason
+                                    }
+                                    unavailableKind={
+                                      agentContextWindows.unavailableKind
+                                    }
+                                    onChange={(size) =>
+                                      changeContextWindow(agentKind, size)
+                                    }
+                                  />
                                 </>
                               ) : null}
                             </ComposerBottomRow>
@@ -4950,6 +4578,7 @@ export function Chats({
                         turnStartedAt={turnStartedAt}
                         workedMs={threadWorked.ms}
                         turnCount={threadWorked.turns}
+                        costUsd={threadTotals.costUsd}
                         // Only while the run is actually live. A transcript
                         // whose last row is a user message describes an open
                         // turn whether or not one is still running — a daemon
@@ -4961,7 +4590,7 @@ export function Chats({
                         openTurn={
                           isSettledRunStatus(activeRunStatus)
                             ? null
-                            : turnScan.open
+                            : openTurnForHeader
                         }
                         runningSubagents={sidePanelLive.subagents}
                         tasks={sidePanelLive.tasks}
@@ -5142,6 +4771,33 @@ export function Chats({
                       />
                     ) : null}
 
+                    {/* The ACCOUNT sign-in the transcript's error row started,
+                        pinned here rather than drawn on that row. The row is
+                        somewhere in a scrollback the user is free to leave, and
+                        this flow needs a place they can still see when the
+                        browser hands them back — including the code field claude
+                        asks for, which is unusable off-screen. Above the
+                        composer is where this chat already puts everything the
+                        user has to act on (the queue, the failure banner).
+
+                        The MCP half of the same controller renders in the dialog
+                        it was pressed in; `server` is which one this is. */}
+                    {login.login && login.login.server === null ? (
+                      // `px-4` for the panel's own `-mx-4` to cancel against:
+                      // it is built as a full-bleed band inside a card that
+                      // pads its content, and dropped into an unpadded column
+                      // the negative margin hangs it over both edges.
+                      <div className="shrink-0 px-4">
+                        <CliLoginProgress
+                          session={login.login.session}
+                          onSubmitCode={(code) => void login.submitCode(code)}
+                          onCancel={() => void login.cancel()}
+                          onDismiss={login.dismiss}
+                          error={login.error}
+                        />
+                      </div>
+                    ) : null}
+
                     {/* No rule above the composer. The card below already has
                         its own border and its own shadow, so the hairline was
                         a second edge a few pixels above the first — it read as
@@ -5152,6 +4808,7 @@ export function Chats({
                       <QueuedStrip
                         messages={queued}
                         steerUnavailableReason={steerUnavailableReason}
+                        steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
                         onEdit={editQueued}
                         onRemove={removeQueued}
@@ -5390,6 +5047,20 @@ export function Chats({
                                     void changeRunSettings({ effort })
                                   }
                                 />
+                                <ContextWindowSelect
+                                  windows={agentContextWindows.windows}
+                                  value={activeRun.contextWindow}
+                                  nextTurnOnly={streaming}
+                                  unavailableReason={
+                                    agentContextWindows.unavailableReason
+                                  }
+                                  unavailableKind={
+                                    agentContextWindows.unavailableKind
+                                  }
+                                  onChange={(contextWindow) =>
+                                    void changeRunSettings({ contextWindow })
+                                  }
+                                />
                                 {/* Between effort and the context readout, not up in
                           the identity row: the permission posture is editable
                           at any time — mid-turn included, since the daemon
@@ -5522,15 +5193,19 @@ export function Chats({
                     onSetMcpEnabled={mcp.setEnabled}
                     onSignInMcp={signInToMcpServer}
                     mcpLoginPanel={
-                      mcpLogin.login ? (
+                      // The SERVER half of the one controller. An account
+                      // sign-in shares its lifecycle but not its home: it is
+                      // started from a failed turn in the transcript and shown
+                      // there (see the band above the composer), so routing it
+                      // here would put the progress inside a dialog the user
+                      // never opened.
+                      login.login && login.login.server !== null ? (
                         <CliLoginProgress
-                          session={mcpLogin.login.session}
-                          onSubmitCode={(code) =>
-                            void mcpLogin.submitCode(code)
-                          }
-                          onCancel={() => void mcpLogin.cancel()}
-                          onDismiss={mcpLogin.dismiss}
-                          error={mcpLogin.error}
+                          session={login.login.session}
+                          onSubmitCode={(code) => void login.submitCode(code)}
+                          onCancel={() => void login.cancel()}
+                          onDismiss={login.dismiss}
+                          error={login.error}
                         />
                       ) : null
                     }
@@ -5550,8 +5225,14 @@ export function Chats({
                   open={detailSubagent !== null}
                   onClose={() => setDetailSubagentId(null)}
                   title={
+                    // The category prefix is dropped for a delegate that has no
+                    // name of its own, because the fallback title already opens
+                    // with it — reported as the title reading
+                    // `Sub-agent · sub-agent`, which names nothing twice.
                     detailSubagent
-                      ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                      ? subagentNamed(detailSubagent)
+                        ? `Sub-agent · ${subagentTitle(detailSubagent)}`
+                        : subagentTitle(detailSubagent)
                       : 'Sub-agent'
                   }
                   className="max-w-2xl">
@@ -5621,13 +5302,15 @@ export function Chats({
                   open={sessionPickerOpen}
                   agent={sessionAgent}
                   onAgentChange={setSessionAgent}
-                  configDir={sessionConfigDir}
+                  profiles={sessionProfileDirs}
+                  query={sessionQuery}
+                  onQueryChange={setSessionQuery}
                   listing={sessionListing}
                   loading={sessionsLoading}
                   error={sessionsError}
                   busyId={resumingSessionId}
                   onClose={() => setSessionPickerOpen(false)}
-                  onResume={(session) => void resumeSession(session)}
+                  onResume={(row) => void resumeSession(row)}
                 />
                 <RunConfigPicker
                   open={runConfigPickerOpen}

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
+import { spawnAgentVersion } from '../../utils/agent-version';
+import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
 import {
   isPlainSessionId,
   SESSION_ID_INVALID_MESSAGE,
@@ -31,6 +33,7 @@ import type {
   AdapterQuestion,
   AgentCommandOptions,
   AgentContextUsage,
+  AgentContextWindowListing,
   AgentEffortListing,
   AgentMcpListingResult,
   AgentMcpServerHealth,
@@ -46,6 +49,7 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { matchSessions } from '../utils/session-search.utils';
 import {
   CURSOR_ACP_ARGS,
   CURSOR_ACP_CLIENT_META,
@@ -53,6 +57,7 @@ import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_ASK_QUESTION_METHOD,
   CURSOR_CONFIG_DIR_ENV,
+  CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MCP_DISABLE_ARGS,
@@ -156,6 +161,14 @@ export function cursorAutoDecision(
   }
   return null;
 }
+
+/**
+ * How long a cached handshake reply stays fresh — the same 10-minute window
+ * `EffortsService`/`ContextWindowsService` already give the PARSED vocabulary
+ * this feeds, so a cold model pays the ~2s handshake once per that window
+ * rather than once per render.
+ */
+const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
 
 /**
  * Drives `cursor-agent acp` — Cursor's first-party Agent Client Protocol
@@ -302,6 +315,23 @@ export class CursorAcpAdapter extends AgentAdapter {
        * than against a constant that goes stale with the next model.
        */
       effortsAreExhaustive: false,
+      /**
+       * Null: this CLI DOES offer the axis, and
+       * {@link CursorAcpAdapter.listModelContextWindows} answers per model.
+       *
+       * Probed 2026-08-21 on 2026.08.11-e8db854 by sweeping all 34 models the
+       * account offers: twelve carry a `context` option under the category
+       * `model_config`, and the vocabularies differ per model —
+       * `claude-opus-5` and `claude-sonnet-5` are `300k|1m`, the `gpt-5.x`
+       * family `272k|1m`, `claude-sonnet-4-6` and `claude-opus-4-6` `200k|1m`
+       * — while the other twenty-two (including `auto-smart`, `composer-2.5`
+       * and every gemini) have no such option at all. The setting has a
+       * measured EFFECT rather than merely existing: with the same model and
+       * the same prompt, `context=1m` makes this CLI's own accounting report a
+       * 1,000,000-token window and `context=300k` a 300,000-token one, which
+       * is what the meter's ring then draws.
+       */
+      contextWindowsUnavailableReason: null,
       /**
        * Empty because {@link CursorAcpAdapter.listModels} answers for real —
        * `builtinModels` is the fallback for a CLI that cannot be asked, and
@@ -571,6 +601,16 @@ export class CursorAcpAdapter extends AgentAdapter {
         // turn's prompt can be sent, so the history arrives on the first turn
         // via `AgentTurnInput.importSessionHistory` rather than off disk.
         historyUnavailableReason: null,
+        /**
+         * `session/list` answers with labels — id, cwd, title, timestamp — and
+         * takes no search parameter, so the only text this CLI offers about a
+         * conversation is the one line the row already shows. The transcript
+         * itself is inside the agent's own per-session store, reachable only by
+         * `session/load`, which REPLAYS a whole conversation over a spawned
+         * process: searching a hundred of them means a hundred spawns.
+         */
+        contentSearchUnavailableReason:
+          'cursor-agent searches conversation titles and folders only — it does not offer what was said inside them.',
       },
       configDir: {
         /**
@@ -605,17 +645,29 @@ export class CursorAcpAdapter extends AgentAdapter {
       },
       followUp: {
         /**
-         * ACP's `session/prompt` is ONE request per turn — there is no frame
-         * that adds a user message to a prompt already in flight. So the
-         * adapter leaves `buildFollowUpPayload` at its default, the turn handle
-         * answers false, and the chat route 409s RUN_BUSY.
+         * This said "ACP has no channel for a message mid-turn" for two
+         * milestones, on the strength of the SPEC — `session/prompt` is one
+         * request per turn — and it was wrong about the BINARY, which is the
+         * distinction `.claude/rules/agent-adapters.md` exists to force.
+         * Reported as "instant sending of a queued message doesn't work",
+         * and probed on 2026.08.11-e8db854: a second `session/prompt` sent
+         * against a live session is ACCEPTED. What it does is interrupt — the
+         * first prompt answers `{"stopReason":"cancelled"}`, the second runs to
+         * `end_turn`, and the agent plainly still holds the conversation (told
+         * "STOP counting, reply BANANA" mid-count, it replied `BANANA`).
          *
-         * The renderer shows this sentence on the disabled "send now" control:
-         * the message still goes out the moment the turn ends, and saying why
-         * it waits is the difference between a queue and a dead button.
+         * So the channel exists and the driver owns it (`AcpTurnDriver.
+         * sendFollowUp`, since the frame needs the session id and has to be
+         * recorded to be understood), and what differs from claude is stated
+         * below rather than hidden behind a working button.
          */
-        unavailableReason:
-          'cursor-agent takes one prompt per turn — ACP has no channel for a message mid-turn',
+        unavailableReason: null,
+        /**
+         * True, and the field exists for this: a press drops whatever
+         * cursor-agent is doing — a tool call in flight included — and answers
+         * the new message instead. Claude's channel adds to the turn.
+         */
+        interrupts: true,
       },
       usage: {
         /**
@@ -908,17 +960,147 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (wanted === '') {
       return superset;
     }
+    const stdout = await this.probeModelConfigOptionsShared(
+      wanted,
+      'efforts',
+      options,
+    );
+    return stdout === undefined
+      ? superset
+      : this.readEffortProbe(stdout, wanted, superset);
+  }
+
+  /**
+   * The window sizes ONE model offers, from the same handshake reply the effort
+   * listing reads.
+   *
+   * SAME probe, different option, and no superset behind it: a window size only
+   * means anything against the model it belongs to (see
+   * `AdapterConfig.contextWindowsUnavailableReason`), so a probe that could not
+   * be taken answers "nothing to offer, and here is why" rather than standing
+   * in with a union of other models' sizes.
+   *
+   * Shares its handshake with the effort listing through
+   * {@link handshakeProbeCache} rather than running its own: the two chips are
+   * asked at different moments by different screens (`EffortsService` /
+   * `ContextWindowsService`, each behind its own `ModelVocabularyCache`), so a
+   * cold model used to spawn the ~2s handshake TWICE for the one reply.
+   * Caching the RAW reply rather than the parsed answer PAIR is what makes
+   * that safe — this method still reads its own option out of whatever came
+   * back, so nothing here has to agree with the effort listing about what the
+   * reply means.
+   */
+  override async listModelContextWindows(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentContextWindowListing> {
+    const wanted = (model ?? '').trim();
+    // No model chosen yet. Unlike the effort chip there is no union to fall
+    // back on, so the picker draws nothing and says what would fill it.
+    //
+    // TWIN PARSER: `NO_MODEL_REASON` in
+    if (wanted === '') {
+      return {
+        windows: [],
+        unavailableReason:
+          'pick a model to see the context-window sizes it offers',
+        // The one kind the chip renders differently: nothing has been asked
+        // yet, so it says "pick a model" rather than claiming a fixed window
+        // for a model nobody has chosen. Carried as a KIND rather than left
+        // for the renderer to recognise in this sentence, so rewording the
+        // prose here cannot silently change what the control says.
+        unavailableKind: 'no-model',
+        exact: false,
+      };
+    }
+    const stdout = await this.probeModelConfigOptionsShared(
+      wanted,
+      'windows',
+      options,
+    );
+    return this.readContextWindowProbe(stdout ?? null, wanted);
+  }
+
+  /**
+   * {@link probeModelConfigOptions}, joined through {@link handshakeProbeCache}
+   * so `listModelEfforts` and `listModelContextWindows` share ONE handshake
+   * for the same (model, binary version) instead of each spawning its own.
+   *
+   * The RAW reply is what is shared rather than a parsed answer: each listing
+   * still reads its own axis out of it, which is what lets the two agree on
+   * one probe without agreeing on what the probe means. That is also why this
+   * sits BELOW the caches `EffortsService` and `ContextWindowsService` hold —
+   * those keep each service's own PARSED vocabulary, so a cold model missed in
+   * both and spawned the handshake twice, neither able to see the other's
+   * in-flight probe.
+   *
+   * `label` still reaches the underlying probe on a cache MISS, so the
+   * throwaway profile root it names is unaffected; a HIT answers with no
+   * spawn at all, so which label the joining caller asked under is moot.
+   */
+  private async probeModelConfigOptionsShared(
+    model: string,
+    label: string,
+    options: AgentCommandOptions,
+  ): Promise<string | null | undefined> {
+    const version = await this.resolveBinaryVersion(options);
+    return this.handshakeProbeCache.read(
+      this.getConfig().kind,
+      model,
+      version,
+      () => this.probeModelConfigOptions(model, label, options),
+    );
+  }
+
+  /**
+   * This CLI's own `--version` line — resolved FRESH on every raw-probe read
+   * rather than memoized here, because it IS the freshness key
+   * {@link handshakeProbeCache} checks: a memoized version would leave a
+   * stale key outliving the very upgrade this exists to catch.
+   *
+   * Cheap next to what it gates: a plain `--version` fork against the ~2s ACP
+   * handshake it decides whether to repeat, so paying it once per listing (up
+   * to two per cold model) costs nothing next to the spawn it can save.
+   */
+  private resolveBinaryVersion(
+    options: AgentCommandOptions,
+  ): Promise<string | null> {
+    return spawnAgentVersion(this.command, {
+      execFileFn: this.options.execFileFn,
+      onSpawn: options.onSpawn,
+    });
+  }
+
+  /**
+   * One model's `session/new` handshake, as raw stdout — or `undefined` when it
+   * could not be taken at all.
+   *
+   * Extracted because two listings read the same reply for different options,
+   * and the SEEDED PROFILE is the mechanism both depend on: the reply
+   * enumerates the parameters of whatever model the profile currently holds
+   * (measured — a fresh profile opens on `composer-2.5`, which has neither an
+   * effort nor a context axis), so the model is chosen by seeding rather than
+   * by a `session/set_config_option` round trip.
+   *
+   * Reached directly only on a {@link handshakeProbeCache} miss — both public
+   * listings go through {@link probeModelConfigOptionsShared}.
+   */
+  private async probeModelConfigOptions(
+    model: string,
+    label: string,
+    options: AgentCommandOptions,
+  ): Promise<string | null | undefined> {
     let cwd = '';
     let profile = '';
     try {
-      cwd = this.makeProbeRoot('efforts');
+      cwd = this.makeProbeRoot(label);
       profile = seedCursorProfile({
         baseDir: this.profileBaseDir(),
         homeDir: this.cursorOptions.homeDir,
         // The whole mechanism — see the seed's own doc block.
-        model: wanted,
+        model,
       });
-      const stdout = await this.runCommand([...CURSOR_ACP_ARGS], {
+      return await this.runCommand([...CURSOR_ACP_ARGS], {
         ...options,
         cwd,
         stdinWrites: acpModelProbeFrames({
@@ -931,9 +1113,8 @@ export class CursorAcpAdapter extends AgentAdapter {
         env: { [CURSOR_CONFIG_DIR_ENV]: profile },
         timeoutMs: options.timeoutMs ?? CURSOR_MODEL_PROBE_TIMEOUT_MS,
       });
-      return this.readEffortProbe(stdout, wanted, superset);
     } catch {
-      return superset;
+      return undefined;
     } finally {
       if (cwd !== '') {
         this.removeProbeRoot(cwd);
@@ -942,6 +1123,53 @@ export class CursorAcpAdapter extends AgentAdapter {
         removeCursorProfile(profile);
       }
     }
+  }
+
+  /**
+   * What one model's handshake said about its window sizes.
+   *
+   * Three answers, the same split {@link readEffortProbe} draws — and the third
+   * differs from the effort one only in having no union to fall back to, so an
+   * unreadable probe and a model with no axis both end with an empty list and
+   * a sentence. They are told apart by WHICH sentence: one names the model, the
+   * other says the CLI could not be asked.
+   */
+  private readContextWindowProbe(
+    stdout: string | null,
+    model: string,
+  ): AgentContextWindowListing {
+    if (stdout !== null) {
+      const option = readAcpConfigOptionProbe(
+        stdout,
+        CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+      );
+      if (option !== null && option.options.length > 0) {
+        return {
+          windows: option.options.map(({ value, name }) => ({
+            id: value,
+            label: name,
+          })),
+          unavailableReason: null,
+          unavailableKind: null,
+          exact: true,
+        };
+      }
+      if (acpProbeEnumeratedConfigOptions(stdout)) {
+        return {
+          windows: [],
+          unavailableReason: `${model} runs at one fixed context window — pick a model that offers a choice.`,
+          unavailableKind: 'fixed-window',
+          exact: true,
+        };
+      }
+    }
+    return {
+      windows: [],
+      unavailableReason:
+        'cursor-agent could not be asked which context windows this model offers',
+      unavailableKind: 'unreadable',
+      exact: false,
+    };
   }
 
   /**
@@ -1133,6 +1361,19 @@ export class CursorAcpAdapter extends AgentAdapter {
       throw new Error(CURSOR_MCP_TOGGLE_FAILED_MESSAGE);
     }
   }
+
+  /** Raw-handshake cache shared by both model-config listings above. */
+  /**
+   * The RAW handshake reply behind both model-vocabulary listings, keyed and
+   * version-checked by the SHARED cache rather than a private copy of it —
+   * `.claude/rules/daemon-module-structure.md`: "Cross-module logic is
+   * extracted, never mirrored." The `kind` dimension is a constant here (there
+   * is only ever one `cursor-agent` to ask), which costs one argument and buys
+   * a single home for the single-flight and freshness rules.
+   */
+  private readonly handshakeProbeCache = new ModelVocabularyCache<
+    string | null | undefined
+  >({ ttlMs: CURSOR_HANDSHAKE_PROBE_TTL_MS, now: Date.now });
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {
     super(cursorOptions);
@@ -1456,11 +1697,20 @@ export class CursorAcpAdapter extends AgentAdapter {
         sessions:
           stdout === null
             ? []
-            : readAcpSessionList(stdout).slice(0, input.limit),
+            : // Narrowed HERE and not by the caller. Every implementation of
+              // this method has to apply the query itself, or a search would
+              // silently widen back to the whole list on whichever CLI forgot —
+              // and this one can only reach what `session/list` returned, which
+              // is why it declares `contentSearchUnavailableReason`.
+              matchSessions(readAcpSessionList(stdout), input.query).slice(
+                0,
+                input.limit,
+              ),
         unavailableReason: null,
+        partialReason: null,
       };
     } catch {
-      return { sessions: [], unavailableReason: null };
+      return { sessions: [], unavailableReason: null, partialReason: null };
     } finally {
       if (cwd !== '') {
         this.removeProbeRoot(cwd);
@@ -1675,7 +1925,11 @@ export class CursorAcpAdapter extends AgentAdapter {
       // turn's own effort applied over whatever the id carried. Composed here
       // because the bracket syntax is this CLI's, and the driver must not learn
       // to read one.
-      modelSelection: cursorModelSelection(input.model, input.effort),
+      modelSelection: cursorModelSelection(
+        input.model,
+        input.effort,
+        input.contextWindow,
+      ),
       autoDecide: (toolCall) =>
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:
@@ -1702,12 +1956,22 @@ export class CursorAcpAdapter extends AgentAdapter {
         method: CURSOR_TODOS_METHOD,
         read: parseCursorTodos,
       },
-      // The SAME store the readout reads, put on the turn's event stream so the
-      // meter's ring is drawn from it too. ACP carries no context accounting at
-      // all, so before this the ring had no reading and rendered hollow while
-      // the panel behind it showed a full breakdown off this very file — the
-      // reported "the number says 51% and the circle is not filled at all".
-      // Two readings of one source cannot disagree; a reading and a blank can.
+      // The SAME store the readout reads, put on the turn's event stream — and,
+      // through it, onto the turn's own `turn_complete` — so the meter's ring is
+      // drawn from it too. ACP carries no context accounting at all, so before
+      // this the ring had no reading and rendered hollow while the panel behind
+      // it showed a full breakdown off this very file — the reported "the number
+      // says 51% and the circle is not filled at all". Two readings of one
+      // source cannot disagree; a reading and a blank can.
+      //
+      // Reported AGAIN after the first pass, and the second half is why: a
+      // reading rides the ephemeral live plane, which the client drops when the
+      // run settles, so the ring was fed for the length of a turn and blank
+      // between turns — which is when anybody is looking at it. The durable
+      // half is `AcpTurnDriver.buildUsage`, which now reads the same reading.
+      // Measured end to end on a real turn: `{contextTokens: 42970,
+      // contextWindowTokens: 200000}` in the row, against `inputTokens: null`
+      // beside it — the row could only have got those from here.
       readContext: (sessionId) => {
         const usage = this.readSessionContext(sessionId);
         return usage === null

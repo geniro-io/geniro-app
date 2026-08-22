@@ -61,8 +61,8 @@ describe('diffRunNotifications', () => {
   it('says nothing about a turn that did nothing but COMPACT', () => {
     // A `/compact` settles the run like any other turn, so it earned a banner
     // and a sidebar mark for housekeeping the user had just asked for and
-    // could see the result of — reported as "не нужно нотификации, когда
-    // компакт сработает".
+    // could see the result of — reported as "no notification needed when
+    // compact fires".
     expect(
       diffRunNotifications(
         reading({ a: 'running' }),

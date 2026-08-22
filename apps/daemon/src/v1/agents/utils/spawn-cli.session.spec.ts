@@ -31,6 +31,10 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     call?: string;
     finalText?: string;
     ask?: string;
+    /** The agent AUTHORING something — what proves it is working again. */
+    says?: string;
+    /** Whose thread it came from: absent is the main one, a value a delegate's. */
+    parent?: string;
   };
   if (typeof row.work === 'string' && row.phase !== undefined) {
     return [
@@ -63,6 +67,15 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
   }
   if (row.failed === true) {
     return [{ type: 'error', message: 'result: is_error' }];
+  }
+  if (typeof row.says === 'string') {
+    return [
+      {
+        type: 'text',
+        text: row.says,
+        ...(row.parent === undefined ? {} : { parentToolUseId: row.parent }),
+      },
+    ];
   }
   // A non-terminal line, for the cases that care where mid-turn output lands.
   if (typeof row.tool === 'string') {
@@ -891,6 +904,109 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(events.at(-1)).toEqual(COMPLETE);
     expect(settled).toBe(true);
+  });
+
+  it('ends the hold when the agent starts producing again', async () => {
+    // The hold says TWO things — the turn stays open, and the agent is idle —
+    // and only the first was ever taken back. Every consumer acts on the
+    // second: the composer sends straight to an idle CLI instead of queueing,
+    // and the badge reads the run as idle. Reported as "it sent message not in
+    // queue … its always, not just during compaction" — a background task with
+    // no end held the turn, and three messages went into a CLI that was
+    // demonstrably working, the last of them mid-compaction.
+    const events: AgentEvent[] = [];
+    let settled = false;
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await Promise.resolve();
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+
+    // A DELEGATE writing is not the agent resuming — it is the very work the
+    // hold is waiting for, and clearing on it would undo the mechanism.
+    line(child, { says: 'delegate thinking', parent: 'toolu_launch' });
+    expect(events.at(-1)).toEqual({
+      type: 'text',
+      text: 'delegate thinking',
+      parentToolUseId: 'toolu_launch',
+    });
+    expect(events.filter((e) => e.type === 'turn_held')).toEqual([
+      { type: 'turn_held', open: 1 },
+    ]);
+
+    // The MAIN thread authoring something is.
+    line(child, { says: 'back to work' });
+
+    expect(events.at(-2)).toEqual({ type: 'turn_held', open: 0 });
+    expect(settled).toBe(false);
+
+    // …and the stale result is GONE rather than merely unannounced: releasing
+    // it when the last unit reports would settle the turn in the middle of the
+    // answer the agent is now writing.
+    line(child, { work: 'task-1', phase: 'settled' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
+
+    // The turn ends on its NEXT terminal, which is the agent's own.
+    line(child, { done: true });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+    expect(settled).toBe(true);
+  });
+
+  it('ends the hold the moment a follow-up is DELIVERED, not when the CLI answers', async () => {
+    // The window this closes was 8 seconds in the reported case: the follow-up
+    // was `/compact`, which the CLI works on for its whole first stretch
+    // without authoring anything, so waiting for it to speak left the run
+    // reading idle — and the user's NEXT message went straight out too.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({
+      onEvent: (e) => events.push(e),
+      buildFollowUpPayload: (message) =>
+        `${JSON.stringify({ follow: message.text })}\n`,
+    });
+
+    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { done: true });
+    await Promise.resolve();
+    expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
+
+    expect(handle?.sendUserMessage({ text: '/compact' })).toBe(true);
+
+    expect(events.at(-1)).toEqual({ type: 'turn_held', open: 0 });
+  });
+
+  it('holds AGAIN when work is still out at the resumed turn’s own end', async () => {
+    // `openWork` is untouched by a release, which is what makes the second
+    // hold happen — the units were never accounted for, only stopped being
+    // the reason to call the agent idle.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'forever', phase: 'started' });
+    line(child, { done: true });
+    line(child, { says: 'resumed' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(events.filter((e) => e.type === 'turn_held')).toEqual([
+      { type: 'turn_held', open: 1 },
+      { type: 'turn_held', open: 0 },
+      { type: 'turn_held', open: 1 },
+    ]);
+    expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
+
+    line(child, { work: 'forever', phase: 'settled' });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
   });
 
   it('waits for the LAST unit, not the first to report', async () => {

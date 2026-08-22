@@ -21,11 +21,8 @@ function run(
 
 const statusOf = (row: Row): RunStatusKind => row.status;
 
-function order(rows: Row[], unseen: string[] = []): string[] {
-  return sortRunsForSidebar(rows, {
-    statusOf,
-    unseen: new Set(unseen),
-  }).map((row) => row.id);
+function order(rows: Row[]): string[] {
+  return sortRunsForSidebar(rows, { statusOf }).map((row) => row.id);
 }
 
 describe('sortRunsForSidebar', () => {
@@ -40,22 +37,9 @@ describe('sortRunsForSidebar', () => {
     expect(order(rows)).toEqual(['asking', 'fresh', 'running']);
   });
 
-  it('puts unseen threads above seen ones, and under needs-input', () => {
-    const rows = [
-      run('seen-newest', 'completed', '2026-03-01T00:00:00.000Z'),
-      run('unseen-old', 'completed', '2026-01-01T00:00:00.000Z'),
-      run('asking', 'needs-input', '2026-02-01T00:00:00.000Z'),
-    ];
-    expect(order(rows, ['unseen-old'])).toEqual([
-      'asking',
-      'unseen-old',
-      'seen-newest',
-    ]);
-  });
-
   it('orders by last activity inside a tier — a thread just written in leads', () => {
-    // `updatedAt` is bumped by every live message, the user's own included, so
-    // this is what makes writing a message bring its thread up.
+    // `updatedAt` is the daemon's own write to the run row, and writing a
+    // message flips that row to `running`, so this is what brings a thread up.
     const rows = [
       run('stale', 'completed', '2026-01-01T00:00:00.000Z'),
       run('just-wrote', 'running', '2026-05-01T00:00:00.000Z'),
@@ -92,7 +76,7 @@ describe('sortRunsForSidebar', () => {
       run('a', 'completed', '2026-01-01T00:00:00.000Z'),
       run('b', 'needs-input', '2026-02-01T00:00:00.000Z'),
     ];
-    sortRunsForSidebar(rows, { statusOf, unseen: new Set() });
+    sortRunsForSidebar(rows, { statusOf });
     expect(rows.map((row) => row.id)).toEqual(['a', 'b']);
   });
 });

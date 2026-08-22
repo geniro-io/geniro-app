@@ -129,7 +129,7 @@ export function ChartTooltip({
   rows: readonly TooltipRow[];
 }): React.JSX.Element {
   return (
-    <div className="pointer-events-none rounded-lg border border-border bg-popover px-3 py-2 shadow-panel-md">
+    <div className="pointer-events-none rounded-lg border border-border/60 bg-popover px-3 py-2 shadow-panel-lg">
       <p className="mb-1.5 text-xs font-medium text-popover-foreground">
         {title}
       </p>

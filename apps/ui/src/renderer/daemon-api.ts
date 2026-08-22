@@ -196,11 +196,16 @@ export interface DaemonApis {
   /** The sidebar's groups (`/v1/groups`) — filing ONE run lives on `chats`. */
   groups: GroupsApi;
   capabilities: CapabilitiesApi;
+  /**
+   * "What would I type to carry this conversation on myself" — one route, and
+   * a terminal is what it is FOR. It carried three sign-in resolvers too until
+   * every sign-in moved in-app; see `cliAuth`.
+   */
   handoff: HandoffApi;
   /**
-   * Signing a CLI in and out in place (`/v1/auth`), as opposed to `handoff`,
-   * which only resolves what the user would type. Separate client for the same
-   * reason they are separate controllers: one runs commands, the other never does.
+   * Signing a CLI in and out (`/v1/auth`) — the daemon runs these, so no
+   * terminal window opens. Separate client for the same reason they are
+   * separate controllers: one runs commands, the other never does.
    */
   cliAuth: CliAuthApi;
   diagnostics: DiagnosticsApi;

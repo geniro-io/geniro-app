@@ -23,6 +23,7 @@ import type {
   AgentApprovalMode,
   AgentCommandOptions,
   AgentContextUsage,
+  AgentContextWindowListing,
   AgentEffort,
   AgentEffortListing,
   AgentErrorRecovery,
@@ -83,8 +84,13 @@ const UTILITY_COMMAND_MAX_BUFFER_CHARS = 1024 * 1024;
  *
  * Agent-agnostic and stays here: it is a property of the PLATFORM, not of any
  * CLI, so no adapter declares it.
+ *
+ * Absolute path, not a bare name: a bare `'script'` resolves through the
+ * inherited login-shell PATH, which an earlier PATH entry can shadow during a
+ * sign-in. Same house rule as `apps/ui/src/main/update-installer.ts`'s
+ * `DITTO`/`XATTR` constants.
  */
-const PTY_WRAPPER = 'script';
+const PTY_WRAPPER = '/usr/bin/script';
 const PTY_WRAPPER_ARGS = ['-q', '/dev/null'] as const;
 
 /**
@@ -365,36 +371,6 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * How the user signs this CLI in to ONE MCP server, or that it cannot.
-   *
-   * Shaped like {@link handoffTarget} and delivered the same way — resolved
-   * here, run by the user's own terminal — and that is a constraint rather than
-   * a preference: both CLIs' `mcp login` refuse a non-TTY stdin outright (the
-   * probe is recorded on `AdapterConfig.mcp.loginArgs`), so there is no
-   * headless spawn being passed over.
-   *
-   * Only `unsupported` can come back. A server NAME cannot be wrong here the
-   * way a session id can — the caller took it from a listing this same CLI
-   * produced — so there is no `no-session` counterpart to invent.
-   */
-  mcpLoginTarget(server: string, configDir?: string | null): HandoffResult {
-    const { loginArgs } = this.getConfig().mcp;
-    if (loginArgs === null) {
-      return { ok: false, reason: 'unsupported' };
-    }
-    return {
-      ok: true,
-      kind: 'command',
-      command: this.command,
-      args: [...loginArgs, server],
-      // A server is authorized INSIDE a profile: signing in under the default
-      // directory leaves the run's own profile exactly as unauthenticated as
-      // it was.
-      env: this.configDirEnv(configDir),
-    };
-  }
-
-  /**
    * Whether a failed turn's message names a cure the user can apply.
    *
    * Concrete over {@link AdapterConfig.auth}'s markers: what differs per CLI is
@@ -417,72 +393,16 @@ export abstract class AgentAdapter {
   }
 
   /**
-   * How the user signs in to THIS CLI, or that they cannot from here.
+   * RUN this CLI's sign-in, headlessly, as a managed child.
    *
-   * The sibling of {@link mcpLoginTarget} one level up: that one authenticates
-   * a server the CLI loads, this one authenticates the CLI itself. A turn that
-   * failed with an expired session needs the second, and offering the first
-   * would send the user to a command that cannot fix what they just hit.
-   *
-   * `unsupported` is the only refusal — a sign-in takes no argument that could
-   * be missing, so there is no `no-session` counterpart to invent.
-   */
-  loginTarget(configDir?: string | null): HandoffResult {
-    const { loginArgs } = this.getConfig().auth;
-    if (loginArgs === null) {
-      return { ok: false, reason: 'unsupported' };
-    }
-    return {
-      ok: true,
-      kind: 'command',
-      command: this.command,
-      args: [...loginArgs],
-      // The credentials live in the config directory, so a sign-in is about
-      // ONE profile: without this, a user whose second-subscription chat
-      // expired would sign in to their default account and watch the same
-      // turn fail again.
-      env: this.configDirEnv(configDir),
-    };
-  }
-
-  /**
-   * How the user signs OUT of this CLI, or that they cannot from here.
-   *
-   * The exact mirror of {@link loginTarget}, down to the single `unsupported`
-   * refusal and the config-directory env — a sign-out is about one profile for
-   * the same reason a sign-in is, and one that dropped the directory would clear
-   * the DEFAULT account's credentials while the user was looking at a card for
-   * a different profile.
-   */
-  logoutTarget(configDir?: string | null): HandoffResult {
-    const { logoutArgs } = this.getConfig().auth;
-    if (logoutArgs === null) {
-      return { ok: false, reason: 'unsupported' };
-    }
-    return {
-      ok: true,
-      kind: 'command',
-      command: this.command,
-      args: [...logoutArgs],
-      env: this.configDirEnv(configDir),
-    };
-  }
-
-  /**
-   * RUN this CLI's sign-in, headlessly, as a managed child — as opposed to
-   * {@link loginTarget}, which only says what the invocation would be.
-   *
-   * Both exist on purpose. The resolve-only path is the fallback and the escape
-   * hatch: it hands the user a real terminal when this one cannot finish, and it
-   * is the only path for anything a daemon-owned child cannot do. This one is
-   * what keeps a terminal window from opening for the common case.
-   *
-   * Why it is allowed at all, given the block on `loginArgs` saying the daemon
-   * resolves and never runs: that block generalised a probe of `mcp login`,
-   * which refuses a non-TTY stdin outright. Re-probed on claude 2.1.228 and
-   * cursor-agent 2026.08.11: the ACCOUNT login does not refuse. Both print a
-   * usable URL, both open the browser themselves, and cursor polls to
-   * completion with stdin closed.
+   * The ONLY path now. A `loginTarget` sibling resolved the invocation for the
+   * user's own terminal to run, on a block that generalised a probe of `mcp
+   * login`, which refuses a non-TTY stdin outright. Re-probed on claude 2.1.228
+   * and cursor-agent 2026.08.11: the ACCOUNT login does not refuse. Both print
+   * a usable URL, both open the browser themselves, and cursor polls to
+   * completion with stdin closed. The resolve-only path outlived that
+   * measurement as "the fallback" until its last caller moved in-app, at which
+   * point it was a second sign-in mechanism nobody could reach.
    *
    * `processGroup` is forced, not optional. A sign-in spawns a browser opener of
    * its own, so the thing that must die on cancel or shutdown is the GROUP —
@@ -513,12 +433,11 @@ export abstract class AgentAdapter {
 
   /**
    * RUN this CLI's sign-in to ONE MCP server, as a managed child — the sibling
-   * of {@link runLogin} one level down, and of {@link mcpLoginTarget}, which
-   * only says what the invocation would be.
+   * of {@link runLogin} one level down.
    *
-   * The resolve-only path stays as the fallback and the escape hatch, exactly
-   * as it does for the account login. What changed is that this is possible at
-   * all: `mcp login` refuses a piped stdin outright, so for two milestones the
+   * The ONLY path, exactly as for the account login: its resolve-only twin is
+   * gone with the last caller that opened a terminal. What made that possible:
+   * `mcp login` refuses a piped stdin outright, so for two milestones the
    * only way to run it was to open the user's terminal — which is what got
    * reported ("it opens a shell; it should take us straight to the browser").
    * The refusal is about a TERMINAL, not about being watched, so
@@ -770,6 +689,7 @@ export abstract class AgentAdapter {
       unavailableReason:
         config.sessions.listingUnavailableReason ??
         `${config.kind} cannot list the conversations it holds`,
+      partialReason: null,
     });
   }
 
@@ -878,6 +798,41 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * The context-window sizes ONE MODEL of this CLI can be run at — the twin of
+   * {@link listModelEfforts}, and per model for the same measured reason.
+   *
+   * Concrete over config, and the default is "this CLI has no such control",
+   * which is claude's answer: a model's window is a property of the model
+   * there, with no flag to change it. A CLI that DOES offer the axis overrides
+   * this; cursor does, as one `model_config` option in its ACP handshake.
+   *
+   * There is no superset fallback, unlike efforts — see
+   * {@link AdapterConfig.contextWindowsUnavailableReason} for why a CLI-wide
+   * union of window sizes would not mean anything. So `exact` is false here
+   * only in the sense that nothing was asked.
+   *
+   * MUST NOT throw, like every listing on this base: a CLI that cannot be asked
+   * costs the user a picker, not the request.
+   */
+  async listModelContextWindows(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentContextWindowListing> {
+    void model;
+    void options;
+    const config = this.getConfig();
+    return {
+      windows: [],
+      unavailableReason:
+        config.contextWindowsUnavailableReason ??
+        `${config.kind} does not offer a context-window setting`,
+      // The base's answer is for a CLI with no such axis at all.
+      unavailableKind: 'no-axis',
+      exact: false,
+    };
+  }
+
+  /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
    * found on disk — each CLI keeps them under its own roots
    * (`config.skillRoots`: `.claude/skills`, `.claude/commands`,
@@ -972,6 +927,9 @@ export abstract class AgentAdapter {
           cwd,
           isolateMcpServers: true,
           internalProbe: true,
+          // Says what this turn IS, for an adapter whose CLI has to be ASKED
+          // for the sentences beside the names — see `commandListProbe`.
+          commandListProbe: true,
         },
         (event) => {
           if (event.type === 'slash_commands' && captured.length === 0) {
@@ -1883,6 +1841,13 @@ export abstract class AgentAdapter {
           buildApprovalResponse: (id, allow, updatedInput) =>
             driver.buildApprovalResponse?.(id, allow, updatedInput),
           buildFollowUpPayload: (message) => this.buildFollowUpPayload(message),
+          // A driver that owns the channel wins over the adapter's payload
+          // builder — the two are alternatives, not a pair, and `sendUserMessage`
+          // consults this one first. Bound only when the driver defines it, so
+          // a CLI without one keeps the stdin-line path untouched.
+          sendFollowUp: driver.sendFollowUp
+            ? (message) => driver.sendFollowUp!(message)
+            : undefined,
           buildApprovalModePayload: (mode) => {
             const line = this.buildApprovalModePayload(turnInput, mode);
             if (line !== undefined) {

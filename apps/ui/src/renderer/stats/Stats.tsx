@@ -30,7 +30,7 @@ import {
 import { HeroStat, StatCard } from './stat-card';
 import {
   cacheHitRate,
-  formatDayTitle,
+  dayRangeTitle,
   formatDuration,
   NOT_MEASURED,
 } from './stats-format';
@@ -109,9 +109,14 @@ export function Stats({
                   // with three days of history that picks "90 days" gets three
                   // columns — indistinguishable from a quiet quarter unless the
                   // real period is on screen.
-                  `${formatDayTitle(data.from.slice(0, 10))} – ${formatDayTitle(
-                    data.to.slice(0, 10),
-                  )}`
+                  //
+                  // Stated ONCE when both ends land on the same day, which
+                  // Today makes ordinary and a fresh install already made
+                  // reachable on every period: a span reading "Thursday, August
+                  // 20, 2026 – Thursday, August 20, 2026" is a range that is
+                  // not one, and the dash invites reading the halves as two
+                  // different days.
+                  dayRangeTitle(data.from, data.to)
                 : 'What your agents have used, and what it cost.'}
             </p>
           </div>
@@ -163,6 +168,83 @@ export function Stats({
                 },
               ]}
             />
+
+            {/* REPORTED as "move those to the top". The eight measured figures
+                sit directly under the headline they qualify, where they read as
+                the rest of the answer to "what did this cost" — before, they
+                were the LAST thing on the page, three full sections and a
+                scroll below the number they belong to, so the split of the
+                hero's own token count was somewhere the reader had to go
+                looking for.
+
+                Four columns, not six. Eight cards in a six-column grid is a row
+                of six over a row of two with four empty cells trailing it, which
+                is survivable at the foot of a page and reads as broken at the
+                top of one. Four gives a clean 2×4 block, and it is the column
+                count the breakdown grid below already uses, so the page has one
+                rhythm rather than two.
+
+                Two columns until `lg`, never three: eight cards over three
+                columns is 3+3+2, the same ragged tail one breakpoint further
+                down. And four columns only from `lg` because the widest value
+                these cards hold is a duration — measured at 900px, "15h 43m"
+                truncated to "15h 4…", which on a page whose whole job is
+                reporting figures is the one thing a cell must not do. */}
+            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <StatCard
+                icon={HardDriveDownload}
+                label="Tokens in"
+                value={formatOrDash(totals.inputTokens, formatTokens)}
+              />
+              <StatCard
+                icon={MessagesSquare}
+                label="Tokens out"
+                value={formatOrDash(totals.outputTokens, formatTokens)}
+              />
+              <StatCard
+                icon={DatabaseZap}
+                label="Cache read"
+                value={formatOrDash(totals.cacheReadTokens, formatTokens)}
+              />
+              <StatCard
+                icon={PiggyBank}
+                label="Cache written"
+                value={formatOrDash(totals.cacheCreationTokens, formatTokens)}
+              />
+              <StatCard
+                icon={Brain}
+                label="Thinking"
+                value={formatOrDash(totals.thinkingTokens, formatTokens)}
+              />
+              <StatCard
+                icon={Clock}
+                label="Agent time"
+                value={formatOrDash(totals.workedMs, formatDuration)}
+              />
+              <StatCard
+                icon={Gauge}
+                label="Cache hit rate"
+                value={formatOrDash(
+                  cacheHitRate(totals.cacheReadTokens, totals.inputTokens),
+                  (rate) => `${Math.round(rate)}%`,
+                )}
+                hint="Share of prompt tokens served from cache — the difference between a cheap session and an expensive one."
+              />
+              <StatCard
+                icon={TrendingDown}
+                label="Cost per turn"
+                value={formatOrDash(perTurn, formatUsd)}
+                footnote={
+                  // Stated whenever the two differ, because the denominator is
+                  // then not the turn count sitting directly above it, and an
+                  // average whose divisor is a mystery invites the reader to
+                  // recompute it and find a different number.
+                  totals.costedTurns === totals.turns
+                    ? undefined
+                    : `over ${totals.costedTurns} costed turns`
+                }
+              />
+            </section>
 
             <ChartPanel
               title="Per day"
@@ -223,62 +305,6 @@ export function Stats({
                 caption="Prompt tokens against completion tokens, per day.">
                 <TokenSplitChart points={points} />
               </ChartPanel>
-            </section>
-
-            <section className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
-              <StatCard
-                icon={HardDriveDownload}
-                label="Tokens in"
-                value={formatOrDash(totals.inputTokens, formatTokens)}
-              />
-              <StatCard
-                icon={MessagesSquare}
-                label="Tokens out"
-                value={formatOrDash(totals.outputTokens, formatTokens)}
-              />
-              <StatCard
-                icon={DatabaseZap}
-                label="Cache read"
-                value={formatOrDash(totals.cacheReadTokens, formatTokens)}
-              />
-              <StatCard
-                icon={PiggyBank}
-                label="Cache written"
-                value={formatOrDash(totals.cacheCreationTokens, formatTokens)}
-              />
-              <StatCard
-                icon={Brain}
-                label="Thinking"
-                value={formatOrDash(totals.thinkingTokens, formatTokens)}
-              />
-              <StatCard
-                icon={Clock}
-                label="Agent time"
-                value={formatOrDash(totals.workedMs, formatDuration)}
-              />
-              <StatCard
-                icon={Gauge}
-                label="Cache hit rate"
-                value={formatOrDash(
-                  cacheHitRate(totals.cacheReadTokens, totals.inputTokens),
-                  (rate) => `${Math.round(rate)}%`,
-                )}
-                hint="Share of prompt tokens served from cache — the difference between a cheap session and an expensive one."
-              />
-              <StatCard
-                icon={TrendingDown}
-                label="Cost per turn"
-                value={formatOrDash(perTurn, formatUsd)}
-                footnote={
-                  // Stated whenever the two differ, because the denominator is
-                  // then not the turn count sitting directly above it, and an
-                  // average whose divisor is a mystery invites the reader to
-                  // recompute it and find a different number.
-                  totals.costedTurns === totals.turns
-                    ? undefined
-                    : `over ${totals.costedTurns} costed turns`
-                }
-              />
             </section>
           </>
         ) : null}

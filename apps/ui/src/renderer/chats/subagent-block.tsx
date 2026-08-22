@@ -130,16 +130,20 @@ function SubagentStepsMissing({
   // that had just spent thirteen seconds working.
   //
   // The generic line is only for a delegate that has genuinely not spoken YET,
-  // so it is withheld from one that has RETURNED: a block carrying a result has
-  // demonstrably done something, and beside that result the sentence is simply
+  // so it is withheld from one whose OWN result is here: a block carrying that
+  // has demonstrably done something, and beside it the sentence is simply
   // false. It used to sit under a `Timeline` heading, where it read as "no
   // steps recorded"; the heading is gone (see {@link SubagentDetail}) and a
   // bare sentence has to be true on its own.
+  //
+  // `resultIsOwn` rather than `returned || result !== null`, which is what it
+  // was: a backgrounded delegate's launch is acknowledged within the second,
+  // so both of those are true before it has done anything at all — and the one
+  // line explaining why the thread below is empty was suppressed on precisely
+  // the delegates whose thread is empty for that reason.
   const line =
     block.stepsUnavailableReason ??
-    (block.returned || block.result !== null
-      ? null
-      : 'This sub-agent has not done anything yet.');
+    (block.resultIsOwn ? null : 'This sub-agent has not done anything yet.');
   if (line === null) {
     return null;
   }
@@ -245,7 +249,19 @@ export function SubagentThread({
       */}
       {working ? <WorkingRow since={block.lastRowAt} /> : null}
       {block.result ? (
-        <BlockResult label={`Result from ${title}`} text={block.result} />
+        <BlockResult
+          // Whose answer this is, said in the heading — see
+          // `SubagentBlockEntry.resultIsOwn`. A backgrounded delegate's call is
+          // answered with a launch acknowledgement while the work is still to
+          // come, and calling that "Result from X" beside a spinner reporting X
+          // as working is the card contradicting itself in two inches.
+          label={
+            block.resultIsOwn
+              ? `Result from ${title}`
+              : 'Reply to the launching call'
+          }
+          text={block.result}
+        />
       ) : null}
       {/*
         No footer. It used to close every delegate's thread with `<title> is

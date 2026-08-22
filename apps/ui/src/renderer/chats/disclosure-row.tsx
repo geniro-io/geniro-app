@@ -262,7 +262,10 @@ export function DisclosureRow({
             type="button"
             variant="outline"
             size="sm"
-            title="Open this agent’s CLI sign-in in your terminal, then send the message again"
+            // Says what now HAPPENS, and it changed: the sign-in runs here and
+            // reports above the composer, so a title still promising a terminal
+            // would describe the mechanism this row was fixed to stop using.
+            title="Sign this agent back in — it runs here and opens your browser"
             onClick={onSignIn}>
             <LogIn aria-hidden="true" className="size-3.5 shrink-0" />
             Sign in

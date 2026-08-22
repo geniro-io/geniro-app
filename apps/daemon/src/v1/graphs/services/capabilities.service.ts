@@ -95,6 +95,7 @@ export class CapabilitiesService {
     return [...this.adapters.all()].map(([agent, adapter]) => ({
       agent,
       unavailableReason: adapter.getConfig().followUp.unavailableReason,
+      interrupts: adapter.getConfig().followUp.interrupts,
     }));
   }
 

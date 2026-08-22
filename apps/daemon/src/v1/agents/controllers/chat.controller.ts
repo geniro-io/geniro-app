@@ -15,6 +15,7 @@ import { ZodResponse } from 'nestjs-zod';
 import type {
   AttachmentDataWire,
   ChatMetricsWire,
+  ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
   RunWire,
@@ -23,6 +24,7 @@ import {
   AttachmentDataDto,
   CancelledDto,
   ChatMetricsDto,
+  ChatTotalsDto,
   CreateChatDto,
   DeletedDto,
   ForgottenInstructionsDto,
@@ -181,6 +183,22 @@ export class ChatController {
   @ZodResponse({ status: 200, type: ChatMetricsDto })
   readMetrics(@Param('runId') runId: string): Promise<ChatMetricsWire> {
     return this.metrics.read(runId);
+  }
+
+  /**
+   * What this thread has cost — the spend half of `:runId/metrics`, alone.
+   *
+   * Its own route because the two halves cost different things to produce. The
+   * breakdown is a round trip to the live CLI and is why that route is opened
+   * rather than polled; this one is a database sum, so the chat header can carry
+   * the figure on every thread the user opens without paying a CLI dial to
+   * switch chats.
+   */
+  @Get(':runId/totals')
+  @ApiOperation({ operationId: 'readChatTotals' })
+  @ZodResponse({ status: 200, type: ChatTotalsDto })
+  async readTotals(@Param('runId') runId: string): Promise<ChatTotalsResponse> {
+    return { totals: await this.metrics.readTotals(runId) };
   }
 
   @Post(':runId/cancel')

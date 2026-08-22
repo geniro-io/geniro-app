@@ -73,7 +73,25 @@ export interface LatestRelease {
 }
 
 export type ReleaseLookup =
-  { ok: true; release: LatestRelease } | { ok: false; error: string };
+  | {
+      ok: true;
+      release: LatestRelease;
+      /**
+       * The newest version the feed PUBLISHES, installable or not.
+       *
+       * Not the same question as {@link release}, and the difference is the
+       * whole reason this exists: publishing a release and uploading its macOS
+       * archive are two steps, so between them the newest tag carries nothing
+       * to install. The caller offering only `release` then had no way to tell
+       * "you are on the latest" apart from "the latest is not downloadable
+       * yet", and said the first about both — REPORTED as "terminal not saying
+       * truth, there is a new version".
+       *
+       * Null only for a feed with no usable tag at all.
+       */
+      published: string | null;
+    }
+  | { ok: false; error: string };
 
 /** Parse `1.2.3` / `v1.2.3` into a `[major, minor, patch]` tuple, or null. */
 export function parseVersion(value: string): [number, number, number] | null {
@@ -120,16 +138,16 @@ function readAsset(value: unknown): ReleaseAsset | null {
 }
 
 /**
- * One entry of the release list, reduced to what an update needs — or null if
- * this app could not act on it.
+ * The version of a release this app would CONSIDER — published (not a draft,
+ * not a pre-release) with a readable tag — whether or not anything on it can be
+ * installed.
  *
- * Four ways to be unusable, and they are deliberately not distinguished: a
- * draft, a pre-release, an unreadable tag, and a release carrying no macOS
- * archive all mean the same thing to a caller looking for something to
- * install. The first two are the filtering `/releases/latest` used to do for
- * us and has to be done here instead.
+ * Split out of {@link readRelease} so the two questions stay separable: which
+ * release can be installed, and which version exists. Folded together they were
+ * indistinguishable, and a tag whose archive had not been uploaded yet was
+ * silently read as no tag at all.
  */
-function readRelease(value: unknown): LatestRelease | null {
+function readPublishedVersion(value: unknown): string | null {
   if (typeof value !== 'object' || value === null) {
     return null;
   }
@@ -137,20 +155,31 @@ function readRelease(value: unknown): LatestRelease | null {
     tag_name: tag,
     draft,
     prerelease,
-    assets: rawAssets,
-  } = value as {
-    tag_name?: unknown;
-    draft?: unknown;
-    prerelease?: unknown;
-    assets?: unknown;
-  };
+  } = value as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
   if (draft === true || prerelease === true) {
     return null;
   }
   const version = typeof tag === 'string' ? parseVersion(tag) : null;
+  return version ? version.join('.') : null;
+}
+
+/**
+ * One entry of the release list, reduced to what an update needs — or null if
+ * this app could not act on it.
+ *
+ * Four ways to be unusable, and they are deliberately not distinguished HERE:
+ * a draft, a pre-release, an unreadable tag, and a release carrying no macOS
+ * archive all mean the same thing to a caller looking for something to install.
+ * The first two are the filtering `/releases/latest` used to do for us. The
+ * fourth is told apart one level up, by {@link readPublishedVersion}, because
+ * it is the only one of the four that means "come back in a minute".
+ */
+function readRelease(value: unknown): LatestRelease | null {
+  const version = readPublishedVersion(value);
   if (!version) {
     return null;
   }
+  const { assets: rawAssets } = value as { assets?: unknown };
   const assets = Array.isArray(rawAssets)
     ? rawAssets.map(readAsset).filter((a): a is ReleaseAsset => a !== null)
     : [];
@@ -159,7 +188,7 @@ function readRelease(value: unknown): LatestRelease | null {
     return null;
   }
   return {
-    version: version.join('.'),
+    version,
     zip,
     checksums: assets.find((a) => a.name === 'SHA256SUMS.txt') ?? null,
   };
@@ -206,6 +235,17 @@ export async function fetchLatestRelease(): Promise<ReleaseLookup> {
     return { ok: false, error: 'could not read the release feed' };
   }
 
+  // Both questions, off the same page: what is the newest tag, and what is the
+  // newest tag this app can actually install. They differ for exactly as long
+  // as a release's macOS archive takes to upload.
+  const published = body
+    .map(readPublishedVersion)
+    .filter((v): v is string => v !== null)
+    .reduce<string | null>(
+      (best, version) =>
+        best === null || isNewerVersion(version, best) ? version : best,
+      null,
+    );
   const installable = body
     .map(readRelease)
     .filter((r): r is LatestRelease => r !== null);
@@ -227,9 +267,15 @@ export async function fetchLatestRelease(): Promise<ReleaseLookup> {
     // release is answered by offering the newest good one instead.
     return {
       ok: false,
-      error: 'no published release carries a macOS archive',
+      // Naming the tag when there is one: "no release carries an archive" and
+      // "v0.2.0's archive is still uploading" send the user to different
+      // places, and only the second is worth waiting out.
+      error:
+        published === null
+          ? 'no published release carries a macOS archive'
+          : `Geniro ${published} is published, but carries no macOS archive`,
     };
   }
 
-  return { ok: true, release: newest };
+  return { ok: true, release: newest, published };
 }

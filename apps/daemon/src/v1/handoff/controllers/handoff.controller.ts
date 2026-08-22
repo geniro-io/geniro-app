@@ -2,12 +2,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import {
-  CliLoginQueryDto,
-  HandoffQueryDto,
-  HandoffTargetDto,
-  McpLoginQueryDto,
-} from '../dto/handoff.dto';
+import { HandoffQueryDto, HandoffTargetDto } from '../dto/handoff.dto';
 import type { HandoffTarget } from '../handoff.types';
 import { HandoffService } from '../services/handoff.service';
 
@@ -19,6 +14,14 @@ import { HandoffService } from '../services/handoff.service';
  * answers with a command and the Electron main process is what opens a
  * terminal with it. There is no session to create, nothing to tear down, and
  * no byte plane: the PTY mirror and its `/terminals` namespace are gone.
+ *
+ * ONE route, and it is the only thing on this surface a terminal is still FOR.
+ * Three siblings resolved a sign-in — the CLI's own account, its sign-out, and
+ * one MCP server — on the reasoning that an interactive browser flow wants a
+ * TTY the daemon cannot be. Re-probed, that turned out to be true of the
+ * TERMINAL and not of being watched: `v1/auth` allocates the pty itself and
+ * runs all three, so every caller moved there and these were left resolving
+ * commands nobody asked for.
  */
 @Controller('v1/handoff')
 @ApiTags('handoff')
@@ -31,45 +34,5 @@ export class HandoffController {
   @ZodResponse({ status: 200, type: HandoffTargetDto })
   resolve(@Query() query: HandoffQueryDto): Promise<HandoffTarget> {
     return this.handoff.resolve(query);
-  }
-
-  /**
-   * "How do I sign in to this MCP server myself" — the same shape, for the same
-   * reason: the CLI's own `mcp login` refuses a non-TTY stdin, so the answer is
-   * a command for the user's terminal rather than anything the daemon runs.
-   *
-   * A GET on the handoff surface, not a POST on the MCP one: nothing changes
-   * here. The credential is written by the CLI the user runs, in their terminal.
-   */
-  @Get('mcp-login')
-  @ApiOperation({ operationId: 'resolveMcpLogin' })
-  @ZodResponse({ status: 200, type: HandoffTargetDto })
-  resolveMcpLogin(@Query() query: McpLoginQueryDto): HandoffTarget {
-    return this.handoff.mcpLoginTarget(query);
-  }
-
-  /**
-   * "How do I sign this CLI in myself" — the account, not one of its MCP
-   * servers. Separate from the route above because the two are different
-   * commands reached by different failures; an expired account session is not
-   * fixed by authenticating a server.
-   */
-  @Get('login')
-  @ApiOperation({ operationId: 'resolveCliLogin' })
-  @ZodResponse({ status: 200, type: HandoffTargetDto })
-  resolveCliLogin(@Query() query: CliLoginQueryDto): HandoffTarget {
-    return this.handoff.loginTarget(query);
-  }
-
-  /**
-   * "How do I sign this CLI out myself" — the counterpart of the route above,
-   * and still a GET: this resolves an invocation and changes nothing. The
-   * credentials are cleared by the CLI the user runs, in their own terminal.
-   */
-  @Get('logout')
-  @ApiOperation({ operationId: 'resolveCliLogout' })
-  @ZodResponse({ status: 200, type: HandoffTargetDto })
-  resolveCliLogout(@Query() query: CliLoginQueryDto): HandoffTarget {
-    return this.handoff.logoutTarget(query);
   }
 }

@@ -6,6 +6,7 @@ import {
   cliTurnDurationMs,
   formatDuration,
   openTurnWorkedMs,
+  parkWhileHeld,
   scanTurns,
   threadWorkedMs,
   turnDurations,
@@ -268,6 +269,68 @@ describe('scanTurns + openTurnWorkedMs', () => {
   it('never reports a negative figure from a clock that moved backwards', () => {
     const { open } = scanTurns([userAt('2026-08-14T10:00:00.000Z')]);
     expect(openTurnWorkedMs(open, at('2026-08-14T09:59:00.000Z'))).toBe(0);
+  });
+
+  it('stops counting once the turn is merely HELD for background work', () => {
+    // The other half of "done but showing like it's working": the badge said
+    // running (fixed in run-status), and the header went on adding to `worked`
+    // for as long as the hold lasted. Reported screenshot: `44m 45s · worked
+    // 44m 45s`, of which the last twenty minutes were a background task the
+    // agent was waiting on rather than any work.
+    //
+    // Deliberately the same mechanism an unanswered card uses — a hold is the
+    // same non-work seen from the agent's side, and a second mechanism is how
+    // the two would come to disagree.
+    const { open } = scanTurns([userAt('2026-08-14T10:00:00.000Z')]);
+    const held = parkWhileHeld(open, at('2026-08-14T10:00:30.000Z'));
+
+    expect(openTurnWorkedMs(held, at('2026-08-14T10:00:45.000Z'))).toBe(30_000);
+    // Twenty minutes into the hold: still the same 30s of work.
+    expect(openTurnWorkedMs(held, at('2026-08-14T10:20:30.000Z'))).toBe(30_000);
+    // And a turn that is NOT held is untouched — it keeps ticking.
+    expect(
+      openTurnWorkedMs(
+        parkWhileHeld(open, undefined),
+        at('2026-08-14T10:00:45.000Z'),
+      ),
+    ).toBe(45_000);
+  });
+
+  it('leaves a hold on top of an unanswered card, rather than replacing it', () => {
+    // Both can be true at once, and `openSince` is a LIST for that reason.
+    // Overwriting it would resume the clock the card had stopped.
+    const { open } = scanTurns([
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('approval_request', '2026-08-14T10:00:20.000Z', {
+        payload: { id: 'req-1' },
+      }),
+    ]);
+    const held = parkWhileHeld(open, at('2026-08-14T10:00:30.000Z'));
+
+    expect(held?.openSince).toHaveLength(2);
+    expect(openTurnWorkedMs(held, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
+  });
+
+  it('does not subtract two OVERLAPPING waits twice', () => {
+    // A pre-existing defect, surfaced by the hold test above and fixable in the
+    // same place: the parked stretches were SUMMED, and they all run to `now`,
+    // so two open at once subtracted the same minutes twice and the figure
+    // pinned itself at 0 — a turn that had worked reporting that it had not.
+    // Two cards open together is ordinary (`openSince` is a list for that
+    // reason), and a hold lands on top of whatever is already open.
+    const { open } = scanTurns([
+      userAt('2026-08-14T10:00:00.000Z'),
+      item('approval_request', '2026-08-14T10:00:20.000Z', {
+        payload: { id: 'req-1' },
+      }),
+      item('approval_request', '2026-08-14T10:00:25.000Z', {
+        payload: { id: 'req-2' },
+      }),
+    ]);
+
+    // 20s of work before the first card, and both waits are the SAME wait.
+    expect(open?.openSince).toHaveLength(2);
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
   });
 
   it('still answers the settled durations exactly as turnDurations does', () => {

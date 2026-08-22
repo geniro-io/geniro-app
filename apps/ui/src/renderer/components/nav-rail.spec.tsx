@@ -96,7 +96,7 @@ describe('NavRail', () => {
   it('keeps its own width toggle, in both directions', () => {
     // It moved to the title bar with everything else and moved straight back:
     // it acts on THIS column rather than on the window, so it belongs to the
-    // column ("давай её в само меню оставим там же, где она и была").
+    // column ("let's leave it in the menu itself, in the same place it was").
     const pressed: string[] = [];
     const open = rail(
       'chats',

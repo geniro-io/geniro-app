@@ -6,8 +6,8 @@ import type { RunStatusKind } from './run-status';
 /**
  * Which threads have done something the user has not looked at yet.
  *
- * The ask: "чтобы на треде горел какой-нибудь статус … чтобы тред как-то
- * хайлайтился до нажатия пользователя на него". A banner is gone in five
+ * The ask: "so some status lights up on the thread … so the thread gets
+ * highlighted somehow until the user clicks on it". A banner is gone in five
  * seconds and macOS drops it silently while the display is shared, so the app
  * had no lasting record that a background thread finished, asked something or
  * failed — the sidebar looked exactly as it had before it happened.

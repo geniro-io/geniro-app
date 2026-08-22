@@ -15,6 +15,7 @@
 
 import * as runtime from '../runtime';
 import type {
+  AgentContextWindowListingDto,
   AgentEffortListingDto,
   AgentKind,
   AgentMcpListingDto,
@@ -23,6 +24,11 @@ import type {
   AgentSkillDto,
   SetMcpServerEnabledDto,
 } from '../models/index';
+
+export interface AgentsApiListAgentContextWindowsRequest {
+    agent: AgentKind;
+    model?: string;
+}
 
 export interface AgentsApiListAgentEffortsRequest {
     agent: AgentKind;
@@ -44,6 +50,7 @@ export interface AgentsApiListAgentSessionsRequest {
     agent: AgentKind;
     cwd?: string;
     configDir?: string;
+    query?: string;
 }
 
 export interface AgentsApiListAgentSkillsRequest {
@@ -59,6 +66,58 @@ export interface AgentsApiSetAgentMcpServerEnabledRequest {
  * 
  */
 export class AgentsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async listAgentContextWindowsRaw(requestParameters: AgentsApiListAgentContextWindowsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentContextWindowListingDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentContextWindows().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/context-windows`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentContextWindows(requestParameters: AgentsApiListAgentContextWindowsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentContextWindowListingDto> {
+        const response = await this.listAgentContextWindowsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -243,6 +302,10 @@ export class AgentsApi extends runtime.BaseAPI {
 
         if (requestParameters['configDir'] != null) {
             queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
+        if (requestParameters['query'] != null) {
+            queryParameters['query'] = requestParameters['query'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};

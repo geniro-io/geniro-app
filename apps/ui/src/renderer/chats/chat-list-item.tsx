@@ -12,6 +12,7 @@ import {
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
+  STANDING_ACTIVITY,
 } from './run-status';
 
 /**
@@ -152,8 +153,8 @@ export const ChatListItem = memo(function ChatListItem({
     <NavListItem
       active={active}
       // `select-none`: without it a press-and-drag on the row starts a TEXT
-      // selection instead of the drag, which is what "выделяется, но не
-      // перетаскивается" looks like from the other side of the screen.
+      // selection instead of the drag, which is what "gets selected, but
+      // doesn't drag" looks like from the other side of the screen.
       className={cn('group select-none', dragging && 'opacity-40')}
       activateLabel={label}
       suspendActivation={editing}
@@ -308,9 +309,13 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="min-w-0 truncate text-muted-foreground">
             · {awaitingPhrase(awaiting)}
           </span>
-        ) : status === 'running' && activity ? (
+        ) : status === 'running' ? (
+          /* Never conditional on there BEING a phrase: a null activity means
+             "working, nothing named", not "say nothing", and treating the two
+             the same is what made this row flicker once per tool call. See
+             {@link STANDING_ACTIVITY}. */
           <span className="min-w-0 truncate text-muted-foreground">
-            · {activity}
+            · {activity ?? STANDING_ACTIVITY}
           </span>
         ) : null}
         {/* The time is for runs that have STOPPED — "when did this last do

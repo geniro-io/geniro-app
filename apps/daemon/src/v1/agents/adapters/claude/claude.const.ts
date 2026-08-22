@@ -66,6 +66,36 @@ export const CLAUDE_SESSION_FILE_SUFFIX = '.jsonl';
 export const CLAUDE_SESSION_HEAD_BUDGET_BYTES = 256 * 1024;
 /** How much of that prompt a picker row shows before it is elided. */
 export const CLAUDE_SESSION_TITLE_MAX_CHARS = 120;
+/**
+ * How far into ONE session a content search reads before giving up on it.
+ *
+ * Searching means opening files the listing would otherwise only stat, so it is
+ * bounded twice — here, and by {@link CLAUDE_SESSION_SEARCH_FILE_LIMIT}. A file
+ * is abandoned the instant every term has matched, so the budget is only ever
+ * paid in full by a session that does NOT match.
+ *
+ * MEASURED on the profile this was written against (3,029 sessions, 1.96GB;
+ * the 600 newest are 561MB, 23 of them over 1MB and one of them 144MB). The
+ * budget started at 1MB, which covers 577 of those 600 files whole for 122MB
+ * of reading and 220ms — and missed the thing it was built for: the long
+ * sessions are exactly the ones worth searching, and 1MB of an 11MB
+ * conversation is its opening tenth. 16MB reads 262MB, and it still refuses
+ * the 144MB outlier, which is the case a budget has to exist for at all.
+ */
+export const CLAUDE_SESSION_SEARCH_BUDGET_BYTES = 16 * 1024 * 1024;
+/**
+ * How many sessions a content search opens at all, newest first.
+ *
+ * The profile this was written against holds 2,448 sessions over 1.7GB, so
+ * "search everything" is a multi-gigabyte read on every keystroke. Newest-first
+ * is what makes a cut usable rather than arbitrary — the conversation somebody
+ * is trying to find is one they had, not one from two years ago — and the
+ * listing SAYS how far it got (`AgentSessionListing.partialReason`) instead of
+ * passing a bounded search off as an exhaustive one.
+ */
+export const CLAUDE_SESSION_SEARCH_FILE_LIMIT = 600;
+/** How much of a matching line a picker row shows before it is elided. */
+export const CLAUDE_SESSION_SNIPPET_MAX_CHARS = 160;
 export const CLAUDE_APPEND_SYSTEM_PROMPT_FLAG = '--append-system-prompt';
 export const CLAUDE_PERMISSION_MODE_FLAG = '--permission-mode';
 export const CLAUDE_PERMISSION_PROMPT_TOOL_FLAG = '--permission-prompt-tool';
@@ -1265,3 +1295,62 @@ export const CLAUDE_PLAN_LIMITS_SUBTYPE = 'get_usage';
  * bound here would only ever give up on a CLI the other is still waiting for.
  */
 export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;
+
+// ---------------------------------------------------------------------------
+// The command list, with the sentences beside it
+// ---------------------------------------------------------------------------
+//
+// `system/init` names every invokable command — and NOTHING else: the field is
+// an array of plain strings, so the composer's `/` autocomplete listed 64 rows
+// with no description at all. Measured against this daemon's own endpoint on a
+// real profile: 67 entries, 3 of them described (the three that happen to be
+// scannable files with frontmatter), 64 bare. The reported "Autocomplete
+// doesn't show tool descriptions" was pointing at two built-ins, `/compact` and
+// `/autocompact`, which exist nowhere on disk to be scanned.
+//
+// The CLI does have a channel that carries them, and it is a PUSH: ask it to
+// reload, and it announces the whole list with each entry's own sentence. Found
+// in the shipped 2.1.237 bundle —
+//
+//   km = () => { …; if (p.outputFormat !== "stream-json") return;
+//                AE({type:"system", subtype:"commands_changed",
+//                    commands: Nbt(No())}) }
+//   function fvm(e) { return {name: …, description: Hbt(e),
+//                             argumentHint: …, aliases: …} }
+//
+// — and then driven live, three times, because the grep only proves the name
+// exists (`.claude/rules/agent-adapters.md`):
+//
+//  1. an ordinary `-p` turn emits NO `commands_changed` at all;
+//  2. a stream-json-stdin turn that sends nothing emits none either — so the
+//     line is not a startup announcement, it is the reload's answer;
+//  3. one `reload_skills` control request produces it: 68 commands, 68 of them
+//     described, `/compact` reading "Free up context by summarizing the
+//     conversation so far".
+//
+// It also arrives BEFORE `system/init`, so the probe that reads it settles
+// sooner than the one it replaces rather than costing a wait.
+//
+// Expiry warning, as with every probe block here: an observation of one build,
+// not a contract. A renamed subtype degrades to the bare names `init` already
+// carried — the autocomplete goes back to what it shows today, never to
+// nothing.
+
+/** The control request that makes the CLI re-announce its command list. */
+export const CLAUDE_RELOAD_COMMANDS_SUBTYPE = 'reload_skills';
+
+/** The `system` subtype that announcement arrives as. */
+export const CLAUDE_COMMANDS_CHANGED_SUBTYPE = 'commands_changed';
+
+/** The array of `{name, description, …}` it carries. */
+export const CLAUDE_COMMANDS_CHANGED_KEY = 'commands';
+
+/**
+ * The request id the probe's reload rides under.
+ *
+ * A constant rather than a fresh uuid because nothing correlates on it: the
+ * answer arrives as a `system` PUSH, not as the `control_response` addressed to
+ * this id, and the probe holds exactly one turn. It is named so the line is
+ * recognisable in a stdio log.
+ */
+export const CLAUDE_RELOAD_COMMANDS_REQUEST_ID = 'geniro-reload-commands';

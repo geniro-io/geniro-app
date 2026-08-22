@@ -15,21 +15,8 @@
 
 import * as runtime from '../runtime';
 import type {
-  AgentKind,
   HandoffTargetDto,
 } from '../models/index';
-
-export interface HandoffApiResolveCliLoginRequest {
-    agent: AgentKind;
-    cwd?: string;
-    configDir?: string;
-}
-
-export interface HandoffApiResolveCliLogoutRequest {
-    agent: AgentKind;
-    cwd?: string;
-    configDir?: string;
-}
 
 export interface HandoffApiResolveHandoffRequest {
     runId: string;
@@ -37,129 +24,10 @@ export interface HandoffApiResolveHandoffRequest {
     sessionId?: string;
 }
 
-export interface HandoffApiResolveMcpLoginRequest {
-    agent: AgentKind;
-    cwd: string;
-    server: string;
-    configDir?: string;
-}
-
 /**
  * 
  */
 export class HandoffApi extends runtime.BaseAPI {
-
-    /**
-     * 
-     */
-    async resolveCliLoginRaw(requestParameters: HandoffApiResolveCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HandoffTargetDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling resolveCliLogin().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['cwd'] != null) {
-            queryParameters['cwd'] = requestParameters['cwd'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/handoff/login`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async resolveCliLogin(requestParameters: HandoffApiResolveCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
-        const response = await this.resolveCliLoginRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async resolveCliLogoutRaw(requestParameters: HandoffApiResolveCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HandoffTargetDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling resolveCliLogout().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['cwd'] != null) {
-            queryParameters['cwd'] = requestParameters['cwd'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/handoff/logout`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async resolveCliLogout(requestParameters: HandoffApiResolveCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
-        const response = await this.resolveCliLogoutRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
 
     /**
      * 
@@ -214,80 +82,6 @@ export class HandoffApi extends runtime.BaseAPI {
      */
     async resolveHandoff(requestParameters: HandoffApiResolveHandoffRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
         const response = await this.resolveHandoffRaw(requestParameters, initOverrides);
-        return await response.value();
-    }
-
-    /**
-     * 
-     */
-    async resolveMcpLoginRaw(requestParameters: HandoffApiResolveMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<HandoffTargetDto>> {
-        if (requestParameters['agent'] == null) {
-            throw new runtime.RequiredError(
-                'agent',
-                'Required parameter "agent" was null or undefined when calling resolveMcpLogin().'
-            );
-        }
-
-        if (requestParameters['cwd'] == null) {
-            throw new runtime.RequiredError(
-                'cwd',
-                'Required parameter "cwd" was null or undefined when calling resolveMcpLogin().'
-            );
-        }
-
-        if (requestParameters['server'] == null) {
-            throw new runtime.RequiredError(
-                'server',
-                'Required parameter "server" was null or undefined when calling resolveMcpLogin().'
-            );
-        }
-
-        const queryParameters: any = {};
-
-        if (requestParameters['agent'] != null) {
-            queryParameters['agent'] = requestParameters['agent'];
-        }
-
-        if (requestParameters['cwd'] != null) {
-            queryParameters['cwd'] = requestParameters['cwd'];
-        }
-
-        if (requestParameters['server'] != null) {
-            queryParameters['server'] = requestParameters['server'];
-        }
-
-        if (requestParameters['configDir'] != null) {
-            queryParameters['configDir'] = requestParameters['configDir'];
-        }
-
-        const headerParameters: runtime.HTTPHeaders = {};
-
-        if (this.configuration && this.configuration.accessToken) {
-            const token = this.configuration.accessToken;
-            const tokenString = await token("bearer", []);
-
-            if (tokenString) {
-                headerParameters["Authorization"] = `Bearer ${tokenString}`;
-            }
-        }
-
-        let urlPath = `/v1/handoff/mcp-login`;
-
-        const response = await this.request({
-            path: urlPath,
-            method: 'GET',
-            headers: headerParameters,
-            query: queryParameters,
-        }, initOverrides);
-
-        return new runtime.JSONApiResponse(response);
-    }
-
-    /**
-     * 
-     */
-    async resolveMcpLogin(requestParameters: HandoffApiResolveMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<HandoffTargetDto> {
-        const response = await this.resolveMcpLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

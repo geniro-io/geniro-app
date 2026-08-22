@@ -535,96 +535,116 @@ export function Settings({
   );
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-2xl flex-col gap-6 overflow-y-auto px-6 py-8">
-      <header className="flex flex-col gap-1">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl">Settings</h1>
-          {savedFlash && !error ? (
-            <span className="flex items-center gap-1.5 text-sm text-success">
-              <Check className="size-4" />
-              Saved
-            </span>
-          ) : null}
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Configure the CLI agents Geniro drives. Changes are saved
-          automatically.
-        </p>
-      </header>
+    /*
+      TWO elements, and the split is the point. REPORTED as "scroll should be
+      for all page, not just in the middle": one element was both the centred
+      42rem reading column AND the scroll container, so the scrollbar was drawn
+      at the column's own right edge — floating inside the pane with dead page
+      background either side of it, and nowhere near the window edge every other
+      scrollbar on the machine lives at.
 
-      {/* The sign-in's own error lives in its progress panel — but a sign-in that
+      The pane scrolls; the column is what it scrolls. `Stats` was already built
+      this way, so this is the house pattern rather than a new one.
+
+      `scrollbar-gutter: stable` because the bar here is a real one that takes
+      width — the reporter runs macOS with "always show scrollbars" on, which is
+      why it is visible in the screenshot at all — and without the gutter the
+      centred column jumps sideways by half its width the moment the content
+      grows past one screen.
+    */
+    <div
+      className="h-full overflow-y-auto"
+      style={{ scrollbarGutter: 'stable' }}>
+      <div className="mx-auto flex w-full max-w-2xl flex-col gap-6 px-6 py-8">
+        <header className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl">Settings</h1>
+            {savedFlash && !error ? (
+              <span className="flex items-center gap-1.5 text-sm text-success">
+                <Check className="size-4" />
+                Saved
+              </span>
+            ) : null}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Configure the CLI agents Geniro drives. Changes are saved
+            automatically.
+          </p>
+        </header>
+
+        {/* The sign-in's own error lives in its progress panel — but a sign-in that
           failed to START has no panel to live in, and would otherwise be a
           button press with no visible outcome. It falls through to here. */}
-      {(error ?? (login.login === null ? login.error : null)) ? (
-        <ErrorText>
-          {error ?? (login.login === null ? login.error : null)}
-        </ErrorText>
-      ) : null}
+        {(error ?? (login.login === null ? login.error : null)) ? (
+          <ErrorText>
+            {error ?? (login.login === null ? login.error : null)}
+          </ErrorText>
+        ) : null}
 
-      <section className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-medium">Agents</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => void refreshClis()}>
-            Re-check
-          </Button>
-        </div>
-        <AgentConfigList
-          clis={clis}
-          open={open}
-          onToggle={toggle}
-          binaryPaths={binaryPaths}
-          onBinaryPathChange={(kind, value) => {
-            setBinaryPaths((prev) => ({ ...prev, [kind]: value }));
-            schedulePathPersist();
-          }}
-          onBrowse={(kind) => void browse(kind)}
-          // Withheld until the daemon answers: `AgentConfigList` renders no
-          // control for an absent handler, which is the honest state on a slow
-          // launch. Passed unconditionally, the button would resolve nothing
-          // and report nothing — `signInToCli` cannot even set an error,
-          // because it has no transport to fail on.
-          onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
-          onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
-          profileScopedKinds={profileScopedKinds}
-          login={
-            login.login
-              ? {
-                  kind: login.login.kind,
-                  session: login.login.session,
-                  error: login.error,
-                  onSubmitCode: (code) => void login.submitCode(code),
-                  onCancel: () => void login.cancel(),
-                  onDismiss: login.dismiss,
-                }
-              : null
-          }
-        />
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium">Notifications</h2>
-        <div className="flex items-center gap-3">
-          <Switch
-            id="settings-notifications"
-            checked={notificationsEnabled}
-            onCheckedChange={onToggleNotifications}
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-medium">Agents</h2>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void refreshClis()}>
+              Re-check
+            </Button>
+          </div>
+          <AgentConfigList
+            clis={clis}
+            open={open}
+            onToggle={toggle}
+            binaryPaths={binaryPaths}
+            onBinaryPathChange={(kind, value) => {
+              setBinaryPaths((prev) => ({ ...prev, [kind]: value }));
+              schedulePathPersist();
+            }}
+            onBrowse={(kind) => void browse(kind)}
+            // Withheld until the daemon answers: `AgentConfigList` renders no
+            // control for an absent handler, which is the honest state on a slow
+            // launch. Passed unconditionally, the button would resolve nothing
+            // and report nothing — `signInToCli` cannot even set an error,
+            // because it has no transport to fail on.
+            onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
+            onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
+            profileScopedKinds={profileScopedKinds}
+            login={
+              login.login
+                ? {
+                    kind: login.login.kind,
+                    session: login.login.session,
+                    error: login.error,
+                    onSubmitCode: (code) => void login.submitCode(code),
+                    onCancel: () => void login.cancel(),
+                    onDismiss: login.dismiss,
+                  }
+                : null
+            }
           />
-          <Label htmlFor="settings-notifications" className="cursor-pointer">
-            Show system notifications
-          </Label>
-          {/* The one control here that PROVES something rather than sets it.
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Notifications</h2>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="settings-notifications"
+              checked={notificationsEnabled}
+              onCheckedChange={onToggleNotifications}
+            />
+            <Label htmlFor="settings-notifications" className="cursor-pointer">
+              Show system notifications
+            </Label>
+            {/* The one control here that PROVES something rather than sets it.
               macOS asks for permission the first time an app posts and consumes
               that banner to do it, so without a deliberate test the first
               notification anyone should have seen is always the one they never
               get — and every later silence (permission refused, Do Not Disturb,
               the app silenced in System Settings) is indistinguishable from a
               bug in here. */}
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            {/* Beside the test rather than behind its result, and always
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              {/* Beside the test rather than behind its result, and always
                 present: the test says whether the OS is holding the app, and
                 this is the only place the user can do anything about it. It
                 used to be a SENTENCE naming that place — "System Settings ›
@@ -632,61 +652,75 @@ export function Settings({
                 some button that will automatically open settings for us"): a
                 destination the app knows how to reach, printed as directions
                 for the user to follow by hand. */}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void window.geniro.openNotificationSettings()}>
+                macOS settings
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={notificationTest === 'testing'}
+                onClick={onTestNotification}>
+                {notificationTest === 'testing' ? 'Sending…' : 'Send a test'}
+              </Button>
+            </div>
+          </div>
+          {notificationTestResult ? (
+            <p
+              data-slot="notification-test-result"
+              className={cn(
+                'text-xs',
+                notificationTest === 'shown'
+                  ? 'text-success'
+                  : 'text-muted-foreground',
+              )}>
+              {notificationTestResult}
+            </p>
+          ) : null}
+          <p className="text-xs text-muted-foreground">
+            Banners when an agent asks something and when a turn ends; clicking
+            one opens that chat. Never for the chat you are watching, or a turn
+            you stopped.
+          </p>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Custom instructions</h2>
+          <ExpandableTextarea
+            id="settings-custom-instructions"
+            title="Custom instructions"
+            value={customInstructions}
+            onChange={onCustomInstructionsChange}
+            rows={6}
+            placeholder="e.g. Always answer in British English. Prefer small, reviewable diffs."
+          />
+          {/* The note and the button share ONE row. They were two, with the
+              second row's only content pushed right by `ml-auto` — which read
+              as an orphan the moment the note above it shrank from two
+              paragraphs to one, since the button then had nothing to sit
+              beside. The errors below get their own full-width line instead of
+              competing with the button for this one: "Contains invisible
+              control characters — not saved. Pasting from a word processor can
+              add them…" does not fit next to anything. */}
+          <div className="flex items-start justify-between gap-3">
+            <p className="min-w-0 text-xs text-muted-foreground">
+              Handed to every agent at the start of each new chat or workflow
+              run — one already running keeps what it started with.
+            </p>
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => void window.geniro.openNotificationSettings()}>
-              macOS settings
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={notificationTest === 'testing'}
-              onClick={onTestNotification}>
-              {notificationTest === 'testing' ? 'Sending…' : 'Send a test'}
+              className="shrink-0"
+              disabled={forgetting || apis === null}
+              onClick={() => void forgetExistingInstructions()}>
+              {forgetting ? 'Removing…' : 'Remove from existing chats'}
             </Button>
           </div>
-        </div>
-        {notificationTestResult ? (
-          <p
-            data-slot="notification-test-result"
-            className={cn(
-              'text-xs',
-              notificationTest === 'shown'
-                ? 'text-success'
-                : 'text-muted-foreground',
-            )}>
-            {notificationTestResult}
-          </p>
-        ) : null}
-        <p className="text-xs text-muted-foreground">
-          A macOS banner when an agent stops to ask you something and when a
-          thread’s turn ends — so a run parked on a question does not sit
-          unanswered while you are in another app. Clicking one opens that chat.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Nothing is posted for the chat you are already looking at, or for a
-          turn you stopped yourself.
-        </p>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium">Custom instructions</h2>
-        <ExpandableTextarea
-          id="settings-custom-instructions"
-          title="Custom instructions"
-          value={customInstructions}
-          onChange={onCustomInstructionsChange}
-          rows={6}
-          placeholder="e.g. Always answer in British English. Prefer small, reviewable diffs."
-        />
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">
-            Handed to every agent, on every provider, at the start of each new
-            chat or workflow run.
-          </p>
           {overLimit ? (
             <ErrorText>
               {customInstructions.length.toLocaleString()} /{' '}
@@ -699,183 +733,160 @@ export function Settings({
               word processor can add them; retype it or paste as plain text.
             </ErrorText>
           ) : null}
-        </div>
-        <div className="flex items-center gap-3">
+          {forgetResult ? (
+            <p className="text-xs text-muted-foreground">{forgetResult}</p>
+          ) : null}
+          {hostPreamble ? (
+            <details data-slot="host-preamble">
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                Geniro already tells every agent this first
+              </summary>
+              <p className="mt-2 text-xs text-muted-foreground">
+                The CLIs are built for a terminal and say so in their own system
+                prompt, so geniro corrects that before your instructions. You
+                cannot edit it — it describes how this app actually renders a
+                reply.
+              </p>
+              <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap text-muted-foreground">
+                {hostPreamble}
+              </pre>
+            </details>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Browser</h2>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="settings-claude-browser-tools"
+              checked={claudeBrowserTools}
+              onCheckedChange={onToggleBrowserTools}
+            />
+            <Label
+              htmlFor="settings-claude-browser-tools"
+              className="cursor-pointer">
+              Let claude drive your browser (Claude in Chrome)
+            </Label>
+          </div>
           <p className="text-xs text-muted-foreground">
-            A chat keeps the instructions it started with, so edits here apply
-            to the next chat you open rather than to one already running.
+            Needs Anthropic’s Chrome extension and a browser running it. Off by
+            default: 22 extra tools in every prompt, paid for on each. Flipping
+            this restarts the daemon.
           </p>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="ml-auto shrink-0"
-            disabled={forgetting || apis === null}
-            onClick={() => void forgetExistingInstructions()}>
-            {forgetting ? 'Removing…' : 'Remove from existing chats'}
-          </Button>
-        </div>
-        {forgetResult ? (
-          <p className="text-xs text-muted-foreground">{forgetResult}</p>
-        ) : null}
-        {hostPreamble ? (
-          <details data-slot="host-preamble">
-            <summary className="cursor-pointer text-xs text-muted-foreground">
-              Geniro already tells every agent this first
-            </summary>
-            <p className="mt-2 text-xs text-muted-foreground">
-              The CLIs are built for a terminal and say so in their own system
-              prompt, so geniro corrects that before your instructions. You
-              cannot edit it — it describes how this app actually renders a
-              reply.
-            </p>
-            <pre className="mt-2 max-h-64 overflow-auto rounded-md border border-border bg-muted/40 p-3 text-xs whitespace-pre-wrap text-muted-foreground">
-              {hostPreamble}
-            </pre>
-          </details>
-        ) : null}
-      </section>
+        </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium">Browser</h2>
-        <div className="flex items-center gap-3">
-          <Switch
-            id="settings-claude-browser-tools"
-            checked={claudeBrowserTools}
-            onCheckedChange={onToggleBrowserTools}
-          />
-          <Label
-            htmlFor="settings-claude-browser-tools"
-            className="cursor-pointer">
-            Let claude drive your browser (Claude in Chrome)
-          </Label>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Hands a claude chat the CLI’s own browser tools — open a page, read
-          it, fill a form, run JavaScript, read the console and network. They
-          need Anthropic’s Chrome extension installed and a browser running it;
-          without one the agent has the tools and nothing to drive.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Off by default because they are 22 extra tools in every prompt of
-          every turn, paid for on each. Flipping this restarts the daemon.
-        </p>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium">Updates</h2>
-        <div className="flex items-center gap-3">
-          <Switch
-            id="settings-check-updates"
-            checked={checkForUpdates}
-            onCheckedChange={onToggleUpdates}
-          />
-          <Label htmlFor="settings-check-updates" className="cursor-pointer">
-            Check for updates automatically
-          </Label>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="ml-auto"
-            disabled={updateBusy}
-            onClick={() => void update.check()}>
-            {update.state?.phase === 'checking' ? 'Checking…' : 'Check now'}
-          </Button>
-          {/* The same action as the strip's, on the screen a user opens when
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Updates</h2>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="settings-check-updates"
+              checked={checkForUpdates}
+              onCheckedChange={onToggleUpdates}
+            />
+            <Label htmlFor="settings-check-updates" className="cursor-pointer">
+              Check for updates automatically
+            </Label>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="ml-auto"
+              disabled={updateBusy}
+              onClick={() => void update.check()}>
+              {update.state?.phase === 'checking' ? 'Checking…' : 'Check now'}
+            </Button>
+            {/* The same action as the strip's, on the screen a user opens when
               they went LOOKING for it — not a second mechanism: both call the
               one service, and both are gated on the same `canInstall`. */}
-          {update.state?.phase === 'available' && update.state.canInstall ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={() => void update.install()}>
-              Update now
-            </Button>
-          ) : null}
-          {/* Installed, waiting on the user. The restart quits the app and
+            {update.state?.phase === 'available' && update.state.canInstall ? (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => void update.install()}>
+                Update now
+              </Button>
+            ) : null}
+            {/* Installed, waiting on the user. The restart quits the app and
               takes the daemon and every running turn with it, so it is a press
               rather than something that happens the moment the copy ends. */}
-          {update.state?.phase === 'ready' ? (
-            <Button
-              type="button"
-              variant="default"
-              size="sm"
-              onClick={() => void update.relaunch()}>
-              Restart now
-            </Button>
-          ) : null}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Geniro checks GitHub Releases on launch and every few minutes. An
-          update downloads, is verified against its published checksum and
-          replaces the app in place — nothing is installed until you press
-          Update now, and nothing restarts until you press Restart now.
-        </p>
-        {update.state && updateLine ? (
-          <p
-            className={cn(
-              'text-xs',
-              update.state.phase === 'error'
-                ? 'text-destructive'
-                : 'text-muted-foreground',
-            )}>
-            {updateLine}
-            {update.state.message ? ` ${update.state.message}` : null}
+            {update.state?.phase === 'ready' ? (
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                onClick={() => void update.relaunch()}>
+                Restart now
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Checks GitHub Releases on launch and every few minutes. Nothing is
+            installed until you press Update now, and nothing restarts until you
+            press Restart now.
           </p>
-        ) : null}
-        {/* Only while something is moving: a bar sitting at 0% next to an
-            offer would suggest a download nobody started. */}
-        {updateWorking && update.state ? (
-          <ProgressBar
-            fraction={
-              update.state.phase === 'installing' ? null : update.state.progress
-            }
-            label={`Update ${update.state.version} progress`}
-          />
-        ) : null}
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium">Diagnostics</h2>
-        <div className="flex items-center gap-3">
-          <Switch
-            id="settings-daemon-inspect"
-            checked={inspectEnabled}
-            onCheckedChange={onToggleInspect}
-          />
-          <Label htmlFor="settings-daemon-inspect" className="cursor-pointer">
-            Attach a debugger to the daemon
-          </Label>
-          {storedInspect === null ? (
-            // Named so the state is legible: the switch is showing a default
-            // this build chose, not something the user set. Without it, a
-            // developer who never opened Settings has no way to learn the
-            // port is open.
-            <Badge variant="secondary">
-              default for {isPackaged ? 'the installed app' : 'dev'}
-            </Badge>
+          {update.state && updateLine ? (
+            <p
+              className={cn(
+                'text-xs',
+                update.state.phase === 'error'
+                  ? 'text-destructive'
+                  : 'text-muted-foreground',
+              )}>
+              {updateLine}
+              {update.state.message ? ` ${update.state.message}` : null}
+            </p>
           ) : null}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          Runs the daemon with a Node inspector on{' '}
-          <code className="rounded bg-muted px-1 py-0.5">
-            127.0.0.1:{DAEMON_INSPECT_PORT}
-          </code>
-          , so Chrome DevTools can attach to it from{' '}
-          <code className="rounded bg-muted px-1 py-0.5">chrome://inspect</code>{' '}
-          — breakpoints, profiler and heap snapshots over the daemon itself.
-          This window’s own DevTools (⌥⌘I) cannot see the daemon: it is a
-          separate process.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          On by default in development and off in the installed app. Toggling it
-          restarts the daemon, and while the port is open any process on this
-          machine can run code inside the daemon — which is why a shipped
-          install, where nobody is debugging, does not open one.
-        </p>
-      </section>
+          {/* Only while something is moving: a bar sitting at 0% next to an
+            offer would suggest a download nobody started. */}
+          {updateWorking && update.state ? (
+            <ProgressBar
+              fraction={
+                update.state.phase === 'installing'
+                  ? null
+                  : update.state.progress
+              }
+              label={`Update ${update.state.version} progress`}
+            />
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Diagnostics</h2>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="settings-daemon-inspect"
+              checked={inspectEnabled}
+              onCheckedChange={onToggleInspect}
+            />
+            <Label htmlFor="settings-daemon-inspect" className="cursor-pointer">
+              Attach a debugger to the daemon
+            </Label>
+            {storedInspect === null ? (
+              // Named so the state is legible: the switch is showing a default
+              // this build chose, not something the user set. Without it, a
+              // developer who never opened Settings has no way to learn the
+              // port is open.
+              <Badge variant="secondary">
+                default for {isPackaged ? 'the installed app' : 'dev'}
+              </Badge>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Runs the daemon with a Node inspector on{' '}
+            <code className="rounded bg-muted px-1 py-0.5">
+              127.0.0.1:{DAEMON_INSPECT_PORT}
+            </code>
+            , so Chrome DevTools can attach to it from{' '}
+            <code className="rounded bg-muted px-1 py-0.5">
+              chrome://inspect
+            </code>{' '}
+            — this window’s own DevTools (⌥⌘I) cannot. Restarts the daemon, and
+            while the port is open any process on this machine can run code
+            inside it.
+          </p>
+        </section>
+      </div>
     </div>
   );
 }

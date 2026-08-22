@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 
+import { ZoomableImage } from '../components/ui/image-viewer';
 import { cn } from '../components/ui/utils';
 import type { StagedAttachment } from './use-attachments';
 
@@ -27,11 +28,15 @@ export function AttachmentStrip({
           key={attachment.key}
           data-slot="staged-attachment"
           className="group relative size-16 overflow-hidden rounded-lg border border-border bg-muted">
-          <img
+          {/* Checking WHICH screenshot got pasted is the reason to look, and a
+              16px-tall crop cannot answer it — least of all after two pastes
+              in a row, where the strip's two squares can look identical. */}
+          <ZoomableImage
             src={attachment.preview}
             alt={attachment.name}
             title={attachment.name}
-            className="size-full object-cover"
+            className="block size-full"
+            imgClassName="size-full object-cover"
           />
           <button
             type="button"

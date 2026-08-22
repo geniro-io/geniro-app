@@ -1,6 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { cliPositionalArgSchema } from '../../../utils/cli-positional-arg';
 import { AgentKindSchema } from '../../runs/runs.types';
 import { AgentMcpListingWireSchema } from '../chat.types';
 
@@ -36,11 +37,17 @@ export class ListMcpServersQueryDto extends createZodDto(
  * The server is named rather than indexed: the listing is re-read between the
  * render and the click, and a position would silently retarget if the set
  * changed underneath.
+ *
+ * `server` is the shared {@link cliPositionalArgSchema}: this value reaches
+ * `cursor-agent mcp enable|disable <server>` / `mcp list-tools <server>` as a
+ * trailing positional, the identical argv shape `cli-auth.dto.ts`'s
+ * `mcpLoginQuerySchema.server` guards against a leading-dash flag injection —
+ * one schema so the two routes cannot drift apart on the same guard again.
  */
 export const setMcpServerEnabledSchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().min(1),
-  server: z.string().min(1),
+  server: cliPositionalArgSchema,
   /** True to load the server on the next turn, false to leave it out. */
   enabled: z.boolean(),
 });

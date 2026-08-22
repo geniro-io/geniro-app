@@ -5,8 +5,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { AgentKind } from '../../runs/runs.types';
 import type { AgentEffortListing } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import type { AgentEffortListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
+import {
+  ModelVocabularyCache,
+  volatile,
+  type VolatileAnswer,
+} from '../utils/model-vocabulary-cache';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
@@ -17,12 +21,6 @@ export interface EffortsServiceOptions {
   ttlMs?: number;
   /** Clock (test seam). */
   now?: () => number;
-}
-
-interface CacheEntry {
-  version: string | null;
-  fetchedAt: number;
-  listing: AgentEffortListing;
 }
 
 /**
@@ -44,7 +42,9 @@ const DEFAULT_TTL_MS = 10 * 60_000;
  * all), so answering exactly now means asking the binary — where before every
  * adapter answered from a documented constant and there was nothing to go
  * stale. The key carries the model for the same reason `ModelsService` carries
- * the version: two models genuinely have different answers.
+ * the version: two models genuinely have different answers. The cache itself
+ * is `ModelVocabularyCache`, shared with the context-window listing so a
+ * single-flight fix cannot exist in one copy and not the other.
  *
  * An EMPTY list is a real answer, not a failure — a CLI with no effort control,
  * or a model with none — and it always arrives with the sentence saying which.
@@ -52,26 +52,18 @@ const DEFAULT_TTL_MS = 10 * 60_000;
 @Injectable()
 export class EffortsService {
   private readonly logger = new Logger(EffortsService.name);
-  private readonly cache = new Map<string, CacheEntry>();
-  /**
-   * Cold reads already running, keyed the same way as the cache. The same
-   * single-flight `ModelsService` keeps, and needed here for the same reason:
-   * a cursor listing SPAWNS a CLI process group, so a composer and a graph
-   * inspector mounting their effort chip at once would otherwise launch two of
-   * them for one answer.
-   */
-  private readonly inFlight = new Map<string, Promise<AgentEffortListing>>();
-  private readonly ttlMs: number;
-  private readonly now: () => number;
+  private readonly cache: ModelVocabularyCache<AgentEffortListing>;
 
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
-    options: EffortsServiceOptions = {},
+    private readonly options: EffortsServiceOptions = {},
   ) {
-    this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
-    this.now = options.now ?? Date.now;
+    this.cache = new ModelVocabularyCache({
+      ttlMs: options.ttlMs ?? DEFAULT_TTL_MS,
+      now: options.now ?? Date.now,
+    });
   }
 
   async list(
@@ -85,27 +77,9 @@ export class EffortsService {
           childProcessHandle(child, spawnInfo),
         ),
     });
-    const key = this.keyFor(kind, model);
-    const cached = this.cache.get(key);
-    if (
-      cached &&
-      cached.version === version &&
-      this.now() - cached.fetchedAt < this.ttlMs
-    ) {
-      return cached.listing;
-    }
-    // Joined AFTER the cache check, so a fresh answer still costs nothing.
-    const running = this.inFlight.get(key);
-    if (running) {
-      return running;
-    }
-    const pending = this.fetch(kind, model, key, version, cached);
-    this.inFlight.set(key, pending);
-    try {
-      return await pending;
-    } finally {
-      this.inFlight.delete(key);
-    }
+    return this.cache.read(kind, model, version, (previous) =>
+      this.fetch(kind, model, previous),
+    );
   }
 
   /**
@@ -182,29 +156,17 @@ export class EffortsService {
     kind: AgentKind,
     model: string,
   ): AgentEffortListing | null {
-    const entry = this.cache.get(this.keyFor(kind, model));
-    if (!entry || this.now() - entry.fetchedAt >= this.ttlMs) {
-      return null;
-    }
-    return entry.listing;
-  }
-
-  /** `(agent, model)` — a null model is its own key, not a missing one. */
-  private keyFor(kind: AgentKind, model: string | null): string {
-    return `${kind}\u0000${model ?? ''}`;
+    return this.cache.fresh(kind, model) ?? null;
   }
 
   private async fetch(
     kind: AgentKind,
     model: string | null,
-    key: string,
-    version: string | null,
-    cached: CacheEntry | undefined,
-  ): Promise<AgentEffortListing> {
+    previous: AgentEffortListing | undefined,
+  ): Promise<AgentEffortListing | VolatileAnswer<AgentEffortListing>> {
     const adapter: AgentAdapter = this.adapters.for(kind);
-    let listing: AgentEffortListing;
     try {
-      listing = await adapter.listModelEfforts(model, {
+      return await adapter.listModelEfforts(model, {
         onSpawn: (child, spawnInfo) =>
           this.processes.register(
             `efforts:list:${randomUUID()}`,
@@ -214,21 +176,23 @@ export class EffortsService {
     } catch (err) {
       // An adapter must not throw here, but a picker with no rows is a dead
       // control — keep the last good answer rather than propagate.
+      //
+      // VOLATILE, so the cache serves this without storing it: nothing was
+      // learned about the model, and remembering the stand-in would answer
+      // every request for the rest of the TTL instead of re-asking on the next.
       this.logger.warn(
         `listing ${kind} efforts failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return (
-        cached?.listing ?? {
+      return volatile(
+        previous ?? {
           efforts: [...adapter.listEfforts()],
           unavailableReason: adapter.getConfig().effortsUnavailableReason,
           // The union standing in for an answer nobody could get — a picker
           // takes it, a refusal must not.
           exact: false,
-        }
+        },
       );
     }
-    this.cache.set(key, { version, fetchedAt: this.now(), listing });
-    return listing;
   }
 
   private adapterFor(kind: AgentKind): AgentAdapter {

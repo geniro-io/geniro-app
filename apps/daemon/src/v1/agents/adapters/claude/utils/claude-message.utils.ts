@@ -29,6 +29,7 @@ import {
   CLAUDE_TASK_UPDATED_SUBTYPE,
   CLAUDE_TURN_ABORTED_MESSAGE,
 } from '../claude.const';
+import { readCommandsChanged } from './claude-commands.utils';
 import {
   claudeTaskEventFromToolResult,
   claudeTaskEventFromToolUse,
@@ -393,6 +394,21 @@ function mapClaudeLine(
               },
             ]
           : [];
+      }
+      {
+        // The SAME normalized event `init` produces below, and deliberately so:
+        // this line carries the identical set of names with each entry's own
+        // sentence beside it, so a consumer that already folds `slash_commands`
+        // gets the descriptions for free. It is the reload's answer rather than
+        // a startup announcement — see `CLAUDE_RELOAD_COMMANDS_SUBTYPE` in
+        // `claude.const.ts` for the request that asks for it and the three
+        // measurements behind it.
+        const announced = readCommandsChanged(root);
+        if (announced !== null) {
+          return announced.length > 0
+            ? [{ type: 'slash_commands', commands: announced }]
+            : [];
+        }
       }
       if (asString(root.subtype) === 'init') {
         const events: AgentEvent[] = [];

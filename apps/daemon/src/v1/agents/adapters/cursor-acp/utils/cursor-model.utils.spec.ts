@@ -189,4 +189,69 @@ describe('cursorModelSelection', () => {
       parameters: [],
     });
   });
+
+  it("lets the TURN's context window win over the one baked into a stored id", () => {
+    // The same precedence the effort has, and needed for the same reason: every
+    // cursor chat created before the parameterized handshake stores a composed
+    // id, and `context=300k` inside it must not override the `1m` the user has
+    // just picked. Reverse it and the picker cannot change anything on any of
+    // those chats.
+    const selection = cursorModelSelection(
+      'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+      null,
+      '1m',
+    );
+
+    expect(selection.model).toBe('claude-opus-5');
+    expect(selection.parameters).toEqual([
+      { id: 'thinking', value: 'true' },
+      { id: 'effort', value: 'high' },
+      { id: 'fast', value: 'false' },
+      // Appended once, with the id's own pair dropped — the axis must not be
+      // set twice and left to frame order. ONE spelling, so no `alternateIds`:
+      // swept across all 34 models, every one that has the axis calls it
+      // `context`.
+      { id: 'context', value: '1m', applyBeforePrompt: true },
+    ]);
+  });
+
+  it('carries both axes at once, each dropping only its own old pair', () => {
+    const selection = cursorModelSelection(
+      'claude-opus-5[thinking=true,context=300k,effort=high,fast=false]',
+      'max',
+      '1m',
+    );
+
+    expect(selection.parameters).toEqual([
+      { id: 'thinking', value: 'true' },
+      { id: 'fast', value: 'false' },
+      { id: 'effort', value: 'max', alternateIds: ['effort', 'reasoning'] },
+      { id: 'context', value: '1m', applyBeforePrompt: true },
+    ]);
+  });
+
+  it('carries a window with no model, for a run on the CLI default', () => {
+    // The ordinary case for a chat left on "default model": the seeded profile
+    // still has a current model, and its `context` option is set on that.
+    expect(cursorModelSelection(null, null, '1m')).toEqual({
+      model: null,
+      parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+    });
+  });
+
+  it('adds nothing when the turn names no window', () => {
+    expect(cursorModelSelection('claude-opus-5', null, null)).toEqual({
+      model: 'claude-opus-5',
+      parameters: [],
+    });
+    // …and a stored id's own pair is LEFT ALONE when the turn names none, which
+    // is what keeps an old chat running on exactly the settings it was made
+    // with.
+    expect(
+      cursorModelSelection('claude-opus-5[context=300k]', null, '  '),
+    ).toEqual({
+      model: 'claude-opus-5',
+      parameters: [{ id: 'context', value: '300k' }],
+    });
+  });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   cacheHitRate,
+  dayRangeTitle,
   formatDayLabel,
   formatDayTitle,
   formatDuration,
@@ -125,6 +126,60 @@ describe('cacheHitRate', () => {
   });
 });
 
+describe('dayRangeTitle', () => {
+  it('states a one-day span ONCE instead of dashing a date to itself', () => {
+    // "Thursday, August 20, 2026 – Thursday, August 20, 2026" is a range that
+    // is not one, and the dash invites reading its halves as two different
+    // days. Reachable on every period, not only Today: the daemon clamps a
+    // request to what its ledger holds, so a first-day install answers
+    // "90 days" with one.
+    // Built from LOCAL midnight, which is what the Today period actually sends
+    // — see the timezone test below for why that matters.
+    const midnight = new Date(2026, 7, 20);
+    const afternoon = new Date(2026, 7, 20, 14, 30);
+    const oneDay = dayRangeTitle(
+      midnight.toISOString(),
+      afternoon.toISOString(),
+    );
+
+    expect(oneDay).toBe(formatDayTitle('2026-08-20'));
+    expect(oneDay).not.toContain('\u2013');
+  });
+
+  it('names the LOCAL calendar day, never the UTC one the ISO string spells', () => {
+    // The daemon buckets by local day (`usage-fold.ts` `localDateKey`), so the
+    // span has to read the same calendar its columns do. Slicing the ISO string
+    // reads UTC instead, and the two disagree in BOTH directions — this is one
+    // bug with two faces, and each zone can only see one of them:
+    //
+    //   east of Greenwich, a local MIDNIGHT is the previous UTC day. Measured
+    //   at UTC+5 on the Today period: "August 20 – August 21" over a chart
+    //   holding one column, labelled Aug 21.
+    //
+    //   west of it — this suite's own zone — a local EVENING is the next UTC
+    //   day. `to` is always now, so every period opened after about 16:00 local
+    //   claimed to run a day past its last column.
+    //
+    // The second is what this asserts, because it is the one this suite's
+    // timezone can actually tell apart.
+    const from = new Date(2026, 7, 21).toISOString();
+    const lateEvening = new Date(2026, 7, 21, 23, 30).toISOString();
+
+    expect(dayRangeTitle(from, lateEvening)).toBe(formatDayTitle('2026-08-21'));
+  });
+
+  it('keeps both ends of a real span', () => {
+    expect(
+      dayRangeTitle(
+        new Date(2026, 7, 14).toISOString(),
+        new Date(2026, 7, 20, 14, 30).toISOString(),
+      ),
+    ).toBe(
+      `${formatDayTitle('2026-08-14')} \u2013 ${formatDayTitle('2026-08-20')}`,
+    );
+  });
+});
+
 describe('periodRange', () => {
   const now = new Date(2026, 7, 16, 14, 30);
 
@@ -153,6 +208,18 @@ describe('periodRange', () => {
     // way to know how far back the ledger goes.
     expect(range.from).toBeUndefined();
     expect(range.to).toBe(now.toISOString());
+  });
+
+  it('reads Today as the calendar day, not the last 24 hours', () => {
+    // The distinction is the whole point of the period: a rolling window slides
+    // into yesterday as the afternoon wears on, so the same page would report a
+    // different "today" every time it was opened.
+    const range = periodRange('today', now);
+    const from = new Date(range.from!);
+
+    expect(from.getDate()).toBe(16);
+    expect(from.getHours()).toBe(0);
+    expect(new Date(range.to).getDate()).toBe(16);
   });
 
   it('offers a usable range for every id it advertises', () => {

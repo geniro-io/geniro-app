@@ -11,8 +11,18 @@ import { cn } from './utils';
  * popover has to escape it. `Menu` adds the clip itself, because its rows run
  * to the panel edge and need the radius to cut them.
  */
+/*
+  ELEVATED, not outlined. Reported against the `+` menu as "this border on the
+  menu looks very strange… not so crude": at full-strength `border-border`
+  over the barely-there `shadow-panel-md`, the border was the strongest line on
+  screen and the panel read as a wireframe rectangle drawn on the page rather
+  than a surface hanging above it. The fix is to swap which one does the work —
+  a hairline at 60% and a real two-layer float (`shadow-panel-lg`). The border
+  stays because the palette is warm near-white on warm near-white and a shadow
+  alone leaves the top edge, which no shadow reaches, undefined.
+*/
 export const popoverSurface =
-  'absolute z-50 rounded-xl border border-border bg-popover shadow-panel-md';
+  'absolute z-50 rounded-xl border border-border/60 bg-popover shadow-panel-lg';
 
 /**
  * An anchored panel holding ARBITRARY content, for the cases `Menu` cannot

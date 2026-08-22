@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { BlockRequest, BlockResult, BlockShell } from './block-shell';
+import {
+  BlockRequest,
+  BlockResult,
+  BlockShell,
+  SectionLabel,
+} from './block-shell';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -341,5 +346,40 @@ describe('BlockShell header hover surface', () => {
 
     expect(button).toBeNull();
     expect(row.className).not.toMatch(/hover:bg-/);
+  });
+});
+
+describe('SectionLabel', () => {
+  it('imposes its OWN type size on a button inside it', () => {
+    // jsdom computes no cascade, so what is asserted is the invariant rather
+    // than the pixels: the size the caption sets on itself and the size it
+    // imposes on an interactive child must be THE SAME size. Written as a
+    // comparison, not against a literal, so it fails both ways — dropping the
+    // button rule, and retuning the caption without retuning the rule.
+    //
+    // It has teeth because the two genuinely came apart: `global.css` gives
+    // every `<button>` `font-size: var(--text-base)` as a base rule, so the
+    // caption's 10px reached the text around the button and not the button's
+    // own label. The task list's heading — the one interactive caption in the
+    // app — rendered at 15px/500 inside this 10px/400 caption, half again the
+    // size of every tool row beside it.
+    act(() =>
+      root.render(
+        <SectionLabel>
+          <button type="button">Task list</button>
+        </SectionLabel>,
+      ),
+    );
+    const classes = container.querySelector('p')!.className.split(/\s+/);
+    const own = classes.find((c) => /^text-\[\d+px\]$/.test(c));
+    const forButtons = classes.find((c) =>
+      /^\[&_button\]:text-\[\d+px\]$/.test(c),
+    );
+
+    expect(own).toBeDefined();
+    expect(forButtons).toBe(`[&_button]:${own}`);
+    // The weight too: the base rule sets buttons to medium, and a caption at
+    // its own weight beside a heavier one reads as two different labels.
+    expect(classes).toContain('[&_button]:font-normal');
   });
 });

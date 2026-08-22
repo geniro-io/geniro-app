@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 
+import { ZoomableImage } from '../components/ui/image-viewer';
 import type { MessageAttachment } from './attachment-payload';
 
 /** Reads one attachment's base64 bytes back from the daemon. */
@@ -84,10 +85,16 @@ function Thumbnail({
       data-slot="message-attachment"
       className="block size-32 overflow-hidden rounded-lg border border-border bg-muted">
       {src ? (
-        <img
+        // The thumbnail is an `object-cover` square, so a pasted screenshot —
+        // the overwhelmingly common case — is cropped to its middle third and
+        // the transcript holds the only copy of it. Pressing it is how the
+        // whole picture is seen; nothing else in the app can show it.
+        <ZoomableImage
           src={src}
           alt="Attached image"
-          className="size-full object-cover"
+          title="Attached image"
+          className="block size-full"
+          imgClassName="size-full object-cover"
         />
       ) : null}
     </span>

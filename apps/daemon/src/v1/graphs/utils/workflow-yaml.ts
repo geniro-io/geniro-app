@@ -68,6 +68,7 @@ const AGENT_ONLY_FIELDS = [
   'agent',
   'model',
   'effort',
+  'contextWindow',
   'description',
   'role',
   'approval',

@@ -1,4 +1,5 @@
 import {
+  CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_IDS,
 } from '../cursor-acp.const';
@@ -33,6 +34,12 @@ export interface CursorModelParameter {
   id: string;
   value: string;
   alternateIds?: readonly string[];
+  /**
+   * Whether the prompt must wait for this frame's reply — the driver's
+   * {@link AcpModelParameter.applyBeforePrompt}, set here because WHICH
+   * settings this CLI binds at turn start is a fact about this CLI.
+   */
+  applyBeforePrompt?: boolean;
 }
 
 /**
@@ -131,8 +138,63 @@ export function splitCursorModelId(
 export function cursorModelSelection(
   modelId: string | null | undefined,
   effort: string | null | undefined,
+  contextWindow?: string | null,
 ): CursorModelSelection {
-  const selection = splitCursorModelId(modelId);
+  return withContextWindow(
+    withEffort(splitCursorModelId(modelId), effort),
+    contextWindow,
+  );
+}
+
+/**
+ * The turn's chosen CONTEXT WINDOW, layered on the same rule the effort follows:
+ * the value picked now beats any the stored id carried, and setting none leaves
+ * whatever the id already said.
+ *
+ * Separate from the effort layer rather than folded into it, because the two
+ * are independent axes and a turn may name either, both or neither — and
+ * because a legacy composed id routinely carries `context=300k` from a chat
+ * created before there was a picker for it (`splitCursorModelId`'s own doc
+ * block). Dropping the old pair before writing the new one is what keeps the
+ * axis from being set twice.
+ */
+function withContextWindow(
+  selection: CursorModelSelection,
+  contextWindow: string | null | undefined,
+): CursorModelSelection {
+  const wanted = (contextWindow ?? '').trim();
+  if (wanted === '') {
+    return selection;
+  }
+  return {
+    model: selection.model,
+    parameters: [
+      ...selection.parameters.filter(
+        (parameter) => parameter.id !== CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+      ),
+      // ONE spelling, so no `alternateIds` — see the constant for the sweep
+      // that measured that, and for what would turn this into a list.
+      //
+      // `applyBeforePrompt` because this CLI binds the window when the TURN
+      // begins, not per request: measured on 2026.08.11-e8db854, the identical
+      // frames pipelined behind the prompt leave the turn on the model's
+      // default (300,000) while awaited they give the 1,000,000 that was asked
+      // for — and the reply confirms `context = 1m` either way, so nothing
+      // short of the timing distinguishes them.
+      {
+        id: CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+        value: wanted,
+        applyBeforePrompt: true,
+      },
+    ],
+  };
+}
+
+/** The effort half of {@link cursorModelSelection} — see its doc block. */
+function withEffort(
+  selection: CursorModelSelection,
+  effort: string | null | undefined,
+): CursorModelSelection {
   const wanted = (effort ?? '').trim();
   if (wanted === '') {
     return selection;

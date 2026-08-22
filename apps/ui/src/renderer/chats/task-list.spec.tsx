@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunSettledContext } from './live-row';
-import { TaskListCard, TaskRows } from './task-list';
+import { TaskListCard, TaskRows, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import type { TaskListEntry } from './transcript-groups';
 
@@ -81,6 +81,19 @@ function disclosure(): HTMLButtonElement {
 }
 
 describe('TaskListCard', () => {
+  it('draws its heading INSIDE the section caption, which is what sizes it', () => {
+    // The reported "task list title should be smaller", pinned where jsdom can
+    // see it. The size itself is a cascade — `SectionLabel` scopes a rule to
+    // the buttons under it (block-shell.spec pins that rule) — so the fact this
+    // card has to hold up is that its heading is UNDER that caption. Lift the
+    // button out of `SectionLabel`, as an ordinary refactor easily might, and
+    // the base `button` rule takes it back to 15px with nothing else changing.
+    render(<TaskListCard entry={card()} />);
+    const caption = container.querySelector('[data-slot="task-list-card"] p')!;
+
+    expect(caption.contains(disclosure())).toBe(true);
+  });
+
   it('lists every task and says how far along the list is', () => {
     render(<TaskListCard entry={card()} />);
     expect(taskTexts()).toEqual([
@@ -230,5 +243,119 @@ describe('TaskRows', () => {
     expect(spinning()).toBe(true);
     render(<TaskRows tasks={rows} live={false} />);
     expect(spinning()).toBe(false);
+  });
+});
+
+describe('TaskScrollRows — the panel’s bounded copy', () => {
+  const box = (): HTMLElement =>
+    container.querySelector<HTMLElement>('[data-slot="task-scroll-rows"]')!;
+
+  /**
+   * Lay the box out: jsdom computes nothing, so the numbers the reveal reads
+   * are supplied here — a 100px frame over 30px rows.
+   *
+   * Defined on the PROTOTYPES rather than on the nodes, because React replaces
+   * neither across a re-render but the rows this returns would be captured
+   * before one; `clientHeight` is the box's own and every `li` reports its
+   * index * 30.
+   */
+  function layOut(): () => void {
+    const proto = HTMLElement.prototype;
+    const original = {
+      clientHeight: Object.getOwnPropertyDescriptor(proto, 'clientHeight'),
+      offsetTop: Object.getOwnPropertyDescriptor(proto, 'offsetTop'),
+      offsetHeight: Object.getOwnPropertyDescriptor(proto, 'offsetHeight'),
+    };
+    const indexOf = (el: HTMLElement): number =>
+      [...(el.parentElement?.children ?? [])].indexOf(el);
+    Object.defineProperty(proto, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.dataset.slot === 'task-scroll-rows' ? 100 : 0;
+      },
+    });
+    Object.defineProperty(proto, 'offsetTop', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.tagName === 'LI' ? indexOf(this) * 30 : 0;
+      },
+    });
+    Object.defineProperty(proto, 'offsetHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.tagName === 'LI' ? 30 : 0;
+      },
+    });
+    return () => {
+      for (const [name, desc] of Object.entries(original)) {
+        if (desc) {
+          Object.defineProperty(proto, name, desc);
+        } else {
+          delete (proto as unknown as Record<string, unknown>)[name];
+        }
+      }
+    };
+  }
+
+  /** A list of `count` tasks with the one at `activeIndex` in progress. */
+  function longList(count: number, activeIndex: number): AgentTaskRow[] {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `t${i}`,
+      title: `Task ${i}`,
+      status:
+        i < activeIndex
+          ? ('completed' as const)
+          : i === activeIndex
+            ? ('in_progress' as const)
+            : ('pending' as const),
+      activeForm: null,
+    }));
+  }
+
+  it('bounds its own height and scrolls itself', () => {
+    // The panel has ONE scroller over every agent card, so a long list does not
+    // overflow anything — it makes its own card that tall and pushes the next
+    // agent off the screen. jsdom computes no layout, so the pin is the pair of
+    // properties that decide it.
+    render(<TaskScrollRows tasks={rows} live />);
+    const classes = box().getAttribute('class') ?? '';
+    expect(classes).toContain('max-h-48');
+    expect(classes).toContain('overflow-y-auto');
+  });
+
+  it('leaves the TRANSCRIPT card unbounded', () => {
+    // A nested scroll box inside a document the reader scrolls takes the wheel
+    // away from the page whenever the pointer is over the list.
+    render(<TaskListCard entry={card()} />);
+    expect(
+      container.querySelector('[data-slot="task-scroll-rows"]'),
+    ).toBeNull();
+  });
+
+  it('follows the running task down as the agent moves on', () => {
+    const restore = layOut();
+    try {
+      render(<TaskScrollRows tasks={longList(12, 1)} live />);
+      // Row 1 sits at 30 in a 100px frame — already visible, so nothing moved.
+      expect(box().scrollTop).toBe(0);
+
+      render(<TaskScrollRows tasks={longList(12, 8)} live />);
+      // Row 8 spans 240–270; the frame has to end at 270.
+      expect(box().scrollTop).toBe(170);
+    } finally {
+      restore();
+    }
+  });
+
+  it('does not move a list nothing is working through', () => {
+    // The `in_progress` row of a settled list is a task that STOPPED there.
+    // Chasing it would scroll a reader's box on a card that is pure history.
+    const restore = layOut();
+    try {
+      render(<TaskScrollRows tasks={longList(12, 8)} live={false} />);
+      expect(box().scrollTop).toBe(0);
+    } finally {
+      restore();
+    }
   });
 });

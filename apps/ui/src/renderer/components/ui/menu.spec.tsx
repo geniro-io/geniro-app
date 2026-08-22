@@ -306,6 +306,28 @@ describe('Menu', () => {
     expect(rows(el)).toHaveLength(0);
     expect(el.textContent).toContain('No matches');
   });
+
+  it('renders a group heading at full token contrast, no opacity modifier', () => {
+    // Regression pin: an opacity modifier on this token (`/75`) would lower
+    // the heading's contrast against the popover background — jsdom computes
+    // no layout, so this cannot measure the resulting ratio, only that the
+    // class list carries the bare token and never a suffixed variant.
+    const el = open([
+      { label: 'Agents', items: [{ value: 'claude', label: 'claude' }] },
+    ]);
+
+    const heading = el.querySelector('[data-slot="menu-group-heading"]')!;
+    expect(heading.textContent).toBe('Agents');
+    // Exact-token match on the split class list — `toContain` on the whole
+    // string would also match a suffixed variant like
+    // `text-muted-foreground/75`, which is exactly what this pins the absence
+    // of.
+    const classes = heading.className.split(/\s+/);
+    expect(classes).toContain('text-muted-foreground');
+    expect(classes.some((c) => c.startsWith('text-muted-foreground/'))).toBe(
+      false,
+    );
+  });
 });
 
 describe('Menu — fitting the window', () => {

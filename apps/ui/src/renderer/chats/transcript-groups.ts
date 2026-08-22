@@ -210,6 +210,28 @@ export interface SubagentBlockEntry {
   failed: boolean;
   /** The launching tool call's result TEXT, or null when it carried none. */
   result: string | null;
+  /**
+   * Whether {@link result} is the DELEGATE's own report, or merely the reply
+   * its launching call got.
+   *
+   * The two are not the same thing and one field cannot mean both. A delegate
+   * the agent WAITS for answers its own call, and there the result is its
+   * report. A backgrounded one has its call answered in under a second with a
+   * launch acknowledgement and then works on — and claude's acknowledgement is
+   * not just uninteresting but explicitly private: measured on the user's own
+   * ledger, all 23 of them read "Async agent launched successfully. (This tool
+   * result is internal metadata — never quote or paste any part of it,
+   * including the agentId below, into a user-facing reply.)". The panel was
+   * printing exactly that under the heading "Result from sub-agent", beside a
+   * spinner saying the delegate was still working.
+   *
+   * Decided STRUCTURALLY — did any of the delegate's rows arrive after its call
+   * was answered — never by matching that sentence, which is one CLI's prose and
+   * belongs to its adapter if it belongs anywhere. The one case the structure
+   * cannot decide is a backgrounded delegate that closed having emitted no rows
+   * at all; there is no evidence either way, and it reads as its own report.
+   */
+  resultIsOwn: boolean;
   /** The model the delegate ran, when the CLI named one. */
   model: string | null;
   /** How long it took, when the CLI reported it. */
@@ -582,7 +604,49 @@ export function subagentBlockStatus(
  * delegate's name.
  */
 export function subagentTitle(block: SubagentBlockEntry): string {
-  return block.label ?? block.kind ?? 'sub-agent';
+  return (
+    block.label ??
+    block.kind ??
+    // NOT the bare word. Nothing here is guessing at a name — the point is that
+    // an unnamed delegate is still a DISTINCT delegate, and a constant made
+    // every one of them the same row: reported against a panel listing one
+    // "Review: optimizations" over seven identical `sub-agent`s, where the only
+    // question a reader has ("which spinner is which piece of work") had no
+    // answer on screen and no way to get one.
+    //
+    // Both fields being null is ordinary rather than exotic. The launching call
+    // is the only thing that ever carries a description, so any delegate whose
+    // launch is outside the loaded window — a transcript opened mid-run, or a
+    // backgrounded agent later RESUMED by a different call — arrives with
+    // neither. The daemon's own `subagent_info` cannot cover for it: measured
+    // across all 76 declarations on the user's ledger, every one carries
+    // `label: null, kind: null` and speaks only about `backgroundOpen`.
+    //
+    // So the identity is what is shown, because it is what is known. Its tail
+    // rather than the whole: `toolu_01AD1kjdJCqfkzGRTjn5M6mo` is twenty-odd
+    // characters of prefix shared by every row, and it is the end that differs.
+    `Sub-agent ${subagentRef(block.id)}`
+  );
+}
+
+/**
+ * Whether a delegate carries a name of its OWN, or only the identity
+ * {@link subagentTitle} falls back to.
+ *
+ * Exists so a surface that prefixes the title with its category — the detail
+ * dialog's `Sub-agent · …` — can drop the prefix rather than stutter it, which
+ * is what produced the reported `Sub-agent · sub-agent`.
+ */
+export function subagentNamed(block: SubagentBlockEntry): boolean {
+  return block.label !== null || block.kind !== null;
+}
+
+/** How many trailing characters of an id identify a delegate on screen. */
+const SUBAGENT_REF_LENGTH = 6;
+
+/** The short form of a delegate's id — its last few characters. */
+function subagentRef(id: string): string {
+  return id.length <= SUBAGENT_REF_LENGTH ? id : id.slice(-SUBAGENT_REF_LENGTH);
 }
 
 /**
@@ -710,6 +774,20 @@ export function buildSubagentBlocks(
     );
   }
   const launches = new Map<string, SubagentLaunch>();
+  /**
+   * Of those launches, the ones whose tool is a DELEGATION by name.
+   *
+   * The two admission routes are not equally strong and only this one is
+   * self-evidencing. A call admitted by its name launched a delegate and its
+   * reply is that delegate's report; a call admitted only because the daemon
+   * declared background work against it may be anything the CLI ran an agent
+   * FOR — measured on the user's own ledger, a `SendMessage` resuming an
+   * already-running agent, whose reply is the receipt `{"success":true,
+   * "message":"Resuming agent a3249b7"…}` and whose block therefore had no
+   * name, no prompt, no conversation, and that receipt where its result
+   * should be.
+   */
+  const byDelegationTool = new Set<string>();
   for (const item of items) {
     if (item.kind !== 'tool_call') {
       continue;
@@ -718,6 +796,9 @@ export function buildSubagentBlocks(
     const name = payloadString(item.payload, 'name') ?? '';
     if (id && (AGENT_TOOLS.has(name) || declarations.has(id))) {
       launches.set(id, { call: item, result: null });
+      if (AGENT_TOOLS.has(name)) {
+        byDelegationTool.add(id);
+      }
     }
   }
   for (const item of items) {
@@ -742,6 +823,14 @@ export function buildSubagentBlocks(
    * produced a single row for renders `stopped` the instant it appears.
    */
   const anchorSeq = new Map<string, number>();
+  /**
+   * The `seq` at which each block's launching call was ANSWERED, for the blocks
+   * that have an answer. Kept apart from {@link anchorSeq}, which coalesces to
+   * the call when there is no result — this must stay undefined there, since
+   * "never answered" and "answered at the launch" are different facts and only
+   * the second can make a result the delegate's own.
+   */
+  const answeredSeq = new Map<string, number>();
   const openBlock = (
     subagentId: string,
     /** Where to read identity from when the launching call is missing. */
@@ -785,12 +874,28 @@ export function buildSubagentBlocks(
       // the four characters `null`, which the result panel then framed as
       // the delegate's own answer.
       result: body == null ? null : toolResultText(body),
+      // Decided in the pass below, once the delegate's rows are known.
+      resultIsOwn: false,
       closed: false,
       lastRowAt: null,
       entries: [],
     };
     if (launch) {
       anchorSeq.set(subagentId, launch.result?.seq ?? launch.call.seq);
+      // Only a call that was a DELEGATION can have been answered WITH a
+      // delegate's report — see {@link byDelegationTool}. A declaration that
+      // describes the delegate is the other CLI's way of saying the same thing
+      // (cursor's ACP frame carries no usable tool name, so its brief is the
+      // evidence), while a declaration that describes nothing is only the
+      // daemon noticing background work against some call.
+      const describes =
+        declared !== null &&
+        (declared.label !== null ||
+          declared.kind !== null ||
+          declared.prompt !== null);
+      if (launch.result && (byDelegationTool.has(subagentId) || describes)) {
+        answeredSeq.set(subagentId, launch.result.seq);
+      }
     }
     blocks.set(subagentId, block);
     out.push(block);
@@ -854,6 +959,21 @@ export function buildSubagentBlocks(
     block.closed = turnEnds.some(
       (item) => item.nodeId === block.nodeId && item.seq > lastSeq,
     );
+    // Whose answer the result is — see {@link SubagentBlockEntry.resultIsOwn}.
+    // `lastSeq` already folds in `anchorSeq`, which for an answered block IS
+    // that answer's seq, so `lastSeq > answered` says exactly "a row of this
+    // delegate's arrived afterwards" — and a delegate that spoke after its call
+    // was answered was plainly not reporting through it.
+    //
+    // The open-background test is what covers the same delegate BEFORE it has
+    // spoken at all: an acknowledgement and no rows leaves the seqs equal, and
+    // an open background unit is the CLI saying the work is still to come.
+    const answered = answeredSeq.get(block.id);
+    block.resultIsOwn =
+      block.result !== null &&
+      answered !== undefined &&
+      block.backgroundOpen !== true &&
+      lastSeq <= answered;
     // Taken BEFORE the fold, while the rows are still flat. Falls back to the
     // LAUNCH when the delegate has produced nothing yet: a delegation issued
     // after the run settled is itself evidence of life, and reading null there
@@ -1674,8 +1794,10 @@ export function withLiveText(
     }
     spokenFor.add(key);
     // Words render as the assistant message they are about to become; a
-    // reasoning stretch has NO text to show (headless claude redacts it), so
-    // its numbers ride the `reasoning` kind instead.
+    // reasoning stretch rides the `reasoning` kind, carrying whichever of the
+    // two things its CLI gives — the thinking TEXT where it discloses it, and
+    // otherwise a running token count, which is all a CLI that redacts the
+    // block (headless claude) can offer.
     //
     // The stretch id is IN the row's identity, which is what makes each wait
     // its own row: React remounts on the new key, so the clock starts at zero
@@ -1692,6 +1814,9 @@ export function withLiveText(
               live: 'thinking',
               thinkingSince: state.thinkingSince,
               thinkingTokens: state.thinkingTokens ?? 0,
+              ...(state.thinkingText === null
+                ? {}
+                : { thinkingText: state.thinkingText }),
             },
           }
         : {

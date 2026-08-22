@@ -129,6 +129,80 @@ describe('displayRunStatus', () => {
       }),
     ).toBe('needs-input');
   });
+
+  it('stops calling a HELD turn running — the agent has finished talking', () => {
+    // The reported "done but showing like it's working", second time around.
+    // The sentence under the badge was fixed to say `waiting on 2 background
+    // tasks`; the badge above it went on spinning `running`, because the live
+    // plane is still open — holding it open is exactly what a hold IS, so
+    // `streaming` cannot tell the two apart and something else has to.
+    //
+    // It bites hardest on a background task with no end (a dev server, a
+    // tailed log): nothing settles it, so the turn stands until the daemon's
+    // 30-minute silence deadline. The screenshot that came back read
+    // `running · 20m 18s` under an answer finished twenty minutes earlier.
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: false,
+        heldForBackgroundWork: true,
+      }),
+    ).toBe('idle');
+  });
+
+  it('keeps a held run RUNNING while a delegate is still producing rows', () => {
+    // Delegates are units of the same background work a hold waits on, so the
+    // two arrive together — and only one of them means the run is idle. A
+    // sub-agent that is demonstrably working is work.
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: false,
+        subagentRunning: true,
+        heldForBackgroundWork: true,
+      }),
+    ).toBe('running');
+  });
+
+  it('an open question outranks a hold, and a failure is not idle', () => {
+    // Both directions of the ranking, since a hold sits in the middle of it.
+    expect(
+      displayRunStatus({
+        status: 'running',
+        streaming: true,
+        awaitingAnswer: true,
+        heldForBackgroundWork: true,
+      }),
+    ).toBe('needs-input');
+    // A run that failed is failed, whatever it launched before it did.
+    expect(
+      displayRunStatus({
+        status: 'failed',
+        streaming: true,
+        awaitingAnswer: false,
+        heldForBackgroundWork: true,
+      }),
+    ).toBe('failed');
+  });
+
+  it('leaves a held run UNSETTLED — its late rows still land', () => {
+    // The reason the badge is `idle` and not `completed`: the turn is genuinely
+    // still open, and everything downstream that asks "has this stopped for
+    // good" must go on answering no. Reported as completed, a delegate's last
+    // rows would arrive under a thread the app had already written off.
+    expect(
+      isSettledRunStatus(
+        displayRunStatus({
+          status: 'running',
+          streaming: true,
+          awaitingAnswer: false,
+          heldForBackgroundWork: true,
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('RUN_STATUS_META', () => {

@@ -161,4 +161,61 @@ describe('ConfigDirSelect', () => {
       '…/me/profiles/fresh',
     );
   });
+
+  it('says who it is choosing FOR, so the builder does not claim to speak for chats', () => {
+    // The graph builder's node inspector uses this same chip. Its default
+    // wording — "for new chats" — is the one thing about the control that is
+    // untrue there, and it is the whole label a screen reader reads out.
+    const chats = render(
+      <ConfigDirSelect
+        configDir={null}
+        recentConfigDirs={[]}
+        unavailableReason={null}
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    expect(trigger(chats)!.getAttribute('aria-label')).toBe(
+      'Agent config directory for new chats',
+    );
+    expect(trigger(chats)!.title).toContain('new chats run as');
+
+    act(() => root?.unmount());
+    container?.remove();
+
+    const node = render(
+      <ConfigDirSelect
+        configDir={null}
+        recentConfigDirs={[]}
+        unavailableReason={null}
+        ariaLabel="Agent config directory for this node"
+        hint="Optional: the profile this node runs as"
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    expect(trigger(node)!.getAttribute('aria-label')).toBe(
+      'Agent config directory for this node',
+    );
+    expect(trigger(node)!.title).toBe(
+      'Optional: the profile this node runs as',
+    );
+  });
+
+  it('prefers the chosen PATH over either wording on hover', () => {
+    // The hint answers "what is this for" while nothing is chosen; once one is,
+    // the question is "which one", and only the full path answers that — the
+    // chip itself shows the leaf.
+    const el = render(
+      <ConfigDirSelect
+        configDir={RECENTS[0]!}
+        recentConfigDirs={RECENTS}
+        unavailableReason={null}
+        hint="Optional: the profile this node runs as"
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    expect(trigger(el)!.title).toBe(RECENTS[0]);
+  });
 });

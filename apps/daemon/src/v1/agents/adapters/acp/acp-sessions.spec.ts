@@ -98,6 +98,9 @@ describe('readAcpSessionList', () => {
       cwd: '/a',
       title: 'Old',
       updatedAt: 1000,
+      // Nothing to quote: this reply carries labels, and the conversation
+      // itself stays inside the agent's own store.
+      snippet: null,
     });
   });
 
@@ -119,6 +122,7 @@ describe('readAcpSessionList', () => {
       cwd: null,
       title: null,
       updatedAt: null,
+      snippet: null,
     });
   });
 });

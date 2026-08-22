@@ -317,3 +317,40 @@ describe('ChatMetricsService', () => {
     expect(readContextUsage).not.toHaveBeenCalled();
   });
 });
+
+describe('ChatMetricsService.readTotals', () => {
+  it('sums the thread WITHOUT asking the agent — the whole reason it is a second route', async () => {
+    // The header carries this figure on every thread the user opens, so it must
+    // not cost the CLI round trip `read` pays for the breakdown (measured at
+    // 1.2–3.3s). A `readTotals` that fell back to `read` would put that latency
+    // on switching chats, and nothing about the answer would look wrong.
+    const { service, readContextUsage } = build({
+      payloads: [
+        turn({ costUsd: 0.25, inputTokens: 10 }),
+        turn({ costUsd: 0.5, inputTokens: 4 }),
+      ],
+    });
+
+    const totals = await service.readTotals('run-1');
+
+    expect(totals.costUsd).toBeCloseTo(0.75, 10);
+    expect(totals.turns).toBe(2);
+    expect(readContextUsage).not.toHaveBeenCalled();
+  });
+
+  it('answers a thread nothing measured with null, never zero', async () => {
+    // cursor-agent reports no cost unless its currency is USD, so `$0.00` in
+    // the header would be the app inventing a figure the CLI declined to give.
+    const { service } = build({ payloads: [turn({ inputTokens: 10 })] });
+
+    expect((await service.readTotals('run-1')).costUsd).toBeNull();
+  });
+
+  it('404s on a run that does not exist, rather than answering an empty sum', async () => {
+    // An empty total is what a real, unused thread looks like — so a missing
+    // run answering `turns: 0` would render as a genuine reading of nothing.
+    const { service } = build({ runExists: false });
+
+    await expect(service.readTotals('nope')).rejects.toThrow(/not found/);
+  });
+});

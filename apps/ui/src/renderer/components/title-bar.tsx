@@ -13,7 +13,7 @@ import { UpdateControl } from './update-control';
  * transcript's, each `h-11` and each ending at its own column's border. They
  * lined up, but two vertical borders ran straight through the strip, so what
  * the eye read was three column headings rather than a title bar — reported as
- * "это криво… у нас этот header всё ещё должен выглядеть как header", against
+ * "this is crooked… our header should still look like a header", against
  * Cursor's, which is one continuous row with the window buttons, a title and a
  * few controls in it. Being ABOVE the columns is the whole fix: their borders
  * now start under it, so nothing crosses the band.
@@ -29,11 +29,11 @@ import { UpdateControl } from './update-control';
  * renderer must agree on — see `shared/contracts.ts`.
  *
  * The rail's collapse toggle deliberately does NOT live here. It was moved up
- * with everything else and moved straight back ("кнопочка, которая сворачивает
- * меню, не там, где она должна быть — давай её в само меню оставим там же, где
- * она и была"): it acts on the column beside it, not on the window, so it
- * belongs to that column. What is here is what is about the WINDOW or the app
- * as a whole.
+ * with everything else and moved straight back ("the little button that
+ * collapses the menu is not where it should be — let's leave it in the menu
+ * itself, right where it was"): it acts on the column beside it, not on the
+ * window, so it belongs to that column. What is here is what is about the
+ * WINDOW or the app as a whole.
  */
 export function TitleBar({
   title,
@@ -80,7 +80,7 @@ export function TitleBar({
       className="app-drag relative flex h-11 shrink-0 items-center border-b border-sidebar-border bg-sidebar pr-2"
       style={{ paddingLeft: TITLEBAR_CONTENT_INSET }}>
       {/* Centred on the WINDOW, which is what every native title bar does and
-          the only definition of "посередине" that does not move.
+          the only definition of "in the middle" that does not move.
 
           It was briefly centred over the CONTENT PANE instead, measured from a
           `leadingWidth` the shell added up from the column widths. That is

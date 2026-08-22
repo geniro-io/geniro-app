@@ -5,6 +5,7 @@ import { NotFoundException } from '@packages/common';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   ChatMetricsWire,
+  ChatTotalsWire,
   ContextBreakdownWire,
   PlanLimitsWire,
 } from '../chat.types';
@@ -92,6 +93,26 @@ export class ChatMetricsService {
       // turns.
       totals: sumUsagePayloads(payloads),
     };
+  }
+
+  /**
+   * What this thread has cost, and NOTHING about its window.
+   *
+   * The same sum {@link read} answers with, reached without the adapter round
+   * trip that makes that route expensive — so the header can carry the spend on
+   * every thread the user opens instead of only where a readout is expanded.
+   * Summed here rather than in the renderer for the reason
+   * `ChatTotalsWireSchema` gives: history is paged behind an `afterSeq` cursor,
+   * and a client that has scrolled back through part of a long conversation
+   * would total part of it, silently.
+   */
+  async readTotals(runId: string): Promise<ChatTotalsWire> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    return sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em));
   }
 
   /**

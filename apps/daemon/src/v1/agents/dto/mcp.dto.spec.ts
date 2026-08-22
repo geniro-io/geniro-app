@@ -87,6 +87,34 @@ describe('setMcpServerEnabledSchema', () => {
     ).toThrow();
   });
 
+  it('rejects a server name starting with a dash', () => {
+    // `server` rides straight into `cursor-agent mcp enable|disable <server>`
+    // / `mcp list-tools <server>` as the CLI's LAST positional argument — a
+    // value beginning with `-` is read there as a FLAG rather than a server
+    // name, letting a caller who only holds the loopback bearer token steer
+    // the child's own flags. The identical guard as `cli-auth.dto.ts`'s
+    // `mcpLoginQuerySchema.server`, via the shared `cliPositionalArgSchema`.
+    expect(() =>
+      setMcpServerEnabledSchema.parse({
+        agent: 'claude',
+        cwd: '/p',
+        server: '--dangerously-skip-permissions',
+        enabled: true,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a bare single dash', () => {
+    expect(() =>
+      setMcpServerEnabledSchema.parse({
+        agent: 'claude',
+        cwd: '/p',
+        server: '-x',
+        enabled: true,
+      }),
+    ).toThrow();
+  });
+
   it('rejects an empty cwd', () => {
     expect(() =>
       setMcpServerEnabledSchema.parse({

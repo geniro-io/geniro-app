@@ -24,7 +24,10 @@ const BASE_INPUT: AgentTurnInput = { prompt: 'do the thing', cwd: '/work' };
 
 function harness(
   overrides: Partial<AcpDriverOptions> = {},
-  writeResult = true,
+  // A THUNK as well as a flag, so a spec can let the handshake through and then
+  // close the pipe under one later frame — which is the only way to reach the
+  // "this write did not land" branch of a driver that writes for itself.
+  writeResult: boolean | (() => boolean) = true,
 ): Harness {
   const sent: Record<string, unknown>[] = [];
   const emitted: AgentEvent[] = [];
@@ -49,7 +52,7 @@ function harness(
   });
   driver.onStdinReady({
     write: (payload) => {
-      if (!writeResult) {
+      if (!(typeof writeResult === 'function' ? writeResult() : writeResult)) {
         return false;
       }
       sent.push(JSON.parse(payload) as Record<string, unknown>);
@@ -1271,10 +1274,31 @@ describe('AcpTurnDriver session updates', () => {
     // thought starts a new one rather than merging into it.
     expect(h.feed(chunk('agent_thought_chunk', 'hmm'))).toEqual([
       { type: 'text', text: 'hello' },
+      { type: 'reasoning_delta', text: 'hmm' },
     ]);
     expect(h.feed(chunk('agent_message_chunk', 'done'))).toEqual([
       { type: 'reasoning', text: 'hmm' },
       { type: 'text_delta', text: 'done' },
+    ]);
+  });
+
+  it('streams a thought chunk live as well as buffering it into a row', () => {
+    // REPORTED as a cursor chat sitting on "Working…" for three minutes with
+    // nothing happening. Thought chunks were arriving the whole time — this
+    // driver buffers them until the block closes, and until the ephemeral twin
+    // below existed a pure reasoning stretch emitted NOTHING, so the transcript
+    // showed the row it draws for an agent that has produced nothing at all.
+    const h = harness();
+    expect(h.feed(chunk('agent_thought_chunk', 'let me '))).toEqual([
+      { type: 'reasoning_delta', text: 'let me ' },
+    ]);
+    expect(h.feed(chunk('agent_thought_chunk', 'work it out'))).toEqual([
+      { type: 'reasoning_delta', text: 'work it out' },
+    ]);
+    // The durable row is still ONE block, unchanged by the live twin.
+    expect(h.feed(chunk('agent_message_chunk', 'answer'))).toEqual([
+      { type: 'reasoning', text: 'let me work it out' },
+      { type: 'text_delta', text: 'answer' },
     ]);
   });
 
@@ -1773,6 +1797,61 @@ describe('AcpTurnDriver off-protocol context reading', () => {
     ).toBe(false);
   });
 
+  it('carries the reading into turn_complete, so the ring survives the turn', () => {
+    // THE REPORTED DEFECT: "cursor's little circle works wrong — it doesn't
+    // sync with the context", against a chat whose panel read 140.7k of
+    // 200k with an empty ring beside it. Emitting the reading was only half of
+    // it — the live plane is dropped when the run settles, so the ring was fed
+    // for the length of a turn and blank between turns, which is when anyone
+    // looks. The durable row has to carry the same figures.
+    const { h } = opened({ readContext: () => READING });
+    const complete = h
+      .feed({ id: 3, result: { stopReason: 'end_turn' } })
+      .find((event) => event.type === 'turn_complete');
+
+    expect(complete?.usage).toMatchObject({
+      contextTokens: 101_100,
+      contextWindowTokens: 200_000,
+      contextModel: 'cursor-grok-4.6',
+    });
+  });
+
+  it('lets the wire’s own occupancy outrank the off-protocol reading', () => {
+    // `usage_update.used` is the agent stating its occupancy in protocol; the
+    // reading is the same quantity taken out of its files. Both beat
+    // `inputTokens`, which measures one request rather than the window — but a
+    // figure the agent SENT is the one to believe.
+    const { h } = opened({ readContext: () => READING });
+    h.feed({
+      method: 'session/update',
+      params: {
+        sessionId: 's',
+        update: { sessionUpdate: 'usage_update', used: 42_000 },
+      },
+    });
+    const complete = h
+      .feed({ id: 3, result: { stopReason: 'end_turn' } })
+      .find((event) => event.type === 'turn_complete');
+
+    expect(complete?.usage?.contextTokens).toBe(42_000);
+    // The WINDOW still comes from the reading: `usage_update` carries none, so
+    // dropping it here would leave the ring a count with no denominator.
+    expect(complete?.usage?.contextWindowTokens).toBe(200_000);
+  });
+
+  it('claims no window at all for an agent with no reading', () => {
+    // Every other ACP agent. ACP states no window anywhere, so the consumer
+    // must show the count bare rather than have this client invent a
+    // denominator — the rule the meter's own "no assumed 200k" note keeps.
+    const { h } = opened({});
+    const complete = h
+      .feed({ id: 3, result: { stopReason: 'end_turn' } })
+      .find((event) => event.type === 'turn_complete');
+
+    expect(complete?.usage?.contextWindowTokens).toBeNull();
+    expect(complete?.usage?.contextModel).toBeNull();
+  });
+
   it('survives a source that throws — a meter is not worth a failed turn', () => {
     const warn = vi.fn();
     const { h, onSession } = opened({
@@ -1794,6 +1873,166 @@ describe('AcpTurnDriver off-protocol context reading', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('store is locked'),
     );
+  });
+});
+
+describe('AcpTurnDriver — a parameter the turn must not start without', () => {
+  /** A session already on the turn's model, offering a `context` axis. */
+  function sessionOfferingContext(): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'claude-opus-5',
+          options: [{ value: 'claude-opus-5', name: 'claude-opus-5' }],
+        },
+        {
+          id: 'context',
+          category: 'model_config',
+          currentValue: '300k',
+          options: [
+            { value: '300k', name: '300K' },
+            { value: '1m', name: '1M' },
+          ],
+        },
+      ],
+    };
+  }
+
+  function turnAsking(applyBeforePrompt: boolean): Partial<AcpDriverOptions> {
+    return {
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [{ id: 'context', value: '1m', applyBeforePrompt }],
+      },
+    };
+  }
+
+  const methods = (frames: Record<string, unknown>[]): unknown[] =>
+    frames.map((frame) => frame.method);
+
+  it('holds the prompt until the agent has answered the frame', () => {
+    // MEASURED, not defensive: cursor binds the window when the TURN begins, so
+    // the identical frames pipelined behind the prompt leave it on the model's
+    // default (300,000) while awaited they give the 1,000,000 asked for — with
+    // the reply confirming `context = 1m` either way. Nothing but the timing
+    // separates the two.
+    const h = harness(turnAsking(true));
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingContext() });
+
+    // The parameter went out; the prompt did NOT.
+    expect(methods(h.sent)).toContain('session/set_config_option');
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    h.feed({ id: 3, result: { configOptions: [] } });
+    expect(methods(h.sent)).toContain('session/prompt');
+  });
+
+  it('sends the prompt straight away for a parameter that does not ask', () => {
+    // Every other frame stays pipelined — one ordered stdio stream already puts
+    // them in order, and deferring behind a reply was priced at ~1.4s per turn.
+    const h = harness(turnAsking(false));
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingContext() });
+
+    expect(methods(h.sent)).toContain('session/prompt');
+  });
+
+  it('releases the prompt when the agent REFUSES the frame', () => {
+    // A turn must not be stranded behind a setting that was never going to
+    // land. The refusal is narrated; the turn runs on what the agent kept.
+    const h = harness(turnAsking(true));
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingContext() });
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    const events = h.feed({
+      id: 3,
+      error: { code: -32602, message: 'Invalid params' },
+    });
+
+    expect(methods(h.sent)).toContain('session/prompt');
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'notice',
+        severity: 'warning',
+      }),
+    );
+  });
+
+  /** A session offering BOTH axes, so two parameter frames can go out. */
+  function sessionOfferingEffortAndContext(): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'claude-opus-5',
+          options: [{ value: 'claude-opus-5', name: 'claude-opus-5' }],
+        },
+        {
+          id: 'effort',
+          category: 'model_config',
+          currentValue: 'medium',
+          options: [
+            { value: 'medium', name: 'Medium' },
+            { value: 'xhigh', name: 'Extra high' },
+          ],
+        },
+        {
+          id: 'context',
+          category: 'model_config',
+          currentValue: '300k',
+          options: [
+            { value: '300k', name: '300K' },
+            { value: '1m', name: '1M' },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('keeps holding the prompt when a NON-blocking parameter answers first', () => {
+    // The order is the adapter's: `withEffort` appends without
+    // `applyBeforePrompt`, `withContextWindow` appends with it and after — so a
+    // turn carrying both an effort and a context window sends effort first and
+    // its reply lands first. Only the context frame blocks, so only the context
+    // reply may release; a release keyed on how MANY replies have come back
+    // instead of on which frame they answer lets the effort's reply free a
+    // prompt the context frame is still holding, and the turn then runs at the
+    // model's default window while the reply still confirms the size asked for.
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [
+          { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
+          { id: 'context', value: '1m', applyBeforePrompt: true },
+        ],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
+
+    // Both frames went out; the prompt is held behind the second.
+    const parameterFrames = h.sent.filter(
+      (frame) => frame.method === 'session/set_config_option',
+    );
+    expect(parameterFrames).toHaveLength(2);
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    // The effort's reply (id 3) — it never blocked, so it must not release.
+    h.feed({ id: 3, result: {} });
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    // The context's reply (id 4) is the one the prompt was waiting on.
+    h.feed({ id: 4, result: { configOptions: [] } });
+    expect(methods(h.sent)).toContain('session/prompt');
   });
 });
 
@@ -2322,5 +2561,197 @@ describe('AcpTurnDriver task list', () => {
       h.feed({ id: 7, method: TODOS, params: { rows: [{ id: '1' }] } }).length,
     ).toBe(1);
     expect(h.sent.find((frame) => frame.id === 7)?.error).toBeDefined();
+  });
+});
+
+describe('AcpTurnDriver — a message delivered into the running turn', () => {
+  /** Drive the driver to a live session with its own prompt already out. */
+  function running(): Harness {
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    return h;
+  }
+
+  /** Every `session/prompt` frame this turn has written, in order. */
+  function prompts(h: Harness): Record<string, unknown>[] {
+    return h.sent.filter((frame) => frame.method === 'session/prompt');
+  }
+
+  it('sends the message as a second prompt on the live session', () => {
+    // REPORTED as "instant sending of a queued message doesn't work". This
+    // CLI has no frame that adds to a prompt in flight, and the adapter had
+    // declared that as having no channel at all — but a second `session/prompt`
+    // is accepted, so the channel is this.
+    const h = running();
+    expect(h.driver.sendFollowUp({ text: 'actually, do X instead' })).toBe(
+      true,
+    );
+
+    const [, second] = prompts(h);
+    expect(second?.params).toEqual({
+      sessionId: 'sess-1',
+      prompt: [{ type: 'text', text: 'actually, do X instead' }],
+    });
+  });
+
+  it('does NOT settle the turn on the prompt its own follow-up superseded', () => {
+    // The agent answers the interrupted prompt with `cancelled`. Emitting a
+    // terminal there settles the run while the message the user just pushed
+    // through is still being answered — and badges it as a Stop nobody pressed.
+    const h = running();
+    h.feed(chunk('agent_message_chunk', 'counting: 1, 2, 3'));
+    h.driver.sendFollowUp({ text: 'stop, answer this instead' });
+    // Whatever the interrupted stretch had already said is finished at the
+    // moment of the interrupt, and is emitted THERE — which is what keeps it
+    // one row rather than a blob merged with whatever arrives in the window
+    // before the agent's own cancel (the case below).
+    expect(h.emitted).toContainEqual({
+      type: 'text',
+      text: 'counting: 1, 2, 3',
+    });
+
+    const superseded = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    expect(superseded.map((e) => e.type)).not.toContain('turn_cancelled');
+    expect(superseded.map((e) => e.type)).not.toContain('turn_complete');
+  });
+
+  it('closes a block the agent kept writing AFTER the interrupt went out', () => {
+    // The frame and the agent's own cancel are not simultaneous: chunks in that
+    // window open a fresh block, and only the superseded reply can close it.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'stop' });
+    h.feed(chunk('agent_message_chunk', 'one last word'));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'cancelled' } })).toEqual([
+      { type: 'text', text: 'one last word' },
+    ]);
+  });
+
+  it('settles on the LAST prompt, once nothing is outstanding', () => {
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead' });
+    h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+
+    const events = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
+
+    expect(events.map((e) => e.type)).toContain('turn_complete');
+  });
+
+  it('does NOT settle the turn when the superseded prompt ERRORS', () => {
+    // The interrupted prompt does not always answer `cancelled` — it can fail.
+    // An `error` is terminal downstream, so answering one here settles the run
+    // as FAILED while the follow-up is still being answered, which is the same
+    // defect the result path was fixed for and needs the same id check.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead' });
+
+    const superseded = h.feed({
+      id: 3,
+      error: { code: -32603, message: 'Internal error' },
+    });
+    expect(superseded.map((e) => e.type)).not.toContain('error');
+
+    // The follow-up's own reply is still the one that ends the turn.
+    expect(
+      h.feed({ id: 4, result: { stopReason: 'end_turn' } }).map((e) => e.type),
+    ).toContain('turn_complete');
+  });
+
+  it('DOES surface an error from the turn’s own prompt', () => {
+    // The guard above must not swallow the ordinary failure — with no follow-up
+    // sent, the turn's own prompt IS the latest one.
+    const h = running();
+
+    expect(
+      h
+        .feed({ id: 3, error: { code: -32603, message: 'Internal error' } })
+        .map((e) => e.type),
+    ).toContain('error');
+  });
+
+  it('settles on the LAST prompt even when the superseded reply lands after it', () => {
+    // Nothing orders the two replies: the agent's cancel of the interrupted
+    // prompt is its own piece of work and can trail the follow-up's whole turn.
+    // Deciding "is this the last prompt" by counting what is still outstanding
+    // reads whichever reply arrives SECOND as the terminal — so this ordering
+    // settles the run on the cancel, under the `cancelled` badge that reads as
+    // a Stop nobody pressed, and discards the real `end_turn` before it.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead' });
+
+    // The follow-up's own turn finishes first.
+    const finished = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
+    expect(finished).toContainEqual(
+      expect.objectContaining({
+        type: 'turn_complete',
+        stopReason: 'end_turn',
+      }),
+    );
+
+    // The superseded prompt's cancel trails it and must settle nothing.
+    const trailing = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    expect(trailing.map((e) => e.type)).not.toContain('turn_cancelled');
+    expect(trailing.map((e) => e.type)).not.toContain('turn_complete');
+  });
+
+  it('refuses while the turn\u2019s OWN prompt is still held back', () => {
+    // Nothing to interrupt yet \u2014 the opening prompt is waiting on a parameter
+    // frame it must not overtake \u2014 and a follow-up would race it. False leaves
+    // the message queued, which is safe and is what the chat route turns into
+    // the RUN_BUSY the composer already handles.
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [{ id: 'context', value: '1m', applyBeforePrompt: true }],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({
+      id: 2,
+      result: {
+        sessionId: 'sess-1',
+        configOptions: [
+          {
+            id: 'context',
+            category: 'model_config',
+            currentValue: '300k',
+            options: [
+              { value: '300k', name: '300K' },
+              { value: '1m', name: '1M' },
+            ],
+          },
+        ],
+      },
+    });
+    expect(prompts(h)).toHaveLength(0);
+
+    expect(h.driver.sendFollowUp({ text: 'me first' })).toBe(false);
+  });
+
+  it('refuses before there is a session at all', () => {
+    const h = harness();
+    expect(h.driver.sendFollowUp({ text: 'too early' })).toBe(false);
+  });
+
+  it('answers FALSE when the write does not land, and stays settleable', () => {
+    // An honest false is what keeps the message queued rather than committing a
+    // user row nobody will answer. The frame must also leave no trace: a
+    // prompt counted as outstanding but never sent would make the REAL reply
+    // look superseded, and the turn would then never settle at all.
+    let writable = true;
+    const h = harness({}, () => writable);
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    writable = false;
+
+    expect(h.driver.sendFollowUp({ text: 'into a closed pipe' })).toBe(false);
+    writable = true;
+
+    expect(
+      h.feed({ id: 3, result: { stopReason: 'end_turn' } }).map((e) => e.type),
+    ).toContain('turn_complete');
   });
 });

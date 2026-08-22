@@ -46,6 +46,7 @@ export interface QueuedStripMessage {
 export function QueuedStrip({
   messages,
   steerUnavailableReason,
+  steerInterrupts = false,
   steerStatus,
   onEdit,
   onRemove,
@@ -57,6 +58,18 @@ export function QueuedStrip({
    * can. Straight off the daemon's capability report.
    */
   steerUnavailableReason: string | null;
+  /**
+   * Whether sending it now STOPS what the agent is currently doing — the
+   * daemon's answer, per CLI.
+   *
+   * It changes only the sentence on the control, and that is the whole point:
+   * on claude the message joins the running turn and nothing is lost, while
+   * cursor's channel is a second prompt that cancels the first, so a press
+   * there throws away the tool call in flight. Offering both under one label
+   * would make the control lie to one of the two, and the moment to say which
+   * is BEFORE the press — there is nothing to undo after it.
+   */
+  steerInterrupts?: boolean;
   /**
    * What became of the Send-now the user last pressed, or null when none is
    * outstanding. Both states exist because the press was otherwise SILENT: the
@@ -260,7 +273,9 @@ export function QueuedStrip({
                   aria-disabled={steerBlocked || steer === 'sending'}
                   title={
                     steerUnavailableReason ??
-                    'Send now — into the turn already running'
+                    (steerInterrupts
+                      ? 'Send now — this stops what the agent is doing and answers this instead'
+                      : 'Send now — into the turn already running')
                   }
                   onClick={() => {
                     if (steerBlocked || steer === 'sending') {

@@ -70,6 +70,21 @@ export interface RunStatusEvent {
    */
   activity?: string | null;
   /**
+   * ISO moment the run ROW was written — present on exactly the announces that
+   * wrote it, absent on every activity-only one.
+   *
+   * It is what the sidebar orders on (`sortRunsForSidebar` reads `updatedAt`),
+   * and the only thing allowed to move it: the snapshot is loaded once, so
+   * without this a thread working in the background kept its load-time position
+   * until the user opened it — and then jumped, because opening it was the
+   * first moment anything here learned the truth.
+   *
+   * Absent asserts nothing, like `awaiting`. A tool-call announce does not
+   * touch the row, so reading one as activity would put this list ahead of the
+   * database and let the next refetch drag the thread back down.
+   */
+  at?: string;
+  /**
    * Whether the run is parked on the user, on what — or `undefined` when this
    * event says nothing about it.
    *
@@ -151,6 +166,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     runId,
     status,
     activity,
+    at,
     awaiting,
     holdingFor,
     summary,
@@ -195,6 +211,12 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
           activity:
             typeof activity === 'string' && activity !== '' ? activity : null,
         }),
+    // Kept only when it is a DATE. The sidebar compares these lexically, so a
+    // string that is merely non-empty would not degrade to "no reorder" — it
+    // would sort, wrongly, and stay wherever it landed until the next refetch.
+    ...(typeof at === 'string' && Number.isFinite(Date.parse(at))
+      ? { at }
+      : {}),
     ...(parked === undefined ? {} : { awaiting: parked }),
     // Absent stays absent, exactly like `awaiting`: an ordinary activity
     // announce says nothing about the hold and must not clear it.

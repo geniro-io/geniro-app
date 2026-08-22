@@ -406,6 +406,28 @@ export const ChatTotalsWireSchema = z
 export type ChatTotalsWire = z.infer<typeof ChatTotalsWireSchema>;
 
 /**
+ * The totals ALONE, for a caller that wants the spend and not the window.
+ *
+ * A route of its own because the two halves cost wildly different things.
+ * `ChatMetricsWireSchema` answers both at once so the panel can never show a
+ * breakdown from one moment beside a spend from another — but the breakdown is
+ * a round trip to the live CLI (measured at 1.2–3.3s), which is why that route
+ * is fetched only when the readout is opened. The chat HEADER wants the spend
+ * on every thread it opens, and paying a CLI dial for a figure that comes
+ * straight out of the database would put that latency on simply switching
+ * chats.
+ *
+ * WRAPPED in an object rather than answering `ChatTotals` at the root:
+ * {@link ChatTotalsWireSchema} carries `.meta({ id })`, and nestjs-zod would
+ * register the component under that id while the response still pointed at the
+ * DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
+ */
+export const ChatTotalsResponseSchema = z.object({
+  totals: ChatTotalsWireSchema,
+});
+export type ChatTotalsResponse = z.infer<typeof ChatTotalsResponseSchema>;
+
+/**
  * What one chat's context window holds right now, plus what the whole thread
  * has cost — the readout behind the composer's context ring.
  *
@@ -732,6 +754,66 @@ export const AgentEffortListingWireSchema = z.object({
 // at the DTO class name — the dangling `$ref` `setupSwagger` fails the boot on.
 // The component name a client sees is the DTO class name, which is what every
 // sibling listing here emits.
+/**
+ * One context-window size a model can be run at.
+ *
+ * Opaque strings for the same reason the effort vocabulary is (`300k`, `1m`,
+ * `272k` are cursor's own words) — and deliberately NOT a token count. The
+ * number a user cares about is the one the agent then reports about its own
+ * window, which the meter already draws; a count here would be a second answer
+ * to that question with nothing keeping the two in step.
+ */
+export const AgentContextWindowWireSchema = z
+  .object({
+    id: z
+      .string()
+      .describe("Passed verbatim to the CLI as that model's window setting"),
+    label: z.string(),
+  })
+  .meta({ id: 'AgentContextWindow' });
+export type AgentContextWindowWire = z.infer<
+  typeof AgentContextWindowWireSchema
+>;
+
+/**
+ * The window sizes available for ONE model, and why there are none.
+ *
+ * The twin of {@link AgentEffortListingWireSchema}, per model for the same
+ * measured reason — swept 2026-08-21 across a cursor account's 34 models,
+ * twelve offer the axis and their vocabularies differ (`300k|1m`, `272k|1m`,
+ * `200k|1m`).
+ *
+ * `unavailableReason` has four producers here and they mean different things:
+ * no model has been chosen yet, this CLI has no such control at all, this
+ * MODEL runs at one fixed window, or the CLI could not be asked. All four are
+ * sentences the chip shows on hover.
+ *
+ * `unavailableKind` says WHICH of them it is, and exists because the consumer
+ * DOES care about one: with no model chosen there is nothing to list yet, and
+ * a chip labelled "one window" there states a fact about a model nobody has
+ * picked. Every other kind really does mean one fixed window. Without this
+ * field the renderer had to match the sentence itself, so rewording the prose
+ * on this side silently reverted the label on the other.
+ */
+export const AgentContextWindowUnavailableKindSchema = z
+  .enum(['no-model', 'no-axis', 'fixed-window', 'unreadable'])
+  .meta({ id: 'AgentContextWindowUnavailableKind' });
+
+export const AgentContextWindowListingWireSchema = z.object({
+  windows: z.array(AgentContextWindowWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why there are no sizes to choose from; null when there are.'),
+  unavailableKind: AgentContextWindowUnavailableKindSchema.nullable().describe(
+    'Which kind of unavailability the reason describes; null when sizes are offered.',
+  ),
+});
+// No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
+export type AgentContextWindowListingWire = z.infer<
+  typeof AgentContextWindowListingWireSchema
+>;
+
 export type AgentEffortListingWire = z.infer<
   typeof AgentEffortListingWireSchema
 >;
@@ -835,6 +917,27 @@ export interface RunStatusEvent {
    */
   activity?: string | null;
   /**
+   * When the run ROW was written — present on exactly the announces that wrote
+   * it, absent on every activity-only one.
+   *
+   * It is the sidebar's ORDER, and it exists because that order was the one
+   * thing a background run could not keep honest. `updatedAt` rides the run
+   * row, and a client only re-reads rows on a refetch, so a thread that was
+   * working somewhere else kept the time it was loaded with for the whole
+   * session and sat wherever that put it. The renderer then learned the truth
+   * at the moment the user OPENED it, which is the reported "as soon as I click
+   * a thread it jumps to the top" — the jump was the list catching up, and the
+   * click was the only thing that could trigger it.
+   *
+   * Three states, like {@link awaiting} and {@link holdingFor}: absent asserts
+   * nothing. That is what keeps it truthful rather than merely live — an
+   * activity announce fires on every tool call and does NOT touch the row, so
+   * stamping one would put the client ahead of the database and a later refetch
+   * would drag the thread back down the list. This carries the row's own write
+   * moment (to within the flush that produced it), so the two agree.
+   */
+  at?: string;
+  /**
    * What the run has to SAY about a status it just reached — the agent's
    * closing words, or a failure's own message.
    *
@@ -867,8 +970,8 @@ export interface RunStatusEvent {
    * it is the whole point: `/compact` is an ordinary turn on the wire (the
    * user's command, the CLI's summary row, a terminal item), so it settled the
    * run like any other and earned a banner and a sidebar mark. Reported as
-   * "когда я делаю компакт, мне отправляется нотификация … не нужно
-   * нотификации, когда компакт сработает".
+   * "when I do a compact, a notification gets sent to me … don't need a
+   * notification when the compact fires".
    *
    * Said by the DAEMON rather than derived by the client, because the client
    * that has to act on it is the one NOT looking: a background chat's items are
@@ -942,9 +1045,8 @@ export interface RunDeltaEvent {
    *
    * Rides the SAME event as the text tail rather than a second channel: both
    * answer "what is this agent doing right now", both are ephemeral, and one
-   * mechanism cannot get out of sync with itself. There is no reasoning TEXT
-   * to carry — headless claude redacts it — so a running total is the whole
-   * signal.
+   * mechanism cannot get out of sync with itself. Null for a CLI that
+   * discloses the words instead — see {@link RunDeltaEvent.thinkingText}.
    *
    * PER STRETCH, not cumulative over the turn: a turn that thinks, runs tools,
    * then thinks again is two separate waits, and each is shown as its own row
@@ -952,6 +1054,21 @@ export interface RunDeltaEvent {
    * "thinking" whose number never went back to zero.
    */
   thinkingTokens: number | null;
+  /**
+   * What the agent is thinking, as it thinks it — or null when there is
+   * nothing to show.
+   *
+   * The whole tail of the CURRENT stretch, never an increment, exactly like
+   * {@link RunDeltaEvent.text}: a client that missed an event is correct again
+   * on the next one.
+   *
+   * The two reasoning channels are alternatives, not a pair, and which one a
+   * turn uses is a property of the CLI: claude REDACTS its thinking and reports
+   * `thinkingTokens`, cursor streams the words and fills this. Null therefore
+   * means "no text", never "not thinking" — `thinkingStretch` is what answers
+   * that, for both.
+   */
+  thinkingText: string | null;
   /**
    * Epoch ms when the CURRENT reasoning stretch began, or null when the agent
    * is not reasoning right now.
@@ -1116,6 +1233,12 @@ export const RunWireSchema = z.object({
     .describe(
       "Reasoning-effort level for the next turn, in the CLI's own vocabulary; null = the CLI's default (no --effort flag)",
     ),
+  contextWindow: z
+    .string()
+    .nullable()
+    .describe(
+      "Which of the model's context-window sizes the next turn runs at, in the CLI's own vocabulary; null = the model's own default",
+    ),
   configDir: z
     .string()
     .nullable()
@@ -1132,6 +1255,10 @@ export const RunWireSchema = z.object({
   /**
    * Last write to the run row — every send flips status to `running` and every
    * settle writes the terminal status, so this is the run's last-activity time.
+   *
+   * It is also what the sidebar ORDERS on, which is why the same moment rides
+   * the live channel as {@link RunStatusEvent.at}: a snapshot alone goes stale
+   * the instant a thread the user is not looking at starts a turn.
    */
   updatedAt: z.string().describe("The run's last-activity time"),
   /**
@@ -1172,6 +1299,12 @@ export const AgentSessionWireSchema = z
       .number()
       .nullable()
       .describe('Epoch ms of the last write; null when the CLI records none'),
+    snippet: z
+      .string()
+      .nullable()
+      .describe(
+        'The line of the conversation that answered the search; null when the title or the folder already explains the match',
+      ),
   })
   // NESTED, never a response root — so an id here names the row type in the
   // generated client instead of leaving it `…DtoSessionsInner`. Compare

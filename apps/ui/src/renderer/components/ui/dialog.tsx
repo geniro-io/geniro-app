@@ -126,7 +126,11 @@ export function Dialog({
         )}
         onClick={(event) => event.stopPropagation()}>
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-5 py-3.5">
-          <div className="text-sm font-semibold">{title}</div>
+          {/* `min-w-0` so a long title (an image viewer's file path) can be
+              truncated or wrapped by the title node itself — a flex item
+              defaults to `min-width: auto`, which refuses to shrink below its
+              text and pushes the ✕ off the card instead. */}
+          <div className="min-w-0 text-sm font-semibold">{title}</div>
           <Button
             type="button"
             variant="ghost"

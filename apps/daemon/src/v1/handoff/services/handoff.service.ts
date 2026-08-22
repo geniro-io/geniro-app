@@ -1,5 +1,3 @@
-import { homedir } from 'node:os';
-
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
@@ -9,7 +7,6 @@ import { SINGLE_AGENT_NODE } from '../../agents/chat.types';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
-import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import type { Run } from '../../runs/entity/run.entity';
@@ -91,142 +88,6 @@ export class HandoffService {
   }
 
   /**
-   * How the user signs one CLI in to one MCP server, or why they cannot.
-   *
-   * Here rather than in `v1/agents` because the ANSWER is a handoff: both CLIs'
-   * `mcp login` refuse a non-TTY stdin outright (probe-verified on claude
-   * 2.1.223 — it exits non-zero ~1.6s in, before any OAuth callback could
-   * arrive), so the daemon can never run one. What it can do is what this
-   * module already does for a conversation: resolve the invocation and let the
-   * user's own terminal be the TTY. Putting it in the MCP controller would have
-   * meant a second copy of that resolution, quoting rule included.
-   *
-   * Takes no run: an MCP server belongs to a FOLDER, not to a conversation, and
-   * the panel that offers this is reachable from a workflow node with no run of
-   * its own.
-   *
-   * A refusal is a 200 carrying a reason, for the same reason {@link resolve}'s
-   * is — "this CLI has no sign-in command" is the answer to the question.
-   */
-  mcpLoginTarget(input: {
-    agent: AgentKind;
-    cwd: string;
-    server: string;
-    configDir?: string;
-  }): HandoffTarget {
-    const adapter = this.adapters.for(input.agent);
-    const target = adapter.mcpLoginTarget(
-      input.server,
-      input.configDir === undefined
-        ? null
-        : resolveValidConfigDir(input.configDir),
-    );
-    if (!target.ok) {
-      return this.unavailable(
-        adapter.getConfig().mcp.loginUnavailableReason ??
-          `${input.agent} cannot sign in to an MCP server`,
-      );
-    }
-    // Validated even though the CLI would reject a bad path itself: this string
-    // is about to become the cwd of a process the USER's terminal spawns, and a
-    // path that does not resolve here must fail as a bad request rather than as
-    // a terminal window that opens and immediately dies.
-    const cwd = resolveValidCwd(input.cwd);
-    return this.command(target, cwd);
-  }
-
-  /**
-   * How the user signs the CLI ITSELF in, or why they cannot.
-   *
-   * The sibling of {@link mcpLoginTarget} one level up, and reached by a
-   * different failure: that one fixes a server the CLI could not authenticate,
-   * this one fixes the CLI's own expired account session — the turn that ends
-   * "Failed to authenticate: OAuth session expired and could not be refreshed".
-   * Offering the MCP one there would send the user to a command that cannot fix
-   * what they hit.
-   *
-   * Here for the same reason its sibling is: the answer is a handoff. A sign-in
-   * is an interactive browser flow wanting a TTY, so the daemon resolves the
-   * invocation and the user's own terminal runs it.
-   *
-   * Takes no run — an account is machine-wide, and the screen that offers this
-   * may have no run open at all.
-   */
-  loginTarget(input: {
-    agent: AgentKind;
-    cwd?: string;
-    configDir?: string;
-  }): HandoffTarget {
-    return this.accountTarget(input, 'login');
-  }
-
-  /**
-   * How the user signs the CLI ITSELF out, or why they cannot.
-   *
-   * The exact counterpart of {@link loginTarget}, and it exists because the
-   * card that offers one has to be able to offer the other: an account action
-   * shown to a CLI the probe just confirmed signed in was Sign in, which reads
-   * as an unfinished setup step rather than as a choice.
-   *
-   * A sign-out needs no TTY the way a sign-in does, so it is worth saying why
-   * it is a handoff too rather than something the daemon runs. Two reasons. It
-   * is the user's own account, and a control that silently clears credentials
-   * from inside an app gives them nothing to see and no chance to stop; and it
-   * lands the user in the same terminal the sign-in that undoes it runs in.
-   */
-  logoutTarget(input: {
-    agent: AgentKind;
-    cwd?: string;
-    configDir?: string;
-  }): HandoffTarget {
-    return this.accountTarget(input, 'logout');
-  }
-
-  /**
-   * The shared body of the two account handoffs above — extracted rather than
-   * copied, because everything that makes them correct is identical: the
-   * config-directory resolution, the fall back to home, and the refusal that is
-   * a 200 carrying the adapter's own sentence. Only the adapter method and the
-   * reason field differ, and both are selected by the one `action` word.
-   */
-  private accountTarget(
-    input: { agent: AgentKind; cwd?: string; configDir?: string },
-    action: 'login' | 'logout',
-  ): HandoffTarget {
-    const adapter = this.adapters.for(input.agent);
-    const configDir =
-      input.configDir === undefined
-        ? null
-        : resolveValidConfigDir(input.configDir);
-    const target =
-      action === 'login'
-        ? adapter.loginTarget(configDir)
-        : adapter.logoutTarget(configDir);
-    if (!target.ok) {
-      const { auth } = adapter.getConfig();
-      return this.unavailable(
-        (action === 'login'
-          ? auth.loginUnavailableReason
-          : auth.logoutUnavailableReason) ??
-          `${input.agent} has no sign-${action === 'login' ? 'in' : 'out'} command`,
-      );
-    }
-    // Validated when given, for the reason the MCP sibling validates its own:
-    // this becomes the cwd of a process the USER's terminal spawns, and a path
-    // that does not resolve must fail as a bad request rather than as a window
-    // that opens and immediately dies.
-    //
-    // Falls back to the home directory rather than to null, even though an
-    // account command genuinely does not care where it runs: the Electron side
-    // takes a validated ABSOLUTE path and writes `cd <cwd> || exit 1` into the
-    // script it opens, so "nowhere in particular" has no representation there.
-    // Home is the one folder that always exists and can surprise nobody.
-    const cwd =
-      input.cwd === undefined ? homedir() : resolveValidCwd(input.cwd);
-    return this.command(target, cwd);
-  }
-
-  /**
    * The CLI's OWN words for why it cannot, asked of its adapter — so a new
    * agent explains itself without this service learning its name.
    *
@@ -251,10 +112,12 @@ export class HandoffService {
    * {@link unavailable}.
    *
    * Both halves of one contract, maintained the same way: the refusal was
-   * already a helper while the success was copy-pasted at each of the three
-   * resolve methods, which is how the `display` line (the pasteable fallback a
-   * terminal geniro cannot launch depends on) could go missing from one of them
-   * without anything noticing.
+   * already a helper while the success was copy-pasted at each resolve method
+   * back when there were three, which is how the `display` line (the pasteable
+   * fallback a terminal geniro cannot launch depends on) could go missing from
+   * one of them without anything noticing. One is left — signing a CLI in or
+   * out is run by the daemon now, not handed to a shell (`v1/auth`) — and the
+   * split stays because the shape is the contract, not the number of callers.
    */
   private command(
     target: Extract<HandoffResult, { ok: true }>,

@@ -82,6 +82,15 @@ function press(el: Element | null): void {
   });
 }
 
+/**
+ * One agent CARD, and not a thread row inside one.
+ *
+ * The delegate list is drawn open now, in a nested `ul` — so `ul > li` matches
+ * a card and every thread under it alike, and a spec counting cards silently
+ * counted both.
+ */
+const CARD_SELECTOR = '[data-slot="agent-cards"] > li';
+
 const mainThread: AgentThread = {
   id: 'main',
   kind: 'main',
@@ -174,20 +183,16 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    const rows = [...el.querySelectorAll('ul > li')];
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
     expect(rows).toHaveLength(3);
 
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
-    // The counts are the thread LIST's header now, so a closed card shows
-    // none of them: on this line they were a tally every card carried whether
-    // or not the reader had opened the rows they describe.
-    expect(worker.textContent).not.toContain('active');
-    expect(worker.textContent).not.toContain('2 threads');
-    click(worker.querySelector('button[aria-label="Worker threads"]'));
+    // The counts are the thread LIST's own caption — over the rows they
+    // count, and drawn with them rather than on the status line, where they
+    // were a tally about rows nobody had asked to see.
     // ONE of its two calls is running — `activeTurns` (3 here) is the node's
     // own live turns and is deliberately not what this caption counts.
     expect(worker.textContent).toContain('1 active · 2 threads');
-    click(worker.querySelector('button[aria-label="Worker threads"]'));
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
     // they are legible without opening anything.
@@ -205,9 +210,8 @@ describe('AgentsPanel', () => {
     )!;
     expect(orchestrator.textContent).not.toContain('1 thread');
     expect(orchestrator.textContent).not.toContain('1 active');
-    // Scoped to the THREAD expander by its own label: the context meter is
-    // also an aria-expanded button now, and a bare attribute selector would
-    // match it and pass for the wrong reason.
+    // No list, so no caption. There is no control to look for either — see
+    // the delegate-list tests below, which pin that for every card.
     expect(
       orchestrator.querySelector('button[aria-label="Orchestrator threads"]'),
     ).toBeNull();
@@ -245,11 +249,17 @@ describe('AgentsPanel', () => {
     expect(el.textContent).toContain('needs more info');
     expect(el.textContent).not.toContain('needs-input');
     // And it must not read as another shade of busy — the one state that will
-    // not advance without the user carries no spinner.
-    expect(el.querySelector('svg.animate-spin')).toBeNull();
+    // not advance without the user carries no spinner. Scoped to the STATUS
+    // row: this agent's own delegate rows are drawn under it now, and one of
+    // them is genuinely running, so a card-wide assertion would be about a
+    // spinner that is telling the truth.
+    const statusRow = [...el.querySelectorAll('div')].find((row) =>
+      row.textContent?.startsWith('needs more info'),
+    )!;
+    expect(statusRow.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('expanding an agent lists its threads; per-thread terminals need claude + a session', () => {
+  it('lists an agent’s threads with nothing to open first; per-thread terminals need claude + a session', () => {
     const onOpenThread = vi.fn();
     const el = render(
       <AgentsPanel
@@ -258,10 +268,6 @@ describe('AgentsPanel', () => {
         onOpenThread={onOpenThread}
       />,
     );
-    // Collapsed: no thread labels yet.
-    expect(el.textContent).not.toContain('Write a haiku about rivers.');
-
-    click(el.querySelector('button[aria-label="Worker threads"]'));
     expect(el.textContent).toContain('call-1 · Write a haiku about rivers.');
     expect(el.textContent).toContain('call-2 · Write a haiku about mountains.');
 
@@ -279,7 +285,7 @@ describe('AgentsPanel', () => {
     click(openCall1);
     expect(onOpenThread).toHaveBeenCalledWith(agents[1], agents[1]!.threads[0]);
 
-    // A sole-thread claude agent needs no expanding: its terminal sits right
+    // A sole-thread claude agent draws no list at all: its terminal sits right
     // on the card and opens without an explicit session id.
     const openMain = el.querySelector(
       'button[aria-label="Open terminal for Orchestrator"]',
@@ -312,7 +318,6 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    click(el.querySelector('button[aria-label="Cursor caller threads"]'));
 
     expect(
       el.querySelector(
@@ -321,9 +326,12 @@ describe('AgentsPanel', () => {
     ).toBeNull();
   });
 
-  it('still expands an agent that genuinely has several threads', () => {
-    // The collapse is for a SOLE main thread only — a fan-out agent's call
-    // threads must stay reachable.
+  it('draws the delegate list OPEN, with no control that opens it', () => {
+    // The reported ask, both halves: "i dont see uncollapsed agents list at
+    // all … we should remove that agents button at all". It used to sit behind
+    // a `ListTree` button in the card's control row — a glyph that says "a
+    // nested list" and nothing about there being one worth opening, next to
+    // two controls that do something else entirely.
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -331,42 +339,59 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    const worker = [...el.querySelectorAll('ul > li')].find((row) =>
+    const worker = [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
       row.textContent?.includes('Worker'),
     )!;
 
-    // By its own label, not a bare `[aria-expanded]`: the context meter and
-    // the MCP control are both aria-expanded buttons in this row, and either
-    // would match first now that the expander lives beside them.
-    const toggle = worker.querySelector('button[aria-label="Worker threads"]');
-    expect(toggle).not.toBeNull();
-    expect(worker.textContent).not.toContain('Write a haiku about rivers.');
-    click(toggle);
     expect(worker.textContent).toContain('Write a haiku about rivers.');
+    // And the control is GONE rather than merely pre-pressed: a card that
+    // opened itself and kept the button would still have something to press
+    // that closes what the panel exists to show.
+    expect(
+      worker.querySelector('button[aria-label="Worker threads"]'),
+    ).toBeNull();
+    expect(worker.querySelector('button[title*="threads"]')).toBeNull();
   });
 
-  it('says whether the thread list is open, now that its icon cannot', () => {
-    // The glyph is a nested list — what the control OPENS — rather than a
-    // chevron, which said which way it opened and nothing about what was in
-    // there. A list does not rotate, so the open state rides `aria-expanded`
-    // and the button's tone; without this, dropping either would leave a
-    // control that gives no feedback at all when pressed.
+  it('puts the DELEGATES above the agent’s own task list', () => {
+    // "IT should be first, and then todo" — the order was the other way round.
+    // Compared by document position rather than by reading the markup, so it
+    // fails if either block moves.
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={agents}
+        tasksByAgent={
+          new Map([
+            [
+              'worker',
+              [
+                {
+                  id: '1',
+                  title: 'Write the haikus',
+                  status: 'in_progress' as const,
+                  activeForm: null,
+                },
+              ],
+            ],
+          ])
+        }
         onOpenThread={vi.fn()}
       />,
     );
-    const toggle = [...el.querySelectorAll('ul > li')]
-      .find((row) => row.textContent?.includes('Worker'))!
-      .querySelector('button[aria-label="Worker threads"]')!;
+    const worker = [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
+      row.textContent?.includes('Worker'),
+    )!;
+    const threads = [...worker.querySelectorAll('p')].find((p) =>
+      p.textContent?.includes('active'),
+    )!;
+    const tasks = worker.querySelector('[data-slot="agent-task-list"]')!;
 
-    expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    expect(toggle.className).toContain('text-muted-foreground');
-    click(toggle);
-    expect(toggle.getAttribute('aria-expanded')).toBe('true');
-    expect(toggle.className).toContain('text-foreground');
+    expect(threads).not.toBeNull();
+    expect(tasks).not.toBeNull();
+    expect(
+      threads.compareDocumentPosition(tasks) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it('the fill ring escalates its tone as the context window fills', () => {
@@ -404,7 +429,44 @@ describe('AgentsPanel', () => {
     expect(ring(93).classList.contains('text-destructive')).toBe(true);
   });
 
-  it('offers the resize handle and NO way to close — the panel is always on screen', () => {
+  it('keeps the status to ONE line by making it the row’s only shrinkable child', () => {
+    // "needs more info" is the only status label of more than one word, and in
+    // a 220–280px panel it wrapped: that card stood a line taller than every
+    // other card, so the one state a reader is meant to spot was the one drawn
+    // differently ("status should be in one line only"). Measured in a browser
+    // at the panel's minimum width — 71px card before, 63px after.
+    //
+    // jsdom lays nothing out, so what is pinned is the ARRANGEMENT that makes
+    // it true: the label truncates, and nothing else on the row can give up
+    // width instead. Add a sibling that is free to shrink and the flexbox has
+    // somewhere else to take the space from — the label stops truncating and
+    // the wrap comes back, with this label's own classes untouched.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, status: 'needs-input' }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+
+    const label = [...el.querySelectorAll('span')].find(
+      (node) => node.textContent === 'needs more info',
+    )!;
+    expect(label.className).toContain('truncate');
+    // `min-w-0`, or a flex child refuses to shrink below its content width and
+    // `truncate` never engages.
+    expect(label.className).toContain('min-w-0');
+    // The full words stay reachable at the widths where it does clip.
+    expect(label.getAttribute('title')).toBe('needs more info');
+
+    for (const sibling of [...label.parentElement!.children]) {
+      if (sibling !== label) {
+        expect(sibling.getAttribute('class') ?? '').toContain('shrink-0');
+      }
+    }
+  });
+
+  it('offers BOTH ways to put the panel away — resize it, or fold it', () => {
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -415,12 +477,46 @@ describe('AgentsPanel', () => {
     expect(
       el.querySelector('[role="separator"][aria-label="Resize agents panel"]'),
     ).not.toBeNull();
-    // Dragging it narrow is how the panel is put away now, so the resize
-    // handle above is the control that has to survive. A close button would
-    // hide a panel nothing could bring back: the header's toggle is gone too.
+    // The fold was reported missing ("button to collapse right sidebar got
+    // removed"): resizing only reaches the panel's minimum width, so without
+    // this control the narrowest the panel goes is 220px of cards.
     expect(
-      el.querySelector('button[aria-label="Close agents panel"]'),
-    ).toBeNull();
+      el.querySelector('button[aria-label="Collapse agents panel"]'),
+    ).not.toBeNull();
+  });
+
+  it('folds to a rail that can bring the panel back, and stays folded across a remount', () => {
+    const panel = (
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />
+    );
+    const el = render(panel);
+    expect(el.textContent).toContain('Orchestrator');
+
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    // The CARDS go; the column does not. A panel that vanished entirely would
+    // need a second control hosted somewhere else to bring it back — the
+    // arrangement that was retired and is not being reintroduced.
+    expect(el.textContent).not.toContain('Orchestrator');
+    expect(
+      el.querySelector('aside[aria-label="Run agents"]')?.textContent,
+    ).toBe('Agents');
+
+    // Remount, exactly as switching chats does: the panel is keyed by run id
+    // in `Chats.tsx`, so component state alone would unfold it on the next
+    // chat the user opened. THIS is what the fold being persisted buys.
+    act(() => {
+      root!.unmount();
+    });
+    container!.remove();
+    const again = render(panel);
+    expect(again.textContent).not.toContain('Orchestrator');
+
+    click(again.querySelector('button[aria-label="Expand agents panel"]'));
+    expect(again.textContent).toContain('Orchestrator');
   });
 
   it('shows an empty state when the run has no agents', () => {
@@ -498,7 +594,7 @@ describe('AgentsPanel', () => {
 
 /** The card of the agent whose name is given. */
 function cardFor(el: HTMLDivElement, name: string): Element {
-  return [...el.querySelectorAll('ul > li')].find((row) =>
+  return [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
     row.querySelector('span')?.textContent?.includes(name),
   )!;
 }
@@ -574,9 +670,11 @@ describe('AgentsPanel — MCP servers', () => {
     expect(row.textContent).toContain('running');
   });
 
-  it('opening the MCP popup does not also expand the thread list', () => {
-    // The card header is itself a button for a multi-thread agent, so without
-    // stopping the press the list underneath toggles on every open.
+  it('opening the MCP popup leaves the rest of the card alone', () => {
+    // The card header used to BE a button for a multi-thread agent, so without
+    // stopping the press the list underneath toggled on every open. The list
+    // no longer folds at all — what is asserted now is that the popup adds its
+    // rows and changes nothing else.
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -589,9 +687,11 @@ describe('AgentsPanel — MCP servers', () => {
     openMcpList(el, 'Worker');
 
     expect(cardFor(el, 'Worker').textContent).toContain('sentry');
-    expect(cardFor(el, 'Worker').textContent).not.toContain(
+    expect(cardFor(el, 'Worker').textContent).toContain(
       'Write a haiku about rivers.',
     );
+    // …and no OTHER card opened with it.
+    expect(cardFor(el, 'Orchestrator').textContent).not.toContain('sentry');
   });
 
   it('keeps the rows behind the trigger until it is pressed', () => {
@@ -1243,7 +1343,6 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
         onOpenThread={vi.fn()}
       />,
     );
-    click(el.querySelector('button[aria-label="Caller threads"]'));
     return el;
   }
 
@@ -1286,7 +1385,6 @@ describe('AgentsPanel — the call-thread terminal follows the CAPABILITY', () =
         onOpenThread={onOpenThread}
       />,
     );
-    click(el.querySelector('button[aria-label="Caller threads"]'));
     click(callButton(el));
     expect(onOpenThread).not.toHaveBeenCalled();
   });
@@ -1451,7 +1549,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           onOpenSubagent={() => undefined}
         />,
       );
-      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
       return el;
     };
 
@@ -1504,7 +1601,6 @@ describe('AgentsPanel — sub-agent threads', () => {
       ).not.toBeNull();
       expect(el.textContent).not.toContain('Main conversation');
 
-      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
       // Still not swept into the finished pile, which is what the split is for.
       expect(el.textContent).not.toContain('Main conversation');
       expect(el.textContent).toContain('3 finished sub-agents');
@@ -1543,7 +1639,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           onOpenSubagent={() => undefined}
         />,
       );
-      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
 
       expect(el.textContent).toContain('3 active · 7 threads');
       // The two readings the caption used to give, neither of which any row
@@ -1562,7 +1657,6 @@ describe('AgentsPanel — sub-agent threads', () => {
           onOpenThread={() => undefined}
         />,
       );
-      click(el.querySelector('button[aria-label="Orchestrator threads"]'));
       expect(el.textContent).not.toContain('finished sub-agent');
     });
   });
@@ -1601,22 +1695,19 @@ describe('AgentsPanel — the thread expander', () => {
       />,
     );
 
-  it('is a button in the control row, beside the MCP one', () => {
+  it('offers no thread control at all, beside the MCP one or anywhere', () => {
+    // What used to be pinned here was the expander's PLACE — adjacent to the
+    // MCP button, as one cluster. There is no expander now, so the pin is that
+    // the cluster holds the two controls that DO something and nothing else.
     const el = panel();
-    const controls = [
-      ...el.querySelectorAll('button[aria-label], button[aria-expanded]'),
-    ];
-    const toggleAt = controls.findIndex(
-      (button) => button.getAttribute('aria-label') === 'Orchestrator threads',
+    const labels = [...el.querySelectorAll('button[aria-label]')].map(
+      (button) => button.getAttribute('aria-label'),
     );
-    const mcpAt = controls.findIndex(
-      (button) => button.getAttribute('aria-label') === 'MCP servers',
-    );
-    expect(toggleAt).toBeGreaterThanOrEqual(0);
-    expect(mcpAt).toBeGreaterThanOrEqual(0);
-    // Adjacent, which is the ask: the two controls read as one cluster rather
-    // than the expander living up on the name line as a chevron.
-    expect(Math.abs(toggleAt - mcpAt)).toBe(1);
+
+    expect(labels).toContain('MCP servers');
+    expect(labels).not.toContain('Orchestrator threads');
+    // The rows it used to hide are simply there.
+    expect(el.textContent).toContain('Review the diff');
   });
 
   it('leaves the agent’s NAME line inert', () => {
@@ -1665,7 +1756,7 @@ describe('AgentsPanel task lists', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    const rows = [...el.querySelectorAll('ul > li')];
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
     const orchestrator = rows.find((row) =>
       row.textContent?.includes('Orchestrator'),
     )!;

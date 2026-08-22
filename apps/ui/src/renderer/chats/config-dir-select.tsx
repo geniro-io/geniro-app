@@ -28,6 +28,8 @@ export function ConfigDirSelect({
   recentConfigDirs,
   unavailableReason,
   disabled = false,
+  ariaLabel = 'Agent config directory for new chats',
+  hint = "Optional: the config directory (account / profile) new chats run as — the CLI's own by default",
   onChange,
   onBrowse,
   className,
@@ -41,6 +43,14 @@ export function ConfigDirSelect({
    */
   unavailableReason: string | null | undefined;
   disabled?: boolean;
+  /**
+   * What this chip is choosing FOR. The composer's default speaks for the next
+   * chat; the builder's node inspector says so for one node instead — the same
+   * control, and the only thing about it that differs is who it is about.
+   */
+  ariaLabel?: string;
+  /** Hover text while no directory is chosen; the path itself once one is. */
+  hint?: string;
   /** A pick, or null from the "Default profile" row. */
   onChange: (configDir: string | null) => void;
   /** Open the native directory dialog. */
@@ -62,11 +72,8 @@ export function ConfigDirSelect({
       // of a profile they picked once.
       clearLabel="Default profile"
       icon={<IdCard />}
-      aria-label="Agent config directory for new chats"
-      title={
-        configDir ??
-        "Optional: the config directory (account / profile) new chats run as — the CLI's own by default"
-      }
+      aria-label={ariaLabel}
+      title={configDir ?? hint}
       disabled={disabled}
       className={className}
       onChange={onChange}

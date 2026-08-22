@@ -133,13 +133,29 @@ describe('CapabilitiesService — a message into a running turn', () => {
     );
   });
 
-  it('states claude’s channel as null and cursor’s absence as a real sentence', () => {
-    // The two live values. This is what decides whether the strip's Steer
-    // control is offered at all — cursor's ACP `session/prompt` is one request
-    // per turn, so its message genuinely cannot go out before the turn ends.
+  it('states BOTH shipped channels as available', () => {
+    // The two live values, and both are null now. Cursor's used to be a
+    // sentence, on the strength of the ACP spec's one-prompt-per-turn shape —
+    // its BINARY accepts a second `session/prompt` against a live session, so
+    // the control was inert over a channel that worked. What differs is what
+    // the press does, which is the row below.
     expect(followUps().get('claude')).toBeNull();
-    expect(followUps().get('cursor-agent')).toEqual(expect.any(String));
-    expect(followUps().get('cursor-agent')).not.toBe('');
+    expect(followUps().get('cursor-agent')).toBeNull();
+  });
+
+  it('says which CLI a mid-turn message INTERRUPTS', () => {
+    // The renderer cannot describe the control without this: on claude the
+    // message joins the running turn, on cursor it cancels whatever is in
+    // flight and answers instead. One sentence for both would be false about
+    // one of them.
+    const interrupts = new Map(
+      service()
+        .service.capabilitiesWire()
+        .followUps.map((f) => [f.agent, f.interrupts]),
+    );
+
+    expect(interrupts.get('claude')).toBe(false);
+    expect(interrupts.get('cursor-agent')).toBe(true);
   });
 });
 

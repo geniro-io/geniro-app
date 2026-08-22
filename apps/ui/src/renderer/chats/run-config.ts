@@ -72,6 +72,7 @@ export function captureRunConfig(input: {
   configDir: string | null;
   models: Partial<Record<CliKind, string>>;
   efforts: Partial<Record<CliKind, string>>;
+  contextWindows: Partial<Record<CliKind, string>>;
   approval: string | null;
 }): RunConfigDraft {
   const kind = targetAgentKind(input.target);
@@ -87,6 +88,7 @@ export function captureRunConfig(input: {
     configDir: workflow ? null : input.configDir,
     model: workflow ? null : (input.models[kind] ?? null),
     effort: workflow ? null : (input.efforts[kind] ?? null),
+    contextWindow: workflow ? null : (input.contextWindows[kind] ?? null),
     approval: workflow ? null : input.approval,
   };
 }
@@ -112,6 +114,13 @@ export interface AppliedRunConfig {
   /** Null means "leave the CLI's default" — the composer omits the field. */
   model: string | null;
   effort: string | null;
+  /**
+   * The window size, on the same terms as `effort` — null means the model's
+   * own. A size the configuration's model no longer offers is not filtered
+   * here: the chip re-fetches that model's list and draws it as unavailable,
+   * which is the one place that can know.
+   */
+  contextWindow: string | null;
   /**
    * A mode this build recognises, or null when the stored one is not — in which
    * case the composer keeps the mode it already had rather than being set to a
@@ -149,6 +158,7 @@ export function applyRunConfig(config: RunConfig): AppliedRunConfig | null {
     configDir: workflow ? null : config.configDir,
     model: workflow ? null : config.model,
     effort: workflow ? null : config.effort,
+    contextWindow: workflow ? null : config.contextWindow,
     approval:
       !workflow && isChatApprovalMode(config.approval) ? config.approval : null,
     branch: config.branch,

@@ -283,3 +283,46 @@ describe('the live rows say their state exactly once', () => {
     expect(occurrences).toBe(1);
   });
 });
+
+describe('ThinkingRow — a CLI that discloses what it is thinking', () => {
+  it('shows the reasoning text as it arrives, with a clock beside it', () => {
+    // REPORTED against a cursor chat reading "Working… · 3m 8s" with nothing
+    // happening, while the agent streamed thought chunks the whole time. The
+    // words are the point: a clock alone cannot tell a long think from a hang.
+    const container = render(
+      <ThinkingRow
+        since={Date.now() - 62_000}
+        tokens={0}
+        text="listing out the first 40 primes"
+      />,
+    );
+
+    expect(container.textContent).toContain('listing out the first 40 primes');
+    expect(container.textContent).toContain('1m 2s');
+    // NEVER the token count: this CLI reports none, and "0 tokens" is a figure
+    // nobody measured.
+    expect(container.textContent).not.toContain('tokens');
+  });
+
+  it('keeps the token-count row for a CLI that REDACTS its thinking', () => {
+    // Headless claude ships the block empty, so the running total is the whole
+    // signal — this row must not become the text one for it.
+    const container = render(
+      <ThinkingRow since={Date.now() - 4_000} tokens={250} />,
+    );
+
+    expect(container.textContent).toContain('250 tokens');
+    expect(container.textContent).toContain('4s');
+  });
+
+  it('ticks the clock while the text is still being written', () => {
+    const container = render(
+      <ThinkingRow since={Date.now()} tokens={0} text="working it out" />,
+    );
+    expect(container.textContent).toContain('0s');
+
+    advance(3_000);
+
+    expect(container.textContent).toContain('3s');
+  });
+});

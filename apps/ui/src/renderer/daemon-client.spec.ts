@@ -212,6 +212,33 @@ describe('parseRunStatus — the run_status twin', () => {
     });
   });
 
+  it('keeps the write moment a status announce carries, and only a real date', () => {
+    // The sidebar's ORDER rides this field and compares the strings lexically,
+    // so a value that is merely non-empty would not degrade to "no reorder" —
+    // it would sort, wrongly, and stay there until the next refetch.
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: null,
+        at: '2026-03-01T00:00:00.000Z',
+      }),
+    ).toEqual({
+      runId: 'r1',
+      status: 'running',
+      activity: null,
+      at: '2026-03-01T00:00:00.000Z',
+    });
+    expect(
+      parseRunStatus({
+        runId: 'r1',
+        status: 'running',
+        activity: null,
+        at: 'soon',
+      }),
+    ).toEqual({ runId: 'r1', status: 'running', activity: null });
+  });
+
   it('still rejects an UNRECOGNISED status outright', () => {
     // Version skew must degrade to no update at all. Folding it in as "no
     // status" would silently downgrade a real status change into an activity

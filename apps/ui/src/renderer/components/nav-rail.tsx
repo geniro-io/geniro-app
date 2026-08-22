@@ -79,7 +79,7 @@ function NavButton({
  *
  * It is NAVIGATION and nothing else now. The daemon status and the version sat
  * in a footer under a rule, and collapsed that footer shrank to a single green
- * pip alone under a line ("вот эта точка выглядит одна-одиноко") — a readout
+ * pip alone under a line ("this little dot looks all alone") — a readout
  * with nothing to read it against. Both moved to the title bar, beside the
  * other things that describe the app as a whole rather than this column.
  */
@@ -108,9 +108,9 @@ export function NavRail({
    *
    * The control is HERE, at the top of the rail, and not in the title bar it
    * briefly moved to: it acts on this column rather than on the window, so it
-   * belongs to the column ("давай её в само меню оставим там же, где она и
-   * была"). Only the STATE is the shell's, because the width it sets is what
-   * the title bar's divider has to line up with.
+   * belongs to the column ("let's leave it in the menu itself, in the same
+   * place it was"). Only the STATE is the shell's, because the width it sets
+   * is what the title bar's divider has to line up with.
    */
   onToggleCollapsed: () => void;
 }): React.JSX.Element {
@@ -128,11 +128,12 @@ export function NavRail({
       }}>
       {/* The rail's own top row: the app mark and the width toggle, which is
           where both were before the shell grew a title bar and where they went
-          back to ("перенести логотип в меню, а кнопку сворачивания в самом меню
-          оставить как сейчас выглядит"). The mark belongs to the app rather
-          than to the window, and the toggle acts on THIS column — so the band
-          above keeps only what is about the window itself. Collapsed there is
-          no room for both, and the toggle is the one that does something. */}
+          back to ("move the logo into the menu, and leave the collapse
+          button in the menu itself looking the way it does now"). The mark
+          belongs to the app rather than to the window, and the toggle acts on
+          THIS column — so the band above keeps only what is about the window
+          itself. Collapsed there is no room for both, and the toggle is the
+          one that does something. */}
       <div
         className={cn(
           'mb-1 flex h-9 shrink-0 items-center',

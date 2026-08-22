@@ -70,6 +70,7 @@ import {
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SESSION_LIST_TIMEOUT_MS,
   CURSOR_SESSION_LOAD_TIMEOUT_MS,
+  CURSOR_SESSION_META_NAME,
   CURSOR_SESSION_MISSING_MESSAGE,
   CURSOR_SESSION_STORE_DB_NAME,
   CURSOR_SESSION_STORE_DIR_NAME,
@@ -97,6 +98,7 @@ import {
   readCursorQuestions,
   withCursorAnswer,
 } from './utils/cursor-question.utils';
+import { readCursorSessionTitle } from './utils/cursor-session-meta.utils';
 import { readCursorTask } from './utils/cursor-task.utils';
 import { parseCursorTodos } from './utils/cursor-todos.utils';
 
@@ -1232,6 +1234,14 @@ export class CursorAcpAdapter extends AgentAdapter {
    * second copy of the path join is a second thing to get wrong.
    */
   private readSessionContext(sessionId: string): AgentContextUsage | null {
+    // The same guard its twin below applies, and for the same reason: the id
+    // reaches a path as a DIRECTORY component. It is the AGENT's own string —
+    // `node_state.agentSessionId` is written from the CLI's `session/new` reply
+    // — so a separator in it points this read-only SQLite open outside the
+    // store. Both readers of `sessionStoreDir()` now pass through here.
+    if (!isPlainSessionId(sessionId)) {
+      return null;
+    }
     const path = join(
       this.sessionStoreDir(),
       sessionId,
@@ -1245,6 +1255,36 @@ export class CursorAcpAdapter extends AgentAdapter {
     // driver now takes a reading per turn, and a channel that warns when
     // nothing is wrong is one people learn to skip.
     return existsSync(path) ? readCursorContextUsage(path, this.warn) : null;
+  }
+
+  /**
+   * The title this agent gave the conversation, off the same store the
+   * breakdown comes from.
+   *
+   * Read from geniro's OWN session directory rather than asked over ACP
+   * `session/list`: the agent writes the title into `meta.json` as it goes, and
+   * the caller already holds the session id, so the protocol route would spawn a
+   * `cursor-agent acp` process to re-read a file this app's own turns just
+   * wrote.
+   *
+   * Absent until the agent has named the conversation — a first turn routinely
+   * has no title yet, and a very short exchange may never get one — which is an
+   * ordinary null the caller answers with the derived title.
+   */
+  override readSessionTitle(sessionId: string): Promise<string | null> {
+    if (!isPlainSessionId(sessionId)) {
+      return Promise.resolve(null);
+    }
+    const path = join(
+      this.sessionStoreDir(),
+      sessionId,
+      CURSOR_SESSION_META_NAME,
+    );
+    // Same silence as the breakdown's store: absent is the normal state of a
+    // new conversation, so it is answered here rather than warned about.
+    return Promise.resolve(
+      existsSync(path) ? readCursorSessionTitle(path, this.warn) : null,
+    );
   }
 
   /** The adapter's own warn, as a value the readers above can be handed. */

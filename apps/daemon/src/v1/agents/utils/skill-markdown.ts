@@ -1,5 +1,7 @@
 import { parse } from 'yaml';
 
+import { titleFromText } from './derive-title';
+
 /**
  * Frontmatter parsing for the skill/command markdown files the CLIs discover
  * on disk (`SKILL.md` under a skills directory, `*.md` under a commands
@@ -51,13 +53,8 @@ function normalizeText(value: unknown): string | null {
   if (typeof value !== 'string') {
     return null;
   }
-  const collapsed = value.replace(/\s+/g, ' ').trim();
-  if (collapsed.length === 0) {
-    return null;
-  }
-  return collapsed.length > MAX_DESCRIPTION_LENGTH
-    ? `${collapsed.slice(0, MAX_DESCRIPTION_LENGTH - 1)}…`
-    : collapsed;
+  const collapsed = titleFromText(value, MAX_DESCRIPTION_LENGTH);
+  return collapsed === '' ? null : collapsed;
 }
 
 /** The first candidate that is a typable `/name` token, else null. */

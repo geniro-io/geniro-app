@@ -42,6 +42,37 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Retitle a run only while its title is still `expected`, and report whether
+   * that held.
+   *
+   * The predicate is the whole point, and it is why auto-naming cannot go
+   * through `updateById`: that reads the row, assigns, and flushes, so the write
+   * is decided by a snapshot taken before the title was resolved — and resolving
+   * one is slow (a `node_state` read, a session-store read, a transcript read).
+   * A `PATCH /v1/chats/:runId` rename landing inside that window would be
+   * overwritten by a name the user never chose, invisibly: nothing announces the
+   * loss, and the screen keeps showing their title until the next listing.
+   *
+   * `expected: null` claims an unnamed run; a string replaces one auto-name with
+   * a better one and refuses if the user has since renamed it. Answering `false`
+   * is a real outcome rather than a failure — the run has a name, just not the
+   * one this call assumed — and the caller uses it to withhold the announce, so
+   * a title that lost the race is never broadcast either.
+   */
+  async retitle(
+    runId: string,
+    title: string,
+    expected: string | null,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const written = await this.getRepo(txEm).nativeUpdate(
+      { id: runId, title: expected },
+      { title },
+    );
+    return written > 0;
+  }
+
+  /**
    * Chat runs stuck in a non-terminal `running` state — used by the boot-time
    * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
    */

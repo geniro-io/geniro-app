@@ -2,6 +2,7 @@ import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
+import { titleFromText } from '../../../utils/derive-title';
 import { isPlainSessionId } from '../../../utils/session-id';
 import type {
   AgentEvent,
@@ -511,10 +512,7 @@ async function readSessionHead(path: string): Promise<SessionHead | null> {
 
 /** One line of a multi-line prompt, short enough for a picker row. */
 function toTitle(text: string): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  return line.length > CLAUDE_SESSION_TITLE_MAX_CHARS
-    ? `${line.slice(0, CLAUDE_SESSION_TITLE_MAX_CHARS - 1).trimEnd()}…`
-    : line;
+  return titleFromText(text, CLAUDE_SESSION_TITLE_MAX_CHARS);
 }
 
 /**

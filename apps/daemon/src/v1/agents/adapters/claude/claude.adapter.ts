@@ -146,6 +146,17 @@ import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
  * (`--permission-prompt-tool stdio` — the CLI pauses each permission-gated
  * tool call as a `control_request` and resumes on our `control_response`),
  * while `'auto'` bypasses permission checks for unattended team execution.
+ *
+ * **No `readSessionTitle` override, and that is measured rather than assumed.**
+ * This CLI does name conversations — its TUI writes
+ * `{"type":"ai-title","aiTitle":…}` into the session JSONL, with a
+ * `custom-title` sibling for a manual rename — but probed on 2.1.237, a
+ * headless `-p` turn writes neither: a complete turn produced 15 lines carrying
+ * `user`, `assistant`, `attachment`, `message` and `last-prompt`, and no title
+ * record of any kind, matching the 147-of-3080 ratio across the local profile.
+ * geniro drives this CLI headlessly only, so `ChatTitleService` derives the
+ * title instead. Re-check by running one `-p` turn and grepping its JSONL for
+ * `ai-title`.
  */
 export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {

@@ -81,10 +81,33 @@ export function BranchSelect(
       className={cn('max-w-40', className)}
       flexible
       leadingIcon={<GitBranch />}
-      groups={[{ items: info.branches.map((b) => ({ value: b, label: b })) }]}
+      groups={[
+        {
+          items: info.branches.map((b) => {
+            const held = info.worktrees.find((entry) => entry.branch === b);
+            return {
+              value: b,
+              label: b,
+              // Named where it is, and still PICKABLE. git will not check it
+              // out twice, so the switch is refused either way — but a disabled
+              // row would be a dead end, where picking it produces the strip's
+              // offer to run in the folder that already has it. The leaf alone:
+              // the full path is what the offer states, and a menu row this
+              // wide would push every branch name out of view.
+              ...(held ? { hint: `in ${leafOf(held.path)}` } : {}),
+            };
+          }),
+        },
+      ]}
       onValueChange={onSwitch}
     />
   );
+}
+
+/** The last segment of a path — what a worktree is recognised by. */
+function leafOf(path: string): string {
+  const parts = path.split('/').filter((part) => part !== '');
+  return parts[parts.length - 1] ?? path;
 }
 
 /**

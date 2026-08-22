@@ -523,6 +523,13 @@ export interface CliDetection {
 // Git (the composer's branch chip — read from the folder a run will use)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** One branch of this repo that a DIFFERENT worktree has checked out. */
+export interface BranchWorktree {
+  branch: string;
+  /** Absolute path of the worktree holding it — a folder a run can use. */
+  path: string;
+}
+
 /** Git state of a working directory; every field is safe on a non-repo. */
 export interface GitInfo {
   /** False for a plain folder — the branch chip renders only when true. */
@@ -533,6 +540,16 @@ export interface GitInfo {
   branches: string[];
   /** Working tree has uncommitted changes — blocks a branch switch. */
   dirty: boolean;
+  /**
+   * Branches OTHER worktrees of this repo hold — git will not check any of them
+   * out here, whatever the tree looks like.
+   *
+   * They stay in {@link branches}: the branch exists, and it is one the user can
+   * work on — just from the folder that holds it. What this field buys is that
+   * the picker can say where, and the refusal can offer that folder instead of
+   * reporting a dead end.
+   */
+  worktrees: BranchWorktree[];
 }
 
 /** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
@@ -550,6 +567,17 @@ export interface BranchSwitchResult {
    * offer to pull the branch up to date without losing that work.
    */
   dirty: boolean;
+  /**
+   * The switch was refused because ANOTHER WORKTREE holds that branch — this is
+   * the path of that worktree, and null for every other outcome.
+   *
+   * A path rather than a flag, because the way out is that folder: git will
+   * never check the branch out twice, so the offer is to point the run at the
+   * worktree that already has it. Reported as its own field for the same reason
+   * {@link dirty} is — the alternative is the renderer recognising the case by
+   * matching git's own sentence, which is locale-dependent prose.
+   */
+  worktree: string | null;
 }
 
 /**

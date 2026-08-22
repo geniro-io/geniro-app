@@ -2937,8 +2937,18 @@ export function Chats({
         applied.branch,
       );
       if (!result.ok) {
+        // `?? null`, never a bare read: this crosses the IPC boundary, and a
+        // reply without the field would otherwise take the worktree arm and
+        // name the folder `undefined` to the user.
+        const heldBy = result.worktree ?? null;
         setRunConfigBranchNotice(
-          `Still on ${info.branch ?? 'a detached HEAD'} — could not switch to ${applied.branch}: ${result.error}`,
+          // The worktree refusal states the PATH, which the generic wrapping
+          // would not: git's own refusal is not something the user can act on
+          // without knowing where the branch actually is, and this is the one
+          // surface that cannot offer to go there (see `composerNotice`).
+          heldBy === null
+            ? `Still on ${info.branch ?? 'a detached HEAD'} — could not switch to ${applied.branch}: ${result.error}`
+            : `“${config.name}” names ${applied.branch}, which is checked out in the worktree at ${heldBy} — this folder stays on ${info.branch ?? 'a detached HEAD'}.`,
         );
       }
       // Re-read either way, and NAME the folder: the chip must show the branch
@@ -2984,9 +2994,14 @@ export function Chats({
    */
   const composerNotice: GitNotice | null =
     error !== null
-      ? { message: error, tone: 'error', offerPull: false }
+      ? { message: error, tone: 'error', offerPull: false, useFolder: null }
       : attachments.error !== null
-        ? { message: attachments.error, tone: 'error', offerPull: false }
+        ? {
+            message: attachments.error,
+            tone: 'error',
+            offerPull: false,
+            useFolder: null,
+          }
         : (git.notice ??
           (runConfigBranchNotice === null
             ? null
@@ -2994,7 +3009,19 @@ export function Chats({
                 message: runConfigBranchNotice,
                 tone: 'error',
                 offerPull: false,
+                // No offer here, deliberately: a configuration names a FOLDER
+                // as well as a branch, so pointing the run at the worktree that
+                // holds the branch would run it somewhere the user's own saved
+                // answer does not name. The sentence still says where it is.
+                useFolder: null,
               }));
+  /**
+   * The worktree the strip is offering, hoisted out of the notice so the click
+   * handler closes over a `const` string: TypeScript drops the narrowing of a
+   * PROPERTY inside a callback, and the alternative is a `!` on the one value
+   * that decides which folder the run uses.
+   */
+  const noticeUseFolder = composerNotice?.useFolder ?? null;
   const transcriptError = error ?? attachments.error;
   /**
    * Close the strip. Every source is cleared, not just the one on top: they are
@@ -4536,7 +4563,31 @@ export function Chats({
                             message={composerNotice.message}
                             tone={composerNotice.tone}
                             action={
-                              composerNotice.offerPull ? (
+                              noticeUseFolder !== null ? (
+                                // The way out of a branch another worktree
+                                // holds: git will never check it out twice, so
+                                // the only route to that branch is the folder
+                                // that already has it. Same clickable-string
+                                // shape as Pull below, and the same reasoning —
+                                // it is the rest of the sentence, not a second
+                                // control.
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                  title={`Run this chat in ${noticeUseFolder}`}
+                                  onClick={() => {
+                                    // Only the folder: the branch is already
+                                    // checked out there, so there is nothing
+                                    // left to switch, and `useGitInfo` re-reads
+                                    // on its own when the directory changes.
+                                    chooseFolder(noticeUseFolder);
+                                    git.clearError();
+                                  }}>
+                                  Use that folder
+                                </Button>
+                              ) : composerNotice.offerPull ? (
                                 // A clickable STRING, not a bordered button. The
                                 // strip is one sentence the app is saying; a
                                 // button beside it reads as a second control

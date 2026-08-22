@@ -39,6 +39,7 @@ const REPO: GitInfo = {
   branch: 'develop',
   branches: ['develop', 'main'],
   dirty: false,
+  worktrees: [],
 };
 
 const classes = (el: Element): string[] =>
@@ -76,6 +77,39 @@ describe('BranchSelect', () => {
     )!;
 
     expect(trigger.textContent).toContain('detached HEAD');
+  });
+
+  it('marks a branch another worktree holds, and still lets it be picked', () => {
+    // git will not check a branch out twice, so this row cannot switch the
+    // folder — but it is not a dead end either: picking it is what produces the
+    // strip's offer to run in the worktree that already has it. A DISABLED row
+    // would take that route away and say nothing about where the branch is.
+    const el = render({
+      ...REPO,
+      branches: ['develop', 'main', 'feat/elsewhere'],
+      worktrees: [
+        { branch: 'feat/elsewhere', path: '/repos/geniro-app-worktrees/side' },
+      ],
+    });
+    const trigger = el.querySelector<HTMLElement>('[data-menu-trigger]')!;
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const rows = [...el.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+
+    const held = rows.find((row) =>
+      row.textContent?.includes('feat/elsewhere'),
+    );
+    expect(held).toBeDefined();
+    expect(held!.disabled).toBe(false);
+    // The LEAF, not the whole path: a menu row carrying an absolute path pushes
+    // every branch name out of view, and the offer states the path in full.
+    expect(held!.textContent).toContain('in side');
+    expect(held!.textContent).not.toContain('/repos/');
+    // Every other branch is unmarked — the hint means something only if it is
+    // not on all of them.
+    const plain = rows.find((row) => row.textContent?.includes('main'));
+    expect(plain!.textContent).not.toContain('in ');
   });
 });
 
@@ -138,7 +172,13 @@ describe('BranchValueSelect', () => {
 
   it('renders nothing for a folder that is not a repository', () => {
     const { el } = renderValue(
-      { isRepo: false, branch: null, branches: [], dirty: false },
+      {
+        isRepo: false,
+        branch: null,
+        branches: [],
+        dirty: false,
+        worktrees: [],
+      },
       null,
     );
 

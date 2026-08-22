@@ -4,6 +4,7 @@ import { promisify } from 'node:util';
 import type {
   BranchPullResult,
   BranchSwitchResult,
+  BranchWorktree,
   GitInfo,
 } from '../shared/contracts';
 
@@ -25,6 +26,7 @@ const NOT_A_REPO: GitInfo = {
   branch: null,
   branches: [],
   dirty: false,
+  worktrees: [],
 };
 
 /**
@@ -47,6 +49,48 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
+ * Which branches OTHER worktrees of this repo hold, and where.
+ *
+ * The porcelain form is parsed rather than the human one for the reason every
+ * other git read here gives: `--porcelain` is a documented, locale-independent
+ * format, while the plain listing pads columns and abbreviates. Records come as
+ * blank-line-separated blocks of `worktree <path>` / `HEAD <sha>` / `branch
+ * <ref>`, with `detached` or `bare` in place of the branch line where there is
+ * none.
+ *
+ * `self` — this folder's own worktree root — is dropped: the branch it holds is
+ * the one already checked out here, and calling that "held elsewhere" would put
+ * the current branch behind a refusal.
+ */
+async function readWorktrees(
+  dir: string,
+  self: string | null,
+): Promise<BranchWorktree[]> {
+  const listing = await git(dir, ['worktree', 'list', '--porcelain']);
+  if (listing === null) {
+    return [];
+  }
+  const found: BranchWorktree[] = [];
+  let path: string | null = null;
+  for (const line of listing.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      path = line.slice('worktree '.length).trim();
+      continue;
+    }
+    if (line.startsWith('branch ') && path !== null) {
+      const branch = line.slice('branch '.length).trim();
+      if (path !== self && branch.startsWith('refs/heads/')) {
+        found.push({
+          branch: branch.slice('refs/heads/'.length),
+          path,
+        });
+      }
+    }
+  }
+  return found;
+}
+
+/**
  * Describe the git state of a folder for the composer's branch chip.
  *
  * A detached HEAD reports `branch: null` — there is no branch to name, and
@@ -57,10 +101,15 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
   if (inside !== 'true') {
     return NOT_A_REPO;
   }
-  const [head, refs, status] = await Promise.all([
+  const [head, refs, status, root] = await Promise.all([
     git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']),
     git(dir, ['for-each-ref', '--format=%(refname:short)', 'refs/heads']),
     git(dir, ['status', '--porcelain']),
+    // The worktree ROOT, not `dir`: a run's folder is routinely a subdirectory
+    // of the checkout, and comparing that against the paths `worktree list`
+    // prints would match none of them — leaving this folder's own branch listed
+    // as held somewhere else, and unswitchable-to for good.
+    git(dir, ['rev-parse', '--show-toplevel']),
   ]);
   return {
     isRepo: true,
@@ -69,6 +118,7 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
     // `null` = the status call itself failed; treating that as clean would let
     // a checkout run without the guard ever having looked.
     dirty: status === null || status !== '',
+    worktrees: await readWorktrees(dir, root),
   };
 }
 
@@ -90,10 +140,30 @@ export async function switchBranch(
       branch: null,
       error: 'Not a git repository',
       dirty: false,
+      worktree: null,
     };
   }
   if (info.branch === branch) {
-    return { ok: true, branch, error: null, dirty: false };
+    return { ok: true, branch, error: null, dirty: false, worktree: null };
+  }
+  // BEFORE the dirty guard, because it outranks it: git will not check a branch
+  // out into two worktrees however clean the tree is, so committing or pulling
+  // changes nothing here — and offering Pull, which the dirty refusal does,
+  // would be a control that has no way to help.
+  //
+  // Decided from the worktree LISTING rather than from git's `fatal: '<branch>'
+  // is already used by worktree at …`, which is prose: it is translated under a
+  // non-English locale, and matching it is how a refusal silently degrades into
+  // "git switch failed" on someone else's machine.
+  const held = info.worktrees.find((entry) => entry.branch === branch);
+  if (held) {
+    return {
+      ok: false,
+      branch: info.branch,
+      error: `${branch} is checked out in another worktree — this folder stays on ${info.branch ?? 'a detached HEAD'}`,
+      dirty: false,
+      worktree: held.path,
+    };
   }
   if (info.dirty) {
     return {
@@ -104,6 +174,7 @@ export async function switchBranch(
       // the button beside it offers the way out.
       error: 'Uncommitted changes in this folder — the branch stays put',
       dirty: true,
+      worktree: null,
     };
   }
   try {
@@ -127,9 +198,10 @@ export async function switchBranch(
       branch: info.branch,
       error: stderr === '' ? 'git switch failed' : stderr.split('\n')[0]!,
       dirty: false,
+      worktree: null,
     };
   }
-  return { ok: true, branch, error: null, dirty: false };
+  return { ok: true, branch, error: null, dirty: false, worktree: null };
 }
 
 /**

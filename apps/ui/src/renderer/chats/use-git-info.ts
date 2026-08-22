@@ -8,6 +8,7 @@ const NOT_A_REPO: GitInfo = {
   branch: null,
   branches: [],
   dirty: false,
+  worktrees: [],
 };
 
 /** What the composer's strip should say about git, and how loudly. */
@@ -21,6 +22,15 @@ export interface GitNotice {
    * would be a control that cannot work.
    */
   offerPull: boolean;
+  /**
+   * The worktree that already holds the branch, when THAT is why the switch was
+   * refused — so the strip can offer that folder instead of describing a dead
+   * end. Null for every other notice.
+   *
+   * The offer is the caller's to act on, not this hook's: the folder a run uses
+   * is composer state, and a hook over one directory cannot move it.
+   */
+  useFolder: string | null;
 }
 
 /**
@@ -86,14 +96,23 @@ export function useGitInfo(dir: string | null): {
       setNotice(null);
       try {
         const result = await window.geniro.switchBranch(dir, branch);
+        // `?? null` rather than a bare read: this crosses the IPC boundary, so
+        // an older main process — one running while the renderer reloads onto
+        // new code — answers without the field, and `undefined !== null` would
+        // turn every refusal into an offer to open the folder `undefined`.
+        const useFolder = result.worktree ?? null;
         if (!result.ok && result.error !== null) {
           // A refusal over uncommitted work is the guard working, not a
           // failure — main tells the two apart so this does not have to guess
           // from the sentence.
           setNotice({
             message: result.error,
-            tone: result.dirty ? 'warning' : 'error',
+            // A branch another worktree holds is the same KIND of thing as the
+            // dirty refusal — a guard with a way out, not a failure — so it
+            // takes the warning tone rather than the red one.
+            tone: result.dirty || useFolder !== null ? 'warning' : 'error',
             offerPull: result.dirty,
+            useFolder,
           });
           // Only a dirty refusal is one `pull` can act on — remember the
           // branch it was FOR so a later pull retries this exact switch
@@ -126,6 +145,7 @@ export function useGitInfo(dir: string | null): {
           message: result.error ?? 'git pull failed',
           tone: 'error',
           offerPull: false,
+          useFolder: null,
         });
         setInfo(await window.geniro.getGitInfo(dir));
         return;
@@ -142,10 +162,12 @@ export function useGitInfo(dir: string | null): {
           pendingSwitchTarget.current = null;
           setNotice(null);
         } else if (retry.error !== null) {
+          const retryFolder = retry.worktree ?? null;
           setNotice({
             message: retry.error,
-            tone: retry.dirty ? 'warning' : 'error',
+            tone: retry.dirty || retryFolder !== null ? 'warning' : 'error',
             offerPull: retry.dirty,
+            useFolder: retryFolder,
           });
           pendingSwitchTarget.current = retry.dirty ? target : null;
         }

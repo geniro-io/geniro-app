@@ -1,7 +1,13 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +43,8 @@ import {
 vi.setConfig({ testTimeout: 30_000 });
 
 let dir = '';
+/** Extra checkouts a case added with `git worktree add`, removed with `dir`. */
+let worktrees: string[] = [];
 
 const run = (args: string[], cwd = dir): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -66,9 +74,13 @@ function initRepo(): void {
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'geniro-git-'));
+  worktrees = [];
 });
 
 afterEach(() => {
+  for (const worktree of worktrees) {
+    rmSync(worktree, { recursive: true, force: true });
+  }
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -79,6 +91,7 @@ describe('readGitInfo', () => {
       branch: null,
       branches: [],
       dirty: false,
+      worktrees: [],
     });
   });
 
@@ -91,6 +104,7 @@ describe('readGitInfo', () => {
       branch: 'main',
       branches: ['feat/chips', 'main'],
       dirty: false,
+      worktrees: [],
     });
   });
 
@@ -118,6 +132,54 @@ describe('readGitInfo', () => {
     expect(info.isRepo).toBe(true);
     expect(info.branch).toBeNull();
   });
+
+  it('names the branches other worktrees hold, and where they are', async () => {
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+
+    const info = await readGitInfo(dir);
+
+    // Still a branch of this repo — it is listed, and it is one the user can
+    // work on. What the extra field says is WHERE.
+    expect(info.branches).toContain('feat/elsewhere');
+    expect(info.worktrees).toEqual([
+      { branch: 'feat/elsewhere', path: realpathSync(other) },
+    ]);
+  });
+
+  it('does NOT report this folder’s own branch as held elsewhere', async () => {
+    // The listing includes the current worktree, so without the self-filter the
+    // branch already checked out here would read as unreachable — and the chip
+    // would refuse to switch back to it.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+
+    expect((await readGitInfo(dir)).worktrees).not.toContainEqual(
+      expect.objectContaining({ branch: 'main' }),
+    );
+  });
+
+  it('reports the worktrees from a SUBDIRECTORY of the checkout too', async () => {
+    // A run's folder is routinely a subdirectory. `worktree list` prints
+    // checkout ROOTS, so a self-filter comparing against the folder itself
+    // would match nothing here and file this checkout's own branch as held
+    // somewhere else.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+    mkdirSync(join(dir, 'apps', 'ui'), { recursive: true });
+
+    const info = await readGitInfo(join(dir, 'apps', 'ui'));
+
+    expect(info.worktrees).toEqual([
+      { branch: 'feat/elsewhere', path: realpathSync(other) },
+    ]);
+  });
 });
 
 describe('switchBranch', () => {
@@ -130,6 +192,7 @@ describe('switchBranch', () => {
       branch: 'feat/chips',
       error: null,
       dirty: false,
+      worktree: null,
     });
     expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('feat/chips');
   });
@@ -152,6 +215,45 @@ describe('switchBranch', () => {
 
     expect(result.ok).toBe(true);
     expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('release');
+  });
+
+  it('refuses a branch another worktree holds, naming that folder', async () => {
+    // The reported case: starting a thread on a branch that is checked out in a
+    // sibling worktree. git can never do this, and its own refusal is a
+    // `fatal:` line the app used to print verbatim.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+
+    const result = await switchBranch(dir, 'feat/elsewhere');
+
+    expect(result.ok).toBe(false);
+    // The way out, and the whole reason this is a field rather than prose: the
+    // renderer offers THIS folder.
+    expect(result.worktree).toBe(realpathSync(other));
+    expect(result.dirty).toBe(false);
+    // Not git's own wording — which is locale-dependent — and no `fatal:`.
+    expect(result.error).toContain('feat/elsewhere');
+    expect(result.error).not.toContain('fatal');
+    expect(run(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
+  });
+
+  it('reports the worktree refusal even on a DIRTY tree, and offers no pull', async () => {
+    // Ordering matters: committing or pulling cannot make git check a branch
+    // out twice, so the dirty refusal — whose whole point is the Pull offer
+    // beside it — must not stand in front of this one and hand the user a
+    // control that cannot help.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+    writeFileSync(join(dir, 'README.md'), 'work in progress\n');
+
+    const result = await switchBranch(dir, 'feat/elsewhere');
+
+    expect(result.worktree).toBe(realpathSync(other));
+    expect(result.dirty).toBe(false);
   });
 
   it('refuses over uncommitted changes and leaves the branch alone', async () => {
@@ -182,6 +284,7 @@ describe('switchBranch', () => {
       branch: 'main',
       error: null,
       dirty: false,
+      worktree: null,
     });
   });
 
@@ -201,6 +304,7 @@ describe('switchBranch', () => {
       branch: null,
       error: 'Not a git repository',
       dirty: false,
+      worktree: null,
     });
   });
 });

@@ -421,6 +421,7 @@ beforeEach(() => {
       branch: null,
       branches: [],
       dirty: false,
+      worktrees: [],
     }),
     switchBranch: vi
       .fn()
@@ -6858,6 +6859,7 @@ describe('Chats — the open thread lays its composer out differently', () => {
       branch: 'main',
       branches: ['main', 'dev'],
       dirty: true,
+      worktrees: [],
     });
     window.geniro.switchBranch = vi.fn().mockResolvedValue({
       ok: false,
@@ -6912,6 +6914,64 @@ describe('Chats — the open thread lays its composer out differently', () => {
     expect(after?.textContent).toContain('Uncommitted changes in this folder');
   });
 
+  it('offers the WORKTREE that holds a branch instead of reporting git’s fatal', async () => {
+    // REPORTED: starting a thread on a branch checked out in another worktree
+    // failed with git's own `fatal: '<branch>' is already used by worktree at
+    // …` in red. git will never check a branch out twice, so the way out is
+    // that folder — and the app knows where it is.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: false,
+      worktrees: [{ branch: 'dev', path: '/proj-worktrees/dev' }],
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error:
+        'dev is checked out in another worktree — this folder stays on main',
+      dirty: false,
+      worktree: '/proj-worktrees/dev',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+
+    const strip = container.querySelector('[data-tone]');
+    // A guard with a way out, like the dirty refusal — not a failure.
+    expect(strip?.getAttribute('data-tone')).toBe('warning');
+    expect(strip?.textContent).toContain('checked out in another worktree');
+    // Pull cannot make git check a branch out twice, so it is NOT offered here.
+    expect(
+      [...container.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Pull latest',
+      ),
+    ).toBeUndefined();
+
+    const use = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Use that folder',
+    );
+    expect(use).toBeDefined();
+    await act(async () => {
+      use?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The offer is the FOLDER — the branch is already checked out there, so
+    // nothing is switched, and the run now points at the worktree.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ projectFolder: '/proj-worktrees/dev' }),
+    );
+    expect(window.geniro.switchBranch).toHaveBeenCalledTimes(1);
+    // Taking the offer closes the notice: it described a refusal that no longer
+    // stands in the way of anything.
+    expect(container.querySelector('[data-tone]')).toBeNull();
+  });
+
   it('clears the strip when the pull DOES unblock the switch', async () => {
     // The other half of the retry, and the case the offer promises: once the
     // refusal is gone the switch lands, and only then is the sentence that sent
@@ -6921,6 +6981,7 @@ describe('Chats — the open thread lays its composer out differently', () => {
       branch: 'main',
       branches: ['main', 'dev'],
       dirty: true,
+      worktrees: [],
     });
     window.geniro.switchBranch = vi
       .fn()
@@ -6966,6 +7027,7 @@ describe('Chats — the open thread lays its composer out differently', () => {
       branch: 'main',
       branches: ['main', 'dev'],
       dirty: true,
+      worktrees: [],
     });
     window.geniro.switchBranch = vi.fn().mockResolvedValue({
       ok: false,
@@ -7018,6 +7080,7 @@ describe('Chats — the open thread lays its composer out differently', () => {
       branch: 'main',
       branches: ['main', 'dev'],
       dirty: false,
+      worktrees: [],
     });
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
     const { client } = makeClient();
@@ -8990,6 +9053,7 @@ describe('Chats — starting from a saved configuration', () => {
       branch: 'main',
       branches: ['main', 'feat/x'],
       dirty: false,
+      worktrees: [],
     });
     const { client } = makeClient();
     const container = await mount(client);
@@ -9022,12 +9086,14 @@ describe('Chats — starting from a saved configuration', () => {
             branch: 'main',
             branches: ['main', 'feat/x'],
             dirty: false,
+            worktrees: [],
           }
         : {
             isRepo: true,
             branch: 'left-behind',
             branches: ['left-behind'],
             dirty: false,
+            worktrees: [],
           },
     );
     const { client } = makeClient();
@@ -9058,6 +9124,7 @@ describe('Chats — starting from a saved configuration', () => {
       branch: 'main',
       branches: ['main', 'feat/x'],
       dirty: true,
+      worktrees: [],
     });
     window.geniro.switchBranch = vi.fn().mockResolvedValue({
       ok: false,
@@ -9086,6 +9153,40 @@ describe('Chats — starting from a saved configuration', () => {
     ).toContain('cursor-agent');
   });
 
+  it('names the WORKTREE when a configuration’s branch is checked out in one', async () => {
+    // The configuration names a FOLDER as well as a branch, so this surface
+    // cannot offer to go to the worktree the way the composer's strip does —
+    // which is exactly why the sentence has to carry the path: without it the
+    // user is told the switch failed and nothing about where the branch is.
+    withSavedConfig();
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'feat/x'],
+      dirty: false,
+      worktrees: [{ branch: 'feat/x', path: '/worktrees/feat-x' }],
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: false,
+      branch: 'main',
+      error: 'feat/x is checked out in another worktree',
+      dirty: false,
+      worktree: '/worktrees/feat-x',
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await applyConfig(container, 'Geniro app');
+
+    expect(container.textContent).toContain('/worktrees/feat-x');
+    // Not the generic wrapper, which would bury the path in git-speak.
+    expect(container.textContent).not.toContain('could not switch to');
+    // And the rest of the configuration still applied, refusal or not.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ projectFolder: '/saved/proj' }),
+    );
+  });
+
   it('does not touch the checkout when the folder is already on that branch', async () => {
     withSavedConfig();
     window.geniro.getGitInfo = vi.fn().mockResolvedValue({
@@ -9093,6 +9194,7 @@ describe('Chats — starting from a saved configuration', () => {
       branch: 'feat/x',
       branches: ['main', 'feat/x'],
       dirty: false,
+      worktrees: [],
     });
     const { client } = makeClient();
     const container = await mount(client);
@@ -9114,6 +9216,7 @@ describe('Chats — starting from a saved configuration', () => {
       branch: 'main',
       branches: ['main'],
       dirty: false,
+      worktrees: [],
     });
     const { client } = makeClient();
     const container = await mount(client);
@@ -9168,6 +9271,7 @@ describe('Chats — starting from a saved configuration', () => {
       branch: 'main',
       branches: ['main', 'feat/x'],
       dirty: true,
+      worktrees: [],
     });
     window.geniro.switchBranch = vi.fn().mockResolvedValue({
       ok: false,

@@ -23,7 +23,7 @@ import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
 import { createDaemonApis } from '../daemon-api';
 import { configDirCapabilityFrom } from '../graphs/use-config-dir-capability';
-import { updateStatusLine } from '../updates/update-status';
+import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
@@ -97,7 +97,7 @@ export function Settings({
   // The live update state, pushed by main — the same one the app-wide strip
   // reads, so this screen cannot show a stale reading of a running download.
   const update = useUpdateState();
-  const updateLine = update.state ? updateStatusLine(update.state) : '';
+  const updateLine = update.state ? updateStatusText(update.state) : '';
   const updateWorking =
     update.state?.phase === 'downloading' ||
     update.state?.phase === 'installing';
@@ -834,7 +834,6 @@ export function Settings({
                   : 'text-muted-foreground',
               )}>
               {updateLine}
-              {update.state.message ? ` ${update.state.message}` : null}
             </p>
           ) : null}
           {/* Only while something is moving: a bar sitting at 0% next to an

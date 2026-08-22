@@ -96,7 +96,11 @@ function checkTimedOut(ms: number): string {
 }
 
 function downloadStalled(ms: number): string {
-  return `the update made no progress for ${humanize(ms)} — you can still update with: ${UPDATE_COMMAND}`;
+  // "it", not "the update": this follows a lead sentence that has already named
+  // the phase (see `updateStatusLine`), and repeating the subject there read as
+  // one sentence broken in the middle — REPORTED as "The update could not be
+  // installed. the update made no progress for 3 minutes".
+  return `it made no progress for ${humanize(ms)} — you can still update with: ${UPDATE_COMMAND}`;
 }
 
 function installTimedOut(ms: number): string {
@@ -195,6 +199,7 @@ export class UpdateService {
         : 'Updates are handled by your dev checkout, not by the app.',
       currentVersion: deps.currentVersion(),
       canInstall: false,
+      failedPhase: null,
     };
   }
 
@@ -629,7 +634,20 @@ export class UpdateService {
   private emit(
     patch: Partial<UpdateState> & { phase?: UpdatePhase },
   ): UpdateState {
-    const next = { ...this.state, ...patch };
+    // Derived here rather than passed by each of the five error sites: the
+    // phase that failed is simply the phase this service was IN, which only
+    // `emit` can see before the patch overwrites it. An error re-emitted over
+    // an error keeps the original — a retry's own failure arrives as a fresh
+    // transition out of `checking`/`downloading`, so nothing is lost.
+    const failedPhase =
+      patch.phase === undefined
+        ? this.state.failedPhase
+        : patch.phase !== 'error'
+          ? null
+          : this.state.phase === 'error'
+            ? this.state.failedPhase
+            : this.state.phase;
+    const next = { ...this.state, ...patch, failedPhase };
     const changed = (Object.keys(next) as (keyof UpdateState)[]).some(
       (key) => next[key] !== this.state[key],
     );

@@ -1,17 +1,6 @@
 import { UPDATE_COMMAND, type UpdateState } from '../../shared/contracts';
 
 /**
- * One sentence for an update state, shared by the strip and the Settings row.
- *
- * Two surfaces show this and they must not word it differently: the banner is
- * what a user sees mid-download and Settings is where they go to check on it,
- * so the same phase reading "Installing…" in one place and "Working…" in the
- * other would read as two different things happening.
- *
- * The message is appended by the caller where there is one — it carries main's
- * own words (the checksum that did not match), which this cannot compose.
- */
-/**
  * What the nav rail's version row offers for an update, if anything.
  *
  * The app-wide strip that used to carry this is GONE — it and this row were two
@@ -113,9 +102,7 @@ export function footerUpdate(
             label: 'retry',
             // main's own words (the checksum that did not match, the command
             // for an install the app cannot replace) — never re-worded here.
-            title: state.message
-              ? `${updateStatusLine(state)} ${state.message}`
-              : updateStatusLine(state),
+            title: updateStatusText(state),
           }
         : { kind: 'none' };
     default:
@@ -146,10 +133,61 @@ export function updateStatusLine(state: UpdateState): string {
       // promise something that is never going to happen on its own.
       return `Geniro ${state.currentVersion} is installed — restart to use it.`;
     case 'error':
-      return 'The update could not be installed.';
+      // WHICH phase failed, from the state rather than assumed. Every failure
+      // used to read "The update could not be installed.", which was REPORTED
+      // against a download that never moved a byte — an app that had installed
+      // nothing being told the install had failed. The three are not the same
+      // news: a failed check is usually the network, a stalled download is a
+      // worse case of it, and only the third has touched the bundle.
+      switch (state.failedPhase) {
+        case 'checking':
+          return 'The update check failed.';
+        case 'downloading':
+          return 'The download failed.';
+        default:
+          // `installing`, and the null a pre-`failedPhase` state carries.
+          return 'The update could not be installed.';
+      }
     default:
       // `idle` — nothing has been checked yet this launch. In a dev build that
       // is permanent, and main's message says so.
       return '';
   }
+}
+
+/**
+ * The whole thing a surface says about an update: the phase's own sentence,
+ * plus main's message when there is one.
+ *
+ * ONE composition, because there are two surfaces and they were joining the
+ * pair themselves — the nav rail's hover title and the Settings line — so the
+ * defect REPORTED against Settings ("The update could not be installed. the
+ * update made no progress for 3 minutes") was present in both and fixable in
+ * neither without fixing the other.
+ *
+ * Never re-words main's own text — the checksum that did not match and the
+ * command for an install the app cannot replace are main's to say; all this
+ * decides is the punctuation between the two halves.
+ */
+export function updateStatusText(state: UpdateState): string {
+  const line = updateStatusLine(state);
+  if (!state.message) {
+    return line;
+  }
+  if (!line) {
+    return state.message;
+  }
+  // main writes an ERROR's message as a FRAGMENT meant to follow a lead ("fetch
+  // failed", "it made no progress for 3 minutes"), and every other phase's as a
+  // whole sentence ("Geniro 1.5.0 is published, but…"). So the error joins with
+  // a colon and the rest with a space.
+  //
+  // Capitalizing the fragment instead was tried and is WRONG: these carry
+  // acronyms, shell commands and absolute paths, so it produced "Ipc broke" out
+  // of a real one. The defect being fixed here is the same seam failing the
+  // other way — the REPORTED "The update could not be installed. the update
+  // made no progress for 3 minutes", a lowercase fragment after a full stop.
+  return state.phase === 'error'
+    ? `${line.replace(/\.$/, '')}: ${state.message}`
+    : `${line} ${state.message}`;
 }

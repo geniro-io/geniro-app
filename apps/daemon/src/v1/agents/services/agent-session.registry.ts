@@ -85,6 +85,25 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   private readonly logger = new Logger(AgentSessionRegistry.name);
   private readonly entries = new Map<string, SessionEntry>();
   private shuttingDown = false;
+  private readonly closeListeners = new Set<(runId: string) => void>();
+
+  /**
+   * Told whenever a run's process is closed — the one signal that no further
+   * event of any kind is coming from it.
+   *
+   * It exists because an off-turn `running` ends only on a terminal event, and
+   * closing the process that owed that event strands the badge for ever (see
+   * `ChatService.settleAfterSessionClosed`). Nothing here interprets that; the
+   * registry's job is to say the process is gone.
+   *
+   * NOT fired during shutdown: every session is closed on the way out, the
+   * daemon is seconds from exiting, and a listener writing rows into a
+   * database that is closing behind it can only lose. The next boot's
+   * reconcile owns those runs instead.
+   */
+  onClosed(listener: (runId: string) => void): void {
+    this.closeListeners.add(listener);
+  }
 
   /**
    * Start a turn for this run, reusing its process when one fits and spawning
@@ -163,7 +182,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
             // than to the refuse default — between the two, the direction that
             // cannot grant something unasked is the one to fail toward.
             (request) => policy.current?.(request) ?? null,
-      onBetweenTurnEvent,
+      // Wrapped so an off-turn row RESTARTS the idle clock — see
+      // {@link touchOffTurn}. Only when the caller supplied a sink: passing a
+      // function where it passed none would change what `startSession` is told
+      // about this session, and the re-arm has nothing to observe anyway.
+      onBetweenTurnEvent:
+        onBetweenTurnEvent === undefined
+          ? undefined
+          : (event) => {
+              this.touchOffTurn(runId);
+              onBetweenTurnEvent(event);
+            },
       onHeldApproval,
     });
     const handle = session.startTurn(input, onEvent);
@@ -282,6 +311,29 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return handle;
   }
 
+  /**
+   * The CLI produced a row with no turn of ours open — restart the idle clock.
+   *
+   * `session.idle` means "alive with no turn of OURS in flight", which is
+   * exactly true of a CLI running flat out between turns: a delegate reporting
+   * back, a continuation the agent opened for itself. Without this the window
+   * armed at the last settle simply runs out underneath live work — measured on
+   * run 1fb3a9f5, a session reaped three seconds after its last row, thirty
+   * minutes of continuous off-turn output having touched nothing here.
+   *
+   * Refreshes rather than arms, and only when a window is already running: with
+   * a turn in flight there is deliberately no timer (`disarm`), and `track`
+   * arms the next one when that turn settles.
+   */
+  private touchOffTurn(runId: string): void {
+    const entry = this.entries.get(runId);
+    if (!entry?.timer) {
+      return;
+    }
+    entry.lastUsedAt = Date.now();
+    entry.timer.refresh();
+  }
+
   private arm(runId: string, entry: SessionEntry): void {
     this.disarm(entry);
     entry.timer = setTimeout(() => {
@@ -383,5 +435,20 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       );
     }
     this.logger.log(`closed the agent session for run ${runId} — ${reason}`);
+    if (this.shuttingDown) {
+      return;
+    }
+    for (const listener of this.closeListeners) {
+      try {
+        listener(runId);
+      } catch (err) {
+        // One listener's failure must not stop the others, and must never stop
+        // a close: this runs inside `evictIfFull` and the teardown path, where
+        // throwing would leave a process the registry has already forgotten.
+        this.logger.warn(
+          `a session-close listener for run ${runId} threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 }

@@ -595,6 +595,9 @@ function setup(
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
   );
+  // Nest calls this for us in production; a hand-built service gets it here so
+  // every spec runs against the same wiring rather than a subset of it.
+  service.onModuleInit();
   return {
     service,
     deltas,
@@ -608,6 +611,7 @@ function setup(
     nodeDao,
     published,
     registry,
+    sessions,
     approvals,
     claude,
     cursor,
@@ -3708,6 +3712,62 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('hands the badge back when the CLI session closes under an off-turn run', async () => {
+    // REPORTED twice over, as "seems like its stuck" and "It finished but
+    // stucked - i have to ask about a status to continue". Reconstructed from
+    // the author's own geniro.db and debug log, run 1fb3a9f5 on 2026-08-22:
+    // the last off-turn row landed at 11:33:52, the idle window closed the CLI
+    // session at 11:33:55 — and nothing was announced ever again. The run row
+    // sat `running` under `still working`, the composer stayed on "Agent is
+    // working — your message will queue…", and the only way out was to send a
+    // message, which is precisely what the second report describes doing.
+    //
+    // The hole is that an off-turn `running` ends ONLY on a terminal event.
+    // A delegate lease at least has an expiry; this latch has none, so when the
+    // process that owed the terminal event is closed the badge has nothing left
+    // that could ever take it down.
+    const { service, claude, runDao, statuses, sessions } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+
+    // A MAIN-THREAD row off-turn — no `parentToolUseId`, so this is the latch
+    // rather than the lease, and there is no timer anywhere in the picture.
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+    statuses.length = 0;
+
+    sessions.close(run.id);
+    await drain();
+
+    expect((await runDao.getById(run.id))?.status).toBe('completed');
+    // A RESTORE for the same reason the lease expiry is one: the turn this
+    // hands back to ended minutes ago, and announced as an ordinary settle it
+    // is a second non-terminal→terminal crossing the client reads as a fresh
+    // ending — a duplicate "turn ended" banner for work long finished.
+    const announce = statuses.at(-1);
+    expect(announce?.status).toBe('completed');
+    expect(announce?.restored).toBe(true);
   });
 
   it('settles a delegate-leased run on the continuation’s own result', async () => {

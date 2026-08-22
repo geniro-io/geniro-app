@@ -67,6 +67,13 @@ export function useUpdateState(): UpdateController {
           canInstall: false,
           ...prev,
           phase: 'error',
+          // The CHANNEL failed, not a phase of the update — a window torn down
+          // mid-call, a handler that threw before the service was reached — so
+          // there is no phase to name and the generic sentence is the honest
+          // one. `...prev` is above this, so a real `failedPhase` main had
+          // already pushed is deliberately overwritten rather than kept: it
+          // described an earlier failure, not this one.
+          failedPhase: null,
           progress: null,
           message: err instanceof Error ? err.message : String(err),
         }));

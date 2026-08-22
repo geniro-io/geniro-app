@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
@@ -107,8 +107,23 @@ const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
  * CLI session id is captured into `node_state` for `--resume`.
  */
 @Injectable()
-export class ChatService {
+export class ChatService implements OnModuleInit {
   private readonly logger = new Logger(ChatService.name);
+
+  /**
+   * Subscribe to the one signal that says no further event is coming from a
+   * run's process — see {@link settleAfterSessionClosed}.
+   *
+   * In a lifecycle hook rather than the constructor so nothing is registered
+   * against a half-built service, and so a spec that builds one by hand gets
+   * the wiring by calling this rather than by reaching into a constructor
+   * side effect.
+   */
+  onModuleInit(): void {
+    this.sessions.onClosed((runId) => {
+      void this.settleAfterSessionClosed(runId);
+    });
+  }
 
   /**
    * Each in-flight turn's FINALIZER, keyed by run — not its handle.
@@ -182,22 +197,25 @@ export class ChatService {
    * Cleared when the continuation settles and whenever a real turn takes the
    * run over.
    */
-  private readonly offTurnRuns = new Set<string>();
+  private readonly offTurnRuns = new Map<string, RunStatus>();
 
   /**
    * Runs whose off-turn `running` is a LEASE on a delegate that is still
-   * producing rows, with the status to hand back when it stops — see
-   * {@link leaseOnDelegateRow}.
+   * producing rows — see {@link leaseOnDelegateRow}.
    *
    * A subset of {@link offTurnRuns} rather than a parallel plane: the badge
    * belongs to the same off-turn continuation either way, so the CLI's own
    * continuation turn settles it exactly as it settles a main-thread one. What
-   * this map adds is the only thing that set cannot carry — the expiry, and the
-   * status the run was wearing before the lease took it.
+   * this map adds is the only thing that one cannot carry — the expiry.
+   *
+   * The status to hand back lives on {@link offTurnRuns} for BOTH kinds, and
+   * deliberately not here: an off-turn latch needs restoring on exactly the
+   * same terms a lease does (see {@link settleAfterSessionClosed}), and a
+   * second copy of that fact is how the two came to be restored differently.
    */
   private readonly delegateLeases = new Map<
     string,
-    { timer: NodeJS.Timeout; restoreTo: RunStatus }
+    { timer: NodeJS.Timeout }
   >();
 
   /**
@@ -1366,7 +1384,7 @@ export class ChatService {
       this.announceActivity(runId, offTurnActivity(event));
       return;
     }
-    this.offTurnRuns.add(runId);
+    this.offTurnRuns.set(runId, run.status);
     await this.setRunStatus(em, runId, 'running', {
       activity: offTurnActivity(event),
     });
@@ -1417,7 +1435,7 @@ export class ChatService {
       if (!run || run.status === 'cancelled' || run.status === 'running') {
         return;
       }
-      this.offTurnRuns.add(runId);
+      this.offTurnRuns.set(runId, run.status);
       await this.setRunStatus(this.em.fork(), runId, 'running', {
         activity: offTurnActivity(event),
       });
@@ -1494,13 +1512,12 @@ export class ChatService {
         // is why identity is compared rather than presence.
         return;
       }
-      const restoreTo = run.status;
       const timer = setTimeout(() => {
         void this.expireDelegateLease(runId);
       }, DELEGATE_ROW_LEASE_MS);
       timer.unref?.();
-      this.delegateLeases.set(runId, { timer, restoreTo });
-      this.offTurnRuns.add(runId);
+      this.delegateLeases.set(runId, { timer });
+      this.offTurnRuns.set(runId, run.status);
       await this.setRunStatus(this.em.fork(), runId, 'running', {
         activity: 'still working',
       });
@@ -1529,26 +1546,85 @@ export class ChatService {
       return;
     }
     this.delegateLeases.delete(runId);
-    if (!this.offTurnRuns.delete(runId) || this.registry.has(runId)) {
+    const restoreTo = this.offTurnRuns.get(runId);
+    if (restoreTo === undefined || this.registry.has(runId)) {
       return;
     }
+    this.offTurnRuns.delete(runId);
     try {
-      const run = await this.runDao.getById(runId);
-      if (run?.status !== 'running') {
-        return;
-      }
-      // A RESTORE, not an ending: this hands back the status the lease took
-      // over. Announced as an ordinary settle it is a second
-      // non-terminal→terminal crossing for a turn that ended minutes ago, which
-      // the client reads as a fresh ending.
-      await this.setRunStatus(this.em.fork(), runId, held.restoreTo, {
-        restored: true,
-      });
+      await this.restoreOffTurnBadge(runId, restoreTo);
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} delegate-lease expiry failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * The run's CLI process is gone, so no terminal event is ever coming.
+   *
+   * REPORTED as "seems like its stuck" and "It finished but stucked - i have to
+   * ask about a status to continue". An off-turn `running` — the latch a
+   * main-thread row takes, and the lease a delegate's row takes — ends on a
+   * terminal event from that process. Close the process and the badge is
+   * stranded: measured on run 1fb3a9f5, the idle window reaped the session
+   * three seconds after its last row and the run read `running · still working`
+   * from then on, with the composer refusing to send rather than queueing
+   * behind anything. The only way out was to send a message, which is exactly
+   * what the second report describes doing.
+   *
+   * A close is therefore the OTHER ending an off-turn badge can have, and the
+   * only one available once the process cannot speak. It is not a lease expiry
+   * with a shorter clock: the expiry is a GUESS that a quiet delegate has
+   * finished, this is the certainty that nothing more can arrive.
+   *
+   * Deliberately does nothing for a run a real turn owns ({@link registry}) —
+   * that turn settles itself, and the session it is closing is being REPLACED
+   * (`it could not serve the next turn`) rather than abandoned — nor for one
+   * being deleted, whose rows are on their way out.
+   */
+  private async settleAfterSessionClosed(runId: string): Promise<void> {
+    this.clearDelegateLease(runId);
+    const restoreTo = this.offTurnRuns.get(runId);
+    if (
+      restoreTo === undefined ||
+      this.registry.has(runId) ||
+      this.deleting.has(runId)
+    ) {
+      return;
+    }
+    this.offTurnRuns.delete(runId);
+    try {
+      await this.restoreOffTurnBadge(runId, restoreTo);
+    } catch (err: unknown) {
+      this.logger.error(
+        `run ${runId} failed to settle after its session closed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Hand an off-turn badge back to the status it took over.
+   *
+   * A RESTORE, not an ending, and the flag says so: announced as an ordinary
+   * settle it is a second non-terminal→terminal crossing for a turn that ended
+   * minutes ago, which the client reads as a fresh ending and notifies about.
+   *
+   * Re-reads rather than trusting the caller: both callers reach this after an
+   * `await`, and only a run still wearing the `running` the off-turn stretch
+   * put there is theirs to change back.
+   */
+  private async restoreOffTurnBadge(
+    runId: string,
+    restoreTo: RunStatus,
+  ): Promise<void> {
+    const run = await this.runDao.getById(runId);
+    if (run?.status !== 'running') {
+      return;
+    }
+    await this.setRunStatus(this.em.fork(), runId, restoreTo, {
+      restored: true,
+    });
   }
 
   /** Drop a run's delegate lease — whoever takes the badge over owns it now. */

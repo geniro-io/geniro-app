@@ -11,7 +11,11 @@ import type {
 } from '../adapters/adapter.types';
 import { AgentAdapter } from '../adapters/agent-adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
-import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
+import type {
+  CliSessionOptions,
+  SpawnedProcess,
+  SpawnFn,
+} from '../utils/spawn-cli';
 import {
   AgentSessionRegistry,
   MAX_LIVE_SESSIONS,
@@ -109,6 +113,17 @@ class FakeSession implements AgentSession {
     this.processGone = true;
   }
 
+  /**
+   * The registry's own between-turn sink, captured at spawn — what the CLI
+   * calls when it produces a row with no turn of ours open.
+   */
+  betweenTurn: ((event: AgentEvent) => void) | null = null;
+
+  /** One off-turn row, as a delegate reporting back would produce. */
+  emitBetweenTurn(name: string): void {
+    this.betweenTurn?.({ type: 'tool_call', id: name, name, input: {} });
+  }
+
   private processGone = false;
   private resolveClosed!: () => void;
   closed = new Promise<void>((resolve) => {
@@ -124,8 +139,9 @@ function fakeAdapter(): {
 } {
   const sessions: FakeSession[] = [];
   const adapter = {
-    startSession: () => {
+    startSession: (_input: AgentTurnInput, opts?: CliSessionOptions) => {
       const session = new FakeSession();
+      session.betweenTurn = opts?.onBetweenTurnEvent ?? null;
       sessions.push(session);
       return session;
     },
@@ -356,6 +372,45 @@ describe('AgentSessionRegistry — ending a process', () => {
     // And the clock resumes once they answer — the re-arm is what stops a
     // once-parked session living forever.
     at(sessions, 0).parked = false;
+    vi.advanceTimersByTime(SESSION_IDLE_MS);
+
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('does not close a session whose CLI is still producing rows between turns', async () => {
+    // MEASURED on the author's own machine, run 1fb3a9f5 on 2026-08-22: a turn
+    // settled at 11:03:55 and armed this window; the CLI then worked off-turn
+    // for the whole thirty minutes — delegates reporting back, continuation
+    // turns of its own, rows landing in the transcript the entire time — and
+    // the window fired at 11:33:55, three seconds after the last row, reaping
+    // a process that had been busy without pause.
+    //
+    // `session.idle` is why: it means "alive with no turn of OURS in flight",
+    // which is true of a CLI running flat out between turns. The window
+    // measures a chat going UNUSED, and one whose agent is writing rows is not
+    // that — the same reading the `parked` case above already applies.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    // The between-turn sink is what the registry watches, so the caller has to
+    // have one — `ChatService` always does, and a caller with none keeps
+    // `spawn-cli`'s "dropped an event arriving between turns" warning instead.
+    registry.startTurn('run-1', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+
+    // Four half-windows of off-turn work — twice the window in total, so a
+    // clock that is not re-armed has fired twice over by the end.
+    for (let i = 0; i < 4; i += 1) {
+      vi.advanceTimersByTime(SESSION_IDLE_MS / 2);
+      at(sessions, 0).emitBetweenTurn(`Bash-${i}`);
+    }
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(1);
+
+    // And the clock still runs out once it really does go quiet — the re-arm
+    // must not turn into a session that lives for ever.
     vi.advanceTimersByTime(SESSION_IDLE_MS);
 
     expect(at(sessions, 0).closes).toBe(1);

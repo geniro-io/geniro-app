@@ -618,6 +618,7 @@ function RunConfigEditor({
                 <ContextWindowSelect
                   windows={contextWindows.windows}
                   unavailableReason={contextWindows.unavailableReason}
+                  unavailableKind={contextWindows.unavailableKind}
                   value={draft.contextWindow}
                   onChange={(contextWindow) => set({ contextWindow })}
                 />

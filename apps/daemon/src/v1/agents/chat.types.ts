@@ -758,17 +758,31 @@ export type AgentContextWindowWire = z.infer<
  * twelve offer the axis and their vocabularies differ (`300k|1m`, `272k|1m`,
  * `200k|1m`).
  *
- * `unavailableReason` has three producers here and they mean different things:
- * this CLI has no such control at all, this MODEL runs at one fixed window, or
- * the CLI could not be asked. All three are sentences the chip shows; the
- * consumer does not care which.
+ * `unavailableReason` has four producers here and they mean different things:
+ * no model has been chosen yet, this CLI has no such control at all, this
+ * MODEL runs at one fixed window, or the CLI could not be asked. All four are
+ * sentences the chip shows on hover.
+ *
+ * `unavailableKind` says WHICH of them it is, and exists because the consumer
+ * DOES care about one: with no model chosen there is nothing to list yet, and
+ * a chip labelled "one window" there states a fact about a model nobody has
+ * picked. Every other kind really does mean one fixed window. Without this
+ * field the renderer had to match the sentence itself, so rewording the prose
+ * on this side silently reverted the label on the other.
  */
+export const AgentContextWindowUnavailableKindSchema = z
+  .enum(['no-model', 'no-axis', 'fixed-window', 'unreadable'])
+  .meta({ id: 'AgentContextWindowUnavailableKind' });
+
 export const AgentContextWindowListingWireSchema = z.object({
   windows: z.array(AgentContextWindowWireSchema),
   unavailableReason: z
     .string()
     .nullable()
     .describe('Why there are no sizes to choose from; null when there are.'),
+  unavailableKind: AgentContextWindowUnavailableKindSchema.nullable().describe(
+    'Which kind of unavailability the reason describes; null when sizes are offered.',
+  ),
 });
 // No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
 export type AgentContextWindowListingWire = z.infer<
@@ -920,8 +934,8 @@ export interface RunStatusEvent {
    * it is the whole point: `/compact` is an ordinary turn on the wire (the
    * user's command, the CLI's summary row, a terminal item), so it settled the
    * run like any other and earned a banner and a sidebar mark. Reported as
-   * "когда я делаю компакт, мне отправляется нотификация … не нужно
-   * нотификации, когда компакт сработает".
+   * "when I do a compact, a notification gets sent to me … don't need a
+   * notification when the compact fires".
    *
    * Said by the DAEMON rather than derived by the client, because the client
    * that has to act on it is the one NOT looking: a background chat's items are

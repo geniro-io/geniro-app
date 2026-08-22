@@ -714,7 +714,7 @@ describe('searching what was SAID in a conversation', () => {
     expect(rows).toEqual([]);
   });
 
-  it('says how far it got when the file cap bit, and nothing when it did not', async () => {
+  it('says nothing was truncated when the cap was never reached', async () => {
     // A bounded search that stays silent is indistinguishable from one that
     // read every conversation there was.
     const small = await listClaudeSessions({
@@ -725,6 +725,22 @@ describe('searching what was SAID in a conversation', () => {
     });
 
     expect(small.searchTruncated).toBe(false);
+  });
+
+  it('says the cap DID bite once the candidate count reaches it', async () => {
+    // The real cap is 600 files, and arranging that many fixtures just to
+    // exercise the true branch would be its own liability. `searchFileLimit`
+    // exists for exactly this: the same two-session profile, with the cap
+    // lowered until it is the thing that stops the scan.
+    const truncated = await listClaudeSessions({
+      profileDir: talkedAboutAsar(),
+      cwd: null,
+      limit: 10,
+      query: 'asar',
+      searchFileLimit: 1,
+    });
+
+    expect(truncated.searchTruncated).toBe(true);
   });
 
   it('leaves an unsearched listing exactly as it was', async () => {

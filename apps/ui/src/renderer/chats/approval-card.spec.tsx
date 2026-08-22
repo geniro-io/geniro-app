@@ -95,6 +95,35 @@ describe('ApprovalCard', () => {
     ).toBeUndefined();
   });
 
+  it('sizes Approve/Deny through the shared Button primitive, never a bare <button>', () => {
+    // `styles/global.css` gives every bare `<button>` a BASE font-size that
+    // wins over an ancestor's own smaller type (see
+    // `type-setting-wrappers.spec.ts`). `Button`'s `cva` base string always
+    // carries an explicit `text-sm`, so it can never be caught by that leak —
+    // but only for as long as these are actually `Button`s. This pins the
+    // observable proof rather than the source: a future refactor swapping
+    // either control for a raw `<button>` with no size class of its own would
+    // fail this the moment it renders wrong, not silently drift.
+    const el = render(
+      <ApprovalCard
+        toolName="Write"
+        input={{ file_path: 'a.txt' }}
+        verdict={null}
+        onRespond={() => {}}
+      />,
+    );
+    const approve = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Approve',
+    )!;
+    const deny = [...el.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Deny',
+    )!;
+    for (const button of [approve, deny]) {
+      expect(button.getAttribute('data-slot')).toBe('button');
+      expect(button.className.split(/\s+/)).toContain('text-sm');
+    }
+  });
+
   it('the freeze re-arms after the retry window when no verdict ever arrives', () => {
     // The verdict item can fail to persist (or the ack can be 'invalid');
     // the daemon settles a request exactly once, so re-offering the buttons

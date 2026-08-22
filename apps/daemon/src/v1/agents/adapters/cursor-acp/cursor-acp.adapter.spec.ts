@@ -1367,6 +1367,166 @@ describe('CursorAcpAdapter misuse', () => {
     });
   });
 
+  describe('listModelEfforts + listModelContextWindows share one handshake', () => {
+    /**
+     * A `session/new` reply carrying BOTH an `effort` and a `context` config
+     * option, so a listing that reads a NON-fallback answer for its own axis
+     * from the SAME stdout is evidence the raw reply was actually shared —
+     * not merely that two independent probes happened to agree.
+     */
+    const CONFIG_REPLY = `${JSON.stringify({
+      jsonrpc: '2.0',
+      id: 2,
+      result: {
+        sessionId: 's1',
+        configOptions: [
+          {
+            id: 'effort',
+            category: 'model_config',
+            currentValue: 'medium',
+            options: [
+              { value: 'low', name: 'low' },
+              { value: 'medium', name: 'medium' },
+            ],
+          },
+          {
+            id: 'context',
+            category: 'model_config',
+            currentValue: '300k',
+            options: [
+              { value: '300k', name: '300k' },
+              { value: '1m', name: '1m' },
+            ],
+          },
+        ],
+      },
+    })}\n`;
+
+    /**
+     * A double for the `session/new` handshake, counted through
+     * `groupSpawnFn` itself — the seam `probeModelConfigOptions` actually
+     * spawns through, so the count below is of REAL process-group spawns
+     * rather than a proxy this spec invented. Deliberately NEVER closes, like
+     * `fakeAcpProbe` above: `cursor-agent acp` does not exit on its own, so
+     * `settleWhen` (not `close`) is what ends a real read.
+     *
+     * Each successive spawn gets the next `reply`, sticking on the last one —
+     * a single-reply call therefore answers every spawn with that one reply.
+     */
+    function fakeAcpConfigProbe(
+      firstReply: string,
+      ...laterReplies: string[]
+    ): {
+      groupSpawnFn: typeof spawn;
+      calls: () => number;
+    } {
+      const replies = [firstReply, ...laterReplies];
+      let calls = 0;
+      const groupSpawnFn = ((_command: string, _args: readonly string[]) => {
+        const reply =
+          replies[Math.min(calls, replies.length - 1)] ?? firstReply;
+        calls += 1;
+        const fake = fakeGroupChild(4242 + calls);
+        queueMicrotask(() => fake.writeStdout(reply));
+        return fake.child;
+      }) as unknown as typeof spawn;
+      return { groupSpawnFn, calls: () => calls };
+    }
+
+    /** Answers `<binary> --version` with a fixed line, through the seam `resolveBinaryVersion` reads. */
+    function fakeVersion(version: () => string): typeof execFile {
+      return ((
+        _command: string,
+        _args: readonly string[] | undefined,
+        _options: unknown,
+        callback: (error: Error | null, stdout: string, stderr: string) => void,
+      ) => {
+        callback(null, `${version()}\n`, '');
+        return {} as ChildProcess;
+      }) as unknown as typeof execFile;
+    }
+
+    it('performs exactly ONE handshake probe for a cold model asked both ways', async () => {
+      const { groupSpawnFn, calls } = fakeAcpConfigProbe(CONFIG_REPLY);
+      const adapter = new CursorAcpAdapter({
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => '2026.08.11-e8db854'),
+      });
+
+      const efforts = await adapter.listModelEfforts('claude-opus-5');
+      const windows = await adapter.listModelContextWindows('claude-opus-5');
+
+      // Each listing reads its OWN axis out of the one reply above — proof
+      // the second call answered from the cache rather than from a fallback
+      // that would also look plausible on its own.
+      expect(efforts).toEqual({
+        efforts: [
+          { id: 'low', label: 'low' },
+          { id: 'medium', label: 'medium' },
+        ],
+        unavailableReason: null,
+        exact: true,
+      });
+      expect(windows).toEqual({
+        windows: [
+          { id: '300k', label: '300k' },
+          { id: '1m', label: '1m' },
+        ],
+        unavailableReason: null,
+        unavailableKind: null,
+        exact: true,
+      });
+      // The assertion that fails the moment the shared cache is reverted: two
+      // listings for the same cold model used to spawn their own `cursor-agent
+      // acp` process group each.
+      expect(calls()).toBe(1);
+    });
+
+    it('re-probes once the CLI binary version changes under the cache', async () => {
+      const secondReply = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's2',
+          configOptions: [
+            {
+              id: 'effort',
+              category: 'model_config',
+              currentValue: 'high',
+              options: [{ value: 'high', name: 'high' }],
+            },
+          ],
+        },
+      })}\n`;
+      // The FIRST spawn gets the cold reply; every spawn after it (there
+      // should be exactly one more) gets the post-upgrade reply.
+      const { groupSpawnFn, calls } = fakeAcpConfigProbe(
+        CONFIG_REPLY,
+        secondReply,
+      );
+      let version = '2026.08.11-e8db854';
+      const adapter = new CursorAcpAdapter({
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => version),
+      });
+
+      const before = await adapter.listModelEfforts('claude-opus-5');
+      expect(before.efforts.map((e) => e.id)).toEqual(['low', 'medium']);
+      expect(calls()).toBe(1);
+
+      // The CLI itself upgraded under the running daemon — the exact case the
+      // version check exists for. Reusing the version-1 entry here is the
+      // failure this pins: a chat left open across an upgrade would otherwise
+      // go on being told the OLD binary's vocabulary for the rest of the
+      // 10-minute TTL.
+      version = '2026.08.19-ffaa123';
+      const after = await adapter.listModelEfforts('claude-opus-5');
+
+      expect(after.efforts.map((e) => e.id)).toEqual(['high']);
+      expect(calls()).toBe(2);
+    });
+  });
+
   describe('setMcpServerEnabled', () => {
     /**
      * Answers the toggle subcommand, capturing its argv and cwd.

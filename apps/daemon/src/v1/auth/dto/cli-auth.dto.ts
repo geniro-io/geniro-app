@@ -1,6 +1,7 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import { cliPositionalArgSchema } from '../../../utils/cli-positional-arg';
 import { AgentKindSchema } from '../../runs/runs.types';
 import { LoginSessionSchema, LogoutResultSchema } from '../auth.types';
 
@@ -27,15 +28,16 @@ export class CliAuthQueryDto extends createZodDto(AgentQuerySchema) {}
  * in, so a sign-in started anywhere else authenticates a different server or
  * none at all.
  *
- * `.trim()` before `.min(1)`: whitespace is not a server name, and one that got
- * through would compose an invocation whose last argument is a space.
+ * `server` is the shared {@link cliPositionalArgSchema} — see its doc block
+ * for why a leading dash is refused; sharing it with `mcp.dto.ts`'s toggle
+ * body is what keeps the two routes from drifting back apart on the same
+ * argv shape.
  */
-export class McpLoginQueryDto extends createZodDto(
-  AgentQuerySchema.extend({
-    cwd: z.string().trim().min(1),
-    server: z.string().trim().min(1),
-  }),
-) {}
+export const mcpLoginQuerySchema = AgentQuerySchema.extend({
+  cwd: z.string().trim().min(1),
+  server: cliPositionalArgSchema,
+});
+export class McpLoginQueryDto extends createZodDto(mcpLoginQuerySchema) {}
 
 export class LoginSessionDto extends createZodDto(LoginSessionSchema) {}
 export class LogoutResultDto extends createZodDto(LogoutResultSchema) {}

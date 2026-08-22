@@ -1387,9 +1387,9 @@ describe('Chats — the system notifications a thread earns', () => {
   });
 
   it('says nothing about a background turn that only COMPACTED', async () => {
-    // The reported defect: "когда я делаю компакт, мне отправляется
-    // нотификация с последним сообщением … не нужно нотификации, когда компакт
-    // сработает". `/compact` is an ordinary turn on the wire, so it settled
+    // The reported defect: "when I do a compact, a notification with the
+    // last message gets sent to me … don't need a notification when the
+    // compact fires". `/compact` is an ordinary turn on the wire, so it settled
     // the run and earned a banner.
     twoChats();
     const { client, emitRunStatus } = makeClient();
@@ -1445,8 +1445,8 @@ describe('Chats — the system notifications a thread earns', () => {
   });
 
   it('does not word a wordless settle from the PREVIOUS turn’s answer', async () => {
-    // The other half of the same report — "нотификация с последним
-    // сообщением". The client keeps the last sentence it was given, so a
+    // The other half of the same report — "notification with the last
+    // message". The client keeps the last sentence it was given, so a
     // settle that said nothing has to say so out loud: with the null dropped
     // from the wire, this banner read back the earlier answer as though the
     // turn that just ended had produced it.
@@ -3233,6 +3233,29 @@ describe('Chats composer memory & suggestions', () => {
     });
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastModels: { claude: 'opus' },
+    });
+  });
+
+  it('forgets the remembered context window when the model chip changes model', async () => {
+    // A window size belongs to the MODEL that offered it, so one remembered
+    // from the previous model is one the new model may refuse — the chip then
+    // reads "default window" while the run is created carrying the old size,
+    // and every turn declines it. The daemon already drops it on a patch that
+    // changes model; the NEW-run path has to do the same here.
+    stubSettings({
+      lastModels: { claude: 'sonnet' },
+      lastContextWindows: { claude: '1m' },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickMenuRow(container, modelTrigger(container), 'opus');
+
+    // The map WITHOUT claude's entry — not merely "some write happened": the
+    // stored word is what reaches the next run, so an unchanged `{claude:'1m'}`
+    // is exactly the defect.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastContextWindows: {},
     });
   });
 
@@ -8495,7 +8518,8 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
     row(container, title).querySelector('[data-slot="unseen-dot"]') !== null;
 
   it('marks it, and opening the thread is what clears the mark', async () => {
-    // The ask: "чтобы тред как-то хайлайтился до нажатия пользователя на него".
+    // The ask: "so the thread gets highlighted somehow until the user clicks
+    // on it".
     // A banner is gone in seconds — and macOS drops every app's while the
     // display is shared — so the sidebar is where the fact has to survive.
     api.listChats.mockResolvedValue([run1, run2]);
@@ -8588,8 +8612,8 @@ describe('Chats — a thread that reported while you were elsewhere stays marked
 });
 
 describe('Chats — the sidebar reorders on activity, never on a click', () => {
-  // REPORTED: "как только я кликаю на какой-то тред, он скачет наверх, только
-  // после того как я на него кликаю" — the list was right about a thread only
+  // REPORTED: "as soon as I click on some thread, it jumps to the top, only
+  // after I click on it" — the list was right about a thread only
   // once the user opened it, so opening one was what moved it.
   const T1 = '2026-01-01T00:00:00.000Z';
   const T2 = '2026-02-01T00:00:00.000Z';

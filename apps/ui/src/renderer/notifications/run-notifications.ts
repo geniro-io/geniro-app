@@ -48,8 +48,8 @@ export interface RunNotificationTrigger {
  * 4. **A turn that did nothing but HOUSEKEEPING is not an ending either.** A
  *    `/compact` is an ordinary turn on the wire, so it settled the run and
  *    earned a banner reporting a piece of context management the user asked
- *    for and can see the result of — reported as "не нужно нотификации, когда
- *    компакт сработает". The daemon says which settles are not news:
+ *    for and can see the result of — reported as "no notification needed when
+ *    compact fires". The daemon says which settles are not news:
  *    `RunStatusEvent.housekeeping` (the turn was only a compaction) and
  *    `RunStatusEvent.restored` (a delegate lease handing an already-settled
  *    status back). A question is still raised either way, because a turn parked

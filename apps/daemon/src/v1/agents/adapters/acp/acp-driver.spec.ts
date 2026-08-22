@@ -1798,8 +1798,8 @@ describe('AcpTurnDriver off-protocol context reading', () => {
   });
 
   it('carries the reading into turn_complete, so the ring survives the turn', () => {
-    // THE REPORTED DEFECT: "у курсора неправильно работает кружочек — он не
-    // синхронизируется с контекстом", against a chat whose panel read 140.7k of
+    // THE REPORTED DEFECT: "cursor's little circle works wrong — it doesn't
+    // sync with the context", against a chat whose panel read 140.7k of
     // 200k with an empty ring beside it. Emitting the reading was only half of
     // it — the live plane is dropped when the run settles, so the ring was fed
     // for the length of a turn and blank between turns, which is when anyone
@@ -1962,6 +1962,77 @@ describe('AcpTurnDriver — a parameter the turn must not start without', () => 
         severity: 'warning',
       }),
     );
+  });
+
+  /** A session offering BOTH axes, so two parameter frames can go out. */
+  function sessionOfferingEffortAndContext(): Record<string, unknown> {
+    return {
+      sessionId: 's-1',
+      configOptions: [
+        {
+          id: 'model',
+          category: 'model',
+          currentValue: 'claude-opus-5',
+          options: [{ value: 'claude-opus-5', name: 'claude-opus-5' }],
+        },
+        {
+          id: 'effort',
+          category: 'model_config',
+          currentValue: 'medium',
+          options: [
+            { value: 'medium', name: 'Medium' },
+            { value: 'xhigh', name: 'Extra high' },
+          ],
+        },
+        {
+          id: 'context',
+          category: 'model_config',
+          currentValue: '300k',
+          options: [
+            { value: '300k', name: '300K' },
+            { value: '1m', name: '1M' },
+          ],
+        },
+      ],
+    };
+  }
+
+  it('keeps holding the prompt when a NON-blocking parameter answers first', () => {
+    // The order is the adapter's: `withEffort` appends without
+    // `applyBeforePrompt`, `withContextWindow` appends with it and after — so a
+    // turn carrying both an effort and a context window sends effort first and
+    // its reply lands first. Only the context frame blocks, so only the context
+    // reply may release; a release keyed on how MANY replies have come back
+    // instead of on which frame they answer lets the effort's reply free a
+    // prompt the context frame is still holding, and the turn then runs at the
+    // model's default window while the reply still confirms the size asked for.
+    const h = harness({
+      input: { ...BASE_INPUT, model: 'claude-opus-5' },
+      modelSelection: {
+        model: 'claude-opus-5',
+        parameters: [
+          { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
+          { id: 'context', value: '1m', applyBeforePrompt: true },
+        ],
+      },
+    });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
+
+    // Both frames went out; the prompt is held behind the second.
+    const parameterFrames = h.sent.filter(
+      (frame) => frame.method === 'session/set_config_option',
+    );
+    expect(parameterFrames).toHaveLength(2);
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    // The effort's reply (id 3) — it never blocked, so it must not release.
+    h.feed({ id: 3, result: {} });
+    expect(methods(h.sent)).not.toContain('session/prompt');
+
+    // The context's reply (id 4) is the one the prompt was waiting on.
+    h.feed({ id: 4, result: { configOptions: [] } });
+    expect(methods(h.sent)).toContain('session/prompt');
   });
 });
 
@@ -2508,7 +2579,7 @@ describe('AcpTurnDriver — a message delivered into the running turn', () => {
   }
 
   it('sends the message as a second prompt on the live session', () => {
-    // REPORTED as "мгновенная отправка сообщения из очереди не работает". This
+    // REPORTED as "instant sending of a queued message doesn't work". This
     // CLI has no frame that adds to a prompt in flight, and the adapter had
     // declared that as having no channel at all — but a second `session/prompt`
     // is accepted, so the channel is this.
@@ -2566,6 +2637,63 @@ describe('AcpTurnDriver — a message delivered into the running turn', () => {
     const events = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
 
     expect(events.map((e) => e.type)).toContain('turn_complete');
+  });
+
+  it('does NOT settle the turn when the superseded prompt ERRORS', () => {
+    // The interrupted prompt does not always answer `cancelled` — it can fail.
+    // An `error` is terminal downstream, so answering one here settles the run
+    // as FAILED while the follow-up is still being answered, which is the same
+    // defect the result path was fixed for and needs the same id check.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead' });
+
+    const superseded = h.feed({
+      id: 3,
+      error: { code: -32603, message: 'Internal error' },
+    });
+    expect(superseded.map((e) => e.type)).not.toContain('error');
+
+    // The follow-up's own reply is still the one that ends the turn.
+    expect(
+      h.feed({ id: 4, result: { stopReason: 'end_turn' } }).map((e) => e.type),
+    ).toContain('turn_complete');
+  });
+
+  it('DOES surface an error from the turn’s own prompt', () => {
+    // The guard above must not swallow the ordinary failure — with no follow-up
+    // sent, the turn's own prompt IS the latest one.
+    const h = running();
+
+    expect(
+      h
+        .feed({ id: 3, error: { code: -32603, message: 'Internal error' } })
+        .map((e) => e.type),
+    ).toContain('error');
+  });
+
+  it('settles on the LAST prompt even when the superseded reply lands after it', () => {
+    // Nothing orders the two replies: the agent's cancel of the interrupted
+    // prompt is its own piece of work and can trail the follow-up's whole turn.
+    // Deciding "is this the last prompt" by counting what is still outstanding
+    // reads whichever reply arrives SECOND as the terminal — so this ordering
+    // settles the run on the cancel, under the `cancelled` badge that reads as
+    // a Stop nobody pressed, and discards the real `end_turn` before it.
+    const h = running();
+    h.driver.sendFollowUp({ text: 'do X instead' });
+
+    // The follow-up's own turn finishes first.
+    const finished = h.feed({ id: 4, result: { stopReason: 'end_turn' } });
+    expect(finished).toContainEqual(
+      expect.objectContaining({
+        type: 'turn_complete',
+        stopReason: 'end_turn',
+      }),
+    );
+
+    // The superseded prompt's cancel trails it and must settle nothing.
+    const trailing = h.feed({ id: 3, result: { stopReason: 'cancelled' } });
+    expect(trailing.map((e) => e.type)).not.toContain('turn_cancelled');
+    expect(trailing.map((e) => e.type)).not.toContain('turn_complete');
   });
 
   it('refuses while the turn\u2019s OWN prompt is still held back', () => {

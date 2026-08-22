@@ -6,7 +6,11 @@ import type { AgentKind } from '../../runs/runs.types';
 import type { AgentContextWindowListing } from '../adapters/adapter.types';
 import type { AgentContextWindowListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
-import { ModelVocabularyCache } from '../utils/model-vocabulary-cache';
+import {
+  ModelVocabularyCache,
+  volatile,
+  type VolatileAnswer,
+} from '../utils/model-vocabulary-cache';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
@@ -54,7 +58,7 @@ export class ContextWindowsService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
-    options: ContextWindowsServiceOptions = {},
+    private readonly options: ContextWindowsServiceOptions = {},
   ) {
     this.cache = new ModelVocabularyCache({
       ttlMs: options.ttlMs ?? DEFAULT_TTL_MS,
@@ -87,6 +91,7 @@ export class ContextWindowsService {
     return {
       windows: listing.windows,
       unavailableReason: listing.unavailableReason,
+      unavailableKind: listing.unavailableKind,
     };
   }
 
@@ -94,7 +99,9 @@ export class ContextWindowsService {
     kind: AgentKind,
     model: string | null,
     previous: AgentContextWindowListing | undefined,
-  ): Promise<AgentContextWindowListing> {
+  ): Promise<
+    AgentContextWindowListing | VolatileAnswer<AgentContextWindowListing>
+  > {
     const adapter = this.adapters.for(kind);
     try {
       return await adapter.listModelContextWindows(model, {
@@ -107,18 +114,22 @@ export class ContextWindowsService {
     } catch (err) {
       // An adapter must not throw here, but a picker with no rows is a dead
       // control — keep the last good answer rather than propagate.
+      //
+      // VOLATILE, so the cache serves this without storing it: nothing was
+      // learned about the model, and remembering the stand-in would answer
+      // every request for the rest of the TTL instead of re-asking on the next.
       this.logger.warn(
         `listing ${kind} context windows failed: ${err instanceof Error ? err.message : String(err)}`,
       );
-      return (
-        previous ?? {
-          windows: [],
-          unavailableReason:
-            adapter.getConfig().contextWindowsUnavailableReason ??
-            `${kind} could not be asked which context windows this model offers`,
-          exact: false,
-        }
-      );
+      const fallback: AgentContextWindowListing = previous ?? {
+        windows: [],
+        unavailableReason:
+          adapter.getConfig().contextWindowsUnavailableReason ??
+          `${kind} could not be asked which context windows this model offers`,
+        unavailableKind: 'unreadable',
+        exact: false,
+      };
+      return volatile(fallback);
     }
   }
 }

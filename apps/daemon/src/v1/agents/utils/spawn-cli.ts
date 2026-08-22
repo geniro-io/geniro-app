@@ -642,9 +642,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * launched THERE was invisible — no liveness announcement, so its block read
    * `done` the moment its launching call returned, and nothing to hold the
    * next turn, so the run settled `completed` with three agents still working.
-   * That is the reported "он пишет, что ждет агента А и Б, хотя у него статус
-   * done, complete": traced in the reporter's own daemon log (2026-08-18
-   * 10:29–10:31, run acd7b34c), three `Agent` calls with
+   * That is the reported "it says it's waiting on agent A and B, even though
+   * its status is done, complete": traced in the reporter's own daemon log
+   * (2026-08-18 10:29–10:31, run acd7b34c), three `Agent` calls with
    * `run_in_background: true` and not one `subagent_info` row between them.
    *
    * A turn is not over while this is non-empty, however plainly the CLI's

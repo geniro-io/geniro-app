@@ -78,7 +78,6 @@ import { BranchSelect } from './branch-select';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
-import { isAgentMessage, previewMessageOf } from './chat-preview';
 import { CliLoginContext } from './cli-login-context';
 import { compactionOnlyTurnEnds } from './compaction-payload';
 import { ComposerCard } from './composer-card';
@@ -92,12 +91,7 @@ import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { RunActivityContext, RunSettledContext } from './live-row';
-import {
-  applyLiveText,
-  CHAT_LIVE_KEY,
-  type LiveState,
-  liveTextKey,
-} from './live-text';
+import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
 import { MarkdownImageLoaderContext } from './markdown-image';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -136,12 +130,13 @@ import type {
   ProfileAnswer,
   ProfiledSession,
 } from './session-search';
-import { mergeSessionListings, sessionProfiles } from './session-search';
 import {
-  lastTerminalItemAt,
-  settledRunStatus,
-  TERMINAL_KINDS,
-} from './settled-status';
+  mapWithLimit,
+  mergeSessionListings,
+  SESSION_SEARCH_CONCURRENCY,
+  sessionProfiles,
+} from './session-search';
+import { lastTerminalItemAt, TERMINAL_KINDS } from './settled-status';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -186,6 +181,7 @@ import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useUnseenRuns } from './use-unseen-runs';
@@ -251,49 +247,6 @@ const START_COLUMN_PAD = '1.5rem';
 const randomId = (): string => crypto.randomUUID();
 
 /**
- * May a REPLAYED transcript release this run's queue?
- *
- * The one rule, in one place. A replay carries every past turn's terminal item,
- * so no individual row may fire the drain — but a replay is also the only
- * signal that a turn ended while this client was not listening (another chat
- * was open, or the socket was down), and a queue owed its send must not wait
- * forever for a live event that already happened.
- *
- * `endedOnTerminal` may only AUTHORIZE, and the daemon's own status may only
- * authorize — but an UNKNOWN run authorizes nothing. `run?.status !== 'running'`
- * alone reads `undefined` as idle, which would send into a run this client
- * knows nothing about; erring toward not sending costs a delay the next
- * activation clears, while erring the other way delivers into a live turn.
- *
- * The status row alone cannot decide it either: three writers touch it and it
- * demonstrably lags, so on reopen the transcript's tail is the fresher witness.
- * That is why a terminal tail authorizes even while the row still says running.
- *
- * A CANCELLED turn authorizes nothing, from either witness. Stop is the user
- * asking the thread to stop, and a queue released by it starts a fresh turn in
- * answer — which is the same defect the live path has, just deferred to the
- * next time the chat is opened.
- */
-function queueMayDrainAfterReplay(
-  run: ChatRun | undefined,
-  lastItem: ChatItem | undefined,
-): boolean {
-  if (run === undefined) {
-    return false;
-  }
-  const tailSettledAs =
-    lastItem === undefined ? null : settledRunStatus(lastItem);
-  if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
-    return false;
-  }
-  const endedOnTerminal =
-    lastItem !== undefined &&
-    TERMINAL_KINDS.has(lastItem.kind) &&
-    lastItem.nodeId === null;
-  return endedOnTerminal || run.status !== 'running';
-}
-
-/**
  * Backoff for a queued send that hits RUN_BUSY. The run's terminal item is
  * persisted-then-emitted while the CLI process is still tearing down, so the
  * daemon frees the turn slot a beat AFTER the renderer learns the turn ended —
@@ -351,11 +304,8 @@ async function currentCustomInstructions(): Promise<{
   return customInstructions.trim() ? { customInstructions } : {};
 }
 
-/** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
 /** Draft key for the landing composer, which has no run id of its own. */
 const NEW_CHAT_DRAFT = '__new__';
-
-const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 
 export function Chats({
   client,
@@ -386,13 +336,6 @@ export function Chats({
     handoff: handoffApi,
   } = apis;
 
-  const [runs, setRuns] = useState<ChatRun[]>([]);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
-  const [items, setItems] = useState<ChatItem[]>([]);
-  // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
-  // never replayed, and cleared whenever the durable transcript is refetched.
-  const [liveText, setLiveText] =
-    useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
   const [input, setInput] = useState('');
   /**
    * The unsent message each thread is holding, with its staged images.
@@ -508,26 +451,7 @@ export function Chats({
   const [runConfigBranchNotice, setRunConfigBranchNotice] = useState<
     string | null
   >(null);
-  const [streaming, setStreaming] = useState(false);
-  // Live mirror, so a callback that must not be rebuilt on every delta can
-  // still ask whether a turn was in flight BEFORE it started one of its own —
-  // which is what tells a failed send whether the working state is its to
-  // clear. Assigned during render like `inputRef`, never from an effect.
-  const streamingRef = useRef(false);
-  streamingRef.current = streaming;
-  const [error, setError] = useState<string | null>(null);
-
-  // Held in a ref so the long-lived onItem subscription always filters against
-  // the current run without re-subscribing.
-  const activeRunIdRef = useRef<string | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
-  // Set when a run is opened, cleared by the first render that has its items.
-  // Opening a run must land on the NEWEST message, and the at-bottom gate below
-  // cannot decide that: activateRun empties the transcript first, which clamps
-  // the scroller to 0, so when the history renders the gate correctly reads
-  // "not at bottom" and would suppress the scroll — leaving the user at the
-  // oldest message of every chat they open.
-  const pendingScrollRef = useRef(false);
   /**
    * Whether the transcript is currently glued to its tail.
    *
@@ -538,114 +462,6 @@ export function Chats({
   const followingRef = useRef(true);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
-  // Highest seq rendered for the active run — the replay cursor used to fetch
-  // only the items missed during a disconnect.
-  const lastSeqRef = useRef(-1);
-  const reconnectAfterSeqRef = useRef(-1);
-  // Mirror `runs` into a ref so the stable activateRun callback can read the
-  // active run's current status without being re-created on every list change.
-  const runsRef = useRef<ChatRun[]>([]);
-  // First list fetch settled (either way) — gates the "No chats yet" claim.
-  // A boolean rather than Graphs' `| null` sentinel deliberately: `runs` has
-  // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
-  // null union would force to re-guard.
-  const [runsLoaded, setRunsLoaded] = useState(false);
-  useEffect(() => {
-    runsRef.current = runs;
-  }, [runs]);
-  // True once a terminal item has been seen for the active run since the last
-  // activateRun. Guards the post-replay streaming derive from re-arming Stop on a
-  // turn that already ended — e.g. a terminal WS item that lands during the
-  // history fetch while the cached run.status is still 'running' and the history
-  // snapshot predates that terminal item.
-  const sawTerminalRef = useRef(false);
-  /**
-   * The same thing, but LIVE items only.
-   *
-   * `sawTerminalRef` answers "has any turn ended since this run was activated",
-   * which a fail-fast run needs (its terminal item is in the replayed history).
-   * It cannot answer the question the activation below actually has — "did a
-   * turn end while I was fetching" — because every chat past its first turn
-   * replays a `turn_complete` and would set it. That made re-opening a working
-   * multi-turn chat show Send instead of Stop, which is the opposite of what
-   * that code promises.
-   */
-  const sawLiveTerminalRef = useRef(false);
-
-  /**
-   * What each running run is DOING right now, keyed by run id — "running
-   * Bash", "waiting for your answer". Ephemeral: it describes the moment, so
-   * it is never fetched, only pushed, and an unknown run simply has no entry.
-   */
-  const [activities, setActivities] = useState<ReadonlyMap<string, string>>(
-    new Map(),
-  );
-  /**
-   * Runs whose turn is HELD — the agent has finished and the process is alive
-   * only until the delegates it launched report back.
-   *
-   * It is deliberately not folded into `activities`: that map holds a sentence
-   * to display, and this is a fact the composer ACTS on. While a run is held
-   * the CLI is idle, so a message typed then goes straight out instead of into
-   * the queue — reported as "if claude is running agents in background it's
-   * like it stopped to work until it gets a notification from them… we should
-   * not send the message to the queue while it's just waiting for listeners".
-   */
-  /*
-   * A MAP, keyed run → when the hold was first seen, and the timestamp earns
-   * its place: the header's worked figure is not a wall clock, and a hold is
-   * exactly the kind of stretch it exists to exclude. `OpenTurn.openSince`
-   * already does this for a turn parked on an approval — "a turn parked
-   * overnight would otherwise report eight hours of work nobody did" — and an
-   * agent that stopped talking twenty minutes ago is the same claim from the
-   * other side. Measured on the reported screenshot: `44m 45s · worked 44m
-   * 45s`, of which the last twenty minutes were a dev server the turn was
-   * waiting on rather than any work.
-   *
-   * First SEEN, not first begun: a window opened mid-hold cannot know when it
-   * started, and dating it from now leaves the part it did not witness counted
-   * as work. That errs toward overstating the work, which is the direction that
-   * cannot invent a pause the agent never took.
-   */
-  const [holding, setHolding] = useState<ReadonlyMap<string, number>>(
-    new Map(),
-  );
-  const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
-  useEffect(() => {
-    holdingRef.current = holding;
-  }, [holding]);
-  /**
-   * What each run SAID as it last settled — the agent's closing words, or the
-   * failure's message, as the daemon announced them.
-   *
-   * Its own map beside {@link activities} rather than a field on the run row:
-   * it describes a MOMENT (this settle) and not the row's current state, and it
-   * arrives on the same push channel — a background thread's row is only as
-   * fresh as the last list fetch, so writing it there would mix a live fact
-   * into stale ones. Read by the notification rules, which is the one place
-   * that has to tell the user what happened without opening the chat.
-   */
-  const [settleSummaries, setSettleSummaries] = useState<
-    ReadonlyMap<string, string | null>
-  >(new Map());
-  /**
-   * The runs whose LAST settle is not worth interrupting the user for.
-   *
-   * Two daemon flags feed it and they are different statements: `housekeeping`
-   * says the turn produced nothing but the CLI's own compaction, `restored`
-   * says the status is being handed BACK — a delegate lease expiring over a run
-   * that had already settled, which crosses non-terminal→terminal a second time
-   * for a turn that ended minutes ago. Both would otherwise earn a banner and a
-   * sidebar mark for an ending the user has already seen.
-   *
-   * A set beside the summaries and updated from the same announce, because it
-   * describes the same moment: whether that ending was worth interrupting the
-   * user for. Both notification surfaces read it, so the banner and the sidebar
-   * mark cannot disagree about one turn.
-   */
-  const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
-    new Set(),
-  );
   // Messages written while the agent was still working — sent automatically,
   // one per settled turn, in order (Claude Code / Cursor-style queueing).
   // Keyed PER RUN and kept for the whole session: switching transcripts or
@@ -718,228 +534,88 @@ export function Chats({
   }, []);
 
   /**
-   * Has the ACTIVE thread's agent ever spoken? — the one thing the preview rule
-   * needs that a single item, or a reconnect delta, cannot see for itself (see
-   * {@link previewMessageOf}). Reset by `activateRun`, since it describes one
-   * thread and would otherwise carry the previous one's answer into a chat
-   * whose agent has said nothing.
-   */
-  const agentSpokeRef = useRef(false);
-
-  /**
-   * A replay's one reading of the sidebar row — the run's status, taken from
-   * the LAST item it replayed (the only terminal item that can describe the
-   * present), and the preview line, taken from the last `message` row in the
-   * same batch.
+   * Park the composer's contents under `from`, and put `to`'s back.
    *
-   * It exists because the alternative (letting each replayed row mirror itself)
-   * writes a past turn's ending over a run that is working right now; see the
-   * `live` gate in {@link addItem}. Applied only when the row still says
-   * `running`, so a replay can settle a stale row but never contradict a
-   * fresher `run_status` broadcast that arrived while the fetch was in flight.
-   *
-   * The PREVIEW is here for the same reason and against a symptom of its own:
-   * mirrored per row, every replayed message wrote itself into the sidebar's
-   * one preview line, so the line's final owner was decided by whatever the
-   * batch happened to end on rather than by any rule. It picks by
-   * {@link previewMessageOf} — the same rule the daemon's run list uses, so the
-   * two sources cannot write different owners into one line — takes the WHOLE
-   * batch rather than its tail (which is routinely a `turn_complete`), and
-   * writes nothing at all when the batch holds no message it should preview: a
-   * reconnect delta carrying only tool rows must not blank a preview the run
-   * list already has right.
+   * One helper for both directions (thread → thread and thread → landing card)
+   * so the two cannot drift into saving different things. Called BEFORE the
+   * switch commits, since it reads what is still on screen. `null` is the
+   * landing card, which has no run id to key its draft by.
    */
-  const reconcileFromTail = useCallback(
-    (runId: string, replayed: readonly ChatItem[]): void => {
-      // Every row must BELONG to the run being reconciled. The two arrive from
-      // different places — the id from the activation, the rows from a fetch
-      // that may have been in flight across a run switch — and applying one
-      // run's ending to another's row is the same class of cross-contamination
-      // `activateRun`'s own stale-fetch guard exists for.
-      const own = replayed.filter((item) => item.runId === runId);
-      const lastItem = own.at(-1);
-      if (lastItem === undefined) {
-        return;
+  const swapDraft = useCallback(
+    (from: string | null, to: string | null): void => {
+      const text = inputRef.current;
+      const images = attachmentsRef.current;
+      const fromKey = from ?? NEW_CHAT_DRAFT;
+      if (text.length > 0 || images.length > 0) {
+        draftsRef.current.set(fromKey, { text, images });
+      } else {
+        // An emptied composer is not a draft — keeping one would restore text
+        // the user had deliberately cleared.
+        draftsRef.current.delete(fromKey);
       }
-      const settled = settledRunStatus(lastItem);
-      const lastMessage = previewMessageOf(own, agentSpokeRef.current);
-      const previewText =
-        lastMessage === undefined
-          ? null
-          : payloadString(lastMessage.payload, 'text');
-      if (settled === null && previewText === null) {
-        return;
-      }
-      setRuns((prev) =>
-        prev.map((run) => {
-          if (run.id !== runId) {
-            return run;
-          }
-          const next = { ...run };
-          if (settled !== null && run.status === 'running') {
-            next.status = settled;
-          }
-          if (previewText !== null) {
-            next.lastMessage = previewText;
-          }
-          // `updatedAt` is deliberately NOT touched here, though the rows in
-          // hand are newer than it: this runs on ACTIVATION, so a time invented
-          // from them moves the thread in the list at the exact moment the user
-          // clicks it — which is the whole of the reported jump. The row's time
-          // is the daemon's, kept current for every thread alike by
-          // `RunStatusEvent.at`.
-          return next;
-        }),
-      );
+      const incoming = draftsRef.current.get(to ?? NEW_CHAT_DRAFT);
+      setInput(incoming?.text ?? '');
+      attachments.restore(incoming?.images ?? []);
     },
-    [],
+    [attachments],
   );
 
   /**
-   * `live` says this item arrived on the wire as it happened, rather than out
-   * of a history replay.
-   *
-   * REQUIRED, with no default — and that is the guard, not the prose. A default
-   * made the dangerous call the natural one: `forEach(addItem)` passes the
-   * ARRAY INDEX as the flag, falsy for the first item and truthy for every one
-   * after, which is exactly the replayed-drain bug this parameter exists to
-   * prevent. Requiring it moves the rule from a comment a reader may skip to an
-   * error the compiler raises.
+   * Does this run hold follow-ups the drain still owes it? Read off the ref so
+   * the run lifecycle's own stable callbacks see the CURRENT queue rather than
+   * the one that existed when they were built.
    */
-  const addItem = useCallback((item: ChatItem, live: boolean): void => {
-    if (item.runId !== activeRunIdRef.current) {
-      return;
-    }
-    setItems((prev) => {
-      const last = prev[prev.length - 1];
-      // Fast path: items carry a monotonic seq and are emitted persist-first,
-      // so a strictly-newer item just appends. `items` stays seq-sorted, so a
-      // full copy+resort per stream item (O(N² log N) to build a run) is only
-      // needed on the rare out-of-order case below.
-      if (last === undefined || item.seq > last.seq) {
-        return [...prev, item];
-      }
-      // The replay/live seam (or a reconnect delta) can re-deliver an item:
-      // de-dupe, then insert in seq order.
-      //
-      // BY ID, never by seq. Identity is what `id` means and what the seam
-      // actually re-delivers — the same row twice — while `seq` is only the
-      // ORDER. Treating a repeated seq as a repeated item made this the second
-      // half of the duplicate-seq defect: the daemon issued one value to two
-      // different rows, and this silently dropped whichever arrived second,
-      // which was reliably the agent's reply ("it deletes its last message").
-      // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
-      // transcript written before that fix still holds such a pair, and an
-      // ordering number is the wrong thing to establish identity with in any
-      // case: this way those rows come back on the next replay instead of
-      // staying invisible forever.
-      if (prev.some((existing) => existing.id === item.id)) {
-        return prev;
-      }
-      // A stable sort keeps two rows that DO share a seq in arrival order,
-      // rather than letting their relative position flip between renders.
-      return [...prev, item].sort((a, b) => a.seq - b.seq);
-    });
-    if (item.seq > lastSeqRef.current) {
-      lastSeqRef.current = item.seq;
-    }
-    // This thread's agent has now spoken — recorded for EVERY message row, live
-    // or replayed, because the preview rule's fallback asks about the whole
-    // conversation rather than about the batch in hand.
-    if (isAgentMessage(item)) {
-      agentSpokeRef.current = true;
-    }
-    // Mirror a streamed message into the sidebar row's preview line, so the
-    // list stays live without a refetch.
-    //
-    // LIVE items only, for exactly the reason the terminal-item mirror below is
-    // gated: a replay carries EVERY message the thread has ever held, and each
-    // one writing itself here left the line's owner decided by where the batch
-    // ended. A replay takes ONE reading, in `reconcileFromTail`.
-    //
-    // The PREVIEW alone. This used to write the row's `updatedAt` too — the
-    // sidebar's ORDER — and that was the one field it had no business
-    // inventing: items reach this window for the OPEN chat only, so the thread
-    // being read crept up the list on every message while the threads working
-    // in the background stood still. The row's time is the daemon's, and it now
-    // arrives for every thread alike on `RunStatusEvent.at`.
-    if (live && item.kind === 'message') {
-      const text = payloadString(item.payload, 'text');
-      const preview =
-        text !== null && previewMessageOf([item], agentSpokeRef.current)
-          ? text
-          : null;
-      if (preview !== null) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId ? { ...run, lastMessage: preview } : run,
-          ),
-        );
-      }
-    }
-    // Only a RUN-level terminal item ends the working state — a workflow's
-    // per-node turn_complete/error (nodeId set) must not re-enable the composer
-    // while sibling branches are still running.
-    const settledStatus = settledRunStatus(item);
-    if (settledStatus !== null) {
-      sawTerminalRef.current = true;
-      if (live) {
-        sawLiveTerminalRef.current = true;
-      }
-      // LIVE items only — for the status and the working state alike, and for
-      // the same reason the drain below is gated: a replayed transcript carries
-      // EVERY past turn's terminal item, and the last of those is routinely not
-      // the run's current state. Mirroring one wrote `completed` onto a run whose
-      // next turn was in flight, and the write outlived the visit: the row stayed
-      // wrong in `runs`, so the next activation read it as settled, left
-      // `streaming` false, and the transcript's live row disappeared with it.
-      // Measured on the real app — a chat with a blocked tool call read
-      // `running · Working… 3m 39s`, and after switching to another chat and back
-      // read `completed` with no live row, while the daemon still said `running`.
-      //
-      // A replay's own reading is taken ONCE by the caller, from the LAST item
-      // (see `activateRun` and the reconnect delta), which is the only terminal
-      // item that can describe the present.
-      if (live) {
-        setStreaming(false);
-        // Mirror the daemon's settle write into the sidebar list — without this
-        // a finished run keeps its stale 'running' badge until an app restart.
-        // The STATUS only: the same settle announces `RunStatusEvent.at`, which
-        // is where the row's time comes from for every thread rather than for
-        // whichever one this window happens to have open.
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === item.runId ? { ...run, status: settledStatus } : run,
-          ),
-        );
-      }
-      // The turn ended — fire the next queued message into this chat (the
-      // early return above guarantees item.runId IS the active run).
-      //
-      // LIVE items only. A replayed transcript carries every past turn's
-      // terminal item, so re-opening a chat that is still working used to
-      // drain the queue straight into the turn in flight — and claude accepts
-      // a mid-turn follow-up, so it genuinely went. That is the exact
-      // behaviour the queue exists to prevent, and Steer is the only sanctioned
-      // way to reach a running turn. A replay's own drain decision is made once
-      // by the caller, from the run's settled status.
-      //
-      // …and NEVER on a CANCEL. Stop is the user asking for the thread to stop,
-      // and the drain answered it by starting a fresh turn on the spot — the
-      // reported "I stopped the thread, but see it continue working", with the
-      // `cancelled` row and the new turn's `Working…` one under it in the same
-      // transcript. The message stays at the head of the queue, where Send-now,
-      // Edit and Remove all still reach it; what it no longer does is let itself
-      // out through the door the user just closed.
-      if (
-        live &&
-        settledStatus !== 'cancelled' &&
-        (queuesRef.current[item.runId]?.length ?? 0) > 0
-      ) {
-        drainQueueRef.current(item.runId);
-      }
-    }
-  }, []);
+  const hasQueuedMessages = useCallback(
+    (runId: string): boolean => (queuesRef.current[runId]?.length ?? 0) > 0,
+    [],
+  );
+  const resetSteerStatus = useCallback((): void => setSteerStatus(null), []);
+
+  const {
+    runs,
+    setRuns,
+    runsLoaded,
+    runsRef,
+    activeRunId,
+    activeRunIdRef,
+    items,
+    liveText,
+    streaming,
+    setStreaming,
+    error,
+    setError,
+    activities,
+    holding,
+    settleSummaries,
+    quietSettles,
+    deadRequestKeys,
+    pendingScrollRef,
+    sawTerminalRef,
+    addItem,
+    refreshRuns,
+    activateRun,
+    handleActivateRun,
+    deactivateRun,
+  } = useChatRun({
+    client,
+    chatApi,
+    workflowApi,
+    swapDraft,
+    resetSteerStatus,
+    hasQueuedMessages,
+    drainQueueRef,
+  });
+
+  // Live mirror, so a callback that must not be rebuilt on every delta can
+  // still ask whether a turn was in flight BEFORE it started one of its own —
+  // which is what tells a failed send whether the working state is its to
+  // clear. Assigned during render like `inputRef`, never from an effect.
+  const streamingRef = useRef(false);
+  streamingRef.current = streaming;
+  const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
+  useEffect(() => {
+    holdingRef.current = holding;
+  }, [holding]);
 
   // The workflow library is editable on the Graphs page while this tab stays
   // mounted (hidden), so refetch it every time the tab becomes visible — a
@@ -1004,6 +680,23 @@ export function Chats({
           next[kind] = model;
         }
         void window.geniro.updateSettings({ lastModels: next });
+        return next;
+      });
+      // A window size belongs to the MODEL that offered it: only some models
+      // carry the axis at all, and those that do differ in what they list, so a
+      // size remembered from the previous model is one the new one may simply
+      // refuse. The daemon already drops it on a patch that changes model
+      // (`ChatService`); a NEW run has to be told the same thing here, or it is
+      // created carrying a size the model declines — and the chip, reading the
+      // new model's list, draws the default while the stored word is still what
+      // gets sent.
+      setContextWindows((current) => {
+        if (current[kind] === undefined) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[kind];
+        void window.geniro.updateSettings({ lastContextWindows: next });
         return next;
       });
     },
@@ -1685,149 +1378,6 @@ export function Chats({
     }
   }, [sessionPickerOpen]);
 
-  /** Reload the sidebar's run list from the daemon (statuses included) —
-   *  live items only reach the ACTIVE run's room, so other runs' settles are
-   *  picked up by refetching at natural moments (mount, pressing +). */
-  const refreshRuns = useCallback((): void => {
-    void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
-      .then(([chats, workflowRuns]) => {
-        const all = [...chats, ...workflowRuns].sort((a, b) =>
-          b.createdAt.localeCompare(a.createdAt),
-        );
-        setRuns(all);
-        // Seeded from the SNAPSHOT, not only from the live announce. The hold
-        // starts with one broadcast and then lasts as long as the delegates do,
-        // so a window opened after it — or one that just reconnected — would
-        // otherwise read a held run as a working agent and queue the user's
-        // message behind delegates that have minutes left to run.
-        setHolding(
-          new Map(
-            all
-              .filter((r) => r.holdingFor > 0)
-              .map((r) => [r.id, Date.now()] as const),
-          ),
-        );
-      })
-      .catch((err: unknown) => setError(String(err)))
-      // Either way the first fetch settled — "No chats yet" is reserved for a
-      // resolved-but-empty list, never shown while the fetch is in flight.
-      .finally(() => setRunsLoaded(true));
-  }, [chatApi, workflowApi]);
-
-  /**
-   * Park the composer's contents under `from`, and put `to`'s back.
-   *
-   * One helper for both directions (thread → thread and thread → landing card)
-   * so the two cannot drift into saving different things. Called BEFORE the
-   * switch commits, since it reads what is still on screen.
-   */
-  const swapDraft = useCallback(
-    (from: string, to: string): void => {
-      const text = inputRef.current;
-      const images = attachmentsRef.current;
-      if (text.length > 0 || images.length > 0) {
-        draftsRef.current.set(from, { text, images });
-      } else {
-        // An emptied composer is not a draft — keeping one would restore text
-        // the user had deliberately cleared.
-        draftsRef.current.delete(from);
-      }
-      const incoming = draftsRef.current.get(to);
-      setInput(incoming?.text ?? '');
-      attachments.restore(incoming?.images ?? []);
-    },
-    [attachments],
-  );
-
-  const activateRun = useCallback(
-    async (runId: string): Promise<void> => {
-      const previous = activeRunIdRef.current;
-      if (previous && previous !== runId) {
-        client.leaveRun(previous);
-      }
-      // Only on a genuine CHANGE of thread. `activateRun` is also called to
-      // re-open the thread already showing (a refresh, a re-select), and
-      // swapping a draft out and back through that path would hand the
-      // composer whatever the map held rather than what is on screen.
-      if (previous !== runId) {
-        swapDraft(previous ?? NEW_CHAT_DRAFT, runId);
-      }
-      // The steer outcome belongs to the run the user pressed it in.
-      setSteerStatus(null);
-      activeRunIdRef.current = runId;
-      lastSeqRef.current = -1;
-      sawTerminalRef.current = false;
-      sawLiveTerminalRef.current = false;
-      // A NEW thread has its own answer to "has the agent spoken" — carrying
-      // the previous one's forward would withhold the preview from a chat whose
-      // first message is still the only one in it.
-      agentSpokeRef.current = false;
-      pendingScrollRef.current = true;
-      setActiveRunId(runId);
-      setItems([]);
-      setLiveText(EMPTY_LIVE_TEXT);
-      setStreaming(false);
-      setError(null);
-      // Join FIRST so any live item published during the history fetch is
-      // buffered through addItem; the seq de-dupe reconciles the overlap.
-      try {
-        await client.joinRun(runId);
-        const history = await chatApi.listRunItems({ runId });
-        // The user may have switched runs while this fetch was in flight —
-        // a stale completion must not replay items or re-arm Stop/streaming
-        // (and cross-contaminate errors) for the CURRENTLY active run.
-        if (activeRunIdRef.current !== runId) {
-          return;
-        }
-        history.forEach((item) => addItem(item, false));
-        // Reconnecting/switching to an in-flight run must show the working state
-        // (Stop), not an enabled Send that a second message would race into a
-        // RUN_BUSY. Derive it from the run's status + whether the replayed
-        // transcript already ended on a terminal item.
-        const run = runsRef.current.find((r) => r.id === runId);
-        const last = history.at(-1);
-        const endedOnTerminal =
-          last !== undefined && settledRunStatus(last) !== null;
-        // The replay's ONE reading of its own tail — only the LAST item can say
-        // what the run is now, which is why no individual replayed row is allowed
-        // to (see `addItem`). It covers the turn that ended while the user was
-        // looking at another chat, where the row they are carrying still says
-        // running and nothing else will correct it.
-        reconcileFromTail(runId, history);
-        if (
-          run?.status === 'running' &&
-          !sawLiveTerminalRef.current &&
-          !endedOnTerminal
-        ) {
-          setStreaming(true);
-        } else if (
-          queueMayDrainAfterReplay(run, last) &&
-          (queuesRef.current[runId]?.length ?? 0) > 0
-        ) {
-          // The ONE drain decision a replay is allowed to make, and it is taken
-          // from the daemon's own run status rather than from any transcript
-          // row: the turn this chat was on finished while the user was looking
-          // at another one, so the queue is owed its send. While the run is
-          // still `running` nothing is sent — Steer is the only way into a live
-          // turn.
-          drainQueueRef.current(runId);
-        }
-      } catch (err) {
-        if (activeRunIdRef.current === runId) {
-          setError(String(err));
-        }
-      }
-    },
-    [client, chatApi, addItem],
-  );
-
-  // Stable id-keyed activation for the memoized ChatListItem rows (see
-  // handleRenameRun above).
-  const handleActivateRun = useCallback(
-    (runId: string): void => void activateRun(runId),
-    [activateRun],
-  );
-
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {
       setFolder(s.projectFolder);
@@ -1853,227 +1403,7 @@ export function Chats({
     // binary is too old to be driven — looked exactly like a working one and
     // failed only AFTER a run had been created, as "exited with code 1".
     void window.geniro.detectClis().then(setCliDetections);
-    refreshRuns();
     refreshGroups();
-    // Wrapped, not passed bare: this is the one site that means LIVE, and an
-    // arrow pins the arity so a future emitter argument cannot land on the
-    // `live` flag.
-    const unsubscribeItem = client.onItem((item) => addItem(item, true));
-    const unsubscribeLiveText = client.onLiveText((event) => {
-      // Throwaway by design — only ever shown for the run on screen, and
-      // dropped wholesale on a run switch or a disconnect.
-      if (event.runId !== activeRunIdRef.current) {
-        return;
-      }
-      setLiveText((prev) => applyLiveText(prev, event));
-    });
-    const unsubscribeDisconnect = client.onDisconnect(() => {
-      reconnectAfterSeqRef.current = lastSeqRef.current;
-      // The daemon kept streaming while we were away and the tail we hold is
-      // now arbitrarily stale; the durable replay below is complete on its own.
-      setLiveText(EMPTY_LIVE_TEXT);
-    });
-    // On reconnect the WS missed any items streamed while offline (the room
-    // buffers nothing for an absent member); fetch just the delta past the last
-    // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
-    // is harmless.
-    const unsubscribeReconnect = client.onReconnect((joinError) => {
-      const active = activeRunIdRef.current;
-      if (!active) {
-        return;
-      }
-      if (joinError) {
-        setError(joinError.message);
-        return;
-      }
-      void chatApi
-        .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
-        // A replay, not live: no individual row here may fire the drain, or a
-        // transcript several turns long would send into the turn in flight.
-        //
-        // But this delta is ALSO the only place a turn that ended while the
-        // socket was down is ever seen, so the same single decision the
-        // activation replay takes has to be taken here too. An earlier version
-        // of this comment claimed the queue would go out "on the next live
-        // terminal item, or on the next activation" — neither fires when the
-        // turn already ended offline, so the queue simply stopped forever, and
-        // on cursor there is not even a Steer control to release it by hand.
-        .then((items) => {
-          items.forEach((item) => addItem(item, false));
-          // Same single reading the activation replay takes, and needed here for
-          // the same reason it is needed there: these rows are historical to the
-          // renderer (no individual one may mirror its status) but they are the
-          // only sighting of a turn that ended while the socket was down.
-          reconcileFromTail(active, items);
-          const run = runsRef.current.find((r) => r.id === active);
-          if (
-            queueMayDrainAfterReplay(run, items.at(-1)) &&
-            (queuesRef.current[active]?.length ?? 0) > 0
-          ) {
-            drainQueueRef.current(active);
-          }
-        })
-        // Same stale-run guard as activateRun's catch: if the user switched
-        // runs while this delta-fetch was in flight, A's error must not paint
-        // over B (addItem is already run-scoped by item.runId; setError is not).
-        .catch((err: unknown) => {
-          if (activeRunIdRef.current === active) {
-            setError(String(err));
-          }
-        });
-    });
-    // Broadcast to every client, for every run — this is what keeps the badge
-    // of a chat the user is NOT looking at honest. Live items only reach the
-    // focused run's room, so before this a background run's settle was
-    // invisible until the next refetch.
-    const unsubscribeRunStatus = client.onRunStatus((event) => {
-      const status = event.status;
-      // An activity-only announce carries no status and must not touch the
-      // badge. It fires on every tool call without reading the run, so while
-      // it asserted `running` one straggler after a cancel flipped the row
-      // back to running and nothing announced again to correct it.
-      // `awaiting` rides the SAME row as the status rather than a map of its
-      // own, because the snapshot already carries it: `GET /v1/chats` answers
-      // it per run, so a window that reconnects after the transition learns it
-      // from the row it just loaded, and this event only has to keep that row
-      // current. A parallel map would need seeding from the snapshot anyway,
-      // and would then be a second place for the same fact to go stale.
-      //
-      // `undefined` means the announce said nothing about waiting — the field
-      // is left exactly as it was, which is what lets a tool-call announce
-      // fire during a parked turn without unparking it.
-      const parked = event.awaiting;
-      // Recorded BEFORE the row update below, so the notification rules — which
-      // run off that row changing — already have the sentence when they fire.
-      if (event.summary !== undefined) {
-        const said = event.summary;
-        setSettleSummaries((prev) => new Map(prev).set(event.runId, said));
-      }
-      // Recorded on the same terms and for the same reason: only a SETTLE says
-      // anything about this, and every settle says it — so an absent field is
-      // an activity announce and must leave the reading alone, while a settle
-      // that did real work clears the flag its predecessor may have set.
-      if (event.status !== null && isSettledRunStatus(event.status)) {
-        const quiet = event.housekeeping === true || event.restored === true;
-        setQuietSettles((prev) => {
-          if (prev.has(event.runId) === quiet) {
-            return prev;
-          }
-          const next = new Set(prev);
-          if (quiet) {
-            next.add(event.runId);
-          } else {
-            next.delete(event.runId);
-          }
-          return next;
-        });
-      }
-      // The moment the daemon wrote the row, and the ONE thing that moves this
-      // list's order — see `RunStatusEvent.at`. Without it a thread working in
-      // the background kept the `updatedAt` it was loaded with for the whole
-      // session, and the first thing that corrected it was the user opening the
-      // thread: the reported "as soon as I click a thread it jumps to the top".
-      // Present only on an announce that really wrote the row, so this cannot
-      // run ahead of what the next refetch will say.
-      const at = event.at;
-      if (status !== null || parked !== undefined || at !== undefined) {
-        setRuns((prev) =>
-          prev.map((run) =>
-            run.id === event.runId
-              ? {
-                  ...run,
-                  ...(status !== null ? { status } : {}),
-                  ...(parked !== undefined ? { awaiting: parked } : {}),
-                  ...(at === undefined ? {} : { updatedAt: at }),
-                }
-              : run,
-          ),
-        );
-      }
-      // A queue in a thread the user is NOT looking at is released HERE, and
-      // nowhere else. Live items are delivered to the run's own room and the
-      // client joins one room at a time, so `addItem` — which fires the drain
-      // for the open chat — never sees a background turn end at all. Until
-      // this, such a queue waited for the user to OPEN that chat again: the
-      // reported "after compacting it will not send message that was in queue
-      // — only after i will choose thread", where the compaction ran for two
-      // minutes and the user read another thread while it did. Reproduced
-      // without any compaction: queue a follow-up, switch chats, and the turn
-      // that ends 20 seconds later leaves the message undelivered.
-      //
-      // The ACTIVE run is deliberately left to its terminal ITEM. This
-      // broadcast and that item race, and one drain per settle is the whole
-      // contract — the item is the finer-grained witness (it carries the
-      // stopReason a workflow's roll-up rides), so it stays the authority
-      // wherever it is available.
-      //
-      // `cancelled` is refused on the same grounds as the live path: Stop is
-      // the user closing the door, not a cue to open a fresh turn behind it.
-      if (
-        status !== null &&
-        status !== 'cancelled' &&
-        isSettledRunStatus(status) &&
-        event.runId !== activeRunIdRef.current &&
-        (queuesRef.current[event.runId]?.length ?? 0) > 0
-      ) {
-        drainQueueRef.current(event.runId);
-      }
-      setActivities((prev) => {
-        const next = new Map(prev);
-        // A run that is no longer RUNNING has no current activity, whatever
-        // the announce carried. A null activity was the only thing that ever
-        // cleared this map, so a terminal status arriving alongside a non-null
-        // one left the entry behind — and the badge went on naming a tool that
-        // finished, for as long as the row lived.
-        const stopped = status !== null && status !== 'running';
-        if (event.activity === null || stopped) {
-          next.delete(event.runId);
-        } else {
-          next.set(event.runId, event.activity);
-        }
-        return next;
-      });
-      setHolding((prev) => {
-        // A real STATUS transition ends whatever hold was in effect — a turn
-        // that settled is not held, and a new turn starting has no hold yet.
-        // An activity-only announce carrying no `holdingFor` says nothing and
-        // must leave the reading alone.
-        const held =
-          event.holdingFor !== undefined
-            ? event.holdingFor > 0
-            : status !== null
-              ? false
-              : prev.has(event.runId);
-        // Unchanged means unchanged, and that is what preserves the START: a
-        // hold re-announces on every unit that reports, so rewriting the entry
-        // each time would restamp it and the parked stretch would never grow.
-        if (held === prev.has(event.runId)) {
-          return prev;
-        }
-        const next = new Map(prev);
-        if (held) {
-          next.set(event.runId, Date.now());
-        } else {
-          next.delete(event.runId);
-        }
-        return next;
-      });
-    });
-    const selectedRun = activeRunIdRef.current;
-    if (selectedRun) {
-      void activateRun(selectedRun);
-    }
-    return () => {
-      unsubscribeItem();
-      unsubscribeLiveText();
-      unsubscribeDisconnect();
-      unsubscribeReconnect();
-      unsubscribeRunStatus();
-      const active = activeRunIdRef.current;
-      if (active) {
-        client.leaveRun(active);
-      }
-    };
   }, [client, chatApi, addItem, activateRun, refreshRuns, refreshGroups]);
 
   useEffect(() => {
@@ -2337,8 +1667,11 @@ export function Chats({
           // Same rule as the model: omitted entirely on the CLI default. A CLI
           // with no effort control never has an entry, since its chip is absent.
           ...(efforts[agentKind] ? { effort: efforts[agentKind] } : {}),
-          // Same rule again. A size the chosen model does not offer is drawn
-          // as unavailable by the chip and never reaches here.
+          // Same rule again. Held true by `changeModel`, which clears the
+          // remembered size whenever the model changes — the chip's own
+          // rendering does not, since it draws the default sentinel for a size
+          // the new model does not list while the stored word is still what
+          // would be sent.
           ...(contextWindows[agentKind]
             ? { contextWindow: contextWindows[agentKind] }
             : {}),
@@ -2488,9 +1821,13 @@ export function Chats({
     // One ask per PROFILE, folded into one list. Concurrent rather than in
     // turn: they are independent questions to independent stores, and asking
     // them sequentially would make opening the picker cost the sum of every
-    // account the user has.
-    void Promise.all(
-      sessionProfileDirs.map(async (profile): Promise<ProfileAnswer> =>
+    // account the user has. Bounded rather than all at once, because each ask
+    // is a full-profile scan and nothing cancels a superseded one — see
+    // `SESSION_SEARCH_CONCURRENCY`.
+    void mapWithLimit(
+      sessionProfileDirs,
+      SESSION_SEARCH_CONCURRENCY,
+      async (profile): Promise<ProfileAnswer> =>
         agentsApi
           .listAgentSessions({
             agent: sessionAgent,
@@ -2513,7 +1850,6 @@ export function Chats({
             listing: null,
             error: daemonErrorDetail(err),
           })),
-      ),
     )
       .then((answers) => {
         if (stale) {
@@ -2630,19 +1966,9 @@ export function Chats({
   /** The sidebar's + : back to the new-run composer. Nothing is created —
    *  the run (chat or workflow) is only seeded when the composer sends. */
   const newChat = useCallback((): void => {
-    const previous = activeRunIdRef.current;
-    if (previous) {
-      client.leaveRun(previous);
-    }
-    swapDraft(previous ?? NEW_CHAT_DRAFT, NEW_CHAT_DRAFT);
-    activeRunIdRef.current = null;
-    setActiveRunId(null);
-    setItems([]);
-    setLiveText(EMPTY_LIVE_TEXT);
-    setStreaming(false);
-    setError(null);
+    deactivateRun();
     refreshRuns();
-  }, [client, refreshRuns]);
+  }, [deactivateRun, refreshRuns]);
 
   const confirmDelete = useCallback(async (): Promise<void> => {
     if (!deleting) {
@@ -3239,26 +2565,6 @@ export function Chats({
       });
     },
     [client, startTurn, enqueueMessage],
-  );
-
-  // Requests the daemon reported as already settled — invalid answers remain
-  // retryable, while expired cards stop retrying forever.
-  const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
-    new Set(),
-  );
-  useEffect(
-    () =>
-      client.onVerdictAck((ack) => {
-        if (
-          ack.status === 'expired' &&
-          ack.runId === activeRunIdRef.current &&
-          ack.requestId
-        ) {
-          const requestKey = `${ack.runId}:${ack.requestId}`;
-          setDeadRequestKeys((prev) => new Set(prev).add(requestKey));
-        }
-      }),
-    [client],
   );
 
   const verdicts = useMemo(() => collectVerdicts(items), [items]);
@@ -4868,7 +4174,7 @@ export function Chats({
                             // the target off the header alone left the body of an
                             // expanded group inert: a chat dragged into it lit
                             // nothing up and landed nowhere, which is the reported
-                            // "выделяется, но не перетаскивается". `dragover`
+                            // "gets selected, but doesn't drag". `dragover`
                             // bubbles, so one handler here covers every child and
                             // the rows need none of their own.
                             <li
@@ -5198,6 +4504,9 @@ export function Chats({
                                     value={contextWindows[agentKind] ?? null}
                                     unavailableReason={
                                       agentContextWindows.unavailableReason
+                                    }
+                                    unavailableKind={
+                                      agentContextWindows.unavailableKind
                                     }
                                     onChange={(size) =>
                                       changeContextWindow(agentKind, size)
@@ -5744,6 +5053,9 @@ export function Chats({
                                   nextTurnOnly={streaming}
                                   unavailableReason={
                                     agentContextWindows.unavailableReason
+                                  }
+                                  unavailableKind={
+                                    agentContextWindows.unavailableKind
                                   }
                                   onChange={(contextWindow) =>
                                     void changeRunSettings({ contextWindow })

@@ -9,6 +9,7 @@ import { useAgentVocabulary } from './use-agent-vocabulary';
 const NOTHING_YET: AgentContextWindowListingDto = {
   windows: [],
   unavailableReason: null,
+  unavailableKind: null,
 };
 
 /**

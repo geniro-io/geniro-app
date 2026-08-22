@@ -153,8 +153,8 @@ export const ChatListItem = memo(function ChatListItem({
     <NavListItem
       active={active}
       // `select-none`: without it a press-and-drag on the row starts a TEXT
-      // selection instead of the drag, which is what "выделяется, но не
-      // перетаскивается" looks like from the other side of the screen.
+      // selection instead of the drag, which is what "gets selected, but
+      // doesn't drag" looks like from the other side of the screen.
       className={cn('group select-none', dragging && 'opacity-40')}
       activateLabel={label}
       suspendActivation={editing}

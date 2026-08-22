@@ -38,6 +38,7 @@ const LISTING: AgentContextWindowListing = {
     { id: '1m', label: '1m' },
   ],
   unavailableReason: null,
+  unavailableKind: null,
   exact: true,
 };
 
@@ -172,6 +173,10 @@ describe('ContextWindowsService', () => {
     expect(await windows.listWire('cursor-agent', 'claude-opus-5')).toEqual({
       windows: LISTING.windows,
       unavailableReason: null,
+      // `unavailableKind` DOES cross — the chip renders the no-model case
+      // differently from the three that mean one fixed window, and recognising
+      // that by matching the reason prose is what this field replaced.
+      unavailableKind: null,
     });
   });
 });

@@ -313,8 +313,8 @@
  * 825px high. Being absolutely positioned against the document, they also
  * escape every `overflow: hidden` on the way up — `main`'s included — so
  * nothing clipped them, and the document's scrollable height simply grew with
- * the conversation ("какой-то infinite scroll, который растёт и растёт на всё
- * окно приложения"). The transcript's tail-follow then had a scrollable
+ * the conversation ("some kind of infinite scroll that grows and grows over
+ * the whole app window"). The transcript's tail-follow then had a scrollable
  * document to drag, which is how the entire UI came to slide off the top of
  * the screen after clicking a long thread.
  *

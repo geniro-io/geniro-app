@@ -1304,8 +1304,8 @@ export const CLAUDE_PLAN_LIMITS_TIMEOUT_MS = 8_000;
 // an array of plain strings, so the composer's `/` autocomplete listed 64 rows
 // with no description at all. Measured against this daemon's own endpoint on a
 // real profile: 67 entries, 3 of them described (the three that happen to be
-// scannable files with frontmatter), 64 bare. The reported "Автокомплит не
-// показывает описание тулов" was pointing at two built-ins, `/compact` and
+// scannable files with frontmatter), 64 bare. The reported "Autocomplete
+// doesn't show tool descriptions" was pointing at two built-ins, `/compact` and
 // `/autocompact`, which exist nowhere on disk to be scanned.
 //
 // The CLI does have a channel that carries them, and it is a PUSH: ask it to

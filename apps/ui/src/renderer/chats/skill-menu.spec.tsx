@@ -132,4 +132,23 @@ describe('SkillMenu', () => {
     });
     expect(onHighlight).toHaveBeenCalledWith(1);
   });
+
+  it('renders the panel on the shared lifted floating surface, not the page-level one', async () => {
+    // Regression pin: this popup floats above the composer card, so it must
+    // compose the same lifted surface as every other floating panel
+    // (`shadow-panel-lg` over a softened `border-border/60`) rather than the
+    // page-level `shadow-panel-md` a dialog uses.
+    const container = await mount(
+      <SkillMenu
+        skills={SKILLS}
+        highlightIndex={0}
+        onSelect={vi.fn()}
+        onHighlight={vi.fn()}
+      />,
+    );
+    const panel = container.querySelector('[role="listbox"]')!;
+    expect(panel.className).toContain('shadow-panel-lg');
+    expect(panel.className).not.toContain('shadow-panel-md');
+    expect(panel.className).toContain('border-border/60');
+  });
 });

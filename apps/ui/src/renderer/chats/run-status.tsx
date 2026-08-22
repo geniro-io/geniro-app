@@ -212,10 +212,11 @@ export function awaitingPhrase(kind: RunAwaiting): string {
  * fallback and the sidebar row carried none, so the sidebar ERASED the phrase
  * every time a tool returned and drew it again on the next call.
  *
- * REPORTED as "фанин статус на треде постоянно прыгает… то появляется, то
- * исчезает. Блинкует… там всегда должен быть последний его статус". A turn is a
- * run of tool calls, so that is a flicker per tool, and it is entirely the
- * missing fallback — the daemon was announcing exactly what it meant.
+ * REPORTED as "the fanin status on the thread keeps jumping around… now it
+ * shows, now it's gone. Blinking… there should always be its last status
+ * there". A turn is a run of tool calls, so that is a flicker per tool, and
+ * it is entirely the missing fallback — the daemon was announcing exactly
+ * what it meant.
  *
  * ONE constant, read by both surfaces, because that is the actual fix: the
  * blink was two renderings of one null disagreeing about what it meant, and a

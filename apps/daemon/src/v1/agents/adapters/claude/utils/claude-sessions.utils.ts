@@ -127,12 +127,33 @@ export async function listClaudeSessions(input: {
   cwd: string | null;
   limit: number;
   query: string | null;
-}): Promise<{ sessions: AgentSessionRecord[]; searchTruncated: boolean }> {
+  /**
+   * Override for {@link CLAUDE_SESSION_SEARCH_FILE_LIMIT}, test-only. Defaults
+   * to the real constant so no production caller has anything to pass — it
+   * exists so a spec can arrange "the cap bit" without writing hundreds of
+   * fixture files to reach the real 600.
+   */
+  searchFileLimit?: number;
+}): Promise<{
+  sessions: AgentSessionRecord[];
+  searchTruncated: boolean;
+  /**
+   * The cap this call actually ran under.
+   *
+   * Returned rather than left for the caller to re-derive from the constant:
+   * the caller's `partialReason` states the number to the user, and reading it
+   * from a second source is how the sentence comes to name a cap the search did
+   * not use.
+   */
+  searchFileLimit: number;
+}> {
   const files = await collectSessionFiles(input.profileDir);
   files.sort((a, b) => b.updatedAt - a.updatedAt);
 
   const terms = searchTerms(input.query);
   const searching = terms.length > 0;
+  const searchFileLimit =
+    input.searchFileLimit ?? CLAUDE_SESSION_SEARCH_FILE_LIMIT;
   // Two phases when searching, and the split is what keeps the answer the same
   // whatever order the disk happens to serve the reads in. Phase A is the
   // listing as it has always been — stat, head, folder filter — and it stops on
@@ -142,9 +163,7 @@ export async function listClaudeSessions(input: {
   // but its file cap would be spent in completion order rather than in
   // newest-first order — so which sessions a large profile searched would
   // change from one keystroke to the next.
-  const candidateCap = searching
-    ? CLAUDE_SESSION_SEARCH_FILE_LIMIT
-    : input.limit;
+  const candidateCap = searching ? searchFileLimit : input.limit;
 
   const wanted = input.cwd === null ? null : await canonical(input.cwd);
   const rows: Candidate[] = [];
@@ -239,6 +258,7 @@ export async function listClaudeSessions(input: {
     return {
       sessions: rows.map(toRecord),
       searchTruncated: false,
+      searchFileLimit,
     };
   }
   return {
@@ -246,7 +266,8 @@ export async function listClaudeSessions(input: {
     // Only when the cap is what stopped it. A profile with fewer sessions than
     // the cap searched every one of them, and saying otherwise would put a
     // permanent "this is not everything" under a list that IS everything.
-    searchTruncated: rows.length >= CLAUDE_SESSION_SEARCH_FILE_LIMIT,
+    searchTruncated: rows.length >= searchFileLimit,
+    searchFileLimit,
   };
 }
 

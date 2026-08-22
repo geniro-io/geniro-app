@@ -85,7 +85,6 @@ import {
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
-  CLAUDE_SESSION_SEARCH_FILE_LIMIT,
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
@@ -681,19 +680,20 @@ export class ClaudeAdapter extends AgentAdapter {
   override async listSessions(
     input: AgentSessionsInput,
   ): Promise<AgentSessionListing> {
-    const { sessions, searchTruncated } = await listClaudeSessions({
-      profileDir: this.profileDir(input.configDir),
-      cwd: input.cwd,
-      limit: input.limit,
-      query: input.query,
-    });
+    const { sessions, searchTruncated, searchFileLimit } =
+      await listClaudeSessions({
+        profileDir: this.profileDir(input.configDir),
+        cwd: input.cwd,
+        limit: input.limit,
+        query: input.query,
+      });
     return {
       sessions,
       unavailableReason: null,
       // A bounded search that says nothing is indistinguishable from one that
       // read every conversation and found these — see the file cap's own note.
       partialReason: searchTruncated
-        ? `Searched what was said in the ${CLAUDE_SESSION_SEARCH_FILE_LIMIT} most recent conversations.`
+        ? `Searched what was said in the ${searchFileLimit} most recent conversations.`
         : null,
     };
   }

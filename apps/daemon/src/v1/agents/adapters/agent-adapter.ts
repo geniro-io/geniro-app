@@ -84,8 +84,13 @@ const UTILITY_COMMAND_MAX_BUFFER_CHARS = 1024 * 1024;
  *
  * Agent-agnostic and stays here: it is a property of the PLATFORM, not of any
  * CLI, so no adapter declares it.
+ *
+ * Absolute path, not a bare name: a bare `'script'` resolves through the
+ * inherited login-shell PATH, which an earlier PATH entry can shadow during a
+ * sign-in. Same house rule as `apps/ui/src/main/update-installer.ts`'s
+ * `DITTO`/`XATTR` constants.
  */
-const PTY_WRAPPER = 'script';
+const PTY_WRAPPER = '/usr/bin/script';
 const PTY_WRAPPER_ARGS = ['-q', '/dev/null'] as const;
 
 /**
@@ -821,6 +826,8 @@ export abstract class AgentAdapter {
       unavailableReason:
         config.contextWindowsUnavailableReason ??
         `${config.kind} does not offer a context-window setting`,
+      // The base's answer is for a CLI with no such axis at all.
+      unavailableKind: 'no-axis',
       exact: false,
     };
   }

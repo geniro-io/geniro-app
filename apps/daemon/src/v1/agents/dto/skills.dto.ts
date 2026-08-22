@@ -93,8 +93,17 @@ export const listAgentSessionsQuerySchema = z.object({
    * reach what its CLI stores, so only the adapter can match on what was SAID
    * in a conversation rather than on the one line a picker row shows. A caller
    * filtering the response could never find a thread by its middle.
+   *
+   * Bounded like every other CLI-vocabulary string this app accepts — a
+   * ceiling generous enough for a real pasted search phrase, never a narrow
+   * filter on how somebody searches. The one caller is the session picker's
+   * own text box behind the loopback token guard, so this is a sanity limit
+   * rather than a defense against an adversarial caller. This 200-char
+   * ceiling is also what `session-search.utils.ts`'s `MAX_SEARCH_TERMS` is
+   * sized against — raising one without the other is how a real pasted
+   * phrase comes to lose words again.
    */
-  query: z.string().min(1).optional(),
+  query: z.string().min(1).max(200).optional(),
 });
 export class ListAgentSessionsQueryDto extends createZodDto(
   listAgentSessionsQuerySchema,

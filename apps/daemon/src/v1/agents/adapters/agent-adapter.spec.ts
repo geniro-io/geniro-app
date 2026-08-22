@@ -1729,3 +1729,26 @@ describe('AgentAdapter.runCommand spawn options', () => {
     expect(opts.cwd).toBeUndefined();
   });
 });
+
+describe('AgentAdapter pty wrapper', () => {
+  it('spawns the pty wrapper by its absolute path, never a bare name a shadowed PATH could substitute', async () => {
+    // The real observable is what `runAsProcessGroup` actually hands its
+    // spawn function under `pty: true` — the FIRST argument the group path
+    // resolves the CLI under `script` with — not a re-statement of the
+    // constant the production code itself declares.
+    let spawnedCommand: string | undefined;
+    const groupSpawnFn = ((command: string): ChildProcess => {
+      spawnedCommand = command;
+      const fake = fakeGroupChild(4300);
+      queueMicrotask(() => fake.close(0));
+      return fake.child;
+    }) as unknown as typeof spawn;
+
+    await new RawCommandAdapter({ groupSpawnFn }).run(['some', 'args'], {
+      pty: true,
+      cwd: '/proj',
+    });
+
+    expect(spawnedCommand).toBe('/usr/bin/script');
+  });
+});

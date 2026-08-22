@@ -5,6 +5,8 @@ import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
 import { resolveAgentBinary } from '../../utils/agent-binary';
+import { spawnAgentVersion } from '../../utils/agent-version';
+import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
 import {
   isPlainSessionId,
   SESSION_ID_INVALID_MESSAGE,
@@ -157,6 +159,14 @@ export function cursorAutoDecision(
   }
   return null;
 }
+
+/**
+ * How long a cached handshake reply stays fresh — the same 10-minute window
+ * `EffortsService`/`ContextWindowsService` already give the PARSED vocabulary
+ * this feeds, so a cold model pays the ~2s handshake once per that window
+ * rather than once per render.
+ */
+const CURSOR_HANDSHAKE_PROBE_TTL_MS = 10 * 60_000;
 
 /**
  * Drives `cursor-agent acp` — Cursor's first-party Agent Client Protocol
@@ -637,7 +647,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          * milestones, on the strength of the SPEC — `session/prompt` is one
          * request per turn — and it was wrong about the BINARY, which is the
          * distinction `.claude/rules/agent-adapters.md` exists to force.
-         * Reported as "мгновенная отправка сообщения из очереди не работает",
+         * Reported as "instant sending of a queued message doesn't work",
          * and probed on 2026.08.11-e8db854: a second `session/prompt` sent
          * against a live session is ACCEPTED. What it does is interrupt — the
          * first prompt answers `{"stopReason":"cancelled"}`, the second runs to
@@ -948,7 +958,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     if (wanted === '') {
       return superset;
     }
-    const stdout = await this.probeModelConfigOptions(
+    const stdout = await this.probeModelConfigOptionsShared(
       wanted,
       'efforts',
       options,
@@ -968,12 +978,15 @@ export class CursorAcpAdapter extends AgentAdapter {
    * be taken answers "nothing to offer, and here is why" rather than standing
    * in with a union of other models' sizes.
    *
-   * It costs its own CLI run rather than sharing the effort listing's, which is
-   * a deliberate trade: one probe answering both would have to be cached as a
-   * pair, and the two chips are asked at different moments by different
-   * screens. The cost is bounded where it belongs — `ContextWindowsService`
-   * caches per (CLI, model) with the same key and TTL the effort listing uses,
-   * so it is one extra ~2s run when the model changes, not one per render.
+   * Shares its handshake with the effort listing through
+   * {@link handshakeProbeCache} rather than running its own: the two chips are
+   * asked at different moments by different screens (`EffortsService` /
+   * `ContextWindowsService`, each behind its own `ModelVocabularyCache`), so a
+   * cold model used to spawn the ~2s handshake TWICE for the one reply.
+   * Caching the RAW reply rather than the parsed answer PAIR is what makes
+   * that safe — this method still reads its own option out of whatever came
+   * back, so nothing here has to agree with the effort listing about what the
+   * reply means.
    */
   override async listModelContextWindows(
     model: string | null,
@@ -982,20 +995,78 @@ export class CursorAcpAdapter extends AgentAdapter {
     const wanted = (model ?? '').trim();
     // No model chosen yet. Unlike the effort chip there is no union to fall
     // back on, so the picker draws nothing and says what would fill it.
+    //
+    // TWIN PARSER: `NO_MODEL_REASON` in
     if (wanted === '') {
       return {
         windows: [],
         unavailableReason:
           'pick a model to see the context-window sizes it offers',
+        // The one kind the chip renders differently: nothing has been asked
+        // yet, so it says "pick a model" rather than claiming a fixed window
+        // for a model nobody has chosen. Carried as a KIND rather than left
+        // for the renderer to recognise in this sentence, so rewording the
+        // prose here cannot silently change what the control says.
+        unavailableKind: 'no-model',
         exact: false,
       };
     }
-    const stdout = await this.probeModelConfigOptions(
+    const stdout = await this.probeModelConfigOptionsShared(
       wanted,
       'windows',
       options,
     );
     return this.readContextWindowProbe(stdout ?? null, wanted);
+  }
+
+  /**
+   * {@link probeModelConfigOptions}, joined through {@link handshakeProbeCache}
+   * so `listModelEfforts` and `listModelContextWindows` share ONE handshake
+   * for the same (model, binary version) instead of each spawning its own.
+   *
+   * The RAW reply is what is shared rather than a parsed answer: each listing
+   * still reads its own axis out of it, which is what lets the two agree on
+   * one probe without agreeing on what the probe means. That is also why this
+   * sits BELOW the caches `EffortsService` and `ContextWindowsService` hold —
+   * those keep each service's own PARSED vocabulary, so a cold model missed in
+   * both and spawned the handshake twice, neither able to see the other's
+   * in-flight probe.
+   *
+   * `label` still reaches the underlying probe on a cache MISS, so the
+   * throwaway profile root it names is unaffected; a HIT answers with no
+   * spawn at all, so which label the joining caller asked under is moot.
+   */
+  private async probeModelConfigOptionsShared(
+    model: string,
+    label: string,
+    options: AgentCommandOptions,
+  ): Promise<string | null | undefined> {
+    const version = await this.resolveBinaryVersion(options);
+    return this.handshakeProbeCache.read(
+      this.getConfig().kind,
+      model,
+      version,
+      () => this.probeModelConfigOptions(model, label, options),
+    );
+  }
+
+  /**
+   * This CLI's own `--version` line — resolved FRESH on every raw-probe read
+   * rather than memoized here, because it IS the freshness key
+   * {@link handshakeProbeCache} checks: a memoized version would leave a
+   * stale key outliving the very upgrade this exists to catch.
+   *
+   * Cheap next to what it gates: a plain `--version` fork against the ~2s ACP
+   * handshake it decides whether to repeat, so paying it once per listing (up
+   * to two per cold model) costs nothing next to the spawn it can save.
+   */
+  private resolveBinaryVersion(
+    options: AgentCommandOptions,
+  ): Promise<string | null> {
+    return spawnAgentVersion(this.command, {
+      execFileFn: this.options.execFileFn,
+      onSpawn: options.onSpawn,
+    });
   }
 
   /**
@@ -1008,6 +1079,9 @@ export class CursorAcpAdapter extends AgentAdapter {
    * (measured — a fresh profile opens on `composer-2.5`, which has neither an
    * effort nor a context axis), so the model is chosen by seeding rather than
    * by a `session/set_config_option` round trip.
+   *
+   * Reached directly only on a {@link handshakeProbeCache} miss — both public
+   * listings go through {@link probeModelConfigOptionsShared}.
    */
   private async probeModelConfigOptions(
     model: string,
@@ -1074,6 +1148,7 @@ export class CursorAcpAdapter extends AgentAdapter {
             label: name,
           })),
           unavailableReason: null,
+          unavailableKind: null,
           exact: true,
         };
       }
@@ -1081,6 +1156,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         return {
           windows: [],
           unavailableReason: `${model} runs at one fixed context window — pick a model that offers a choice.`,
+          unavailableKind: 'fixed-window',
           exact: true,
         };
       }
@@ -1089,6 +1165,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       windows: [],
       unavailableReason:
         'cursor-agent could not be asked which context windows this model offers',
+      unavailableKind: 'unreadable',
       exact: false,
     };
   }
@@ -1282,6 +1359,19 @@ export class CursorAcpAdapter extends AgentAdapter {
       throw new Error(CURSOR_MCP_TOGGLE_FAILED_MESSAGE);
     }
   }
+
+  /** Raw-handshake cache shared by both model-config listings above. */
+  /**
+   * The RAW handshake reply behind both model-vocabulary listings, keyed and
+   * version-checked by the SHARED cache rather than a private copy of it —
+   * `.claude/rules/daemon-module-structure.md`: "Cross-module logic is
+   * extracted, never mirrored." The `kind` dimension is a constant here (there
+   * is only ever one `cursor-agent` to ask), which costs one argument and buys
+   * a single home for the single-flight and freshness rules.
+   */
+  private readonly handshakeProbeCache = new ModelVocabularyCache<
+    string | null | undefined
+  >({ ttlMs: CURSOR_HANDSHAKE_PROBE_TTL_MS, now: Date.now });
 
   constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {
     super(cursorOptions);

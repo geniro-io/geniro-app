@@ -10,6 +10,10 @@
 /**
  * The calendar day a moment falls on, in the machine's own timezone.
  *
+ * TWIN PARSER: `localDayKey` in `apps/ui/src/renderer/stats/stats-format.ts`.
+ * The two must agree on which day a moment falls on, and there is no shared
+ * type spanning them — a change here MUST be mirrored there.
+ *
  * Local rather than UTC because the daemon and the window reading it are the
  * same computer: "today" means the user's today, and a UTC key would file a
  * late-evening turn under tomorrow for everyone east of Greenwich and under

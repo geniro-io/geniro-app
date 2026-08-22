@@ -517,27 +517,35 @@ export class AcpTurnDriver implements TurnDriver {
   private nextRequestId = 1;
   private readonly pending = new Map<JsonRpcId, PendingKind>();
   /**
-   * Parameter frames whose reply the PROMPT is waiting on, and the prompt held
-   * behind them.
+   * Request ids of the parameter frames the PROMPT is waiting on, and the
+   * prompt held behind them.
    *
    * Only for a parameter the adapter marked `applyBeforePrompt` — see that
-   * field for the measurement. Zero on every other turn, which is almost all of
-   * them, and the prompt goes out pipelined exactly as before.
+   * field for the measurement. Empty on every other turn, which is almost all
+   * of them, and the prompt goes out pipelined exactly as before.
+   *
+   * Ids rather than a count, because EVERY `set_model_parameter` reply reaches
+   * `releasePrompt` while only some of those frames block: a counter is
+   * decremented by replies that never incremented it. A turn setting both an
+   * effort (which does not block) and a context window (which does) would then
+   * release on the effort's reply and run at the model's default window.
    */
-  private promptBlockers = 0;
+  private readonly promptBlockers = new Set<JsonRpcId>();
   private promptHeld = false;
   /**
-   * How many `session/prompt` requests this turn has out and unanswered.
+   * The id of the most recent `session/prompt` — the only one whose reply ends
+   * the turn.
    *
-   * One, almost always. It goes to two while a mid-turn message is being
-   * delivered ({@link sendFollowUp}), and that is the whole reason it is
-   * counted: this CLI answers the SUPERSEDED prompt with its own reply, and a
-   * turn that emitted its terminal there would settle the run in the middle of
-   * answering the message the user had just pushed through — under
-   * `stopReason: "cancelled"`, reading as a Stop nobody pressed. Only the last
-   * outstanding prompt ends the turn.
+   * A second is in flight while a mid-turn message is being delivered
+   * ({@link sendFollowUp}): this CLI answers the SUPERSEDED prompt with its own
+   * reply, and a turn that emitted its terminal there would settle the run in
+   * the middle of answering the message the user had just pushed through —
+   * under `stopReason: "cancelled"`, reading as a Stop nobody pressed. Matched
+   * by id rather than by counting what is outstanding, because the two replies
+   * are not ordered: a count settles the turn on whichever arrives second,
+   * which is the superseded one whenever the agent's cancel is the slower half.
    */
-  private promptsOutstanding = 0;
+  private latestPromptId: JsonRpcId | null = null;
   private capabilities: AcpAgentCapabilities = {
     loadSession: false,
     mcpHttp: false,
@@ -695,7 +703,7 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         this.pending.delete(message.id);
-        return this.onReply(kind, message.result);
+        return this.onReply(kind, message.result, message.id);
       }
       case 'error': {
         const kind = this.pending.get(message.id);
@@ -703,7 +711,7 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         this.pending.delete(message.id);
-        return this.onErrorReply(kind, message.message);
+        return this.onErrorReply(kind, message.message, message.id);
       }
       case 'request':
         return this.onAgentRequest(message.id, message.method, message.params);
@@ -767,6 +775,24 @@ export class AcpTurnDriver implements TurnDriver {
     kind: PendingKind,
     events: AgentEvent[],
   ): boolean {
+    return this.sendRequest(method, params, kind, events) !== null;
+  }
+
+  /**
+   * {@link request}, answering with the id the frame went out under, or null
+   * when it did not go out at all.
+   *
+   * The id is what correlates a reply with the frame that earned it, which only
+   * the two frames whose reply changes the turn's own state need: a parameter
+   * the prompt is held behind ({@link promptBlockers}) and the prompt itself
+   * ({@link latestPromptId}).
+   */
+  private sendRequest(
+    method: string,
+    params: unknown,
+    kind: PendingKind,
+    events: AgentEvent[],
+  ): JsonRpcId | null {
     const id = this.nextRequestId++;
     this.pending.set(id, kind);
     if (this.io?.write(encodeRequest(id, method, params)) !== true) {
@@ -775,9 +801,9 @@ export class AcpTurnDriver implements TurnDriver {
         type: 'error',
         message: `acp: failed to send ${method} (the agent's stdin is closed)`,
       });
-      return false;
+      return null;
     }
-    return true;
+    return id;
   }
 
   private reply(id: JsonRpcId, result: unknown): void {
@@ -790,7 +816,11 @@ export class AcpTurnDriver implements TurnDriver {
 
   // --- inbound ------------------------------------------------------------
 
-  private onReply(kind: PendingKind, result: unknown): AgentEvent[] {
+  private onReply(
+    kind: PendingKind,
+    result: unknown,
+    id: JsonRpcId,
+  ): AgentEvent[] {
     switch (kind) {
       case 'initialize':
         return this.onInitialized(result);
@@ -810,13 +840,17 @@ export class AcpTurnDriver implements TurnDriver {
         return [];
       case 'set_model_parameter':
         // Silent too — but it may be the frame the prompt is waiting on.
-        return this.releasePrompt();
+        return this.releasePrompt(id);
       case 'prompt':
-        return this.onPromptComplete(result);
+        return this.onPromptComplete(result, id);
     }
   }
 
-  private onErrorReply(kind: PendingKind, message: string): AgentEvent[] {
+  private onErrorReply(
+    kind: PendingKind,
+    message: string,
+    id: JsonRpcId,
+  ): AgentEvent[] {
     if (kind === 'session_load') {
       // The thread could not be reopened — so run the turn on a FRESH session
       // rather than ending it. A hard failure here is a dead end by
@@ -903,8 +937,17 @@ export class AcpTurnDriver implements TurnDriver {
         // A refusal releases the prompt too: the setting did not apply, and a
         // turn must not be stranded behind a frame that was never going to
         // land. The notice above is what says so.
-        ...this.releasePrompt(),
+        ...this.releasePrompt(id),
       ];
+    }
+    if (kind === 'prompt' && id !== this.latestPromptId) {
+      // The SUPERSEDED prompt failed rather than answering `cancelled`, and an
+      // `error` is terminal downstream — so returning one here settles the run
+      // as failed while the message the user just pushed through is still being
+      // answered. Same rule as {@link onPromptComplete}: only the most recent
+      // prompt may end the turn. The open block is still closed, exactly as a
+      // cancel closes one.
+      return this.flushPending();
     }
     return [{ type: 'error', message: `acp ${kind} failed: ${message}` }];
   }
@@ -1080,7 +1123,7 @@ export class AcpTurnDriver implements TurnDriver {
     // released by its reply (`releasePrompt`). Everything else about the
     // ordering is unchanged: with no such parameter this is the same
     // back-to-back send it has always been.
-    if (this.promptBlockers > 0) {
+    if (this.promptBlockers.size > 0) {
       this.promptHeld = true;
       return events;
     }
@@ -1093,18 +1136,17 @@ export class AcpTurnDriver implements TurnDriver {
     if (this.sessionId === null) {
       return;
     }
-    if (
-      this.request(
-        ACP_AGENT_METHODS.sessionPrompt,
-        {
-          sessionId: this.sessionId,
-          prompt: this.composePromptBlocks(events),
-        },
-        'prompt',
-        events,
-      )
-    ) {
-      this.promptsOutstanding += 1;
+    const id = this.sendRequest(
+      ACP_AGENT_METHODS.sessionPrompt,
+      {
+        sessionId: this.sessionId,
+        prompt: this.composePromptBlocks(events),
+      },
+      'prompt',
+      events,
+    );
+    if (id !== null) {
+      this.latestPromptId = id;
     }
   }
 
@@ -1148,14 +1190,15 @@ export class AcpTurnDriver implements TurnDriver {
       ...(withImages ? images : []),
       { type: 'text', text: message.text },
     ];
-    const sent = this.request(
+    const id = this.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
       { sessionId: this.sessionId, prompt: blocks },
       'prompt',
       events,
     );
+    const sent = id !== null;
     if (sent) {
-      this.promptsOutstanding += 1;
+      this.latestPromptId = id;
       // Close the open block HERE rather than leaving it to the superseded
       // reply: what the agent had already said is finished the moment we
       // interrupt it, and closing at the interrupt is what keeps it ONE row
@@ -1185,11 +1228,11 @@ export class AcpTurnDriver implements TurnDriver {
    * `onErrorReply`, so the turn runs on whatever the agent kept, which is what
    * it would have done had the frame never been sent.
    */
-  private releasePrompt(): AgentEvent[] {
-    if (this.promptBlockers > 0) {
-      this.promptBlockers -= 1;
-    }
-    if (this.promptBlockers > 0 || !this.promptHeld) {
+  private releasePrompt(id: JsonRpcId): AgentEvent[] {
+    // A no-op for a frame that never blocked, which is what keeps a parameter
+    // sent WITHOUT `applyBeforePrompt` from releasing one that was.
+    this.promptBlockers.delete(id);
+    if (this.promptBlockers.size > 0 || !this.promptHeld) {
       return [];
     }
     this.promptHeld = false;
@@ -1376,8 +1419,7 @@ export class AcpTurnDriver implements TurnDriver {
         continue;
       }
       this.requestedParameter = `${configId}=${parameter.value}`;
-      const before = this.pending.size;
-      this.request(
+      const id = this.sendRequest(
         ACP_AGENT_METHODS.sessionSetConfigOption,
         {
           sessionId: this.sessionId,
@@ -1387,11 +1429,11 @@ export class AcpTurnDriver implements TurnDriver {
         'set_model_parameter',
         events,
       );
-      // Counted only for a frame that really went out — `request` un-pends one
-      // it could not write, and a blocker with no reply coming would hold the
-      // prompt for ever.
-      if (parameter.applyBeforePrompt && this.pending.size > before) {
-        this.promptBlockers += 1;
+      // Recorded only for a frame that really went out — `sendRequest` un-pends
+      // one it could not write, and a blocker with no reply coming would hold
+      // the prompt for ever.
+      if (parameter.applyBeforePrompt && id !== null) {
+        this.promptBlockers.add(id);
       }
     }
   }
@@ -1605,17 +1647,14 @@ export class AcpTurnDriver implements TurnDriver {
     });
   }
 
-  private onPromptComplete(result: unknown): AgentEvent[] {
-    if (this.promptsOutstanding > 0) {
-      this.promptsOutstanding -= 1;
-    }
-    if (this.promptsOutstanding > 0) {
-      // A LATER prompt is still running, so this reply belongs to one we
-      // superseded ourselves — `sendFollowUp` sent a second `session/prompt`,
-      // which this CLI answers by cancelling the first. The turn is not over:
-      // emitting the terminal here would settle the run while the message the
-      // user just pushed through is being answered, and `stopReason:
-      // "cancelled"` would badge it as a Stop nobody pressed.
+  private onPromptComplete(result: unknown, id: JsonRpcId): AgentEvent[] {
+    if (id !== this.latestPromptId) {
+      // This reply answers a prompt we superseded ourselves — `sendFollowUp`
+      // sent a second `session/prompt`, which this CLI answers by cancelling
+      // the first. The turn is not over: emitting the terminal here would
+      // settle the run while the message the user just pushed through is being
+      // answered, and `stopReason: "cancelled"` would badge it as a Stop nobody
+      // pressed.
       //
       // The open block is still CLOSED, exactly as a real cancel closes one.
       // Usually there is nothing left to close — `sendFollowUp` flushes at the

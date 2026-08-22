@@ -465,7 +465,9 @@ export function Menu({
                   // full width of a four-row menu, where it outweighed every
                   // row under it — the loudest thing on a surface whose whole
                   // job is the rows.
-                  <p className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-muted-foreground/75">
+                  <p
+                    data-slot="menu-group-heading"
+                    className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-muted-foreground">
                     {group.label}
                   </p>
                 ) : null}

@@ -32,6 +32,58 @@ export interface ModelVocabularyCacheOptions {
   now: () => number;
 }
 
+/**
+ * Brand for {@link VolatileAnswer}. A symbol rather than a string key, so a
+ * cached value that happens to carry a `volatile` field of its own cannot be
+ * mistaken for the wrapper.
+ */
+const VOLATILE = Symbol('volatile-answer');
+
+/** An answer the cache must SERVE but must not remember. See {@link volatile}. */
+export interface VolatileAnswer<T> {
+  readonly [VOLATILE]: true;
+  readonly value: T;
+}
+
+/**
+ * Mark a `fetch` result as un-cacheable.
+ *
+ * A listing that could not actually be obtained still has to answer with
+ * something — a picker with no rows is a dead control — but storing that
+ * stand-in is what turns one transient probe failure into a TTL-long outage:
+ * the next request reads the fallback as a fresh answer and never re-asks. The
+ * fallback is returned to this caller and the entry is left as it was, so the
+ * following request retries.
+ */
+export function volatile<T>(value: T): VolatileAnswer<T> {
+  return { [VOLATILE]: true, value };
+}
+
+function isVolatile<T>(
+  answer: T | VolatileAnswer<T>,
+): answer is VolatileAnswer<T> {
+  return typeof answer === 'object' && answer !== null && VOLATILE in answer;
+}
+
+/**
+ * Ceiling on how many distinct `(agent, model)` entries {@link entries} holds
+ * before the OLDEST is evicted — insertion-ordered `Map` iteration gives that
+ * for free, so eviction costs one `.keys().next()` and one `.delete()`.
+ * Without it, `model` is a caller-supplied string on every route this cache
+ * backs, not a small enum, so a long-running daemon asked about enough
+ * distinct strings would grow this map for its entire lifetime.
+ *
+ * 200 is a measurement, not a guess: a real cursor account was swept at 34
+ * models total (`GET /v1/agents/context-windows`'s own sweep, see
+ * `apps/daemon/CLAUDE.md`). Even generously accounting for BOTH shipped
+ * CLIs, several accounts/profiles switched across one daemon's lifetime, and
+ * the per-CLI null-model entry, the live working set stays well under a
+ * hundred keys — nobody works with hundreds of distinct models in one
+ * session. Eviction here therefore only ever reaches a key from an abandoned
+ * account or CLI version, which a later ask simply re-fetches.
+ */
+const MAX_ENTRIES = 200;
+
 export class ModelVocabularyCache<T> {
   private readonly entries = new Map<
     string,
@@ -47,13 +99,16 @@ export class ModelVocabularyCache<T> {
    *
    * `fetch` receives whatever was cached before, so a listing that fails can
    * keep serving the last good answer instead of a dead picker. It must not
-   * throw; a rejection is the caller's to model.
+   * throw; a rejection is the caller's to model. A stand-in it produces because
+   * the real answer could not be obtained is wrapped in {@link volatile}, which
+   * serves it without storing it — otherwise one failed probe answers for the
+   * whole TTL.
    */
   async read(
     kind: AgentKind,
     model: string | null,
     version: string | null,
-    fetch: (previous: T | undefined) => Promise<T>,
+    fetch: (previous: T | undefined) => Promise<T | VolatileAnswer<T>>,
   ): Promise<T> {
     const key = keyFor(kind, model);
     const cached = this.entries.get(key);
@@ -68,13 +123,25 @@ export class ModelVocabularyCache<T> {
     if (running) {
       return running;
     }
-    const pending = fetch(cached?.value).then((value) => {
+    const pending = fetch(cached?.value).then((answer) => {
+      if (isVolatile(answer)) {
+        return answer.value;
+      }
       this.entries.set(key, {
         version,
         fetchedAt: this.options.now(),
-        value,
+        value: answer,
       });
-      return value;
+      // A re-set of an already-present key leaves the map's size (and its
+      // insertion-ordered iteration) unchanged, so this only ever fires the
+      // read after a genuinely NEW key pushed the cache past its cap.
+      if (this.entries.size > MAX_ENTRIES) {
+        const oldestKey = this.entries.keys().next().value;
+        if (oldestKey !== undefined) {
+          this.entries.delete(oldestKey);
+        }
+      }
+      return answer;
     });
     this.inFlight.set(key, pending);
     try {

@@ -1764,7 +1764,7 @@ describe('ClaudeAdapter — commands the CLI reports about itself', () => {
   });
 
   it('takes the DESCRIBED list the reload announces, over the bare names on init', async () => {
-    // The reported "Автокомплит не показывает описание тулов", at its source.
+    // The reported "Autocomplete doesn't show tool descriptions", at its source.
     // `system/init` names every command and describes none — measured against
     // this daemon's own endpoint on a real profile, 64 of 67 rows had no
     // sentence at all, `/compact` and `/autocompact` among them. The reload's

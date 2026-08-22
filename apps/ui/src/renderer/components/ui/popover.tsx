@@ -12,8 +12,8 @@ import { cn } from './utils';
  * to the panel edge and need the radius to cut them.
  */
 /*
-  ELEVATED, not outlined. Reported against the `+` menu as "вот этот бордер у
-  меню выглядит очень странно… не так топорно": at full-strength `border-border`
+  ELEVATED, not outlined. Reported against the `+` menu as "this border on the
+  menu looks very strange… not so crude": at full-strength `border-border`
   over the barely-there `shadow-panel-md`, the border was the strongest line on
   screen and the panel read as a wireframe rectangle drawn on the page rather
   than a surface hanging above it. The fix is to swap which one does the work —

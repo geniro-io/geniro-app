@@ -1062,9 +1062,28 @@ export interface AgentContextWindow {
  * SENTENCE whenever the list is empty, because a picker that silently
  * disappears is indistinguishable from a broken one.
  */
+/**
+ * Which kind of "no sizes to choose from" a listing is reporting.
+ *
+ * `no-model` is the one that behaves differently downstream: nothing has been
+ * asked yet, so a control claiming the model runs at one fixed window would be
+ * stating a fact about a model nobody has picked. The other three all mean the
+ * turn really does run at exactly one window — this CLI has no such axis, this
+ * model offers only one size, or the CLI could not be asked and its own answer
+ * is unknown.
+ *
+ * An ENUM rather than the sentence: the reason prose is what a user reads, and
+ * a consumer that has to recognise a specific case by matching those words
+ * silently changes behaviour the moment the wording is improved.
+ */
+export type AgentContextWindowUnavailableKind =
+  'no-model' | 'no-axis' | 'fixed-window' | 'unreadable';
+
 export interface AgentContextWindowListing {
   windows: AgentContextWindow[];
   unavailableReason: string | null;
+  /** Which case {@link unavailableReason} describes; null when sizes are offered. */
+  unavailableKind: AgentContextWindowUnavailableKind | null;
   /** True when this is the NAMED MODEL's own answer — see {@link AgentEffortListing.exact}. */
   exact: boolean;
 }

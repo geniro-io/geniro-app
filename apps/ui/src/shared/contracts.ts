@@ -417,8 +417,8 @@ export const TRAFFIC_LIGHT_WIDTH = 60;
  * Breathing room between the buttons and the first thing in the title bar.
  *
  * Not optional polish. Clearing them by arithmetic alone leaves half a pixel,
- * which reads exactly as reported — "очень мало отступа между иконкой и
- * кнопками" — because a control that merely fails to overlap still looks
+ * which reads exactly as reported — "very little spacing between the icon and
+ * the buttons" — because a control that merely fails to overlap still looks
  * crammed against them. The rail's own `px-3` for the same reason: a gap the
  * eye already reads as "a gap" elsewhere in the shell.
  */

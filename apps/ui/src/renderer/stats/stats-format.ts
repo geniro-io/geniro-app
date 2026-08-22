@@ -55,13 +55,15 @@ export function formatDayTitle(date: string): string {
 /**
  * The calendar day an ISO instant falls on, in the machine's own timezone.
  *
- * The daemon's twin (`v1/stats/utils/usage-fold.ts` `localDateKey`), and the
- * reason this exists rather than `iso.slice(0, 10)`: that slice reads the UTC
- * day, while every bucket on the page is a LOCAL one. The two disagree for
- * anyone off UTC, and the span under the title was reading the wrong end of the
- * disagreement — measured here (UTC+5) on the Today period, whose start is a
- * local midnight and therefore the PREVIOUS UTC day: the header said "August 20
- * – August 21" over a chart holding one column labelled Aug 21.
+ * TWIN PARSER: `localDateKey` in `apps/daemon/src/v1/stats/utils/usage-fold.ts`.
+ * The two must agree on which day a moment falls on, and there is no shared
+ * type spanning them — a change here MUST be mirrored there. This exists
+ * rather than `iso.slice(0, 10)`: that slice reads the UTC day, while every
+ * bucket on the page is a LOCAL one. The two disagree for anyone off UTC, and
+ * the span under the title was reading the wrong end of the disagreement —
+ * measured here (UTC+5) on the Today period, whose start is a local midnight
+ * and therefore the PREVIOUS UTC day: the header said "August 20 – August 21"
+ * over a chart holding one column labelled Aug 21.
  */
 function localDayKey(iso: string): string {
   const at = new Date(iso);

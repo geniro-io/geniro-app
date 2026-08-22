@@ -17,6 +17,24 @@ import type { AgentSessionRecord } from '../adapter.types';
  */
 
 /**
+ * How many terms one query can carry before the rest is ignored.
+ *
+ * The DTO bounds the query's LENGTH (`listAgentSessionsQuerySchema.query`,
+ * `apps/daemon/src/v1/agents/dto/skills.dto.ts`, `.max(200)`); this bounds
+ * what splitting it can produce, which is a different quantity, and the two
+ * must not disagree: a real pasted phrase at that 200-character ceiling runs
+ * to roughly 28-40 words at ordinary English lengths, so a term cap lower
+ * than that would silently drop words from exactly the query the DTO's own
+ * doc calls "generous enough for a real pasted search phrase". 50 sits
+ * comfortably above that real-text range while still bounding the
+ * pathological case to a fixed cost — a 200-character string built entirely
+ * of one-character "words" can reach roughly 100 terms, which is what
+ * `unmatchedTerms` (and, on the claude path, a per-term file search) would
+ * otherwise be handed with no ceiling of its own.
+ */
+const MAX_SEARCH_TERMS = 50;
+
+/**
  * The query as terms, ALL of which a session must answer for.
  *
  * Terms rather than the whole string, because that is how somebody remembers a
@@ -24,7 +42,11 @@ import type { AgentSessionRecord } from '../adapter.types';
  * what was said ("auth geniro"), in whatever order they come to mind.
  */
 export function searchTerms(query: string | null): string[] {
-  return (query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  return (query ?? '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, MAX_SEARCH_TERMS);
 }
 
 /**

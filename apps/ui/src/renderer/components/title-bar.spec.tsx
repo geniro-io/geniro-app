@@ -110,7 +110,7 @@ describe('TitleBar', () => {
   });
 
   it('clears the window buttons, by their measured footprint rather than a guess', () => {
-    // REPORTED as "это криво". The reservation used to be a hand-written
+    // REPORTED as "this is crooked". The reservation used to be a hand-written
     // `pl-[50px]` derived from a 52px button group — right for years of macOS,
     // wrong on 26, where the group measures 59.5px. Eight pixels short is the
     // green button drawn over what sits beside it. Asserted against the shared
@@ -141,8 +141,8 @@ describe('TitleBar', () => {
     // column widths — right until a column opens on the other side: with the
     // agents panel out, the midpoint of "everything right of the chat list"
     // sits well right of the transcript, and the title drifted with it
-    // ("тайтл в хедере все еще как-то сдвинут, он не посередине", measured at
-    // 1322px into a 2000px window).
+    // ("the title in the header is still shifted somehow, it's not in the
+    // middle", measured at 1322px into a 2000px window).
     const el = bar();
     const title = el.querySelector('[data-slot="titlebar-title"]');
     const classes = (title?.getAttribute('class') ?? '').split(/\s+/);
@@ -281,8 +281,8 @@ describe('TitleBar', () => {
 
   it('carries the daemon status and version, which the rail no longer does', () => {
     // They sat in the rail's footer under a rule, and collapsing the rail left
-    // a single green pip alone under a line — "вот эта точка выглядит
-    // одна-одиноко". Here the version also sits beside the update offering a
+    // a single green pip alone under a line — "that dot looks all alone".
+    // Here the version also sits beside the update offering a
     // newer one, which is the comparison a user actually makes.
     const status = bar({
       connected: true,

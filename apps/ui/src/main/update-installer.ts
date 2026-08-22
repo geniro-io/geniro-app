@@ -86,7 +86,7 @@ let asarSuspended = 0;
  * {@link RM_RETRIES} times with a backoff. It does not fail; it does not
  * finish.
  *
- * REPORTED as an update that installs "бесконечно" — the loader never ends. It
+ * REPORTED as an update that installs "endlessly" — the loader never ends. It
  * never ended because {@link installUpdate}'s cleanup never returned, so the
  * install never resolved and the phase never left `installing`, on an update
  * whose bundle was already swapped in and working. The same call in the launch

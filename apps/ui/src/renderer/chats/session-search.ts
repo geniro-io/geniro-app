@@ -21,6 +21,47 @@ import { shortenPath } from './directory-select';
  * figure out of a partial page.
  */
 
+/**
+ * How many profile asks are in flight at once.
+ *
+ * The fan-out reaches one ask per profile — up to twelve, since the profile
+ * list is the default plus the recent config directories, themselves capped at
+ * ten — and each ask is a full-profile scan on the daemon, whose per-file
+ * budget was measured for ONE profile at a time. Nothing cancels a superseded
+ * search either: the daemon's in-flight join keys on the query, so a changed
+ * query is a distinct key that runs to completion whatever the client does
+ * with the answer. Bounding what is in flight is what keeps an abandoned
+ * search's tail short.
+ */
+export const SESSION_SEARCH_CONCURRENCY = 3;
+
+/**
+ * `Promise.all(items.map(fn))` with at most `limit` calls in flight, answering
+ * in input order.
+ *
+ * Rejects like `Promise.all` does; the session fan-out catches per profile
+ * before this ever sees a failure.
+ */
+export async function mapWithLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index] as T);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker),
+  );
+  return results;
+}
+
 /** One conversation, and which profile it was found in. */
 export interface ProfiledSession {
   session: AgentSession;

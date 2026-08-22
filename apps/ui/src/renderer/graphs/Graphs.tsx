@@ -1178,6 +1178,7 @@ export function Graphs({
                           unavailableReason={
                             agentContextWindows.unavailableReason
                           }
+                          unavailableKind={agentContextWindows.unavailableKind}
                           value={selected.contextWindow ?? null}
                           onChange={(contextWindow) =>
                             patchSelected({

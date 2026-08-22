@@ -79,7 +79,28 @@ export interface AgentContextWindowListingDto {
      * @memberof AgentContextWindowListingDto
      */
     unavailableReason: string | null;
+    /**
+     * 
+     * @type {AgentContextWindowUnavailableKind}
+     * @memberof AgentContextWindowListingDto
+     */
+    unavailableKind: AgentContextWindowUnavailableKind | null;
 }
+
+
+
+/**
+ * 
+ * @export
+ */
+export const AgentContextWindowUnavailableKind = {
+    NoModel: 'no-model',
+    NoAxis: 'no-axis',
+    FixedWindow: 'fixed-window',
+    Unreadable: 'unreadable'
+} as const;
+export type AgentContextWindowUnavailableKind = typeof AgentContextWindowUnavailableKind[keyof typeof AgentContextWindowUnavailableKind];
+
 /**
  * 
  * @export

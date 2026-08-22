@@ -3170,7 +3170,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
   });
 
   it('puts the badge back to running for a delegate launched between turns', async () => {
-    // "он пишет, что ждет агента А и Б, хотя у него статус done, complete" —
+    // "it says it's waiting on agent A and B, even though its status is done, complete" —
     // the CLI launched three agents while no turn of ours was open, and the run
     // went on reading `completed` under them. The launch announcement is the
     // evidence that it is working again.
@@ -3248,7 +3248,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
   });
 
   it('puts the badge back to running while a DELEGATE goes on producing rows', async () => {
-    // "выполняются какие-то внутренние процессы, но он показывается как
+    // "some internal processes are running, but it's shown as
     // Completed" — a delegate whose launching `Task` call already returned has
     // nothing holding the turn open for it, so the result line settles the run
     // while its steps keep arriving. Reproduced against the real renderer: two
@@ -4152,7 +4152,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     // CLI's summary row, a terminal item — so it settled the run like any
     // other and earned a system banner plus a sidebar mark for a piece of
     // context management the user had just asked for and could see. Reported
-    // as "не нужно нотификации, когда компакт сработает".
+    // as "don't need a notification when the compact fires".
     const { service, claude, statuses } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
@@ -4447,7 +4447,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
   });
 
   it('says what a held turn is WAITING ON, not the last tool it ran', async () => {
-    // The reported "он закончил, но пишет что он ещё в процессе": the turn is
+    // The reported "it finished, but it says it's still in process": the turn is
     // held open while background work it started has not reported, which is
     // deliberate — but the row went on naming the last tool, so a live delegate
     // and a dead one looked identical.
@@ -4866,11 +4866,12 @@ describe('ChatService — the live tail belongs to the MAIN thread', () => {
   const REST = 'вот три варианта.';
 
   it('does NOT throw the tail away when a DELEGATE lands a message', async () => {
-    // The reported defect: a turn streamed, "обрезал первую часть сообщения и
-    // достримил вторую", and the whole message only appeared once its own
-    // durable row landed. There is ONE tail per run and it holds the main
-    // agent's words; a sub-agent's message is the durable copy of text that
-    // was never in it, so retiring on one restarted the bubble mid-sentence.
+    // The reported defect: a turn streamed, "cut off the first part of the
+    // message and streamed out the second one", and the whole message only
+    // appeared once its own durable row landed. There is ONE tail per run and
+    // it holds the main agent's words; a sub-agent's message is the durable
+    // copy of text that was never in it, so retiring on one restarted the
+    // bubble mid-sentence.
     const { service, claude, deltas } = setup();
     const run = await service.createChat({
       agentKind: 'claude',

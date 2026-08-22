@@ -80,6 +80,7 @@ function updateState(patch: Partial<UpdateState>): UpdateState {
     message: null,
     currentVersion: '1.2.3',
     canInstall: true,
+    failedPhase: null,
     ...patch,
   };
 }

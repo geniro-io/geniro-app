@@ -518,6 +518,11 @@ describe('UpdateService deadlines', () => {
     expect(service.getState()).toMatchObject({
       phase: 'error',
       progress: null,
+      // WHICH phase died, kept across the transition into `error` — the
+      // renderer's lead sentence is built from it, and without it every
+      // failure read "The update could not be installed." including this one,
+      // which never installed anything.
+      failedPhase: 'downloading',
     });
     expect(service.getState().message).toContain('made no progress');
     expect(service.getState().message).toContain(UPDATE_COMMAND);

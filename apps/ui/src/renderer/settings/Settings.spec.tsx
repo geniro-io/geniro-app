@@ -86,6 +86,7 @@ function updateState(overrides: Partial<UpdateState> = {}): UpdateState {
     message: null,
     currentVersion: '0.1.0',
     canInstall: true,
+    failedPhase: null,
     ...overrides,
   };
 }

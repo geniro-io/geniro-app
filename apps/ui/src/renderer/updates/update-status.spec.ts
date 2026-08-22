@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { UPDATE_COMMAND, type UpdateState } from '../../shared/contracts';
-import { footerUpdate } from './update-status';
+import { footerUpdate, updateStatusText } from './update-status';
 
 /** An `UpdateState` with only the fields a case cares about spelled out. */
 function updateState(patch: Partial<UpdateState>): UpdateState {
@@ -12,6 +12,7 @@ function updateState(patch: Partial<UpdateState>): UpdateState {
     message: null,
     currentVersion: '1.2.3',
     canInstall: true,
+    failedPhase: null,
     ...patch,
   };
 }
@@ -95,5 +96,71 @@ describe('footerUpdate', () => {
       label: '1.47.0',
       title: `Update with: ${UPDATE_COMMAND}`,
     });
+  });
+});
+
+describe('updateStatusText', () => {
+  it('names the phase that actually failed, not always the install', () => {
+    // REPORTED against a DOWNLOAD that never moved a byte: Settings read "The
+    // update could not be installed." on an app that had installed nothing.
+    // `error` erases the phase it came from, so the lead has to be told.
+    expect(
+      updateStatusText(
+        updateState({
+          phase: 'error',
+          failedPhase: 'downloading',
+          message: `it made no progress for 3 minutes — you can still update with: ${UPDATE_COMMAND}`,
+        }),
+      ),
+    ).toBe(
+      `The download failed: it made no progress for 3 minutes — you can still update with: ${UPDATE_COMMAND}`,
+    );
+  });
+
+  it('tells a failed CHECK apart from a failed install', () => {
+    // The actionable difference: a check that cannot reach GitHub is a network
+    // problem, and calling it an install failure sends the reader to the wrong
+    // place entirely. Measured on the author's own log — 32 failed checks over
+    // two days, every one of them reported as an install that failed.
+    expect(
+      updateStatusText(
+        updateState({
+          phase: 'error',
+          failedPhase: 'checking',
+          message: 'fetch failed',
+        }),
+      ),
+    ).toBe('The update check failed: fetch failed');
+  });
+
+  it('still says the install could not be done when that is what failed', () => {
+    expect(
+      updateStatusText(
+        updateState({ phase: 'error', failedPhase: 'installing' }),
+      ),
+    ).toBe('The update could not be installed.');
+  });
+
+  it('never re-words the message — a command must survive verbatim', () => {
+    // Capitalizing the fragment was tried first and produced "Ipc broke" out of
+    // a real error string. These carry shell commands and absolute paths, so
+    // the join changes punctuation and nothing else.
+    expect(
+      updateStatusText(
+        updateState({
+          phase: 'error',
+          failedPhase: 'installing',
+          message: `this copy of Geniro cannot replace itself — update with: ${UPDATE_COMMAND}`,
+        }),
+      ),
+    ).toBe(
+      `The update could not be installed: this copy of Geniro cannot replace itself — update with: ${UPDATE_COMMAND}`,
+    );
+  });
+
+  it('appends nothing when there is no message, on any phase', () => {
+    expect(updateStatusText(updateState({ phase: 'up-to-date' }))).toBe(
+      'Up to date (v1.2.3).',
+    );
   });
 });

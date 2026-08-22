@@ -365,6 +365,18 @@ export interface UpdateState {
   progress: number | null;
   /** One line for the user: the failure, or what is happening right now. */
   message: string | null;
+  /**
+   * Which phase was in flight when {@link phase} became `error`; null whenever
+   * it is not.
+   *
+   * `error` is an ending and so erases what failed, which left every failure
+   * described as "The update could not be installed." — REPORTED against a
+   * DOWNLOAD that never moved a byte, on an app that had installed nothing.
+   * The distinction is the actionable half: a failed check is a network
+   * problem, a stalled download is a bigger one, and a failed install is the
+   * only one of the three that has touched the bundle.
+   */
+  failedPhase: UpdatePhase | null;
   /** The running app's version, so a screen can state it without a second call. */
   currentVersion: string;
   /**

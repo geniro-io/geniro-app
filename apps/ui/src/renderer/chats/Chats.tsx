@@ -90,6 +90,7 @@ import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
+import { JumpToLatest } from './jump-to-latest';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
 import { MarkdownImageLoaderContext } from './markdown-image';
@@ -122,7 +123,7 @@ import {
   isSettledRunStatus,
   type RunStatusKind,
 } from './run-status';
-import { nextFollowState } from './scroll-follow';
+import { isScrolledToBottom, nextFollowState } from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { SessionPicker } from './session-picker';
 import type {
@@ -452,6 +453,16 @@ export function Chats({
     string | null
   >(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Is the reader above the tail? The one piece of scroll position that is
+   * STATE rather than a ref, because a control renders from it
+   * ({@link JumpToLatest}).
+   *
+   * Written from the scroll listener, which fires at frame rate — so it is
+   * written with the value itself and React bails out of the re-render whenever
+   * it has not flipped. Only the transitions cost anything.
+   */
+  const [aboveTail, setAboveTail] = useState(false);
   /**
    * Whether the transcript is currently glued to its tail.
    *
@@ -1462,6 +1473,9 @@ export function Chats({
       return;
     }
     lastScrollTopRef.current = scroller.scrollTop;
+    // A freshly opened transcript is at its tail (`pendingScrollRef`), so the
+    // control starts hidden rather than flashing on until the first scroll.
+    setAboveTail(false);
     const onScroll = (): void => {
       followingRef.current = nextFollowState(
         followingRef.current,
@@ -1469,6 +1483,11 @@ export function Chats({
         lastScrollTopRef.current,
       );
       lastScrollTopRef.current = scroller.scrollTop;
+      // Deliberately NOT `!followingRef.current`: the follow is sticky through
+      // content that grows under a reader who never moved, which is exactly
+      // when the tail runs away from them — the button is about where the
+      // viewport IS, not about what the transcript intends to do next.
+      setAboveTail(!isScrolledToBottom(scroller));
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
     return () => scroller.removeEventListener('scroll', onScroll);
@@ -1489,6 +1508,12 @@ export function Chats({
         ? null
         : new ResizeObserver(() => {
             if (!followingRef.current) {
+              // Growth fires no `scroll` event, so this is the only moment the
+              // control can learn that the tail has run away from a reader who
+              // never moved — which is precisely the case it exists for: a
+              // tool that renders half a screen of output while you are
+              // reading further up.
+              setAboveTail(!isScrolledToBottom(scroller));
               return;
             }
             scrollToBottom(scroller, 'auto');
@@ -1521,6 +1546,27 @@ export function Chats({
       children?.disconnect();
     };
   }, [activeRunId]);
+
+  /**
+   * Take the reader back to the tail, and RE-ARM the follow.
+   *
+   * Both halves, because the button answers a state with two parts: the
+   * viewport is above the bottom, and the transcript has stopped chasing it.
+   * Scrolling alone would land at the tail and then let the next streamed token
+   * leave it behind again — which is the same complaint one message later.
+   *
+   * `smooth`, unlike the open-a-thread jump: this one the user asked for, and
+   * the movement is what tells them where they were taken from.
+   */
+  const jumpToLatest = useCallback((): void => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (!scroller) {
+      return;
+    }
+    followingRef.current = true;
+    setAboveTail(false);
+    scrollToBottom(scroller, 'smooth');
+  }, []);
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -2329,6 +2375,17 @@ export function Chats({
     if ((!text && images.length === 0) || !runId) {
       return;
     }
+    // Sending RE-ARMS the follow, wherever the reader had scrolled to. The
+    // suppression rule is about not dragging somebody away from what they are
+    // reading — and typing into the composer is them saying they are done
+    // reading it. Without this, a user who scrolled up, came back to the box
+    // and asked a question watched the answer arrive off-screen, with the
+    // transcript still frozen where they had left it.
+    //
+    // Only the FOLLOW, not a scroll of its own: the message lands as an item a
+    // frame later, and the tail-follow effect takes it from there.
+    followingRef.current = true;
+    setAboveTail(false);
     // Queueing is a chat-run concept — the workflow composer is disabled.
     const queueable =
       runsRef.current.find((r) => r.id === runId)?.workflowId == null;
@@ -3609,22 +3666,39 @@ export function Chats({
    * it, so this is the header joining that sentence rather than inventing one.
    */
   const sidePanelLive = useMemo(() => {
+    // The delegates THEMSELVES, not merely how many are working: the header's
+    // counter holds the list behind it now, and re-deriving that list wherever
+    // it is drawn would be a second reading of the same threads.
+    const subagentThreads: AgentThread[] = [];
     let subagents = 0;
     for (const agent of agents) {
       for (const thread of agent.threads) {
-        if (thread.kind === 'subagent' && thread.status === 'running') {
+        if (thread.kind !== 'subagent') {
+          continue;
+        }
+        subagentThreads.push(thread);
+        if (thread.status === 'running') {
           subagents += 1;
         }
       }
     }
     let done = 0;
     let total = 0;
+    // Flattened in the panel's own agent order, so the popover's list reads
+    // top-to-bottom as the cards below it do.
+    const taskRows: AgentTaskRow[] = [];
     for (const rows of tasksByAgent.values()) {
       const progress = taskProgress(rows);
       done += progress.done;
       total += progress.total;
+      taskRows.push(...rows);
     }
-    return { subagents, tasks: { done, total } };
+    return {
+      subagents,
+      subagentThreads,
+      tasks: { done, total },
+      taskRows,
+    };
   }, [agents, tasksByAgent]);
 
   /**
@@ -4645,6 +4719,8 @@ export function Chats({
                         }
                         runningSubagents={sidePanelLive.subagents}
                         tasks={sidePanelLive.tasks}
+                        subagents={sidePanelLive.subagentThreads}
+                        taskRows={sidePanelLive.taskRows}
                       />
                     ) : null}
 
@@ -4673,7 +4749,9 @@ export function Chats({
                   browser that it is inert: at 900px a horizontal wheel gesture
                   and a `scrollIntoView` on the widest descendant both leave
                   `scrollLeft` at 0. */}
-                    <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
+                    <div
+                      data-slot="transcript"
+                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
                       <RunSettledContext.Provider value={activeRunSettledAt}>
                         <RunActivityContext.Provider value={activeActivity}>
                           <TurnDurationContext.Provider value={turnDurations}>
@@ -4747,6 +4825,12 @@ export function Chats({
                       </RunSettledContext.Provider>
                       <div ref={transcriptEndRef} />
                     </div>
+
+                    {/* Between the scroller and the composer, and drawn OVER
+                  the transcript from a zero-height row — see
+                  `jump-to-latest.tsx` for why it cannot take part in the
+                  column's sizing. */}
+                    <JumpToLatest visible={aboveTail} onJump={jumpToLatest} />
 
                     {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled

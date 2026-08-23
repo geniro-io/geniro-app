@@ -45,7 +45,11 @@ function render(el: React.ReactNode): void {
 function meterLabel(): string | null {
   return (
     container
-      .querySelector('button[aria-expanded]')
+      // Scoped to the METER's own slot, not "any expandable button on screen":
+      // the header grew readouts of its own (the sub-agent and task counts,
+      // each holding its list behind the same `HoverPopover`), and an unscoped
+      // query read one of those as the meter.
+      .querySelector('[data-slot="context-meter"] button[aria-expanded]')
       ?.getAttribute('aria-label') ?? null
   );
 }

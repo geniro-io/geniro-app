@@ -764,6 +764,122 @@ describe('Chats transcript auto-scroll', () => {
     expect(container.textContent).toContain('a long reply');
   });
 
+  const jumpControl = (container: HTMLElement): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-slot="jump-to-latest"]');
+
+  it('offers a way BACK to the tail once the reader is above it', async () => {
+    // REPORTED alongside the auto-scroll gap: the follow is silent by design,
+    // so once it is off the only way back was dragging the scrollbar through
+    // however much tool output arrived meanwhile.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // At the tail: the control is mounted but inert, so its appearance costs
+    // no layout under the reader.
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('true');
+    expect(jumpControl(container)?.tabIndex).toBe(-1);
+
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('false');
+    expect(jumpControl(container)?.tabIndex).toBe(0);
+  });
+
+  it('pressing it returns to the tail AND re-arms the follow', async () => {
+    // Both halves. Scrolling alone would land at the bottom and let the next
+    // streamed row leave it behind again — the same complaint one message on.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // Scroll UP, which is what switches the follow off.
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 3600,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      jumpControl(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('true');
+
+    // The re-arm, observed rather than asserted on a ref: a new item now moves
+    // the transcript again, which it would not have before the press.
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a later reply'));
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('sending a message re-arms the follow, wherever the reader had scrolled', async () => {
+    // Typing into the composer IS the statement that they are done reading
+    // further up — without this the answer to their own question arrived off
+    // screen, on a transcript frozen where they left it.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'and this?'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 3600,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      emitItem(msg(11, 'assistant', 'the answer'));
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
   it('jumps to the newest message when a chat with history is OPENED', async () => {
     // Opening is not "a new item arrived": activateRun empties the transcript
     // first, so the browser clamps the scroller to 0 and the history then
@@ -7169,9 +7285,11 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
   const pinned = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('[data-slot="pinned-request"]');
 
+  // The scroller by NAME, not by position: it was reached through the pinned
+  // card's `previousElementSibling`, so the jump-to-latest control landing
+  // between the two made this assert against that control's own text.
   const transcript = (container: HTMLElement): HTMLElement =>
-    container.querySelector<HTMLElement>('[data-slot="pinned-request"]')!
-      .previousElementSibling as HTMLElement;
+    container.querySelector<HTMLElement>('[data-slot="transcript"]')!;
 
   it('lifts the open card out of the transcript and leaves a marker in its slot', async () => {
     // Two live copies of one card would put two sets of buttons over a

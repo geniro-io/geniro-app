@@ -71,12 +71,12 @@ describe('ChatHeader', () => {
     expect(
       el.querySelector('button[aria-label="Close side panel"]'),
     ).toBeNull();
-    // The counts it used to carry survive it — as a readout, not a button:
-    // there is nothing left for a press to do.
+    // The counts it used to carry survive it. They are pressable again — but
+    // for their OWN readout (the delegates behind the number, the tasks behind
+    // the pair), never to open or close the panel beside the chat.
     const counts = el.querySelector('[data-slot="side-panel-counts"]')!;
     expect(counts).not.toBeNull();
     expect(counts.tagName).toBe('SPAN');
-    expect(counts.querySelector('button')).toBeNull();
     expect(counts.textContent).toContain('2');
     // The task figure names its DENOMINATOR. A lone "3" left the reader unable
     // to tell three-of-four from three-of-forty, and it only ever shrinks — the
@@ -84,6 +84,111 @@ describe('ChatHeader', () => {
     expect(counts.querySelector('[data-slot="open-tasks"]')?.textContent).toBe(
       '3/8',
     );
+  });
+
+  it('keeps the sub-agent counter on screen at ZERO', async () => {
+    // REPORTED: "здесь должна быть всегда иконка саб-эйджентов, даже если их
+    // ноль". A counter that appears only once something is running answers "are
+    // any working" with the same blank space as a header that never had one.
+    const el = render(<ChatHeader {...baseProps} runningSubagents={0} />);
+
+    const counter = el.querySelector('[data-slot="running-subagents"]')!;
+    expect(counter).not.toBeNull();
+    expect(counter.textContent).toContain('0');
+    // The TASK counter is still conditional: a thread whose agent keeps no
+    // list has no list to report on.
+    expect(el.querySelector('[data-slot="open-tasks"]')).toBeNull();
+  });
+
+  it('holds the delegates themselves behind the count', async () => {
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        runningSubagents={1}
+        subagents={[
+          {
+            id: 't1',
+            kind: 'subagent',
+            label: 'explore',
+            status: 'running',
+            sessionId: null,
+          },
+          {
+            id: 't2',
+            kind: 'subagent',
+            label: 'review the diff',
+            status: 'completed',
+            sessionId: null,
+          },
+        ]}
+      />,
+    );
+
+    const trigger = el
+      .querySelector('[data-slot="running-subagents"]')!
+      .querySelector('button')!;
+    // Closed, the panel is not in the DOM at all — the count is all there is.
+    expect(el.textContent).not.toContain('review the diff');
+
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('explore');
+    expect(el.textContent).toContain('review the diff');
+    // Each row states its own status, so a finished delegate is not counted as
+    // one of the working ones the number names.
+    expect(el.textContent).toContain('completed');
+  });
+
+  it('says so in words when there are no delegates to list', async () => {
+    // The counter is drawn at zero now, so an EMPTY panel behind it would read
+    // as a readout that failed to load.
+    const el = render(<ChatHeader {...baseProps} runningSubagents={0} />);
+
+    await act(async () => {
+      el.querySelector('[data-slot="running-subagents"]')!
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('No sub-agents yet');
+  });
+
+  it('holds the task LIST behind the done/total pair', async () => {
+    // REPORTED: "при наведении на to-do поп-овер с тудушками" — and the count
+    // alone could not say which task was running.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        tasks={{ done: 1, total: 2 }}
+        taskRows={[
+          {
+            id: '1',
+            title: 'read the spec',
+            status: 'completed',
+            activeForm: null,
+          },
+          {
+            id: '2',
+            title: 'write the adapter',
+            status: 'in_progress',
+            activeForm: 'writing the adapter',
+          },
+        ]}
+      />,
+    );
+
+    await act(async () => {
+      el.querySelector('[data-slot="open-tasks"]')!
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('read the spec');
+    // The running row reads in its present-continuous form, as it does
+    // everywhere else the same list is drawn.
+    expect(el.textContent).toContain('writing the adapter');
   });
 });
 

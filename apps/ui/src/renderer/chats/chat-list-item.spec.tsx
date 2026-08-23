@@ -375,6 +375,44 @@ describe('ChatListItem — the running row never goes phrase-less', () => {
     expect(container.textContent).not.toContain(STANDING_ACTIVITY);
   });
 
+  it('marks an unseen row on the ROW — a bar and a wash, not only a dot', async () => {
+    // REPORTED twice: the dot alone was missed at 6px and again at 10px. A
+    // mark the size of a glyph competes with every other glyph on the rail,
+    // so the row itself carries the signal now — which is what "дополнительная
+    // линия или выделение" asked for.
+    const container = await mount(
+      <ChatListItem {...props({ unseen: true })} />,
+    );
+    const row = container.querySelector('li')!;
+
+    expect(row.className).toContain('before:bg-primary');
+    expect(row.className).toContain('bg-primary/10');
+    // The dot stays: it is the marker carrying the accessible name, and the
+    // group header draws the same one when a fold hides these rows.
+    expect(row.querySelector('[data-slot="unseen-dot"]')).not.toBeNull();
+  });
+
+  it('leaves a SEEN row unmarked — no bar, no wash', async () => {
+    const container = await mount(<ChatListItem {...props()} />);
+    const row = container.querySelector('li')!;
+
+    expect(row.className).not.toContain('before:bg-primary');
+    expect(row.className).not.toContain('bg-primary/10');
+    expect(row.querySelector('[data-slot="unseen-dot"]')).toBeNull();
+  });
+
+  it('yields the wash to the ACTIVE row, keeping one highlight per row', async () => {
+    // Two backgrounds on one row read as a third state. The bar stays, since
+    // it is the mark rather than the highlight.
+    const container = await mount(
+      <ChatListItem {...props({ unseen: true, active: true })} />,
+    );
+    const row = container.querySelector('li')!;
+
+    expect(row.className).not.toContain('bg-primary/10');
+    expect(row.className).toContain('before:bg-primary');
+  });
+
   it('says nothing of the sort once the run has STOPPED', async () => {
     // The fallback describes work in progress. A settled row showing it would
     // claim the run was still going — worse than the blink it replaces.

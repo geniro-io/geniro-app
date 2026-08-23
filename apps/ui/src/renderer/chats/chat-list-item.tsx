@@ -155,7 +155,30 @@ export const ChatListItem = memo(function ChatListItem({
       // `select-none`: without it a press-and-drag on the row starts a TEXT
       // selection instead of the drag, which is what "gets selected, but
       // doesn't drag" looks like from the other side of the screen.
-      className={cn('group select-none', dragging && 'opacity-40')}
+      className={cn(
+        'group select-none',
+        // An unseen row is marked on the ROW, not only in front of its name.
+        // Reported twice: a 6px dot was missed, a 10px one still was — "точку
+        // не видно… давай что-то более заметное, дополнительная линия или
+        // выделение". A mark the width of a glyph competes with every other
+        // glyph on a 260px rail; a bar down the row's own edge and a wash
+        // behind it are read by shape and area instead, which is what a mail
+        // client uses for the same job.
+        //
+        // The bar is a pseudo-element on the row's own box (`NavListItem` is
+        // `relative`), so it costs no layout and cannot push the title the way
+        // a leading element does — and it sits INSIDE the row, clear of the
+        // group's colour rail, which is the section's mark rather than this
+        // row's.
+        unseen &&
+          'before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-primary',
+        // The wash yields to the ACTIVE row: an open chat has its own
+        // highlight, and two backgrounds on one row would read as a third
+        // state. Moot in practice — opening a thread is what marks it seen —
+        // but the frame in between is exactly when the eye is on it.
+        unseen && !active && 'bg-primary/10',
+        dragging && 'opacity-40',
+      )}
       activateLabel={label}
       suspendActivation={editing}
       // Not while renaming: a text field inside a draggable element cannot be

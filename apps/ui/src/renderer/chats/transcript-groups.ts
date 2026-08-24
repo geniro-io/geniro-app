@@ -1174,6 +1174,15 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       }
       continue;
     }
+    if (item.kind === 'shell_info') {
+      // Bookkeeping, not narrative: it says a detached command has finished and
+      // renders as nothing (`shell-activity.ts` is its only reader). Skipped
+      // OUTRIGHT rather than left to the fall-through below, which treats any
+      // other kind as the node having "said something" and closes its open tool
+      // group — so a burst of background commands would chop one turn's tools
+      // into a run of one-call rows for a row nobody can see.
+      continue;
+    }
     if (item.kind === 'tool_call') {
       const name = payloadString(item.payload, 'name') ?? '';
       const callId = payloadString(item.payload, 'id');

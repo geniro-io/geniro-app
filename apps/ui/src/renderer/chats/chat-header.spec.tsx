@@ -511,4 +511,74 @@ describe('ChatHeader — what this thread SPENT', () => {
 
     expect(el.textContent).toContain('$0.0003');
   });
+  it('counts the running shells beside the delegates, and holds them behind it', async () => {
+    // The ask: how many commands this thread has open, next to how many
+    // delegates are working. Both are counts of work in flight the transcript
+    // alone would make a reader hunt for.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        runningSubagents={1}
+        shells={[
+          {
+            id: 'c1',
+            command: 'pnpm build',
+            description: null,
+            background: false,
+            handle: null,
+            status: 'running',
+            exitCode: null,
+            startedAt: new Date(Date.now() - 5_000).toISOString(),
+            agentId: null,
+          },
+          {
+            id: 'c2',
+            command: 'pnpm dev',
+            description: null,
+            background: true,
+            handle: 'bash_1',
+            status: 'running',
+            exitCode: null,
+            startedAt: new Date(Date.now() - 5_000).toISOString(),
+            agentId: null,
+          },
+        ]}
+      />,
+    );
+
+    const counter = el.querySelector('[data-slot="running-shells"]')!;
+    expect(counter).not.toBeNull();
+    expect(counter.textContent).toContain('2');
+    // Closed, the commands themselves are not in the DOM — the count is all
+    // there is, exactly as with the delegates beside it.
+    expect(el.textContent).not.toContain('pnpm build');
+
+    await act(async () => {
+      counter
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('pnpm build');
+    expect(el.textContent).toContain('pnpm dev');
+  });
+
+  it('keeps the shell counter on screen at ZERO, and says so in words', async () => {
+    // The same rule as the sub-agent counter it sits beside: a counter that
+    // appears only once something is running answers "is anything running" with
+    // the same blank space as a header that never had one.
+    const el = render(<ChatHeader {...baseProps} shells={[]} />);
+
+    const counter = el.querySelector('[data-slot="running-shells"]')!;
+    expect(counter).not.toBeNull();
+    expect(counter.textContent).toContain('0');
+
+    await act(async () => {
+      counter
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('Nothing running');
+  });
 });

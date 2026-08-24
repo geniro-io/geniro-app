@@ -141,6 +141,8 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt, TERMINAL_KINDS } from './settled-status';
+import { runningShellsByAgent, type ShellRun } from './shell-activity';
+import { ShellOutputDialog } from './shell-output-dialog';
 import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -1909,6 +1911,30 @@ export function Chats({
    */
   const loadChatMetrics = useCallback(
     (runId: string) => chatApi.readChatMetrics({ runId }),
+    [chatApi],
+  );
+
+  /**
+   * Read what one command an agent started has PRINTED — the terminal behind a
+   * row in the running-shells list.
+   *
+   * Keyed on the ACTIVE run for the same reason `loadMarkdownImage` is: the
+   * shells on screen are this run's, the daemon resolves the output file from
+   * this run's own transcript, and a call id means nothing without it.
+   *
+   * The daemon is given a CALL ID and never a path. The file it reads is
+   * whatever that call's own reply announced, so this is a read of one file the
+   * CLI itself named in this run's transcript rather than a file-read channel
+   * with a validated argument.
+   */
+  const loadShellOutput = useCallback(
+    (callId: string) => {
+      const runId = activeRunIdRef.current;
+      if (!runId) {
+        throw new Error('no run to read this command against');
+      }
+      return chatApi.readShellOutput({ runId, callId });
+    },
     [chatApi],
   );
 
@@ -3846,6 +3872,46 @@ export function Chats({
     }
   }, [activeRunId, chatContext, rememberContextReading]);
   /**
+   * The shells each agent has running right now — read by the panel's section
+   * and by the header's counter, which is why the LIVENESS RULE lives here
+   * rather than in either of them.
+   *
+   * Re-keyed to the panel's agent ids, exactly as the task lists above are and
+   * for the same reason: a 1:1 chat's rows carry `nodeId: null` while its card
+   * is keyed by `CHAT_AGENT_KEY`, and that mapping belongs to this screen
+   * rather than to the fold.
+   *
+   * The gate is `isSettledRunStatus` — has this agent stopped FOR GOOD — and it
+   * is correctness rather than tidiness. A shell ends when its tool call comes
+   * back, so a turn the user cancelled, or one the CLI abandoned, leaves a call
+   * with no reply that the fold can only read as still running; every one of
+   * those rows would then stand for the rest of the session claiming a process
+   * that died with the turn.
+   *
+   * Written as `status === 'running'` it was WRONG, and measured so on a live
+   * run: a turn holding background work sits in `waiting` (the status carved
+   * out of `running` precisely because such a hold can last twenty minutes), so
+   * a detached command vanished from the panel three seconds after it started
+   * and came back to nothing. `isSettledRunStatus` is the app's own answer to
+   * the question actually being asked — while a run can still produce rows, its
+   * commands can still be running; once it has stopped for good, none can.
+   */
+  const shellsByAgent = useMemo(() => {
+    const working = new Set(
+      agents
+        .filter((agent) => !isSettledRunStatus(agent.status))
+        .map((a) => a.id),
+    );
+    const byAgent = new Map<string, ShellRun[]>();
+    for (const [nodeId, shells] of runningShellsByAgent(items)) {
+      const key = nodeId ?? CHAT_AGENT_KEY;
+      if (working.has(key)) {
+        byAgent.set(key, shells);
+      }
+    }
+    return byAgent;
+  }, [agents, items]);
+  /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
    *
@@ -3864,6 +3930,12 @@ export function Chats({
    * as a countdown out of a number the header never states. `done/total` is
    * also how the transcript cards, the panel and the sub-agent headers all say
    * it, so this is the header joining that sentence rather than inventing one.
+   *
+   * The SHELLS are the third — asked for beside the delegate count, and the
+   * same kind of reading: how much of this machine the thread is using right
+   * now. Flattened out of the very map the panel's sections render, liveness
+   * rule included, so the counter and the cards below it cannot disagree about
+   * what is running.
    */
   const sidePanelLive = useMemo(() => {
     // The delegates THEMSELVES, not merely how many are working: the header's
@@ -3893,13 +3965,20 @@ export function Chats({
       total += progress.total;
       taskRows.push(...rows);
     }
+    // In the panel's own agent order, like the task rows above — the popover
+    // reads top-to-bottom as the cards below it do.
+    const shells: ShellRun[] = [];
+    for (const agent of agents) {
+      shells.push(...(shellsByAgent.get(agent.id) ?? []));
+    }
     return {
       subagents,
       subagentThreads,
       tasks: { done, total },
       taskRows,
+      shells,
     };
-  }, [agents, tasksByAgent]);
+  }, [agents, shellsByAgent, tasksByAgent]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -3908,6 +3987,16 @@ export function Chats({
    * it was opened from.
    */
   const [detailSubagentId, setDetailSubagentId] = useState<string | null>(null);
+  /**
+   * The command whose output is open, or null.
+   *
+   * The ROW rather than its id, unlike the sub-agent detail beside it: a shell
+   * leaves the running list the moment it settles, so following the live fold
+   * would close the dialog under the reader at exactly the moment they came to
+   * see how it ended. The command, its clock and its status are a snapshot; the
+   * OUTPUT is what stays live, and that is re-read from the daemon.
+   */
+  const [openShell, setOpenShell] = useState<ShellRun | null>(null);
   const detailSubagent = useMemo(
     (): SubagentBlockEntry | null =>
       detailSubagentId === null
@@ -4921,6 +5010,8 @@ export function Chats({
                             : openTurnForHeader
                         }
                         runningSubagents={sidePanelLive.subagents}
+                        shells={sidePanelLive.shells}
+                        onOpenShell={setOpenShell}
                         tasks={sidePanelLive.tasks}
                         subagents={sidePanelLive.subagentThreads}
                         taskRows={sidePanelLive.taskRows}
@@ -5536,6 +5627,8 @@ export function Chats({
                     agents={agents}
                     artifacts={artifacts}
                     tasksByAgent={tasksByAgent}
+                    shellsByAgent={shellsByAgent}
+                    onOpenShell={setOpenShell}
                     terminalReasons={terminalReasons}
                     usageReasons={usageReasons}
                     // A chat only: a workflow run's nodes each hold their own
@@ -5625,6 +5718,12 @@ export function Chats({
                     </RunSettledContext.Provider>
                   ) : null}
                 </Dialog>
+
+                <ShellOutputDialog
+                  shell={openShell}
+                  onClose={() => setOpenShell(null)}
+                  load={loadShellOutput}
+                />
 
                 <ConfirmDialog
                   open={deleting !== null}

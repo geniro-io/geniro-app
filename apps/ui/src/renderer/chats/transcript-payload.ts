@@ -34,6 +34,24 @@ export function payloadString(payload: unknown, key: string): string | null {
   return null;
 }
 
+/**
+ * Read a boolean field out of an item's payload, defensively.
+ *
+ * Three-state on purpose: `null` is "the payload does not carry this", which a
+ * caller must be able to tell from a stated `false` — a tool reply that never
+ * mentioned `isError` and one that said it was fine are the same row to a
+ * `=== true` test, and different rows to anything deciding on absence.
+ */
+export function payloadBoolean(payload: unknown, key: string): boolean | null {
+  if (payload && typeof payload === 'object' && key in payload) {
+    const value = (payload as Record<string, unknown>)[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+  }
+  return null;
+}
+
 /** Read a numeric field out of an item's payload, defensively. */
 export function payloadNumber(payload: unknown, key: string): number | null {
   if (payload && typeof payload === 'object' && key in payload) {

@@ -1795,3 +1795,76 @@ describe('AgentsPanel task lists', () => {
     expect(section.textContent).toContain('Edit the file');
   });
 });
+
+describe('running shells', () => {
+  const shell = (id: string, command: string, background = false) => ({
+    id,
+    command,
+    description: null,
+    background,
+    handle: null,
+    status: 'running' as const,
+    exitCode: null,
+    startedAt: new Date(Date.now() - 12_000).toISOString(),
+    agentId: 'orchestrator',
+  });
+
+  it("lists the commands an agent has running, with each one's clock", () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        shellsByAgent={
+          new Map([
+            [
+              'orchestrator',
+              [shell('c1', 'pnpm build'), shell('c2', 'pnpm dev', true)],
+            ],
+          ])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
+    const orchestrator = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    const section = orchestrator.querySelector(
+      '[data-slot="agent-shell-list"]',
+    )!;
+    expect(section).not.toBeNull();
+    expect(section.textContent).toContain('2 shells running');
+    expect(section.textContent).toContain('pnpm build');
+    // A detached command is the one row that can outlive the agent's answer, so
+    // it says which it is.
+    expect(
+      section.querySelector('[data-shell-background="true"]')?.textContent,
+    ).toContain('pnpm dev');
+    expect(section.textContent).toContain('12s');
+
+    // And it is THIS agent's: the worker was given none.
+    const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
+    expect(worker.querySelector('[data-slot="agent-shell-list"]')).toBeNull();
+  });
+
+  it('renders exactly the shells it was GIVEN, gate included', () => {
+    // The liveness rule — which agents may contribute a shell at all — lives in
+    // `Chats.tsx`, because the header's counter is the same reading over the
+    // same map and two copies of the rule is how a `2` up there comes to sit
+    // over three cards down here. So a settled agent HANDED shells still draws
+    // them: this panel invents no filter of its own. `Chats.spec.tsx` pins the
+    // rule itself, on the real fold.
+    const idle: AgentDisplay = { ...agents[0]!, status: 'completed' };
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[idle]}
+        shellsByAgent={new Map([['orchestrator', [shell('c1', 'pnpm build')]]])}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(
+      el.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm build');
+  });
+});

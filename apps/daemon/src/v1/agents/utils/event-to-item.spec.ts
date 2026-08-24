@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '../adapters/adapter.types';
-import {
-  closesADelegate,
-  mapEventToItem,
-  terminalStatus,
-} from './event-to-item';
+import { closesWork, mapEventToItem, terminalStatus } from './event-to-item';
 
 // The one event→transcript projection BOTH execution paths (chat service and
 // graph executor) persist through — each arm is pinned with a worked-example
@@ -481,7 +477,7 @@ describe('terminalStatus', () => {
   });
 });
 
-describe('closesADelegate', () => {
+describe('closesWork', () => {
   /** The announcement `spawn-cli` makes about one delegate's liveness. */
   const announce = (backgroundOpen: boolean | null): AgentEvent => ({
     type: 'subagent_info',
@@ -498,21 +494,32 @@ describe('closesADelegate', () => {
   });
 
   it('is true only for the announcement that a delegate has STOPPED', () => {
-    expect(closesADelegate(announce(false))).toBe(true);
-    expect(closesADelegate(announce(true))).toBe(false);
+    expect(closesWork(announce(false))).toBe(true);
+    expect(closesWork(announce(true))).toBe(false);
   });
 
   it('reads an announcement that claims nothing about liveness as no close', () => {
     // A `subagent_info` carrying a delegate's FACTS says nothing about whether
     // it is running; reading null as a close would silence the run every time
     // the CLI described the delegate it had just launched.
-    expect(closesADelegate(announce(null))).toBe(false);
+    expect(closesWork(announce(null))).toBe(false);
+  });
+
+  it('is true for a background SHELL settling, unconditionally', () => {
+    // Unlike the delegate half there is no direction to read: the announcement
+    // is only ever emitted on a settle, the start of a command already being in
+    // the transcript as the tool call that made it. Without this a `pnpm dev`
+    // finishing minutes after a chat settled puts that chat's badge back to
+    // `running` with nothing able to take it down.
+    expect(
+      closesWork({ type: 'shell_info', toolCallId: 'toolu_a', workId: 'b_1' }),
+    ).toBe(true);
   });
 
   it('is false for every other event', () => {
-    expect(closesADelegate({ type: 'text', text: 'hi' })).toBe(false);
+    expect(closesWork({ type: 'text', text: 'hi' })).toBe(false);
     expect(
-      closesADelegate({
+      closesWork({
         type: 'background_work',
         id: 'task-1',
         phase: 'settled',

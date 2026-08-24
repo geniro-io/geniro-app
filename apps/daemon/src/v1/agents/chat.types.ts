@@ -280,6 +280,36 @@ export const LocalImageWireSchema = z.object({
 export type LocalImageWire = z.infer<typeof LocalImageWireSchema>;
 
 /**
+ * How much of a background command's output file is served at once.
+ *
+ * The TAIL, not the head, and this is what a terminal shows: a `pnpm dev` left
+ * running for an hour writes megabytes and the interesting line is the last
+ * one. 256KB is comfortably more than a panel can render and small enough that
+ * a poll while the command runs stays cheap.
+ */
+export const MAX_SHELL_OUTPUT_BYTES = 256 * 1024;
+
+/** What one background command has written so far. */
+export const ShellOutputWireSchema = z.object({
+  text: z.string().describe('the tail of the output file, decoded as UTF-8'),
+  truncated: z
+    .boolean()
+    .describe('earlier output was dropped — this is the tail of a longer file'),
+  /**
+   * Why there is nothing to show, or null when {@link text} is the answer.
+   *
+   * A 200 rather than a 404, on the same rule the metrics route follows: "this
+   * command was not detached, so the CLI kept no output file" is an ANSWER the
+   * panel states, not a failure. Only a malformed request — an unknown run, a
+   * call id the run never made — is a 4xx.
+   */
+  unavailableReason: z.string().nullable(),
+});
+// No `.meta({ id })`: this is a response DTO ROOT — same rule, and same reason,
+// as `LocalImageWireSchema` above.
+export type ShellOutputWire = z.infer<typeof ShellOutputWireSchema>;
+
+/**
  * One line item of the context window — a NAMED component, so the generated
  * client gets a real type rather than an inline anonymous shape per field.
  */

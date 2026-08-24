@@ -61,6 +61,31 @@
   --code-punctuation: #8a7a67;
   --code-variable: #2f6a86;
 
+  /* Terminal (ANSI) palette — what a shell's own colours become in the app.
+     ALIASES of the semantic and code palettes wherever one already carries the
+     hue, on the same rule the group palette follows: a terminal's red and an
+     error's red sit in the same window and two independently-maintained reds
+     would drift. They are named by the ANSI COLOUR because that is what the
+     bytes say — a shell writes `ESC[31m`, never "destructive".
+
+     Tuned for THIS background rather than taken from a terminal's own defaults:
+     a terminal's #00ff00 on black is unreadable on cream, and these are the
+     values already proven legible on `--card` by the syntax highlighter.
+     BRIGHT variants (90–97) deliberately map to the same values — on a light
+     background "brighter" means less contrast, and the weight carried by
+     `ESC[1m` says the same thing legibly. */
+  --ansi-black: var(--foreground);
+  --ansi-red: var(--destructive);
+  --ansi-green: var(--success);
+  --ansi-yellow: var(--warning);
+  --ansi-blue: var(--code-variable);
+  --ansi-magenta: var(--code-function);
+  /* The ONE new literal here: nothing in the palette carries a cyan, and the
+     avatar teal (#14b8a6) is a 500-weight built for white cards — measured
+     against this cream it reads as a highlight rather than as text. */
+  --ansi-cyan: #2a7175;
+  --ansi-white: var(--muted-foreground);
+
   /* Agent avatar palette — mirrors geniro web's AGENT_AVATAR_COLORS
      (tailwind 500s), hashed deterministically per node id. */
   --avatar-1: #3b82f6;
@@ -180,6 +205,14 @@
   --color-sidebar-primary-strong: var(--sidebar-primary-strong);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
+  --color-ansi-black: var(--ansi-black);
+  --color-ansi-red: var(--ansi-red);
+  --color-ansi-green: var(--ansi-green);
+  --color-ansi-yellow: var(--ansi-yellow);
+  --color-ansi-blue: var(--ansi-blue);
+  --color-ansi-magenta: var(--ansi-magenta);
+  --color-ansi-cyan: var(--ansi-cyan);
+  --color-ansi-white: var(--ansi-white);
   --color-avatar-1: var(--avatar-1);
   --color-avatar-2: var(--avatar-2);
   --color-avatar-3: var(--avatar-3);

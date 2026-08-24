@@ -41,6 +41,7 @@ import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
+import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
@@ -171,6 +172,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     RunTeardownService,
     RunGroupsService,
+    ShellOutputService,
     ItemSeqAllocator,
     ItemDao,
     NodeStateDao,

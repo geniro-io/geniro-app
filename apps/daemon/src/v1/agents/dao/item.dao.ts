@@ -61,6 +61,57 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * The two halves of ONE tool call of a run, by the CLI's own call id.
+   *
+   * Narrowed in SQL rather than by scanning the transcript, because the row
+   * being looked for can be arbitrarily far back: a `pnpm dev` detached at the
+   * start of a long session is exactly the command someone opens the output of,
+   * and by then its launch sits thousands of items behind. The `$like` is over
+   * the payload TEXT — an id is not a column — so the parsed payload is
+   * re-checked below and the caller validates the id's shape before it gets
+   * here, which is what keeps a `%` out of the pattern.
+   */
+  async findToolCallPair(
+    runId: string,
+    callId: string,
+    txEm?: EntityManager,
+  ): Promise<{ call: Item | null; result: Item | null }> {
+    const rows = await this.getRepo(txEm).find(
+      {
+        runId,
+        kind: { $in: ['tool_call', 'tool_result'] },
+        payload: { $like: `%${callId}%` },
+      },
+      { orderBy: { seq: 'asc' }, disableIdentityMap: true },
+    );
+    // `Item.payload` is JSON TEXT, not a parsed object — the column is `text`
+    // and only the wire projection parses it. Reading `.id` off the string
+    // matches nothing, which is a 404 for every command rather than an error.
+    const idOf = (item: Item): string | null => {
+      try {
+        const payload: unknown = JSON.parse(item.payload);
+        if (payload === null || typeof payload !== 'object') {
+          return null;
+        }
+        const value = (payload as { id?: unknown }).id;
+        return typeof value === 'string' ? value : null;
+      } catch {
+        return null;
+      }
+    };
+    const matched = rows.filter((row) => idOf(row) === callId);
+    return {
+      call: matched.find((row) => row.kind === 'tool_call') ?? null,
+      // The LAST result wins: a transcript written before `ItemSeqAllocator`
+      // can hold more than one row for a pair, and the later one is the one
+      // that describes how the call actually ended.
+      result:
+        [...matched].reverse().find((row) => row.kind === 'tool_result') ??
+        null,
+    };
+  }
+
+  /**
    * Text of each run's latest AGENT message — the chat list's preview line.
    *
    * The agent's, not simply the newest of either role, and that is the whole

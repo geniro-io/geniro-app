@@ -7859,6 +7859,170 @@ describe('Chats — a screenshot pasted into a question answer', () => {
   });
 });
 
+describe('Chats — running shells', () => {
+  /** A shell command the agent started and has not been answered on. */
+  function bashCall(seq: number, command: string, id = 'sh-1'): ChatItem {
+    return {
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id, name: 'Bash', input: { command } },
+      createdAt: 'now',
+    };
+  }
+
+  /** …and the reply that ends it. */
+  function bashReply(seq: number, id = 'sh-1'): ChatItem {
+    return {
+      id: `i${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_result',
+      role: 'tool',
+      payload: { id, name: 'Bash', result: 'ok', isError: false },
+      createdAt: 'now',
+    };
+  }
+
+  it('counts a command in flight in the header and lists it in the panel', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // The header's counter, beside the delegates' — the two readings of work in
+    // flight a reader scans.
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    // …and the panel's own section, over the SAME reading, so a `1` up there
+    // cannot sit over an empty card down here.
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm build');
+  });
+
+  it('drops a command as soon as its reply lands', async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+      bashReply(2),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('0');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]'),
+    ).toBeNull();
+  });
+
+  it('clears the row when the daemon reports a DETACHED command finished', async () => {
+    // The accumulation fix, end to end. A background command's launching call
+    // is answered within the second and the command runs on, so nothing else in
+    // the transcript ever closes it — before this row, every one a session
+    // launched stayed listed and the header's count climbed all turn.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'start the dev server'),
+      bashCall(1, 'pnpm dev'),
+      {
+        ...bashReply(2),
+        payload: {
+          id: 'sh-1',
+          name: 'Bash',
+          result: 'Command running in background with ID: bash_1.',
+          isError: false,
+        },
+      },
+      {
+        id: 'i3',
+        runId: 'r1',
+        nodeId: null,
+        seq: 3,
+        kind: 'shell_info' as const,
+        role: null,
+        payload: { id: 'sh-1', workId: 'bash_1' },
+        createdAt: 'now',
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('0');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]'),
+    ).toBeNull();
+  });
+
+  it('keeps a detached command listed until something says it ended', async () => {
+    // The other side of the same rule: the reply to a detached launch settles
+    // nothing, so a command with no settle row is still running and still says
+    // so.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'start the dev server'),
+      bashCall(1, 'pnpm dev'),
+      {
+        ...bashReply(2),
+        payload: {
+          id: 'sh-1',
+          name: 'Bash',
+          result: 'Command running in background with ID: bash_1.',
+          isError: false,
+        },
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm dev');
+  });
+
+  it('claims nothing is running once the run has stopped', async () => {
+    // THE LIVENESS RULE, and the reason it is worth a screen-level test: a
+    // cancelled turn leaves a call with no reply, which the fold alone can only
+    // read as still running — so without the gate this row would claim a
+    // process that died with the turn, for the rest of the session.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'cancelled' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('0');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]'),
+    ).toBeNull();
+  });
+});
+
 describe('Chats — background sub-agents', () => {
   /**
    * When the run row settled, and the two moments a delegate's last row can sit

@@ -1029,7 +1029,10 @@ describe('a turn whose background work outlives its result', () => {
 
     // Held, and the count came DOWN as the first unit reported — the sentence
     // under the badge counts off the delegates instead of standing still.
-    expect(events).toEqual([
+    // Read off the HELD events alone: an un-typed unit is a shell, so its
+    // settle also announces the row that closes it in the panel, which this
+    // test says nothing about.
+    expect(events.filter((e) => e.type === 'turn_held')).toEqual([
       { type: 'turn_held', open: 2 },
       { type: 'turn_held', open: 1 },
     ]);
@@ -1053,7 +1056,7 @@ describe('a turn whose background work outlives its result', () => {
 
     // Still held — the stray report closed nothing this turn was waiting on,
     // so the count it re-announces is unchanged.
-    expect(events).toEqual([
+    expect(events.filter((e) => e.type === 'turn_held')).toEqual([
       { type: 'turn_held', open: 1 },
       { type: 'turn_held', open: 1 },
     ]);
@@ -1143,6 +1146,96 @@ describe('a turn whose background work outlives its result', () => {
     ]);
   });
 
+  it('closes a background SHELL with its own announcement', async () => {
+    // The row the running-shells list needs and the transcript otherwise never
+    // gets: a detached command's launching call is answered the moment the CLI
+    // accepts it, so nothing else says the command has actually finished.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'bash_1',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_sh',
+    });
+    // The settle names neither the kind nor the call — matched by work id,
+    // exactly as a delegate's is.
+    line(child, { work: 'bash_1', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([
+      { type: 'shell_info', toolCallId: 'toolu_sh', workId: 'bash_1' },
+      COMPLETE,
+    ]);
+  });
+
+  it('announces ONE row however many channels report the end', async () => {
+    // Measured on a real background `sleep`: claude reports the same ending on
+    // `task_updated` AND `task_notification`, 7ms apart. The row is durable, so
+    // a duplicate would be stored for the life of the transcript.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'bash_1',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_sh',
+    });
+    line(child, { work: 'bash_1', phase: 'settled', call: 'toolu_sh' });
+    line(child, { work: 'bash_1', phase: 'settled', call: 'toolu_sh' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events.filter((e) => e.type === 'shell_info')).toEqual([
+      { type: 'shell_info', toolCallId: 'toolu_sh', workId: 'bash_1' },
+    ]);
+  });
+
+  it('announces a shell settle the started of which was never seen', async () => {
+    // A session that resumed after the launch, or a channel that omitted the
+    // pairing. The work id alone still names the command, which is the whole
+    // reason both ride every announcement.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'bash_9', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([
+      { type: 'shell_info', toolCallId: null, workId: 'bash_9' },
+      COMPLETE,
+    ]);
+  });
+
+  it('never announces a DELEGATE as a shell', async () => {
+    // The two twins split one channel, and this is the split: announcing a
+    // delegate here would retire a shell row that never existed, while
+    // announcing a shell as a delegate would put a phantom sub-agent in the
+    // transcript.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    line(child, { work: 'task-1', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events.filter((e) => e.type === 'shell_info')).toEqual([]);
+  });
+
   it('carries the settling unit’s SPEND onto the announcement', async () => {
     // What the block header states in front of each delegate. The figures ride
     // the lifecycle event and are announced HERE rather than by the adapter
@@ -1222,10 +1315,12 @@ describe('a turn whose background work outlives its result', () => {
     );
   });
 
-  it('says nothing about background work that is not a delegate', async () => {
+  it('never announces a SHELL as a sub-agent', async () => {
     // The same channel carries a delegate's own shell command. Announcing one
-    // would put a phantom sub-agent in the transcript, under the id of whatever
-    // tool call happened to launch it.
+    // as a delegate would put a phantom sub-agent in the transcript, under the
+    // id of whatever tool call happened to launch it. It gets the `shell_info`
+    // row instead — a different kind, which renders as nothing and exists only
+    // to close the command in the running-shells list.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
@@ -1240,13 +1335,19 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await handle?.done;
 
-    expect(events).toEqual([COMPLETE]);
+    expect(events.filter((e) => e.type === 'subagent_info')).toEqual([]);
+    expect(events).toEqual([
+      { type: 'shell_info', toolCallId: 'toolu_bash', workId: 'task-bash' },
+      COMPLETE,
+    ]);
   });
 
   it('never hands a background_work event to the turn', async () => {
     // Turn plumbing, not conversation. `mapEventToItem` answers null for it too,
-    // but a consumer must not see it at all — a pair of "work started/settled"
-    // rows would say what the delegate's own rows already say.
+    // but a consumer must not see the raw event at all — a pair of "work
+    // started/settled" rows would say what the delegate's own rows already say.
+    // What a consumer DOES see is the derived announcement, which is one row on
+    // the settle and never the pair.
     const events: AgentEvent[] = [];
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
@@ -1256,7 +1357,11 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await handle?.done;
 
-    expect(events).toEqual([COMPLETE]);
+    expect(events.filter((e) => e.type === 'background_work')).toEqual([]);
+    expect(events).toEqual([
+      { type: 'shell_info', toolCallId: null, workId: 'task-1' },
+      COMPLETE,
+    ]);
   });
 
   it('does NOT hold a cancel or a failure back', async () => {

@@ -68,8 +68,15 @@ export function filePathOf(input: unknown): string | null {
   );
 }
 
-/** The shell command a tool is running, under any of the spellings in use. */
-function commandOf(input: unknown): string | null {
+/**
+ * The shell command a tool is running, under any of the spellings in use.
+ *
+ * Exported for `shell-activity.ts`, which asks the same question of the same
+ * payloads for the panel's running-shells list: a second reading of these
+ * spellings is how a CLI's `cmd` comes to be highlighted in the transcript and
+ * missing from the panel.
+ */
+export function commandOf(input: unknown): string | null {
   const record = asRecord(input);
   if (!record) {
     return null;

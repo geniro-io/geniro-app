@@ -14,6 +14,8 @@ import {
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
+import type { ShellRun } from './shell-activity';
+import { ShellIcon, ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import {
@@ -234,6 +236,8 @@ export function ChatHeader({
   costUsd = null,
   openTurn = null,
   runningSubagents = 0,
+  shells = [],
+  onOpenShell,
   tasks = null,
   subagents = [],
   taskRows = [],
@@ -310,6 +314,19 @@ export function ChatHeader({
   openTurn?: OpenTurn | null;
   /** Delegates working right now. */
   runningSubagents?: number;
+  /**
+   * The shells this run's agents have RUNNING right now — the commands, not a
+   * count, since the counter holds the list behind it exactly as the sub-agent
+   * one does.
+   *
+   * Asked for beside that count, and it belongs beside it: both say how much
+   * work is in flight that the transcript alone would make you hunt for. The
+   * rows come from the same map the panel's sections render — liveness rule
+   * and all — so a `2` here and two cards below cannot disagree.
+   */
+  shells?: readonly ShellRun[];
+  /** Show one command's own output, from the counter's own list. */
+  onOpenShell?: (shell: ShellRun) => void;
   /**
    * The agents' own task lists, as DONE OUT OF TOTAL — null when no agent here
    * keeps one.
@@ -453,6 +470,29 @@ export function ChatHeader({
               </>
             }>
             <SubagentList threads={subagents} />
+          </HoverPopover>
+          {/* Beside the delegates, and drawn at zero for the same reason they
+              are: "is anything running on my machine" is a question with an
+              answer either way, and a counter that appears only once something
+              is gives the same blank space for "nothing" as for "this header
+              has no such readout". The two are the pair a reader scans — how
+              many agents are working, and how many commands they have open. */}
+          <HoverPopover
+            slot="running-shells"
+            label={`${shells.length} shell${shells.length === 1 ? '' : 's'} running`}
+            panelLabel="Shells"
+            side="bottom"
+            triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+            // Bounded and scrolling, like the delegates' — a fan-out can hold a
+            // dozen, and the rows are long (a command, not a name).
+            panelClassName="max-h-64 w-[22rem] overflow-y-auto"
+            trigger={
+              <>
+                <ShellIcon className="size-3.5" />
+                {shells.length}
+              </>
+            }>
+            <ShellRows shells={shells} onOpen={onOpenShell} />
           </HoverPopover>
           {tasks !== null && tasks.total > 0 ? (
             <HoverPopover

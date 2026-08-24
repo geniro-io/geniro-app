@@ -36,7 +36,7 @@ import {
   isUserQuestion,
 } from '../utils/approval-answer';
 import {
-  closesADelegate,
+  closesWork,
   mapEventToItem,
   offTurnActivity,
   terminalStatus,
@@ -1334,7 +1334,7 @@ export class ChatService implements OnModuleInit {
       this.recordDelegateBracket(runId, event);
       if (event.parentToolUseId !== undefined) {
         await this.leaseOnDelegateRow(runId, event.parentToolUseId);
-      } else if (!closesADelegate(event)) {
+      } else if (!closesWork(event)) {
         await this.restatusAfterOffTurnEvent(em, runId, event);
       }
     } catch (err: unknown) {
@@ -1470,7 +1470,7 @@ export class ChatService implements OnModuleInit {
    *   delegate's trailing rows through it is what latched a `still working`
    *   spinner on at the exact moment the work ended, with nothing able to take
    *   it down. The lease is that missing off-switch.
-   * - A delegate CLOSING (`closesADelegate`) still restates nothing, and now
+   * - A delegate CLOSING (`closesWork`) still restates nothing, and now
    *   need not be special-cased: a close carries no `parentToolUseId`, so it
    *   never reaches here at all.
    *

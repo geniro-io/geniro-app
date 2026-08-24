@@ -754,6 +754,45 @@ type AgentEventBody =
     }
   | {
       /**
+       * A background SHELL the CLI started or finished — the delegate
+       * announcement's twin, for the units on that same channel that are not
+       * delegates.
+       *
+       * It exists because a detached command's launching tool call returns
+       * INSTANTLY (`Command running in background with ID: …`) and the command
+       * then runs for minutes. That leaves the transcript with no end signal at
+       * all: measured on claude 2.1.237, a 45-second `sleep` reported its
+       * completion to the MODEL as a `system/task_notification` frame and to
+       * the conversation as an ordinary sentence the agent wrote — so a client
+       * folding "what is running" out of tool calls alone lists it forever, and
+       * the count climbs all session. The frames were already parsed here (see
+       * `background_work`) and thrown away for want of anywhere to put them.
+       *
+       * A ROW rather than a live signal, on the same rule as `task_list`: a
+       * reopened chat replays the transcript, so an ephemeral end would leave
+       * every past background command listed as running again.
+       *
+       * Announced only on the SETTLE. The start is already in the transcript as
+       * the tool call itself, and a second row saying so would double every
+       * background command for nothing.
+       */
+      type: 'shell_info';
+      /**
+       * The tool call that launched it, when the CLI ties one to the unit —
+       * which is what joins this to the shell already in the transcript.
+       *
+       * Null when only the CLI's own work id is known: a settle names the call
+       * on one of the two channels and not the other, and a session that
+       * resumed after the launch never saw the `started` that would have paired
+       * them. The consumer then matches on {@link workId} instead, which is why
+       * both ride every announcement.
+       */
+      toolCallId: string | null;
+      /** The CLI's own id for the unit (claude's `task_id`, e.g. `bash_1`). */
+      workId: string;
+    }
+  | {
+      /**
        * The agent's OWN task list moved — the todo list a coding CLI keeps for
        * itself while it works through a multi-step job.
        *

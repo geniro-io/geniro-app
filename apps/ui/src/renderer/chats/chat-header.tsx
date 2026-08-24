@@ -1,11 +1,16 @@
-import { Bot, IdCard, Workflow as WorkflowIcon } from 'lucide-react';
+import {
+  Bot,
+  FolderOpen,
+  IdCard,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { HoverPopover } from '../components/hover-popover';
 import { Chip } from '../components/ui/chip';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
-import { folderName as configDirName } from './directory-select';
+import { folderName } from './directory-select';
 import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';
 import {
@@ -211,8 +216,10 @@ function SubagentList({
 
 /**
  * The open transcript's header: the same identity the sidebar row carries —
- * label, live status (spinning while running), last activity. The run's
- * working directory lives in the composer's folder chip below, not here.
+ * label, live status (spinning while running), last activity — plus the three
+ * facts fixed for the run's whole life: the agent, the folder it runs in and
+ * the profile it runs as. The folder arrived here last, after three composer
+ * arrangements the user rejected on how they looked; see the `cwd` prop.
  *
  * On the right, only what the agents panel is holding, as a readout. It used to
  * be that panel's toggle; the panel is always on screen now, so there is nothing
@@ -227,6 +234,7 @@ export function ChatHeader({
   label,
   isWorkflow,
   agentKind = null,
+  cwd = null,
   configDir = null,
   status,
   lastActivityAt,
@@ -251,6 +259,26 @@ export function ChatHeader({
    * run, whose agents are per node — the panel lists those.
    */
   agentKind?: string | null;
+  /**
+   * The folder this run's turns happen in.
+   *
+   * HERE, on the same rule the agent and the profile beside it already follow:
+   * it is fixed for the life of the run and it changes what the conversation IS
+   * — the same question asked in two repositories is two conversations. That
+   * rule was already written down one field below, for the config directory,
+   * and the cwd is the plainer case of it; what kept the cwd out of the header
+   * was a separate reading, that a folder is a caption on the MESSAGE.
+   *
+   * It comes here after three positions in the composer — beside Send, then a
+   * row above the card, then inside the card's top right — each of which the
+   * user rejected on how it looked, the last one flatly ("мне все еще не
+   * нравится, как это выглядит… может, в шапку?"). The composer is where the
+   * run's LIVE choices are, and the folder is not one: every arrangement that
+   * put an unchangeable fact among the pickers had to earn its own band, and
+   * the band was the thing that looked wrong. Here it costs no layout at all —
+   * the identity line already exists and already truncates.
+   */
+  cwd?: string | null;
   /**
    * The agent config directory this run's turns use — which account/profile
    * the CLI runs as — or null for the CLI's own default.
@@ -385,6 +413,24 @@ export function ChatHeader({
           {label}
         </h2>
         {agentKind ? <Chip className="h-6 px-1.5">{agentKind}</Chip> : null}
+        {cwd ? (
+          // The LEAF plus the full path on hover, exactly as the profile chip
+          // below does it and for the same reason — a working directory is
+          // routinely deep, and this row is a one-line identity rather than a
+          // place to read paths.
+          //
+          // AHEAD of the profile: the folder is the fact a reader checks first
+          // ("which repo is this thread in"), and a profile is only ever a
+          // qualifier on it. `shrink-0` is deliberately absent — with the title
+          // beside it this is the second-best thing here to truncate, and the
+          // title is the first.
+          <Chip
+            className="h-6 min-w-0 px-1.5"
+            title={`Working directory: ${cwd}`}>
+            <FolderOpen />
+            <span className="max-w-40 truncate">{folderName(cwd)}</span>
+          </Chip>
+        ) : null}
         {configDir ? (
           // The LEAF, with the whole path on hover: a profile directory is
           // usually deep (`~/Desktop/Projects/X/.claude-thing`) and the header
@@ -393,9 +439,7 @@ export function ChatHeader({
             className="h-6 min-w-0 px-1.5"
             title={`Agent config directory (account / profile): ${configDir}`}>
             <IdCard />
-            <span className="max-w-40 truncate">
-              {configDirName(configDir)}
-            </span>
+            <span className="max-w-40 truncate">{folderName(configDir)}</span>
           </Chip>
         ) : null}
         <span className="flex shrink-0 items-center gap-1 text-xs">

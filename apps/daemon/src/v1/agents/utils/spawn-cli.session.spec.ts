@@ -873,6 +873,25 @@ describe('runHeadlessCli keeps the one-turn contract', () => {
  * `completed` and its delegates rendered as `stopped`.
  */
 describe('a turn whose background work outlives its result', () => {
+  it('holds for a DELEGATE and not for a backgrounded command', async () => {
+    // The hold buys a turn for the agent's OWN continuation to land in, which
+    // is a thing a delegate triggers and a shell does not: a shell's end is a
+    // durable row, and anything the CLI says once it lands is carried by the
+    // between-turn path. Held for one, the thread reads as working for as long
+    // as the command runs — a `pnpm dev` never reports at all — which is the
+    // reported "it shows working even though you actually stopped".
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'bash_1', phase: 'started', unit: 'other' });
+    line(child, { done: true });
+
+    await expect(handle?.done).resolves.toBeUndefined();
+    expect(events.some((e) => e.type === 'turn_held')).toBe(false);
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
   it('holds the turn open while a unit of work has not reported', async () => {
     const events: AgentEvent[] = [];
     let settled = false;
@@ -882,7 +901,7 @@ describe('a turn whose background work outlives its result', () => {
       settled = true;
     });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await Promise.resolve();
 
@@ -929,7 +948,7 @@ describe('a turn whose background work outlives its result', () => {
       settled = true;
     });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await Promise.resolve();
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
@@ -980,7 +999,7 @@ describe('a turn whose background work outlives its result', () => {
         `${JSON.stringify({ follow: message.text })}\n`,
     });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await Promise.resolve();
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
@@ -998,7 +1017,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'forever', phase: 'started' });
+    line(child, { work: 'forever', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     line(child, { says: 'resumed' });
     line(child, { done: true });
@@ -1021,17 +1040,14 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
-    line(child, { work: 'task-2', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { work: 'task-2', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     line(child, { work: 'task-1', phase: 'settled' });
     await Promise.resolve();
 
     // Held, and the count came DOWN as the first unit reported — the sentence
     // under the badge counts off the delegates instead of standing still.
-    // Read off the HELD events alone: an un-typed unit is a shell, so its
-    // settle also announces the row that closes it in the panel, which this
-    // test says nothing about.
     expect(events.filter((e) => e.type === 'turn_held')).toEqual([
       { type: 'turn_held', open: 2 },
       { type: 'turn_held', open: 1 },
@@ -1049,7 +1065,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     line(child, { work: 'somebody-elses-task', phase: 'settled' });
     await Promise.resolve();
@@ -1077,7 +1093,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true, finalText: 'LAUNCHED' });
     line(child, {
       done: true,
@@ -1170,6 +1186,39 @@ describe('a turn whose background work outlives its result', () => {
       { type: 'shell_info', toolCallId: 'toolu_sh', workId: 'bash_1' },
       COMPLETE,
     ]);
+  });
+
+  it('closes a shell the process died under, since nothing else can', async () => {
+    // A detached command is a child of the CLI and dies with the group. The
+    // CLI is what reports a shell's end, so a session reaped (or stopped) with
+    // one still open leaves a row nothing will ever take down — and the client
+    // lists a detached command on the strength of that report rather than on
+    // the run's status, so it would stand for the transcript's whole life.
+    // Both sinks, because which one carries the row depends on whether the
+    // dying process still had a turn open — and the row must arrive either way.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (e) =>
+      events.push(e),
+    );
+    session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'bash_1',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_sh',
+    });
+    await Promise.resolve();
+    expect(events.some((e) => e.type === 'shell_info')).toBe(false);
+
+    child.emit('close', 0, null);
+    await session.closed;
+
+    expect(events).toContainEqual({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
   });
 
   it('announces ONE row however many channels report the end', async () => {
@@ -1352,7 +1401,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { work: 'task-1', phase: 'settled' });
     line(child, { done: true });
     await handle?.done;
@@ -1374,7 +1423,7 @@ describe('a turn whose background work outlives its result', () => {
       onEvent: (e) => cancelled.push(e),
       buildInterruptPayload: () => 'INTERRUPT\n',
     });
-    line(first.child, { work: 'task-1', phase: 'started' });
+    line(first.child, { work: 'task-1', phase: 'started', unit: 'agent' });
     cancelHandle?.cancel();
     line(first.child, { failed: true });
     await cancelHandle?.done;
@@ -1385,7 +1434,7 @@ describe('a turn whose background work outlives its result', () => {
     const failHandle = second.session.startTurn({
       onEvent: (e) => failed.push(e),
     });
-    line(second.child, { work: 'task-2', phase: 'started' });
+    line(second.child, { work: 'task-2', phase: 'started', unit: 'agent' });
     line(second.child, { failed: true });
     await failHandle?.done;
     expect(failed).toEqual([{ type: 'error', message: 'result: is_error' }]);
@@ -1399,7 +1448,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     child.emit('close', 0, null);
     await handle?.done;
@@ -1419,7 +1468,7 @@ describe('a turn whose background work outlives its result', () => {
     const { session, child } = openSession(undefined, logger);
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     await handle?.done;
@@ -1490,7 +1539,7 @@ describe('a turn whose background work outlives its result', () => {
     const events: AgentEvent[] = [];
     const { session, child } = openSession(undefined, undefined, () => {});
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     const handle = session.startTurn({ onEvent: (e) => events.push(e) });
     line(child, { done: true });
     await Promise.resolve();
@@ -1509,7 +1558,7 @@ describe('a turn whose background work outlives its result', () => {
     const between: AgentEvent[] = [];
     const { child } = openSession(undefined, undefined, (e) => between.push(e));
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await Promise.resolve();
 
@@ -1529,7 +1578,7 @@ describe('a turn whose background work outlives its result', () => {
       between.push(e),
     );
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     expect(between).toEqual([]);
 
@@ -1552,7 +1601,7 @@ describe('a turn whose background work outlives its result', () => {
     const logger = { warn: vi.fn(), debug: vi.fn() };
     const { child } = openSession(undefined, logger, (e) => between.push(e));
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
 
@@ -1573,7 +1622,7 @@ describe('a turn whose background work outlives its result', () => {
     });
     const first = session.startTurn({ onEvent: () => {} });
 
-    line(child, { work: 'task-1', phase: 'started' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
     await first?.done;
@@ -1601,7 +1650,7 @@ describe('a turn whose background work outlives its result', () => {
     });
 
     child.stdout.emitData(
-      `${JSON.stringify({ work: 'task-1', phase: 'started' })}\n`,
+      `${JSON.stringify({ work: 'task-1', phase: 'started', unit: 'agent' })}\n`,
     );
     child.stdout.emitData(`${JSON.stringify({ done: true })}\n`);
     await Promise.resolve();

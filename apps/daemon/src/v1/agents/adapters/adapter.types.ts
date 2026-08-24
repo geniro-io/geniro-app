@@ -874,9 +874,12 @@ type AgentEventBody =
        * the same channel. Counting the second as a sub-agent would report two
        * delegates where the user launched one.
        *
-       * `'other'` is the safe default for a CLI that says nothing: it keeps the
-       * turn plumbing (which only cares about identity) and claims nothing about
-       * delegates.
+       * `'other'` is the safe default for a CLI that says nothing, and what it
+       * is safe ABOUT is the transcript: no phantom sub-agent is announced for
+       * it. It no longer keeps the turn open either — only an `agent` unit does
+       * (see `runCliSession`'s `trackBackgroundWork`) — so a CLI that starts
+       * naming its delegates gains the hold along with the block, and one that
+       * names nothing gets neither.
        */
       unit: 'agent' | 'other';
       /**
@@ -1459,6 +1462,22 @@ export interface AgentSessionsInput {
 }
 
 /** Which conversation is being taken over, and from where. */
+/**
+ * The exchange a conversation is to be NAMED from.
+ *
+ * The text rather than the run, because an adapter must not read this app's
+ * database — and rather than a session id, because a CLI that has to be ASKED
+ * for a title is one whose own store holds none.
+ */
+export interface AgentTitleInput {
+  /** What the user opened the conversation with. */
+  opening: string;
+  /** What the agent answered, when it has answered. */
+  reply: string | null;
+  /** The profile the run belongs to; null = the CLI's default. */
+  configDir: string | null;
+}
+
 export interface AgentSessionImportInput {
   /** The id, as {@link AgentSessionRecord.id} spelled it. */
   sessionId: string;

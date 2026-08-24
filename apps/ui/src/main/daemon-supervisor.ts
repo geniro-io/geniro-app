@@ -248,6 +248,7 @@ function toHandle(info: DaemonInfo): DaemonHandle {
     port: info.port,
     token: info.token,
     version: info.version,
+    startedAt: info.startedAt,
   };
 }
 

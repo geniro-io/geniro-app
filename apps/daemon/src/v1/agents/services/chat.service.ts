@@ -1247,6 +1247,10 @@ export class ChatService implements OnModuleInit {
         null,
         event.contextTokens,
       );
+      await this.rememberContext(runId, {
+        contextTokens: event.contextTokens,
+        contextWindowTokens: event.contextWindowTokens ?? null,
+      });
       return;
     }
     // What the CLI reports about ITSELF is true whether or not a turn of ours
@@ -1392,6 +1396,44 @@ export class ChatService implements OnModuleInit {
     await this.setRunStatus(em, runId, 'running', {
       activity: offTurnActivity(event),
     });
+  }
+
+  /**
+   * File the CLI's own context reading on the run row.
+   *
+   * The DURABLE twin of the live `context_progress` delta, written from the same
+   * event at both of its sites so the two cannot report different moments. It is
+   * what a client with no live reading draws the ring from — a reload, a
+   * reconnect, a chat opened for the first time this session — and the
+   * alternative it replaces is the last SETTLED turn's usage, which on this
+   * app's work can be an hour and half a million tokens old. REPORTED against a
+   * chat whose ring read 2% beside a panel reading 46%: the last settled turn
+   * ended right after a `/compact`.
+   *
+   * Every reading, unthrottled. This is one small UPDATE per main-thread model
+   * response — the same cadence at which the transcript is already gaining rows,
+   * and a fraction of what each of those costs.
+   *
+   * Failure is swallowed with a log line: this is bookkeeping for a readout, and
+   * a run must never fail a turn over it. Which halves of the reading are
+   * usable is the DAO's rule, since it is the one that must never clear either.
+   */
+  private async rememberContext(
+    runId: string,
+    reading: {
+      contextTokens?: number | null;
+      contextWindowTokens?: number | null;
+    },
+  ): Promise<void> {
+    try {
+      await this.runDao.rememberContext(runId, reading);
+    } catch (err) {
+      this.logger.warn(
+        `failed to record the context reading for run ${runId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /**
@@ -2139,15 +2181,19 @@ export class ChatService implements OnModuleInit {
                   event.contextModel ?? null,
                 );
               }
-              // EPHEMERAL, like the deltas above: the durable copy is the
-              // turn_complete usage. This is what lets the meter move DURING
-              // the turn instead of only when it ends.
+              // The live plane is what lets the meter move DURING the turn
+              // instead of only when it ends — and it is EPHEMERAL, so the same
+              // reading is filed on the run row beside it.
               this.partials.context(
                 runId,
                 SINGLE_AGENT_NODE,
                 null,
                 event.contextTokens,
               );
+              void this.rememberContext(runId, {
+                contextTokens: event.contextTokens,
+                contextWindowTokens: event.contextWindowTokens ?? null,
+              });
               return;
             }
             if (event.type === 'turn_model') {
@@ -2175,6 +2221,18 @@ export class ChatService implements OnModuleInit {
                 event.usage?.contextWindowTokens ?? null,
                 event.usage?.contextModel ?? null,
               );
+              // …and the DURABLE copy of the same pair. It is the same write
+              // the live readings above make, taken here because this is the
+              // one line that carries a WINDOW: claude names it on its result
+              // and on no assistant line, so a chat's very first turn would
+              // otherwise leave the row a numerator with no denominator, and
+              // the ring is withheld rather than drawn against an assumed size.
+              // From the second turn on the row already holds one — the write
+              // never clears it — so this is what gets a new chat its ring.
+              void this.rememberContext(runId, {
+                contextTokens: event.usage?.contextTokens ?? null,
+                contextWindowTokens: event.usage?.contextWindowTokens ?? null,
+              });
             }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the

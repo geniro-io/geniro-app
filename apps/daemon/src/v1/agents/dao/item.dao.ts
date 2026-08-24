@@ -221,12 +221,35 @@ export class ItemDao extends BaseDao<Item> {
    * carries no text; `ChatTitleService` leaves such a run unnamed rather than
    * titling it with a placeholder.
    */
-  async firstUserMessageText(
+  firstUserMessageText(
     runId: string,
     txEm?: EntityManager,
   ): Promise<string | null> {
+    return this.firstMessageText(runId, 'user', txEm);
+  }
+
+  /**
+   * Text of the run's first ASSISTANT message — the other half of the exchange
+   * a generated title is written from.
+   *
+   * It exists because the opening message is routinely a slash command and a
+   * URL (`/geniro:implement https://…`), which names nothing: the agent's first
+   * reply is where the subject of the conversation is first stated in words.
+   */
+  firstAssistantMessageText(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    return this.firstMessageText(runId, 'assistant', txEm);
+  }
+
+  private async firstMessageText(
+    runId: string,
+    role: 'user' | 'assistant',
+    txEm?: EntityManager,
+  ): Promise<string | null> {
     const [row] = await this.getRepo(txEm).find(
-      { runId, kind: 'message', role: 'user' },
+      { runId, kind: 'message', role },
       {
         // The same total ordering `latestMessageTextPerRun` needs, for the same
         // reason: a transcript written before `ItemSeqAllocator` can hold two

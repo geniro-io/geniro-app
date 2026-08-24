@@ -2006,6 +2006,18 @@ export interface RunDto {
     contextWindow: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    contextWindowTokens: number | null;
+    /**
+     * 
      * @type {string}
      * @memberof RunDto
      */

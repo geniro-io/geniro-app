@@ -79,6 +79,38 @@ export class Run extends TimestampsEntity {
   contextWindow: string | null = null;
 
   /**
+   * How full this conversation's context window was the LAST time the CLI said
+   * — the durable half of the composer's ring, and the only half a window that
+   * has just loaded has.
+   *
+   * Runtime state, not a setting: written from every `context_progress` the CLI
+   * reports, which is once per main-thread model response, so it tracks a
+   * running turn rather than a finished one. That is the whole reason it exists.
+   * The transcript already carries a figure per SETTLED turn, and on the work
+   * this app is for a turn runs for an hour and grows the window by half a
+   * million tokens — so a client with no live reading (a reload, a reconnect, a
+   * chat opened for the first time this session) drew the ring from a figure
+   * that could be a whole turn old. Worst directly after a `/compact`, which is
+   * where it was REPORTED: the last settled turn said 16.7k of 1M and the panel
+   * beside the ring, which asks the live agent, said 462.3k.
+   *
+   * INTEGER so the `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'integer', nullable: true })
+  contextTokens: number | null = null;
+
+  /**
+   * The window {@link contextTokens} is measured against, as the CLI reported
+   * it — null until one has been reported.
+   *
+   * Never overwritten with null, on the rule the renderer's own fold follows: a
+   * turn that reports no window has said nothing about the model's, and wiping
+   * a real denominator leaves a numerator with nothing to divide by.
+   */
+  @Property({ type: 'integer', nullable: true })
+  contextWindowTokens: number | null = null;
+
+  /**
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin

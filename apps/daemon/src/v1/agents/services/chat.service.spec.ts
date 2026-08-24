@@ -105,6 +105,31 @@ class FakeRunDao {
       (run) => run.status === 'running' && run.workflowId === null,
     );
   }
+  /** Mirrors the real write: the window is only ever set, never cleared. */
+  async rememberContext(
+    id: string,
+    reading: {
+      contextTokens?: number | null;
+      contextWindowTokens?: number | null;
+    },
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return;
+    }
+    if (
+      typeof reading.contextTokens === 'number' &&
+      reading.contextTokens > 0
+    ) {
+      run.contextTokens = reading.contextTokens;
+    }
+    if (
+      typeof reading.contextWindowTokens === 'number' &&
+      reading.contextWindowTokens > 0
+    ) {
+      run.contextWindowTokens = reading.contextWindowTokens;
+    }
+  }
   /** Mirrors the real `nativeUpdate` — every run holding a value, count back. */
   async forgetCustomInstructions(): Promise<number> {
     let cleared = 0;
@@ -2046,6 +2071,41 @@ describe('ChatService — approval modes (parity M1)', () => {
       contextTokens: 26_000,
       contextWindowTokens: 1_000_000,
     });
+    claude.finish();
+    await drain();
+  });
+
+  it('files every live reading on the RUN ROW, mid-turn', async () => {
+    // The live plane is ephemeral, so a window that reloads, reconnects, or
+    // opens the chat for the first time has only the run row to read — and
+    // without this it read the last SETTLED turn instead, which on an hour-long
+    // turn is an hour old. REPORTED as a ring at 2% beside a panel at 46%.
+    const { service, claude, runDao } = setup();
+    const chat = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(chat.id, 'go');
+
+    claude.emit({
+      type: 'context_progress',
+      contextTokens: 120_000,
+      contextWindowTokens: 1_000_000,
+    });
+    await drain();
+    expect(runDao.runs.get(chat.id)).toMatchObject({
+      contextTokens: 120_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    // …and it keeps up as the same turn grows, which is the whole point: no
+    // turn has settled between these two readings.
+    claude.emit({ type: 'context_progress', contextTokens: 462_300 });
+    await drain();
+    expect(runDao.runs.get(chat.id)).toMatchObject({
+      contextTokens: 462_300,
+      // Unchanged rather than wiped by a reading that named none — a numerator
+      // with no denominator is a ring that cannot be drawn.
+      contextWindowTokens: 1_000_000,
+    });
+
     claude.finish();
     await drain();
   });

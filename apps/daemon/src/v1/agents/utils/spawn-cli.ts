@@ -631,8 +631,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
   /**
-   * Background work the CLI has started on this PROCESS and not reported on —
-   * see `AgentEvent`'s `background_work`.
+   * DELEGATES the CLI has started on this PROCESS and not reported on — see
+   * `AgentEvent`'s `background_work`, and {@link trackBackgroundWork} for why a
+   * backgrounded COMMAND is deliberately not in here.
    *
    * At SESSION scope, and that is the correction rather than a detail. It used
    * to live on the turn that happened to be open when the `started` line
@@ -1374,7 +1375,26 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     announceShellWork(event);
     announceDelegateWork(event);
     if (event.phase === 'started') {
-      openWork.add(event.id);
+      // Only a DELEGATE holds the turn. A backgrounded command does not: the
+      // agent that launched it has said its piece and is waiting for the user,
+      // and holding the turn for a `pnpm dev` that never ends reports the
+      // thread as working for as long as the server runs — the reported "it
+      // shows working even though you actually stopped".
+      //
+      // What the hold buys is that a unit's completion has a turn to arrive
+      // into, and for a shell that is now bought elsewhere: its end is a
+      // durable `shell_info` row (see {@link announceShellWork}) and anything
+      // the CLI says once it lands is carried by the owner's own between-turn
+      // path. A delegate keeps the hold because the continuation it triggers is
+      // a whole further turn of the agent's own, which is the incident this
+      // mechanism was built for.
+      //
+      // A unit the CLI did not classify counts as a shell — the same reading
+      // `announceDelegateWork` already takes, so a CLI that names no kinds
+      // cannot get delegate treatment through one path and not the other.
+      if (event.unit === 'agent') {
+        openWork.add(event.id);
+      }
       return;
     }
     if (!openWork.delete(event.id) || openWork.size > 0) {
@@ -1642,6 +1662,28 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       terminator.disarm();
       resolveClosed();
+    }
+    // Every background command this process was still running dies WITH it —
+    // they are its own children, and the group is killed as a group. Nothing
+    // else will ever say so: a shell's end is reported by the CLI, and the CLI
+    // is what just ended. Announced here so the rows close honestly, since the
+    // client lists a detached command on the strength of that report rather
+    // than on the run's status — without it a `pnpm dev` from a reaped session
+    // is listed as running for the rest of that transcript's life.
+    //
+    // Before `releaseOffTurnHold`, so these rows precede the terminal event
+    // they were outstanding at.
+    for (const id of [...shellWork.keys()]) {
+      announceShellWork({
+        type: 'background_work',
+        id,
+        phase: 'settled',
+        // The CLI said neither, and neither is needed: the launching call was
+        // recorded on the `started`, and the kind is what put the id in this
+        // map in the first place.
+        unit: 'other',
+        toolCallId: null,
+      });
     }
     // Nothing can report now, so nothing is being waited for: whatever was held
     // for background work is handed over rather than dying with the process,

@@ -125,7 +125,13 @@ vi.mock('./turn-block', async (importOriginal) => {
   };
 });
 
-const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
+const handle = {
+  host: '127.0.0.1',
+  port: 8123,
+  token: 'tok',
+  version: '1',
+  startedAt: '2026-01-01T00:00:00.000Z',
+};
 
 function msg(seq: number, role: 'user' | 'assistant', text: string): ChatItem {
   return {
@@ -197,6 +203,8 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  contextTokens: null,
+  contextWindowTokens: null,
   configDir: null,
   groupId: null,
   createdAt: 'now',
@@ -1019,6 +1027,47 @@ describe('Chats transcript auto-scroll', () => {
 
     await clickRun(container, 'Second chat');
     expect(composerValue()).toBe('something else entirely');
+  });
+
+  it('draws the ring from the RUN ROW, not the last settled turn', async () => {
+    // REPORTED as a ring reading 2% beside a panel reading 46%. The transcript
+    // can only carry a figure per SETTLED turn, and on this app's work a turn
+    // runs for an hour — so a chat whose last turn ended right after a
+    // `/compact` drew the ring from that turn's 16.7k while the window had
+    // since regrown to 462k. The daemon files every reading the CLI reports on
+    // the run row, which is what a window with no live plane (a reload, a
+    // reconnect, a first open) has to read.
+    const settled: ChatItem = {
+      id: 'compacted-turn',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: {
+          contextTokens: 16_686,
+          contextWindowTokens: 1_000_000,
+          costUsd: null,
+        },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([
+      { ...run1, contextTokens: 462_300, contextWindowTokens: 1_000_000 },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), settled]);
+
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container
+        .querySelector('[data-slot="context-meter"] button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Context 46% full — 462.3k of 1M');
   });
 
   it('keeps a chat’s context ring through a switch, with its OWN figure', async () => {
@@ -2731,6 +2780,8 @@ describe('Chats workflow runs', () => {
     approval: null,
     effort: null,
     contextWindow: null,
+    contextTokens: null,
+    contextWindowTokens: null,
     configDir: null,
     groupId: null,
     createdAt: 'later',
@@ -3282,6 +3333,8 @@ describe('Chats — handing a conversation to the user', () => {
       approval: null,
       effort: null,
       contextWindow: null,
+      contextTokens: null,
+      contextWindowTokens: null,
       configDir: null,
       groupId: null,
       createdAt: 'later',
@@ -4425,52 +4478,54 @@ describe('Chats queued messages', () => {
     ).toBeTruthy();
   });
 
-  it('states the run’s FOLDER above the textarea, on the right', async () => {
-    // REPORTED as "давай текущую папку проекта переместим просто над
-    // текст-эрией вправо". It used to lead the actions, beside Send.
+  it('states the run’s FOLDER in the HEADER, once, and nowhere in the composer', async () => {
+    // The FOURTH position, and the last: beside Send, then a row above the
+    // composer card ("давай текущую папку проекта переместим просто над
+    // текст-эрией вправо"), then inside the card's top right ("внутри
+    // текстэрии, но в верхний правый угол"), each rejected on how it looked —
+    // the last one flatly ("мне все еще не нравится, как это выглядит… может, в
+    // шапку?"). Every composer arrangement had to give an unchangeable fact its
+    // own band among controls that change things, and the band is what looked
+    // wrong. The header already carries the run's other two life-long facts.
     //
-    // Asserted on DOCUMENT POSITION and on `ml-auto`, because jsdom computes no
-    // layout: which node comes first and which one is pushed to the far edge
-    // are the DOM facts that decide where it lands, and they are exactly what a
-    // move back would change.
+    // Asserted on CONTAINMENT, because jsdom computes no layout: which box the
+    // chip is inside is the DOM fact that decides where it lands, and it is
+    // exactly what a move back to any of the three would change.
     const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    // ONE of them, which is not a formality: moving the chip up while leaving
-    // the old one in place renders the folder twice, and a `find` here passed
-    // on exactly that — the composer showed `geniro-run-cwd` above the textarea
-    // AND again beside Send.
+    // ONE of them, which is not a formality: this chip has been moved four
+    // times, and every move that left the old one in place rendered the folder
+    // twice — once above the textarea AND again beside Send.
     const folders = [
       ...container.querySelectorAll('[data-slot="chip"]'),
-    ].filter((chip) => chip.getAttribute('title') === '/proj');
+    ].filter((chip) => chip.getAttribute('title')?.includes('/proj'));
     expect(folders).toHaveLength(1);
     const folder = folders[0]!;
     expect(folder.textContent).toContain('proj');
 
+    // In the header's identity line, beside the agent chip.
+    const agent = [...container.querySelectorAll('[data-slot="chip"]')].find(
+      (chip) => chip.textContent === 'claude',
+    )!;
+    expect(folder.parentElement).toBe(agent.parentElement);
+
+    // …and nowhere in the composer: not in the card, and not in the row above
+    // it. The header check alone would still pass with a second chip left
+    // behind, which is the failure this pairs against.
     const textarea = container.querySelector('textarea')!;
+    const card = textarea.closest('[data-slot="composer-card"]')!;
+    expect(card.contains(folder)).toBe(false);
     expect(
       folder.compareDocumentPosition(textarea) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(classesOf(folder)).toContain('ml-auto');
 
-    // And no longer inside the card, which is where the actions row it used to
-    // lead lives — the document-position check above says "before the
-    // textarea", and this says "outside the box the textarea is in", which is
-    // the difference between above the card and on its first line.
-    const card = textarea.closest('[data-slot="composer-card"]');
-    expect(card).not.toBeNull();
-    expect(card!.contains(folder)).toBe(false);
-
-    // …and sitting DIRECTLY on it: "отступа практически должно не быть между
-    // директорией и текст-эйрией". The row carried `pb-1.5`, which read as a
-    // sibling block above the card rather than as its caption. jsdom computes
-    // no layout, so the padding class IS the mechanism and the only thing a
-    // test can observe — measured live at 0px between the chip and the card.
-    expect(
-      classesOf(folder.parentElement!).some((token) => token.startsWith('pb-')),
-    ).toBe(false);
+    // The composer keeps its own top padding, which the chip's band inside the
+    // card had taken over — a leftover `pt-1` would leave the first line jammed
+    // against a border with nothing above it.
+    expect(classesOf(textarea)).toContain('pt-3.5');
   });
 
   it('opens a long chat on its newest page, and fetches older ones on scroll up', async () => {
@@ -5853,7 +5908,10 @@ describe('Chats run composer chips', () => {
     const folderChip = chips(container).find((el) =>
       el.textContent?.includes('proj'),
     );
-    expect(folderChip?.getAttribute('title')).toBe('/proj');
+    // Labelled now, not a bare path: the header shows this chip beside the
+    // profile chip, and two unlabelled paths side by side say nothing about
+    // which is which.
+    expect(folderChip?.getAttribute('title')).toContain('/proj');
     // The send action is the same round icon button as the create screen.
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
@@ -7190,11 +7248,6 @@ describe('Chats — the open thread lays its composer out differently', () => {
   const contextRing = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('button[aria-label^="Context "]');
 
-  const folderChip = (container: HTMLElement): HTMLElement | undefined =>
-    [...container.querySelectorAll<HTMLElement>('[data-slot="chip"]')].find(
-      (el) => el.getAttribute('title') === '/proj',
-    );
-
   it('runs effort → auto-approve → context, so approval sits with the per-turn controls', async () => {
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
     const { client, emitLiveText } = makeClient();
@@ -7226,42 +7279,6 @@ describe('Chats — the open thread lays its composer out differently', () => {
     // falls BETWEEN effort and the ring is what fails if it moves back up.
     expect(order(container, effort)).toBeLessThan(order(container, approval));
     expect(order(container, approval)).toBeLessThan(order(container, ring));
-  });
-
-  it('puts the folder chip on the actions line, ahead of Send', async () => {
-    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), terminal(1)]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    const send = composerButton(container, 'Send');
-    const folder = folderChip(container);
-    expect(folder, 'folder chip').toBeDefined();
-    expect(send, 'send button').not.toBeNull();
-    // Order, not presence: the chip renders in every layout this ever had — it
-    // is WHERE that is under test. It leads the actions line rather than
-    // trailing it, so this is the assertion that flips if it moves back.
-    expect(order(container, folder)).toBeLessThan(order(container, send));
-    // Still carries its full-path tooltip after the move.
-    expect(folder?.getAttribute('title')).toBe('/proj');
-  });
-
-  it('keeps the folder chip ahead of Stop mid-turn', async () => {
-    // The reported case. Idle, the chip trails Send; mid-turn the trailing slot
-    // is Stop, and a caption sitting after the one control that destroys work
-    // reads as belonging to it. Asserted separately because the two layouts
-    // render different buttons — pinning only the Send case leaves the one the
-    // user actually saw unpinned.
-    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-
-    const stop = composerButton(container, 'Stop');
-    const folder = folderChip(container);
-    expect(stop, 'stop button').not.toBeNull();
-    expect(folder, 'folder chip').toBeDefined();
-    expect(order(container, folder)).toBeLessThan(order(container, stop));
   });
 
   it('answers a branch switch blocked by uncommitted work with a WARNING and a Pull', async () => {
@@ -8000,11 +8017,78 @@ describe('Chats — running shells', () => {
     ).toContain('pnpm dev');
   });
 
+  it('keeps a DETACHED command listed after the turn that started it ends', async () => {
+    // The case the panel exists for, and the one the liveness gate used to
+    // swallow: the agent starts a dev server, says it is done, and the turn
+    // settles — with the server still running and nothing on screen saying so.
+    // A detached command's end is REPORTED (a `shell_info` row, written even
+    // when the CLI process dies under it), so the run settling says nothing
+    // about it and the gate must not apply.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'start the dev server'),
+      bashCall(1, 'pnpm dev'),
+      {
+        ...bashReply(2),
+        payload: {
+          id: 'sh-1',
+          name: 'Bash',
+          result: 'Command running in background with ID: bash_1.',
+          isError: false,
+        },
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm dev');
+  });
+
+  it('drops a detached command the daemon cannot have kept running', async () => {
+    // The one report that can go missing: announcements are suppressed during
+    // shutdown, so a command open when the daemon died gets no settle row —
+    // measured on a real `sleep 1200`, killed with its group, four transcript
+    // rows and no `shell_info` among them. An agent's CLI cannot outlive the
+    // daemon that spawned it, so a launch older than THIS daemon's start is
+    // over whatever the transcript says.
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'start the dev server'),
+      { ...bashCall(1, 'pnpm dev'), createdAt: '2025-12-31T23:00:00.000Z' },
+      {
+        ...bashReply(2),
+        payload: {
+          id: 'sh-1',
+          name: 'Bash',
+          result: 'Command running in background with ID: bash_1.',
+          isError: false,
+        },
+      },
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('0');
+    expect(
+      container.querySelector('[data-slot="agent-shell-list"]'),
+    ).toBeNull();
+  });
+
   it('claims nothing is running once the run has stopped', async () => {
     // THE LIVENESS RULE, and the reason it is worth a screen-level test: a
-    // cancelled turn leaves a call with no reply, which the fold alone can only
-    // read as still running — so without the gate this row would claim a
-    // process that died with the turn, for the rest of the session.
+    // cancelled turn leaves a FOREGROUND call with no reply, which the fold
+    // alone can only read as still running — so without the gate this row
+    // would claim a process that died with the turn, for the rest of the
+    // session.
     api.listChats.mockResolvedValue([{ ...run1, status: 'cancelled' }]);
     api.listRunItems.mockResolvedValue([
       msg(0, 'user', 'build it'),

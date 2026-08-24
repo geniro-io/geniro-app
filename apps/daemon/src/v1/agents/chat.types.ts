@@ -1269,6 +1269,18 @@ export const RunWireSchema = z.object({
     .describe(
       "Which of the model's context-window sizes the next turn runs at, in the CLI's own vocabulary; null = the model's own default",
     ),
+  contextTokens: z
+    .number()
+    .nullable()
+    .describe(
+      "How full the conversation's context window was when the CLI last reported — updated DURING a turn, so a client with no live reading draws the ring from this rather than from the last settled turn; null = never reported",
+    ),
+  contextWindowTokens: z
+    .number()
+    .nullable()
+    .describe(
+      'The window the tokens above are measured against, as the CLI reported it; null = never reported, in which case the ring is withheld rather than drawn against an assumed size',
+    ),
   configDir: z
     .string()
     .nullable()

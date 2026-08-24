@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { rmSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,6 +31,7 @@ import type {
   AgentSessionListing,
   AgentSessionReadInput,
   AgentSessionsInput,
+  AgentTitleInput,
   AgentTurnInput,
   FollowUpMessage,
   InstalledApprovalSupport,
@@ -40,6 +41,7 @@ import type {
 } from '../adapter.types';
 import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
+import { titlePrompt } from '../utils/title-prompt.utils';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
   CLAUDE_ARTIFACT_ENV,
@@ -88,6 +90,10 @@ import {
   CLAUDE_SET_PERMISSION_MODE_SUBTYPE,
   CLAUDE_SKIP_PERMISSIONS_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_TITLE_ARGS,
+  CLAUDE_TITLE_DIR_PREFIX,
+  CLAUDE_TITLE_MODEL,
+  CLAUDE_TITLE_TIMEOUT_MS,
   CLAUDE_TODO_TOOLS_ENV,
   CLAUDE_UNSET_MODE_FALLBACK,
 } from './claude.const';
@@ -130,6 +136,7 @@ import {
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
+import { readClaudeTitleReply } from './utils/claude-title.utils';
 import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
 
 /**
@@ -156,9 +163,13 @@ import { ClaudeSessionCostLedger } from './utils/claude-usage.utils';
  * headless `-p` turn writes neither: a complete turn produced 15 lines carrying
  * `user`, `assistant`, `attachment`, `message` and `last-prompt`, and no title
  * record of any kind, matching the 147-of-3080 ratio across the local profile.
- * geniro drives this CLI headlessly only, so `ChatTitleService` derives the
- * title instead. Re-check by running one `-p` turn and grepping its JSONL for
- * `ai-title`.
+ * geniro drives this CLI headlessly only, so there is nothing on disk to read.
+ * Re-check by running one `-p` turn and grepping its JSONL for `ai-title`.
+ *
+ * What it has instead is a `generateTitle` override: the title is ASKED for on
+ * a throwaway turn rather than read, which is the only route to an LLM-written
+ * name for a CLI that writes none. See that method for what the turn costs and
+ * why it runs where it does.
  */
 export class ClaudeAdapter extends AgentAdapter {
   getConfig(): AdapterConfig {
@@ -885,6 +896,53 @@ export class ClaudeAdapter extends AgentAdapter {
       },
     );
     return parseMcpGetHealth(stdout);
+  }
+
+  /**
+   * Name the conversation by asking the CLI, since it writes no title itself.
+   *
+   * A throwaway `-p` turn, in its own temporary folder and with the user's MCP
+   * servers withheld. The folder matters as much as the flags: a project's
+   * `CLAUDE.md` is loaded from the cwd, and this repository's is 40KB that
+   * would be billed to every chat that gets named — so the naming turn is
+   * rooted nowhere in particular, which is also why it can be told nothing
+   * about the run beyond the words it is titling.
+   *
+   * On the run's OWN profile (`configDir`), because that is which account is
+   * billed and which one is signed in.
+   *
+   * Never throws: `runCommand` answers null for a missing binary, a timeout and
+   * a non-zero exit alike, and an unreadable reply is null too.
+   */
+  override async generateTitle(
+    input: AgentTitleInput,
+    options: AgentCommandOptions = {},
+  ): Promise<string | null> {
+    const dir = await mkdtemp(join(tmpdir(), CLAUDE_TITLE_DIR_PREFIX));
+    try {
+      const stdout = await this.runCommand(
+        [
+          ...CLAUDE_TITLE_ARGS,
+          CLAUDE_MODEL_FLAG,
+          CLAUDE_TITLE_MODEL,
+          titlePrompt(input),
+        ],
+        {
+          ...options,
+          cwd: dir,
+          timeoutMs: options.timeoutMs ?? CLAUDE_TITLE_TIMEOUT_MS,
+          ...(input.configDir
+            ? { env: { [CLAUDE_CONFIG_DIR_ENV]: input.configDir } }
+            : {}),
+        },
+      );
+      return readClaudeTitleReply(stdout);
+    } finally {
+      // Best-effort, like every other scratch removal here: a directory left
+      // behind costs a few bytes in the system temp dir, and a throw would turn
+      // a title that WORKED into a logged failure.
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   /**

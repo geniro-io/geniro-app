@@ -244,22 +244,10 @@ const SESSION_SEARCH_DEBOUNCE_MS = 350;
  */
 const SESSION_LIST_LIMIT = 400;
 
-/**
- * The start screen's content column — the greeting and the new-run composer.
- *
- * A string rather than a `max-w-*` class because the same value appears twice:
- * as the column's own width and inside the expression that re-centres it on the
- * window. Two spellings of one number is how the clamp comes to protect a width
- * the column no longer has.
- */
+/** The start screen's content column — the greeting and the new-run composer. */
 const START_COLUMN_WIDTH = '42rem';
 
-/**
- * The start screen's own padding — and so both the smallest gap re-centring may
- * leave between its column and the sidebar, and the correction the re-centring
- * expression owes: `100%` there is the padding BOX, which is narrower than the
- * pane by exactly this on each side.
- */
+/** The start screen's own padding, and so its smallest gap to the sidebar. */
 const START_COLUMN_PAD = '1.5rem';
 
 /** Client-side only — this id never reaches the daemon. */
@@ -3839,26 +3827,56 @@ export function Chats({
    * `agents[0]` there is one node among several and the ring is withheld
    * exactly as it was.
    *
-   * The fallback to {@link recallContextReading} is the fix for the reported
-   * lag. The derivation above reads the LOADED TRANSCRIPT, which a chat switch
-   * clears and refetches — so it answers null for the whole of that fetch, and
-   * the ring went value → gone → value under a name that had already changed.
-   * Recalling THIS run's own last reading fills that stretch with the one
-   * figure that cannot be wrong about it.
+   * Three sources, freshest first. The live delta is this turn's latest
+   * REQUEST, the RUN ROW is the last reading the daemon filed (one per
+   * main-thread model response, so it moves inside a turn), and the transcript
+   * can only offer the last SETTLED turn.
+   *
+   * The row is what closes the reported defect: a ring reading `2%` beside a
+   * panel reading `46%`. The last settled turn had ended directly after a
+   * `/compact`, so the transcript's newest figure was 16.7k of 1M, and the hour
+   * of work since had regrown the window to 462k with no settled turn to record
+   * it. The live plane had that figure and is EPHEMERAL — a reload, a
+   * reconnect, or a chat opened for the first time this session starts without
+   * one — and the transcript cannot have it at all, since it is not written
+   * there until the turn ends.
+   *
+   * The chain is a strict recency order and nothing compares the figures: each
+   * source measures a later moment than the one after it, so a plain `??` is
+   * the whole rule. Reading the live delta HERE rather than through `agents[0]`
+   * is what makes that true — that field already collapses the live plane onto
+   * the transcript, which would have put the oldest source ahead of the row.
+   *
+   * {@link recallContextReading} is last and covers what none of them can: the
+   * stretch during which a chat switch has cleared the transcript and its
+   * refetch has not landed, where the ring used to go value → gone → value
+   * under a name that had already changed.
    */
   const chatContext = useMemo(() => {
     if (activeRun === null || activeRun.workflowId) {
       return { tokens: null, window: null };
     }
-    const tokens = agents[0]?.contextTokens ?? null;
+    const live = liveText.get(CHAT_LIVE_KEY);
+    const tokens =
+      live?.contextTokens ??
+      activeRun.contextTokens ??
+      agents[0]?.contextTokens ??
+      null;
     if (tokens !== null) {
-      return { tokens, window: agents[0]?.contextWindowTokens ?? null };
+      return {
+        tokens,
+        window:
+          live?.contextWindowTokens ??
+          activeRun.contextWindowTokens ??
+          agents[0]?.contextWindowTokens ??
+          null,
+      };
     }
     const recalled = recallContextReading(activeRun.id);
     return recalled === null
       ? { tokens: null, window: null }
       : { tokens: recalled.tokens, window: recalled.window };
-  }, [activeRun, agents, recallContextReading]);
+  }, [activeRun, agents, liveText, recallContextReading]);
   useEffect(() => {
     // Filed only for the run it was measured on, and only once there IS a
     // measurement — `remember` ignores a null rather than erasing what it
@@ -3881,20 +3899,29 @@ export function Chats({
    * is keyed by `CHAT_AGENT_KEY`, and that mapping belongs to this screen
    * rather than to the fold.
    *
-   * The gate is `isSettledRunStatus` — has this agent stopped FOR GOOD — and it
-   * is correctness rather than tidiness. A shell ends when its tool call comes
-   * back, so a turn the user cancelled, or one the CLI abandoned, leaves a call
-   * with no reply that the fold can only read as still running; every one of
-   * those rows would then stand for the rest of the session claiming a process
-   * that died with the turn.
+   * The gate applies to FOREGROUND commands only, and the split is the whole
+   * of it. A foreground shell is read as running because its tool call has no
+   * reply — a reading a cancelled or abandoned turn makes permanently false, so
+   * every such row would stand for the rest of the session claiming a process
+   * that died with the turn. `isSettledRunStatus` — has this agent stopped for
+   * good — is the app's own answer to exactly that.
    *
-   * Written as `status === 'running'` it was WRONG, and measured so on a live
-   * run: a turn holding background work sits in `waiting` (the status carved
-   * out of `running` precisely because such a hold can last twenty minutes), so
-   * a detached command vanished from the panel three seconds after it started
-   * and came back to nothing. `isSettledRunStatus` is the app's own answer to
-   * the question actually being asked — while a run can still produce rows, its
-   * commands can still be running; once it has stopped for good, none can.
+   * A BACKGROUND command is not read that way and must not be gated that way.
+   * Its call is answered within the second, its end is a durable row the daemon
+   * writes (`shell_info`), and the daemon writes one for every shell still open
+   * when the CLI process dies — so its liveness is REPORTED rather than
+   * inferred, and the run settling says nothing about it. Gating it here is
+   * what made the panel go blank on precisely the case it exists for: the
+   * agent finishes, the turn settles, and the `pnpm dev` it started keeps
+   * running with nothing on screen saying so.
+   *
+   * The ONE report that can go missing is the one a dying daemon cannot make:
+   * announcements are suppressed during shutdown, so a command open at that
+   * moment gets no row — measured, a `sleep 1200` killed with its group and
+   * four transcript rows with no `shell_info` among them. That gap is closed
+   * from the other end rather than by writing during a teardown: an agent's CLI
+   * cannot outlive the daemon that spawned it, so a command launched before
+   * THIS daemon's `startedAt` is over whatever the transcript says.
    */
   const shellsByAgent = useMemo(() => {
     const working = new Set(
@@ -3902,15 +3929,29 @@ export function Chats({
         .filter((agent) => !isSettledRunStatus(agent.status))
         .map((a) => a.id),
     );
+    const daemonStartedAt = Date.parse(handle.startedAt);
+    const stillRunning = (shell: ShellRun): boolean => {
+      const startedAt = Date.parse(shell.startedAt);
+      // An unparseable stamp on either side proves nothing, so it decides
+      // nothing: the row stands on whatever the transcript said.
+      return (
+        !Number.isFinite(daemonStartedAt) ||
+        !Number.isFinite(startedAt) ||
+        startedAt >= daemonStartedAt
+      );
+    };
     const byAgent = new Map<string, ShellRun[]>();
     for (const [nodeId, shells] of runningShellsByAgent(items)) {
       const key = nodeId ?? CHAT_AGENT_KEY;
-      if (working.has(key)) {
-        byAgent.set(key, shells);
+      const live = working.has(key)
+        ? shells.filter((shell) => !shell.background || stillRunning(shell))
+        : shells.filter((shell) => shell.background && stillRunning(shell));
+      if (live.length > 0) {
+        byAgent.set(key, live);
       }
     }
     return byAgent;
-  }, [agents, items]);
+  }, [agents, handle.startedAt, items]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -4684,38 +4725,15 @@ export function Chats({
                     <div
                       className="flex min-h-0 flex-1 flex-col items-center justify-center"
                       style={{ padding: START_COLUMN_PAD }}>
-                      {/* Centred on the WINDOW, not on the pane it lives in.
-                          Reported as "this content on the start screen should
-                          be in the middle of the screen", and measured: the
-                          card sat a constant 240px right of the window centre
-                          at every width — exactly half the 480px of chrome
-                          (nav rail + chat list) to its left, because
-                          `justify-center` centres it in what is left over.
-
-                          The shift is derived rather than hardcoded, which is
-                          the whole reason it is CSS and not a number: `100%`
-                          is this pane's width and `100vw` the window's, so
-                          their difference IS the chrome beside it — and it
-                          re-derives itself when the rail is collapsed or the
-                          chat list dragged wider, which a constant could not.
-                          In a `justify-center` box a right margin of M moves
-                          the child left by M/2, so M = chrome lands it dead
-                          centre.
-
-                          Clamped, because exact centring is not always
-                          geometrically possible: it needs the card to fit in
-                          `window − 2 × chrome`, which at 1440 is 480px against
-                          a 672px composer. The second term spends only the
-                          slack the pane actually has, keeping a gutter to the
-                          sidebar — so the card moves as far as it can and
-                          degrades to plain pane-centring when there is no room
-                          at all, instead of sliding under the chat list. */}
+                      {/* Centred in the PANE it lives in — equal air either
+                          side of the card. It briefly carried a margin that
+                          re-centred it on the whole WINDOW instead, derived
+                          from `100vw - 100%`; that reads as shifted left,
+                          because the chrome it compensates for is a column the
+                          eye has already stopped counting as part of the page. */}
                       <div
                         className="flex w-full flex-col gap-5"
-                        style={{
-                          maxWidth: START_COLUMN_WIDTH,
-                          marginRight: `max(0px, min(calc(100vw - 100% - 2 * ${START_COLUMN_PAD}), calc(100% - ${START_COLUMN_WIDTH} - 2 * ${START_COLUMN_PAD})))`,
-                        }}>
+                        style={{ maxWidth: START_COLUMN_WIDTH }}>
                         <h2 className="text-center text-xl font-semibold tracking-tight">
                           What are we building?
                         </h2>
@@ -4987,6 +5005,11 @@ export function Chats({
                         label={runLabel(activeRun, workflowNames)}
                         isWorkflow={activeRun.workflowId != null}
                         agentKind={activeRun.agentKind}
+                        // Where this conversation happens. Beside the agent
+                        // because it is the same kind of fact — fixed for the
+                        // run's life — and after three rejected positions in the
+                        // composer below.
+                        cwd={activeRun.cwd}
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.
                         configDir={activeRun.configDir}
@@ -5309,36 +5332,14 @@ export function Chats({
                               </span>
                             </Chip>
                           ) : null}
-                          {/* Where the run happens — ABOVE the textarea, hard
-                      right: "давай текущую папку проекта переместим просто над
-                      текст-эрией вправо".
-
-                      It spent a while beside Send, on the reading that a cwd
-                      fixed at creation is a caption on the button that
-                      dispatches the work rather than a picker among live ones.
-                      Up here it is a caption on the MESSAGE instead, which
-                      answers the same observation better — and it takes the one
-                      item whose label is user data off a line that may now never
-                      wrap, so the pickers below stop competing with a folder
-                      name for width.
-
-                      `ml-auto` rather than a `justify-end` on the row: the
-                      workflow trigger chip beside it still reads from the left,
-                      and this is the only thing here that belongs on the other
-                      edge. `shrink` overrides `Chip`'s own `shrink-0` for the
-                      reason it did below — the label is the user's own folder
-                      name and the full path is on hover, so it is the right
-                      thing to truncate first. */}
-                          {activeRun?.cwd ? (
-                            <Chip
-                              title={activeRun.cwd}
-                              className="ml-auto max-w-56 min-w-0 shrink">
-                              <FolderOpen />
-                              <span className="truncate">
-                                {folderName(activeRun.cwd)}
-                              </span>
-                            </Chip>
-                          ) : null}
+                          {/* The run's FOLDER is not here, and after four
+                      positions it is not in this composer at all — it is in the
+                      HEADER, beside the agent and the profile. See
+                      `chat-header.tsx`'s `cwd` prop for the three arrangements
+                      tried here first and why none of them held: a fact fixed
+                      for the run's life kept having to earn a band among
+                      controls that change things, and the band is what looked
+                      wrong every time. */}
                         </ComposerTopRow>
                         <ComposerCard>
                           <AttachmentStrip
@@ -5384,8 +5385,9 @@ export function Chats({
                           <ComposerBottomRow
                             actions={
                               <>
-                                {/* The run's FOLDER is not here any more — it moved
-                          ABOVE the textarea (see the top row). It led the
+                                {/* The run's FOLDER is not here any more — it is
+                          INSIDE the card, at its top right (see that chip for
+                          the two positions it held before this one). It led the
                           actions for a while, on the reading that a cwd fixed
                           at creation is a caption on the button that dispatches
                           the work rather than a picker among live ones; it is a

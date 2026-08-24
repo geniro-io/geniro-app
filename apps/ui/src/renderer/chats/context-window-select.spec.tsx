@@ -156,6 +156,34 @@ describe('ContextWindowSelect', () => {
     expect(trigger(el)!.textContent).toContain('default');
   });
 
+  it('says WHY inside the open menu when it has no sizes to offer, and draws no empty block above the row', () => {
+    // REPORTED as "It didnt load contexts for cursor. CHeck it", over a
+    // `kimi-k3` composer. The daemon was right — that model's own handshake
+    // enumerates `reasoning` and no `context` parameter, while `claude-opus-5`
+    // on the same account and build enumerates `context = 300k|1m` — so the
+    // panel correctly had one row. What made it read as a failed fetch was the
+    // rendering: an empty sizes BLOCK above the lone row, and an explanation
+    // that lived only in the trigger's hover title.
+    const el = render(
+      <ContextWindowSelect
+        windows={[]}
+        value={null}
+        unavailableReason="kimi-k3 runs at one fixed context window — pick a model that offers a choice."
+        unavailableKind="fixed-window"
+        onChange={() => {}}
+      />,
+    );
+    act(() => {
+      trigger(el)!.click();
+    });
+    expect(el.textContent).toContain(
+      'kimi-k3 runs at one fixed context window',
+    );
+    // One block, not two: the sizes group is empty, and an empty group renders
+    // as a bare band with the next group's hairline under it.
+    expect(el.querySelectorAll('[data-slot="menu-group"]')).toHaveLength(1);
+  });
+
   it('follows the KIND, not the wording of the reason', () => {
     // The one assertion that actually discriminates. The component used to
     // recognise the no-model case by matching the daemon's sentence, so a

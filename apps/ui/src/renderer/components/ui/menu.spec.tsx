@@ -307,6 +307,44 @@ describe('Menu', () => {
     expect(el.textContent).toContain('No matches');
   });
 
+  it('draws no block for a group with no rows, so the group after it carries no stray hairline', () => {
+    // A caller composes groups from data, so an empty block is ordinary — the
+    // context-window chip's sizes group is empty on a model that offers one
+    // fixed window. Rendered, it was a blank band with the next group's
+    // separator beneath it, which is what "it didnt load contexts for cursor"
+    // was actually looking at. The search path already dropped empty groups;
+    // the unfiltered path did not.
+    const el = open([
+      { items: [] },
+      { items: [{ value: 'default', label: 'model default' }] },
+    ]);
+
+    expect(el.querySelectorAll('[data-slot="menu-group"]')).toHaveLength(1);
+    expect(
+      el.querySelector('[data-slot="menu-group"]')!.className,
+    ).not.toContain('border-t');
+    expect(labels(el)).toEqual(['model default']);
+  });
+
+  it('renders a group NOTE as prose beneath its rows’ block, distinct from a heading', () => {
+    const el = open([
+      {
+        label: 'Sizes',
+        note: 'kimi-k3 runs at one fixed context window.',
+        items: [{ value: 'default', label: 'model default' }],
+      },
+    ]);
+
+    const note = el.querySelector('[data-slot="menu-group-note"]')!;
+    expect(note.textContent).toBe('kimi-k3 runs at one fixed context window.');
+    // Not folded into the heading: the heading is an 11px uppercase
+    // micro-label, and a sentence set that way outweighs every row under it.
+    expect(
+      el.querySelector('[data-slot="menu-group-heading"]')!.textContent,
+    ).toBe('Sizes');
+    expect(note.className).not.toContain('uppercase');
+  });
+
   it('renders a group heading at full token contrast, no opacity modifier', () => {
     // Regression pin: an opacity modifier on this token (`/75`) would lower
     // the heading's contrast against the popover background — jsdom computes

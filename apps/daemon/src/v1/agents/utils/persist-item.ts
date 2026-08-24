@@ -91,6 +91,8 @@ export function runToWire(
     approval: run.approval,
     effort: run.effort,
     contextWindow: run.contextWindow,
+    contextTokens: run.contextTokens,
+    contextWindowTokens: run.contextWindowTokens,
     configDir: run.configDir,
     groupId: run.groupId,
     createdAt: run.createdAt.toISOString(),

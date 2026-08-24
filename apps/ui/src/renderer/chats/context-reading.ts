@@ -32,10 +32,13 @@ export interface ContextReading {
  * happened.
  *
  * What it does NOT do is invent a figure for a chat this session has never
- * opened: there is no reading to remember, the meter renders nothing, and that
- * is the honest reading of "we have not measured this thread yet". Closing that
- * would mean the daemon carrying the last turn's context on the run row, which
- * is a wire change and a different piece of work.
+ * opened: there is no reading to remember, and that is the honest reading of
+ * "we have not measured this thread yet". That gap is closed from the other
+ * end now — the daemon files every reading the CLI reports on the RUN ROW
+ * (`Run.contextTokens`), so a cold window has a figure without this ever having
+ * seen the chat. This stays the LAST fallback, for the one stretch the row
+ * cannot cover: a switch whose refetch is still in flight, where the run being
+ * shown has changed and its row has not arrived.
  */
 export function useContextReadings(): {
   /** File the reading currently on screen for a run. */

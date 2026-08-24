@@ -75,7 +75,13 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   })),
 }));
 
-const handle = { host: '127.0.0.1', port: 8123, token: 'tok', version: '1' };
+const handle = {
+  host: '127.0.0.1',
+  port: 8123,
+  token: 'tok',
+  version: '1',
+  startedAt: '2026-01-01T00:00:00.000Z',
+};
 
 /** An update state as main would push it; `idle` unless a phase is named. */
 function updateState(overrides: Partial<UpdateState> = {}): UpdateState {

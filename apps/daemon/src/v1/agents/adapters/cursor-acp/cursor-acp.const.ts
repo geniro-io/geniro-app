@@ -99,6 +99,18 @@ export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
  * that sweep; a second spelling appearing turns this into a list, exactly as
  * {@link CURSOR_EFFORT_PARAMETER_IDS} already is.
  *
+ * RE-CHECKED 2026-08-24 on the same build, prompted by "it didnt load contexts
+ * for cursor": still `context`, still `model_config`, and the listing was
+ * right. `claude-opus-5` enumerates `context = 300k {300k|1m}`; `kimi-k3` — the
+ * model in the report — enumerates `reasoning` and NO `context` at all, so it
+ * genuinely runs at one fixed window and the empty listing is the true answer.
+ * Worth knowing for the next reader: without the
+ * {@link CURSOR_ACP_CLIENT_META} flag the same probe returns `mode` and `model`
+ * ALONE, with every parameter folded into the composed model id
+ * (`claude-sonnet-4-5[thinking=true,context=200k]`) — so a hand-run probe that
+ * forgets the flag will "reproduce" a broken listing on every model and blame
+ * the wrong layer.
+ *
  * Named rather than inline because three readers spell it: the listing probe,
  * the turn's selection builder, and the driver that sends it.
  */

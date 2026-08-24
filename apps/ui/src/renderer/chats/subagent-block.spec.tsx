@@ -394,6 +394,42 @@ describe('SubagentBlock', () => {
     expect(container.textContent).not.toContain('is working...');
   });
 
+  it('states a delegate’s tokens and duration on the CLOSED header', () => {
+    // REPORTED as "in front of each agent i wanna see amount of
+    // tokens/costs/time", against rows reading only `general-purpose · 49
+    // tools`. The header is where it has to land: a block is collapsed by
+    // default, so a figure that needs a click answers nothing for someone
+    // scanning a column of delegates.
+    const block: SubagentBlockEntry = {
+      ...makeBlock(),
+      tokens: 26124,
+      durationMs: 2029,
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
+
+    // The disclosure BUTTON specifically — it is the header row, and asserting
+    // on it rather than on the block is what makes this a test about the
+    // CLOSED state: the same strings under the facts line inside would satisfy
+    // a container-wide assertion the moment anything opened the block.
+    const header = container.querySelector(
+      '[data-role="subagent-block"] button[aria-label^="Show"]',
+    );
+    expect(header?.textContent).toContain('26.1k tokens');
+    expect(header?.textContent).toContain('took 2s');
+  });
+
+  it('shows no spend at all for a delegate whose CLI measured none', () => {
+    // Every CLI but claude reports none of this, and a `— tokens` placeholder
+    // on each of twenty delegate rows is noise about a blind spot the reader
+    // can do nothing with. `tokens`/`durationMs` are null on `makeBlock`.
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} soloAgent />),
+    );
+
+    expect(container.textContent).not.toContain('tokens');
+    expect(container.textContent).not.toContain('took ');
+  });
+
   it('reports a delegate whose tool returned an error as failed, not done', () => {
     // `isError` IS on the tool_result payload (event-to-item.ts persists it),
     // so reading the mere presence of a result would paint a failed delegate

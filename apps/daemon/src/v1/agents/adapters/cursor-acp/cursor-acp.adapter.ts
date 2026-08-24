@@ -85,6 +85,7 @@ import {
   CURSOR_TASK_METHOD,
   CURSOR_TODOS_METHOD,
 } from './cursor-acp.const';
+import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
@@ -1956,6 +1957,14 @@ export class CursorAcpAdapter extends AgentAdapter {
         method: CURSOR_TODOS_METHOD,
         read: parseCursorTodos,
       },
+      // This CLI catches its own failure, writes the sentence out as an
+      // assistant message and answers `end_turn` regardless — so without this
+      // a turn that died on `RetriableError: [unavailable] PING timed out`
+      // rendered that line as the agent's own prose under a `✓ done · 1m 14s`
+      // footer. REPORTED with exactly that screenshot. The reader's doc block
+      // carries the catch block it was read out of and why matching it is
+      // sound.
+      agentFailure: { read: readCursorAgentFailure },
       // The SAME store the readout reads, put on the turn's event stream — and,
       // through it, onto the turn's own `turn_complete` — so the meter's ring is
       // drawn from it too. ACP carries no context accounting at all, so before

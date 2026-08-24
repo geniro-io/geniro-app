@@ -67,8 +67,11 @@ export function ComposerTopRow({
     // padding, so aligning their TEXT with the textarea's would need the
     // padding of neither. One notch in keeps the row visually hung off the
     // card's left edge without indenting it.
-    // `pb-1.5` is the only gap to the card — the row is a caption for it, and
-    // spacing it like a sibling block would break that reading.
+    // NO bottom padding: "отступа практически должно не быть между директорией
+    // и текст-эйрией". The row is a caption for the card, not a sibling block
+    // above it, and the 6px that used to sit here read as the latter. What air
+    // remains is the chips' OWN box — they are `h-8` around ~12px of text — and
+    // that is the chip being a chip rather than a gap between two things.
     // No blanket shrink rule here, deliberately. Applied to every child, flex
     // takes width off ALL of them — `claude` became `cla…` beside a folder chip
     // still showing twenty characters, which is the wrong chip losing its
@@ -76,7 +79,7 @@ export function ComposerTopRow({
     // each says so itself (`shrink` on the folder, branch and profile chips —
     // the three whose text is user data and whose full value is on hover). The
     // short fixed-vocabulary ones keep their `shrink-0` and stay whole.
-    <div className="flex items-center gap-x-0.5 px-1 pb-1.5 empty:hidden">
+    <div className="flex items-center gap-x-0.5 px-1 empty:hidden">
       {children}
     </div>
   );
@@ -101,14 +104,28 @@ export function ComposerBottomRow({
           own height — the menus simply vanish — and a clipped box is still a
           scroll container, so focusing a menu's search field scrolled the row
           sideways under its own chips. */}
-      {/* Wrapping happens INSIDE this box, so the actions beside it never move
-          — which is what made wrapping wrong on the old single row and makes it
-          right here. Measured at 760px: without it "default effort" ran clean
-          UNDER Send, and forcing the chips to shrink instead truncated their
-          chevrons away, so they stopped reading as pickers at all. Stacking
-          keeps both legible. `[&>*]` still overrides the chip's own `shrink-0`
-          for the last resort — one chip wider than the whole box. */}
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-0.5 gap-y-1 [&>*]:min-w-0 [&>*]:shrink">
+      {/* ONE LINE, at every width. Reported flatly — "они расползаются на две
+          строки. Никогда такого быть не должно" — against a 620px composer
+          where the three pickers filled the first line and the approval chip
+          and the context ring dropped onto a second.
+
+          This box used to WRAP, on a measurement that no longer holds: shrinking
+          the chips was rejected because it "truncated their chevrons away", and
+          it does not — `Select`'s trigger keeps its icon and its chevron
+          `shrink-0` and gives up the LABEL, which is `truncate`d. (That is the
+          same arrangement the `flexible` prop already ships for the
+          run-configuration editor's rows; what was missing here was the second
+          half of it.) So the chips narrow in place instead of stacking, and the
+          row's height stops depending on how many of them a run happens to
+          show.
+
+          Three rules make that work, and none of them is optional:
+          `[&>*]` overrides the chip's own `shrink-0` so a direct child may
+          narrow; the trigger rule makes the BUTTON follow its wrapper, without
+          which the wrappers shrink on schedule while the buttons keep their
+          content width and overlap each other's text; and the labels
+          themselves already truncate. */}
+      <div className="flex min-w-0 flex-1 items-center gap-x-0.5 [&>*]:min-w-0 [&>*]:shrink [&_[data-menu-trigger]]:w-full [&_[data-menu-trigger]]:min-w-0">
         {children}
       </div>
       <span className="flex shrink-0 items-center gap-1.5">{actions}</span>

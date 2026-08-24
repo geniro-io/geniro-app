@@ -15,12 +15,43 @@ export class ItemDao extends BaseDao<Item> {
    * Ordered transcript for a run. `afterSeq` is the replay cursor: pass the
    * highest seq the client has already rendered to fetch only newer items
    * (default -1 returns the whole transcript, since seq starts at 0).
+   *
+   * `window` is the OTHER direction — the newest `limit` items, optionally
+   * those before `beforeSeq`, for a client paging backwards through a long
+   * conversation. Measured on a real thread: 7,814 items are 18.9MB of payload
+   * where its newest 1,000 are 0.63MB, so opening a chat used to move thirty
+   * times the bytes anybody was going to look at. The rows still come back in
+   * ASCENDING seq whichever way they were selected, because every reader
+   * downstream — the fold, the pairing, the turn scan — is written against a
+   * transcript in the order it happened.
    */
   async getByRun(
     runId: string,
     afterSeq = -1,
     txEm?: EntityManager,
+    window?: { limit: number; beforeSeq?: number },
   ): Promise<Item[]> {
+    if (window) {
+      const rows = await this.getRepo(txEm).find(
+        {
+          runId,
+          seq: {
+            $gt: afterSeq,
+            ...(window.beforeSeq === undefined
+              ? {}
+              : { $lt: window.beforeSeq }),
+          },
+        },
+        // Newest FIRST for the selection, so the limit takes the tail of the
+        // conversation rather than its beginning, then reversed below.
+        {
+          orderBy: { seq: 'desc' },
+          limit: window.limit,
+          disableIdentityMap: true,
+        },
+      );
+      return rows.reverse();
+    }
     return this.getRepo(txEm).find(
       { runId, seq: { $gt: afterSeq } },
       // Read-only replay path: skip identity-map tracking so a long transcript

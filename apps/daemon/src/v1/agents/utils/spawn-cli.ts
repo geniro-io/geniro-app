@@ -1173,7 +1173,25 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     if (event.phase === 'started') {
       delegateWork.set(event.id, toolCallId);
-    } else {
+    } else if (event.usage !== undefined) {
+      // Forgotten on the settle that carried the FIGURES, not on the first
+      // settle to arrive — and the difference is the whole of what a delegate
+      // costs.
+      //
+      // A CLI is free to report one unit's end on two channels, which is
+      // exactly why the pairing is remembered here at all; only one of the two
+      // says what the work spent. Measured on claude 2.1.237, the figure-less
+      // one goes FIRST: `task_updated {status:'completed'}` then
+      // `task_notification {usage:{…}}`, in that order on a real delegation.
+      // Deleting on the first therefore threw the figures away every time —
+      // observed end to end, four `subagent_info` rows in the app's own
+      // database with `tokens: null` on all of them.
+      //
+      // A settle with no figures still ANNOUNCES (the block has to close), it
+      // simply does not close the book. The cost of that is an entry surviving
+      // the session for a unit whose CLI never reports usage: two short
+      // strings, on a map this code already keeps deliberately past the
+      // silence deadline for late reports.
       delegateWork.delete(event.id);
     }
     const announcement: AgentEvent = {
@@ -1186,7 +1204,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       kind: null,
       prompt: null,
       model: null,
-      durationMs: null,
+      // …with the exception of what the settle line itself measured, which is
+      // announced HERE rather than by the adapter for the reason recorded on
+      // `background_work.usage`: this is the only point that knows the settling
+      // unit was a delegate at all. A `started` carries no figures and keeps
+      // the nulls, so it cannot blank out a settle that arrives first on the
+      // other channel.
+      durationMs: event.usage?.durationMs ?? null,
+      tokens: event.usage?.tokens ?? null,
+      toolUses: event.usage?.toolUses ?? null,
       stepsUnavailableReason: null,
       backgroundOpen: event.phase === 'started',
     };

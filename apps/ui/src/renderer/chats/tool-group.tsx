@@ -1,5 +1,5 @@
 import { ChevronRight } from 'lucide-react';
-import { memo, useContext, useState } from 'react';
+import { createContext, memo, useContext, useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -8,9 +8,14 @@ import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { ToolBodyView } from './tool-body-view';
 import { ToolCallIcon, ToolOperationIcon } from './tool-icon';
-import { toolOperationOf } from './tool-kind';
-import { formatToolName, toolInputBody, toolResultBody } from './tool-render';
 import {
+  formatToolName,
+  shortenPath,
+  toolInputBody,
+  toolResultBody,
+} from './tool-render';
+import {
+  showsFileChange,
   toolCallSummary,
   type ToolGroupEntry,
   toolGroupOperations,
@@ -18,6 +23,18 @@ import {
   type ToolPair,
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
+
+/**
+ * Whether a turn's intermediate steps start FOLDED, whatever the app would
+ * otherwise judge worth opening (`Settings.collapseToolSteps`).
+ *
+ * A context and not a prop: the rows sit several layers below the transcript
+ * (turn block → group → row), all of them memoized, and threading a preference
+ * through every one of them would re-render each on a change none of them is
+ * about. Defaults false, so a row rendered outside a provider — a test, a
+ * sub-agent detail panel — behaves exactly as before.
+ */
+export const CollapseToolStepsContext = createContext(false);
 
 /**
  * Where one tool invocation stands.
@@ -33,49 +50,6 @@ export function toolPairStatus(pair: ToolPair, settled: boolean): BlockStatus {
   }
   const payload = pair.result.payload as { isError?: unknown } | null;
   return payload?.isError === true ? 'error' : 'done';
-}
-
-/**
- * Does this call have a CHANGE TO A FILE to show?
- *
- * REPORTED as "I wanna see all file edits, so it should be automatically open,
- * like claude cli" — the transcript folded every edit behind two presses (the
- * group's chevron, then the row's), so the one part of a turn a reader has to
- * check by eye was the part hidden hardest. Nothing else about the transcript
- * changes: this decides what is OPEN, never what is drawn.
- *
- * Only file changes, and deliberately not "everything". A turn's reads, greps
- * and command output are the material an agent worked FROM; unfolding those
- * too would bury the diff in the wall of text this fold exists to prevent.
- *
- * Asked of BOTH directions, because the two shipped transports report a change
- * at opposite ends of one call: claude discloses it in the arguments
- * (`Edit`'s `old_string`/`new_string`, `Write`'s `content`), while an ACP agent
- * discloses no arguments at all and returns `diffs` on the result. Keying on
- * either alone would open the diffs of one CLI and none of the other's.
- *
- * The last clause is the guard rather than the rule: a tool this classifies as
- * an edit but nothing renders as a diff (`MultiEdit`, whose arguments are a
- * list) still has arguments worth reading, but a row with NO body opens onto
- * blank space and would read as a broken disclosure.
- */
-export function showsFileChange(pair: ToolPair): boolean {
-  const payload: unknown = pair.call.payload;
-  const name = payloadString(payload, 'name') ?? 'tool';
-  const input = (payload as { input?: unknown } | null)?.input;
-  const body = toolInputBody(name, input);
-  if (body?.kind === 'diff') {
-    return true;
-  }
-  if (pair.result !== null) {
-    const result =
-      (pair.result.payload as { result?: unknown } | null)?.result ?? null;
-    if (toolResultBody(input, result).kind === 'diff') {
-      return true;
-    }
-  }
-  const operation = toolOperationOf(payload);
-  return (operation === 'edit' || operation === 'create') && body !== null;
 }
 
 /**
@@ -102,7 +76,10 @@ function ToolRow({
   // the result, for an ACP agent), so a seeded row would stay shut on exactly
   // the edits this exists to show. Same shape as `TaskListCard`'s `latest`.
   const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? showsFileChange(pair);
+  // The user's own press outranks BOTH — the setting decides what a row starts
+  // as, never what it can be.
+  const collapseSteps = useContext(CollapseToolStepsContext);
+  const open = override ?? (!collapseSteps && showsFileChange(pair));
   // Annotated `unknown` rather than inheriting the generated DTO's `any`: the
   // payload is untyped on the wire BY DESIGN (each item kind carries a different
   // shape), and every reader below is written to narrow it defensively. Without
@@ -172,6 +149,109 @@ function ToolRow({
 }
 
 /**
+ * ONE file change, drawn as part of the conversation rather than as a control.
+ *
+ * REPORTED against the first cut of the lift-out, which reused {@link ToolRow}:
+ * "это не красиво… он не должен коллапсироваться в этом случае. В принципе,
+ * вообще не должна быть такая возможность, и оно должно выглядеть ближе к
+ * обычному сообщению". Three things follow from that, and they are one idea:
+ *
+ * - **No fold, and no control to fold with.** The row is here BECAUSE it was
+ *   lifted out of its group to be read; a chevron offering to hide it again is
+ *   an affordance for undoing the whole point. Not merely open-by-default —
+ *   there is no button at all, so there is nothing to press.
+ * - **No pill.** `ToolRow`'s bordered, filled header reads as a control, which
+ *   is right inside a group of ten of them and wrong for a lone block in the
+ *   flow. What is left is a caption: the operation's glyph, the tool's name and
+ *   the path.
+ * - **The path is said ONCE.** The diff carries its own caption, so the header
+ *   and the body were printing the same path a line apart; the body's is
+ *   dropped and the header keeps it, where it reads as the block's title.
+ *
+ * The RESULT is shown only when the change FAILED. For a write that worked it
+ * is `File created successfully at: <the path above>` — a second copy of what
+ * the header says, in a grey box as tall as the diff — while a failure is the
+ * one thing about the change a diff cannot show.
+ */
+function FileChangeBlock({
+  pair,
+  settled,
+}: {
+  pair: ToolPair;
+  settled: boolean;
+}): React.JSX.Element {
+  const payload: unknown = pair.call.payload;
+  const name = payloadString(payload, 'name') ?? 'tool';
+  const input = (payload as { input?: unknown } | null)?.input;
+  const body = toolInputBody(name, input);
+  const result = pair.result
+    ? ((pair.result.payload as { result?: unknown } | null)?.result ?? null)
+    : null;
+  const resultBody = toolResultBody(input, result);
+  const status = toolPairStatus(pair, settled);
+  // Whichever END of the call disclosed the change — claude puts it in the
+  // arguments, an ACP agent returns it on the result. `showsFileChange` accepts
+  // either, so the block has to render either.
+  const change =
+    body?.kind === 'diff'
+      ? body
+      : resultBody.kind === 'diff'
+        ? resultBody
+        : null;
+  // The diff's own caption is the path it is about; `toolCallSummary` is the
+  // fallback for the edit that renders as something other than a diff.
+  const pathTitle = change?.caption ?? toolCallSummary(pair.call);
+  return (
+    <div className="flex w-full flex-col gap-1.5 text-sm">
+      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+        <ToolCallIcon payload={payload} status={status} className="size-3.5" />
+        <span
+          className={cn(
+            'shrink-0 font-mono',
+            status === 'error' ? 'font-semibold text-destructive' : undefined,
+          )}>
+          {formatToolName(name)}
+        </span>
+        {/* Shortened from the FRONT, like every other path in the transcript:
+            CSS truncation eats the filename, which is the half that says what
+            changed. The whole thing stays on hover. */}
+        <span className="min-w-0 flex-1 truncate font-mono" title={pathTitle}>
+          {shortenPath(pathTitle)}
+        </span>
+      </span>
+      {/* INDENTED under the caption, so the diff reads as this block's
+          content rather than as a sibling of it — "все еще саб-левел в этом
+          сообщении, то есть оно должно быть немного сдвинуто вправо". Losing
+          the pill took the last thing that tied the two together, and flush
+          left they became two unrelated bands in the flow.
+
+          `pl-6` is the value the grouped row's body already uses, so a change
+          sits at the same depth whether it was lifted out or is being read
+          inside its group. */}
+      <div data-slot="file-change-body" className="flex flex-col gap-1.5 pl-6">
+        {change !== null ? (
+          <ToolBodyView body={{ ...change, caption: null }} />
+        ) : body !== null ? (
+          // An edit this app classifies as one but nothing renders as a diff —
+          // `MultiEdit`, whose arguments are a list. Its arguments are still
+          // worth reading, and `showsFileChange` already refuses a call with no
+          // body at all, so this never renders an empty block.
+          <ToolBodyView body={body} />
+        ) : null}
+        {status === 'error' ? (
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-medium uppercase tracking-wide text-destructive">
+              failed
+            </span>
+            <ToolBodyView body={resultBody} />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/**
  * A collapsed run of tool calls — geniro web's WorkingBlock: a bare
  * summary header ("Used N tools · edited M files…", chevron, a spinner
  * while a call is still in flight), with the per-invocation rows behind
@@ -189,7 +269,9 @@ export const ToolGroup = memo(function ToolGroup({
   // — the reads and commands that led to it — come along as the one-line rows
   // they already were, which is what the CLI prints too.
   const [override, setOverride] = useState<boolean | null>(null);
-  const open = override ?? group.pairs.some(showsFileChange);
+  const collapseSteps = useContext(CollapseToolStepsContext);
+  const open =
+    override ?? (!collapseSteps && group.pairs.some(showsFileChange));
   // Only the FACT here, not the moment: a tool call is a single round trip, so
   // "has it spoken since the run stopped" is the same question as "did it
   // return", which `pair.result` already answers. The sub-agent block is where
@@ -205,6 +287,22 @@ export const ToolGroup = memo(function ToolGroup({
   const settled = group.closed || runSettled;
   const running = !settled && group.pairs.some((pair) => pair.result === null);
   const operations = toolGroupOperations(group.pairs);
+  // ONE file change, lifted out of the run around it — so there is no run left
+  // to summarise. A header here would read `Used 1 tool · edited 1 file` over a
+  // row already saying `Edit  src/foo.ts`, and put a second chevron in front of
+  // a diff the split exists to bring forward.
+  if (group.standalone) {
+    return (
+      <div
+        data-role="tool-group"
+        data-standalone="true"
+        className="flex w-full flex-col gap-1.5 text-sm text-muted-foreground">
+        {group.pairs.map((pair) => (
+          <FileChangeBlock key={pair.call.id} pair={pair} settled={settled} />
+        ))}
+      </div>
+    );
+  }
   return (
     <div
       data-role="tool-group"

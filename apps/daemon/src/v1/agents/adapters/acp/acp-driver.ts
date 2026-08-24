@@ -204,6 +204,38 @@ export interface AcpTodoProtocol {
   read(params: unknown): AcpTodoUpdate | null;
 }
 
+/**
+ * How one agent reports its OWN failure — for a CLI that reports it inside the
+ * conversation instead of on the protocol.
+ *
+ * ACP has no channel for this, and it is not an oversight either side can fix
+ * from here: `session/prompt` answers a stop reason, and a request that never
+ * completed still has to answer something. A CLI is therefore free to catch its
+ * own transport failure, write the sentence out as an
+ * `agent_message_chunk`, and reply `end_turn` — which is exactly what
+ * cursor-agent does (see `cursor-acp/utils/cursor-agent-failure.utils.ts` for
+ * the catch block it does it in). Nothing about that is visible to a client
+ * reading the protocol correctly: the turn is a success carrying one more
+ * paragraph of the agent's prose.
+ *
+ * So the recognition has to be the ADAPTER's, and this seam is the whole of
+ * what the driver knows about it — one predicate over one chunk. An adapter
+ * that declares none keeps the old behaviour, which is correct for an agent
+ * whose failures reach the protocol.
+ */
+export interface AcpAgentFailureProtocol {
+  /**
+   * The failure this chunk reports, or null when it is the agent talking —
+   * which is every chunk of a healthy turn, so this runs on all of them and
+   * must be cheap and heavily anchored.
+   *
+   * Returning the message rather than a boolean because the CLI's own framing
+   * (leading blank lines, a prefix) is the adapter's to strip: the driver would
+   * otherwise have to know where the sentence starts.
+   */
+  read(text: string): string | null;
+}
+
 /** What one agent told us about its task list, normalized. */
 export interface AcpTodoUpdate {
   /** See {@link AgentEvent}'s `task_list`: whole list, or only the rows named. */
@@ -253,6 +285,11 @@ export interface AcpDriverOptions {
   delegate?: AcpDelegateProtocol;
   /** How this agent reports its own task list, or absent when it does not. */
   todos?: AcpTodoProtocol;
+  /**
+   * How this agent reports its OWN failure inside the conversation, or absent
+   * when its failures reach the protocol.
+   */
+  agentFailure?: AcpAgentFailureProtocol;
   /**
    * How full this agent's window is, read OFF-PROTOCOL — absent for an agent
    * that reports it on the wire, or not at all.
@@ -597,6 +634,18 @@ export class AcpTurnDriver implements TurnDriver {
    */
   private contextReading: AcpContextReading | null = null;
   private readonly textChunks: string[] = [];
+  /**
+   * The failure this agent reported about ITSELF, kept until the stop reason
+   * that would otherwise call the turn a success.
+   *
+   * Per-turn state, so it belongs to the driver rather than the adapter: one
+   * adapter instance drives N concurrent turns under graph fan-out. It has to
+   * be state at all because the two halves arrive apart — the sentence in a
+   * message chunk, the ending in the prompt reply — and it is the ENDING that
+   * is wrong, so the sentence has to outlive its own notification to correct
+   * it. See {@link AcpAgentFailureProtocol}.
+   */
+  private agentFailure: string | null = null;
   /**
    * The assistant-text or thought block being streamed right now, not yet
    * written as a transcript row.
@@ -1679,6 +1728,22 @@ export class AcpTurnDriver implements TurnDriver {
       return [...this.flushPending(), { type: 'turn_cancelled' }];
     }
 
+    if (this.agentFailure !== null) {
+      // The CLI told us the turn FAILED and then told us it ended normally.
+      // The first statement is the true one, so the turn settles on an `error`
+      // INSTEAD of a `turn_complete` — not as well as, or the run would settle
+      // twice and the second reading would put the success badge back.
+      //
+      // What the agent said BEFORE it died is still flushed: the failure came
+      // at the end of real work, and a transcript that dropped it would hide
+      // the part the user can act on. What is dropped is the failure's own
+      // usage and `finalText` — a turn that produced no answer has none, and
+      // publishing a `finalText` here would hand a downstream graph node the
+      // transport error as this node's output.
+      const message = this.agentFailure;
+      this.agentFailure = null;
+      return [...this.flushPending(), { type: 'error', message }];
+    }
     const promptUsage = root ? asRecord(root.usage) : null;
     if (promptUsage) {
       this.usage.inputTokens = asNumber(promptUsage.inputTokens);
@@ -2013,6 +2078,13 @@ export class AcpTurnDriver implements TurnDriver {
     return {
       type: 'subagent_info',
       ...facts,
+      // This protocol's delegate frame carries a duration and nothing else it
+      // spent — measured on cursor's `cursor/task`, whose result is
+      // `{durationMs, isBackground}` — so the figures are declared absent
+      // rather than left off, which is what keeps the merge rule safe: a null
+      // here cannot overwrite a value some other announcement gave.
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason:
         this.options.delegate?.stepsUnavailableReason ?? null,
       // This protocol reports no background lifecycle for a delegate, so it
@@ -2104,6 +2176,17 @@ export class AcpTurnDriver implements TurnDriver {
         }
         const text = textOf(update.content);
         if (text === null) {
+          return [];
+        }
+        // This CLI reporting its own failure, which it does as an ordinary
+        // message — see {@link AcpAgentFailureProtocol}. Held rather than
+        // emitted: the terminal is what says a turn failed, and it has not
+        // arrived yet. Deliberately NOT pushed onto `textChunks` either, so it
+        // cannot become the turn's `finalText` — a downstream graph node
+        // consuming "the answer" must not be handed the transport error as one.
+        const failure = this.options.agentFailure?.read(text) ?? null;
+        if (failure !== null) {
+          this.agentFailure = failure;
           return [];
         }
         this.textChunks.push(text);

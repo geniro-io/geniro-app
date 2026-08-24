@@ -124,20 +124,20 @@ describe('ContextWindowSelect', () => {
       const control = trigger(el);
       expect(control).not.toBeNull();
       expect(control!.disabled).toBe(false);
-      expect(control!.textContent).toContain('default window');
+      expect(control!.textContent).toContain('default');
       // The daemon's sentence is what the label stopped carrying, so it has to
       // be reachable: it is the chip's own hover title, in place of the plain
       // "Context window" a chip with rows shows.
       expect(control!.getAttribute('title')).toBe(reason);
       // And the menu opens on the one row that is true — no fabricated sizes.
-      expect(optionValues(el)).toEqual(['default window']);
+      expect(optionValues(el)).toEqual(['model default']);
     },
   );
 
   it('keeps a stored size on screen even when the model reports no sizes at all', () => {
     // A chat moved onto a model with no window axis: the stored word is still
-    // what is on the run, and the chip's fallback to "default window" must not
-    // be the only trace of it. The empty-list path reaches the same disabled
+    // what is on the run, and the chip's own default fallback must not be the
+    // only trace of it. The empty-list path reaches the same disabled
     // add-back row as a model that offers a choice.
     const el = render(
       <ContextWindowSelect
@@ -152,8 +152,8 @@ describe('ContextWindowSelect', () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toContain('1m');
     expect(rows[0]).toContain('unavailable');
-    expect(rows[1]).toBe('default window');
-    expect(trigger(el)!.textContent).toContain('default window');
+    expect(rows[1]).toBe('model default');
+    expect(trigger(el)!.textContent).toContain('default');
   });
 
   it('follows the KIND, not the wording of the reason', () => {
@@ -174,7 +174,66 @@ describe('ContextWindowSelect', () => {
     );
     expect(trigger(el)).toBeNull();
     expect(el.textContent).toContain('pick a model');
-    expect(el.textContent).not.toContain('default window');
+    expect(el.textContent).not.toContain('model default');
+  });
+
+  it('shows the MEASURED window on the chip in place of the word', () => {
+    // REPORTED as "вместо Default Window, потому что это слишком длинно, может
+    // быть, сразу значение дефолтное туда поставим". The chip's job is to say
+    // what this turn runs at, and the agent has already said so — `1M` in two
+    // characters where `default window` took fourteen, on a composer row that
+    // must never wrap.
+    const el = render(
+      <ContextWindowSelect
+        windows={[]}
+        value={null}
+        windowTokens={1_000_000}
+        unavailableReason={REASON_NO_AXIS}
+        unavailableKind="no-axis"
+        onChange={() => {}}
+      />,
+    );
+
+    expect(trigger(el)!.textContent).toContain('1M');
+    expect(trigger(el)!.textContent).not.toContain('default');
+    // The MENU still states the CHOICE, which is a different sentence: with
+    // nothing picked the chip reports the window and the row reports what you
+    // would be selecting. One label cannot be both.
+    expect(optionValues(el)).toEqual(['model default']);
+  });
+
+  it('keeps the word when the size is PICKED, not merely measured', () => {
+    // The measured window labels the DEFAULT and nothing else: with `300k`
+    // chosen, the chip must say what was chosen. Otherwise a user who picked
+    // 300k on a model whose reading happens to be 300k could not tell their own
+    // pick from the fallback.
+    const el = render(
+      <ContextWindowSelect
+        windows={CURSOR_WINDOWS}
+        value="300k"
+        windowTokens={1_000_000}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(trigger(el)!.textContent).toContain('300k');
+    expect(trigger(el)!.textContent).not.toContain('1M');
+  });
+
+  it('falls back to the bare word when nothing has measured a window', () => {
+    // Every surface but an open chat: the builder's node inspector, a saved
+    // configuration, a thread with no turn yet. A fabricated number there would
+    // state a window nobody reported — the standing rule in this file.
+    const el = render(
+      <ContextWindowSelect
+        windows={CURSOR_WINDOWS}
+        value={null}
+        windowTokens={null}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(trigger(el)!.textContent).toContain('default');
   });
 
   it('offers exactly the sizes the daemon reported, plus a default row', () => {
@@ -185,7 +244,7 @@ describe('ContextWindowSelect', () => {
         onChange={() => {}}
       />,
     );
-    expect(optionValues(el)).toEqual(['300k', '1m', 'default window']);
+    expect(optionValues(el)).toEqual(['300k', '1m', 'model default']);
   });
 
   it('reports the picked size, and null for the default row', () => {
@@ -211,7 +270,7 @@ describe('ContextWindowSelect', () => {
     });
     const reopened = el.querySelectorAll<HTMLElement>('[role="option"]');
     act(() => {
-      reopened[reopened.length - 1]!.click(); // 'default window'
+      reopened[reopened.length - 1]!.click(); // 'model default'
     });
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
@@ -219,7 +278,7 @@ describe('ContextWindowSelect', () => {
   it('keeps a stored size the current model refuses on screen, disabled rather than dropped', () => {
     // The reported shape this control exists for: a chat carried onto another
     // model still carries the old size, and the chip's silent fallback to
-    // "default window" must not be the only trace of that on screen.
+    // the chip's own default fallback must not be the only trace of that.
     const onChange = vi.fn();
     const el = render(
       <ContextWindowSelect
@@ -246,7 +305,7 @@ describe('ContextWindowSelect', () => {
 
     // The chip itself reads as the model's own default — the size the turn
     // will actually run at — never the refused word.
-    expect(trigger(el)!.textContent).toContain('default window');
+    expect(trigger(el)!.textContent).toContain('default');
     expect(trigger(el)!.textContent).not.toContain('200k');
   });
 });

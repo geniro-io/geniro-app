@@ -52,6 +52,35 @@ const byLabel = (label: string): HTMLButtonElement | null =>
     `button[aria-label="${label}"]`,
   ) ?? null;
 
+const pressKey = (el: Element, key: string): void => {
+  act(() => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+};
+
+/**
+ * Carry `from` over `to` — a `dragstart` on one row followed by a `dragover`
+ * on the other.
+ *
+ * jsdom implements neither `DragEvent` nor `DataTransfer`, so the events are
+ * plain bubbling `Event`s with a `dataTransfer` stub attached. That is enough
+ * for what is being asserted — React reads the handler off the event's type and
+ * the component only calls `setData`/`dropEffect` on it — and the alternative
+ * would be asserting nothing about the gesture at all.
+ */
+const dragOver = (from: Element, to: Element): void => {
+  const dataTransfer = { setData: () => {}, effectAllowed: '', dropEffect: '' };
+  const fire = (el: Element, type: string): void => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
+    act(() => {
+      el.dispatchEvent(event);
+    });
+  };
+  fire(from, 'dragstart');
+  fire(to, 'dragover');
+};
+
 const editor = (position: number): HTMLTextAreaElement | null =>
   container?.querySelector<HTMLTextAreaElement>(
     `textarea[aria-label="Edit queued message ${position}"]`,
@@ -105,6 +134,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -125,6 +155,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -147,6 +178,7 @@ describe('QueuedStrip', () => {
       steerStatus: null,
       onEdit: noop,
       onRemove: noop,
+      onReorder: noop,
       onSteer: noop,
     };
     render(<QueuedStrip messages={[first, second]} {...props} />);
@@ -178,6 +210,7 @@ describe('QueuedStrip', () => {
       steerStatus: null,
       onEdit: noop,
       onRemove: noop,
+      onReorder: noop,
       onSteer: noop,
     };
     render(<QueuedStrip messages={[first, second]} {...props} />);
@@ -203,10 +236,124 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
     expect(el.textContent?.match(/sends next/g)).toHaveLength(1);
+  });
+
+  it('reorders by DRAGGING one row over another, reporting both by id', () => {
+    // REPORTED as "я хочу иметь возможность drag-and-drop передвигать queue
+    // сообщений, чтобы контролировать, какое сообщение следующим отправится
+    // первым". The queue drains from the head, so the arrangement was the whole
+    // decision and it was frozen at the order things were typed in.
+    const onReorder = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[
+          message('id-a', 'first'),
+          message('id-b', 'second'),
+          message('id-c', 'third'),
+        ]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={onReorder}
+        onSteer={noop}
+      />,
+    );
+    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    expect(rows).toHaveLength(3);
+
+    dragOver(rows[2]!, rows[0]!);
+
+    // Ids on BOTH sides, like every other control here: the queue drains on its
+    // own, so a position captured when the row rendered can address a different
+    // message by the time the pointer reaches it.
+    expect(onReorder).toHaveBeenCalledWith('id-c', 'id-a');
+  });
+
+  it('does not report a drag over the row being dragged', () => {
+    // Passing over yourself is not a move, and reporting it would put a
+    // `splice` in the caller's queue on every pointer twitch.
+    const onReorder = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[message('id-a', 'first'), message('id-b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={onReorder}
+        onSteer={noop}
+      />,
+    );
+    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    dragOver(rows[0]!, rows[0]!);
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it('moves a row with ↑ / ↓ on its grip, and stops at the ends', () => {
+    // Dragging is the only other way to reorder, so without this the feature is
+    // out of reach of the keyboard entirely.
+    const onReorder = vi.fn();
+    render(
+      <QueuedStrip
+        messages={[
+          message('id-a', 'first'),
+          message('id-b', 'second'),
+          message('id-c', 'third'),
+        ]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={onReorder}
+        onSteer={noop}
+      />,
+    );
+
+    pressKey(byLabel('Reorder queued message 2')!, 'ArrowUp');
+    expect(onReorder).toHaveBeenLastCalledWith('id-b', 'id-a');
+    pressKey(byLabel('Reorder queued message 2')!, 'ArrowDown');
+    expect(onReorder).toHaveBeenLastCalledWith('id-b', 'id-c');
+
+    // The ends have nowhere to go, and reporting a move to a neighbour that is
+    // not there would send the row to the far end of the queue instead.
+    onReorder.mockClear();
+    pressKey(byLabel('Reorder queued message 1')!, 'ArrowUp');
+    pressKey(byLabel('Reorder queued message 3')!, 'ArrowDown');
+    expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it('cannot be dragged while its own editor is open', () => {
+    // `group-header` records the reason: a text field inside a draggable
+    // element cannot be selected with the mouse, because the drag starts
+    // instead of the selection.
+    render(
+      <QueuedStrip
+        messages={[message('id-a', 'first'), message('id-b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={noop}
+      />,
+    );
+    const rows = (): Element[] => [
+      ...container!.querySelectorAll('[role="group"] > div'),
+    ];
+    expect(rows()[0]!.getAttribute('draggable')).toBe('true');
+
+    click(byLabel('Edit queued message 1'));
+
+    expect(rows()[0]!.getAttribute('draggable')).toBe('false');
+    // …and only that one: the rest of the queue can still be rearranged around
+    // the row being written.
+    expect(rows()[1]!.getAttribute('draggable')).toBe('true');
   });
 
   it('reports the message ID back, never its position', () => {
@@ -223,6 +370,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={onEdit}
         onRemove={onRemove}
+        onReorder={() => {}}
         onSteer={onSteer}
       />,
     );
@@ -252,6 +400,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -279,6 +428,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -302,6 +452,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={onSteer}
       />,
     );
@@ -325,6 +476,7 @@ describe('QueuedStrip', () => {
         steerStatus={{ id: 'a', state: 'sending' }}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -341,6 +493,7 @@ describe('QueuedStrip', () => {
         steerStatus={{ id: 'a', state: 'held' }}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -358,6 +511,7 @@ describe('QueuedStrip', () => {
         steerStatus={{ id: 'b', state: 'held' }}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -378,6 +532,7 @@ describe('QueuedStrip', () => {
         steerStatus={{ id: 'a', state: 'sending' }}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={onSteer}
       />,
     );
@@ -399,6 +554,7 @@ describe('QueuedStrip', () => {
         steerStatus={{ id: 'a', state: 'held' }}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={onSteer}
       />,
     );
@@ -417,6 +573,7 @@ describe('QueuedStrip', () => {
         steerStatus={null}
         onEdit={noop}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -434,6 +591,7 @@ describe('QueuedStrip — the editor is a block, with its own controls', () => {
         steerStatus={null}
         onEdit={onEdit}
         onRemove={noop}
+        onReorder={() => {}}
         onSteer={noop}
       />,
     );
@@ -504,6 +662,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
         steerStatus={null}
         onEdit={() => {}}
         onRemove={() => {}}
+        onReorder={() => {}}
         onSteer={() => {}}
       />,
     );
@@ -524,6 +683,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
         steerStatus={null}
         onEdit={() => {}}
         onRemove={() => {}}
+        onReorder={() => {}}
         onSteer={() => {}}
       />,
     );
@@ -546,6 +706,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
         steerStatus={null}
         onEdit={() => {}}
         onRemove={() => {}}
+        onReorder={() => {}}
         onSteer={() => {}}
       />,
     );

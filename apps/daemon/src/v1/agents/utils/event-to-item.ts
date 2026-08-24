@@ -167,6 +167,8 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           prompt: event.prompt,
           model: event.model,
           durationMs: event.durationMs,
+          tokens: event.tokens,
+          toolUses: event.toolUses,
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
         },
@@ -243,6 +245,9 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           ...(event.severity && !event.origin
             ? { severity: event.severity }
             : {}),
+          // And `caption`, on the same two terms: stamped only when the
+          // producer named one, dropped entirely for CLI-authored text.
+          ...(event.caption && !event.origin ? { caption: event.caption } : {}),
         },
       };
     case 'turn_cancelled':

@@ -1617,6 +1617,67 @@ describe('AcpTurnDriver turn completion', () => {
     return h;
   }
 
+  it('settles on the FAILURE an agent reported about itself, not on end_turn', () => {
+    // The reported screenshot: `Error: RetriableError: [unavailable] PING timed
+    // out` in the transcript as the agent's own prose, under `✓ done · 1m 14s`.
+    // cursor-agent catches its own transport failure, writes it out as a
+    // message chunk and answers `end_turn` regardless — so the stop reason is a
+    // statement the CLI has already contradicted.
+    const h = primed({
+      agentFailure: {
+        read: (text) => (text.startsWith('\n\nError: ') ? text.trim() : null),
+      },
+    });
+    h.feed(chunk('agent_message_chunk', 'Found it. The plugin lives at ~/x.'));
+    h.feed(
+      chunk(
+        'agent_message_chunk',
+        '\n\nError: RetriableError: [unavailable] PING timed out',
+      ),
+    );
+
+    // What the agent said BEFORE it died is kept — that is the part the user
+    // can act on — and the failure ends the turn INSTEAD of a `turn_complete`,
+    // so the run settles once and settles failed.
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      { type: 'text', text: 'Found it. The plugin lives at ~/x.' },
+      {
+        type: 'error',
+        message: 'Error: RetriableError: [unavailable] PING timed out',
+      },
+    ]);
+  });
+
+  it('keeps the failure OUT of the answer the turn reports', () => {
+    // `finalText` is what a downstream graph node consumes as this node's
+    // output. A turn that produced no answer must not hand one the transport
+    // error as one — which is what pushing the chunk onto `textChunks` would
+    // do, silently, since the row it also draws would look right.
+    const h = primed({
+      agentFailure: { read: (text) => (text.includes('boom') ? 'boom' : null) },
+    });
+    h.feed(chunk('agent_message_chunk', 'boom'));
+    const events = h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+
+    expect(events).toEqual([{ type: 'error', message: 'boom' }]);
+    expect(events.some((event) => event.type === 'turn_complete')).toBe(false);
+  });
+
+  it('leaves a turn alone when the adapter declares no such channel', () => {
+    // Every agent whose failures reach the protocol, and the default: the same
+    // chunk is the agent talking, and stays an ordinary answer.
+    const h = primed();
+    h.feed(chunk('agent_message_chunk', '\n\nError: RetriableError: nope'));
+
+    expect(h.feed({ id: 3, result: { stopReason: 'end_turn' } })).toEqual([
+      { type: 'text', text: '\n\nError: RetriableError: nope' },
+      expect.objectContaining({
+        type: 'turn_complete',
+        finalText: '\n\nError: RetriableError: nope',
+      }),
+    ]);
+  });
+
   it('completes with the stop reason and the accumulated answer text', () => {
     const h = primed();
     h.feed(chunk('agent_message_chunk', 'part one '));

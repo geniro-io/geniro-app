@@ -154,6 +154,15 @@ function build(opts: {
     await drain();
   };
 
+  /** The user's own message — what names a chat before its turn ends. */
+  const userMessage = async (): Promise<void> => {
+    items.next({
+      runId: 'run-a',
+      item: { ...item(null, 'message'), role: 'user' },
+    });
+    await drain();
+  };
+
   /** Two settles in a row, the second after the first has fully drained. */
   const settleTwice = async (): Promise<void> => {
     await settle();
@@ -180,6 +189,7 @@ function build(opts: {
   return {
     settle,
     settleKind,
+    userMessage,
     settleTwice,
     settleConcurrently,
     deleteRun,
@@ -478,12 +488,55 @@ describe('ChatTitleService', () => {
     expect(statuses).toEqual([]);
   });
 
-  it('ignores an item that is not a settled turn', async () => {
+  it('ignores a message that is not the USER’s', async () => {
+    // The two kinds this service acts on are a settled turn and the user's own
+    // message; an agent's message is neither, and reading a session title per
+    // streamed reply would be a read per row.
     const { settleKind, retitle, readSessionTitle } = build({
       nativeTitle: 'Should Not Be Used',
     });
 
     await settleKind('message');
+
+    expect(readSessionTitle).not.toHaveBeenCalled();
+    expect(retitle).not.toHaveBeenCalled();
+  });
+
+  it('names the chat from the user’s first message, before any turn ends', async () => {
+    // REPORTED as "AutoTitle не работает — просто название агента выводит",
+    // against a sidebar row reading `claude` under a turn still running. An
+    // untitled run falls through to its agent kind, and naming fired on
+    // `turn_complete` alone — so every new chat was labelled after its CLI for
+    // the whole of its first turn.
+    const { userMessage, retitle, statuses } = build({
+      firstUserMessageText: 'why does the worktree switch fail',
+    });
+
+    await userMessage();
+
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'why does the worktree switch fail',
+      null,
+      expect.anything(),
+    );
+    // Broadcast, so the sidebar row renames itself without a refetch.
+    expect(statuses).toEqual([
+      expect.objectContaining({ title: 'why does the worktree switch fail' }),
+    ]);
+  });
+
+  it('leaves an already-named run alone on every later message', async () => {
+    // The message path names an UNNAMED run and stops. Reaching `upgrade` from
+    // here would spend the run's few attempts — and a session read apiece — on
+    // every message the user ever sends.
+    const { userMessage, retitle, readSessionTitle } = build({
+      run: { title: 'A name it already has' },
+      nativeTitle: 'Should Not Be Used',
+      firstUserMessageText: 'a later question',
+    });
+
+    await userMessage();
 
     expect(readSessionTitle).not.toHaveBeenCalled();
     expect(retitle).not.toHaveBeenCalled();

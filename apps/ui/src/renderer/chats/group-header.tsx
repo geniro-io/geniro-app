@@ -463,7 +463,11 @@ export const GroupHeader = memo(function GroupHeader({
             data-slot="group-unseen"
             role="img"
             aria-label={`${group.name} has a thread you have not opened`}
-            className="size-1.5 shrink-0 rounded-full bg-primary"
+            // The SAME 10px as the rows' own mark (`chat-list-item`), not the
+            // 6px it was: this is that mark summarised, and a summary drawn
+            // smaller than the thing it summarises is the one that gets missed
+            // — on a folded group it is also the only copy left on screen.
+            className="size-2.5 shrink-0 rounded-full bg-primary"
           />
         ) : null}
         {summary.needsInput ? (

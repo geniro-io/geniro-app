@@ -976,13 +976,17 @@ export class ChatService implements OnModuleInit {
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
 
-  async getHistory(runId: string, afterSeq = -1): Promise<ItemWire[]> {
+  async getHistory(
+    runId: string,
+    afterSeq = -1,
+    window?: { limit: number; beforeSeq?: number },
+  ): Promise<ItemWire[]> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    const items = await this.itemDao.getByRun(runId, afterSeq, em);
+    const items = await this.itemDao.getByRun(runId, afterSeq, em, window);
     return items.map((item) => this.itemToWire(item));
   }
 

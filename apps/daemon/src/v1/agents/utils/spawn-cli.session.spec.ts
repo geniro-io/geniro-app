@@ -35,6 +35,12 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     says?: string;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
+    /** What the settling unit spent, when the fake line states it. */
+    spent?: {
+      tokens: number | null;
+      toolUses: number | null;
+      durationMs: number | null;
+    };
   };
   if (typeof row.work === 'string' && row.phase !== undefined) {
     return [
@@ -44,6 +50,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         phase: row.phase,
         unit: row.unit ?? 'other',
         toolCallId: row.call ?? null,
+        usage: row.spent,
       },
     ];
   }
@@ -1114,6 +1121,8 @@ describe('a turn whose background work outlives its result', () => {
         prompt: null,
         model: null,
         durationMs: null,
+        tokens: null,
+        toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: true,
       },
@@ -1125,11 +1134,92 @@ describe('a turn whose background work outlives its result', () => {
         prompt: null,
         model: null,
         durationMs: null,
+        tokens: null,
+        toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: false,
       },
       COMPLETE,
     ]);
+  });
+
+  it('carries the settling unit’s SPEND onto the announcement', async () => {
+    // What the block header states in front of each delegate. The figures ride
+    // the lifecycle event and are announced HERE rather than by the adapter
+    // because this is the only point that knows the settling unit was a
+    // delegate — the settle line does not restate it.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    line(child, {
+      work: 'task-1',
+      phase: 'settled',
+      spent: { tokens: 26124, toolUses: 0, durationMs: 2029 },
+    });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: 'subagent_info',
+        backgroundOpen: true,
+        // The launch measures nothing, and must not: a `started` announcing
+        // zeros would be a reading, and the merge prefers the last non-null.
+        tokens: null,
+        toolUses: null,
+        durationMs: null,
+      }),
+      expect.objectContaining({
+        type: 'subagent_info',
+        backgroundOpen: false,
+        tokens: 26124,
+        toolUses: 0,
+        durationMs: 2029,
+      }),
+      COMPLETE,
+    ]);
+  });
+
+  it('still reports the spend when a figure-less settle arrives FIRST', async () => {
+    // The order claude actually sends, measured on 2.1.237: `task_updated`
+    // {status:'completed'} and then `task_notification` {usage:{…}}, both for
+    // one delegate. Forgetting the delegate on the first settle threw the
+    // figures away every time — four rows in the app's own database with
+    // `tokens: null` on all of them, which is how this was caught.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    line(child, { work: 'task-1', phase: 'settled' });
+    line(child, {
+      work: 'task-1',
+      phase: 'settled',
+      spent: { tokens: 26124, toolUses: 0, durationMs: 2029 },
+    });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'toolu_a',
+        tokens: 26124,
+        durationMs: 2029,
+      }),
+    );
   });
 
   it('says nothing about background work that is not a delegate', async () => {
@@ -1262,6 +1352,8 @@ describe('a turn whose background work outlives its result', () => {
         prompt: null,
         model: null,
         durationMs: null,
+        tokens: null,
+        toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: true,
       },
@@ -1278,6 +1370,8 @@ describe('a turn whose background work outlives its result', () => {
       prompt: null,
       model: null,
       durationMs: null,
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
     });

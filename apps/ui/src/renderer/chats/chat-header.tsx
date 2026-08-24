@@ -1,16 +1,21 @@
 import { Bot, IdCard, Workflow as WorkflowIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
+import { HoverPopover } from '../components/hover-popover';
 import { Chip } from '../components/ui/chip';
+import { cn } from '../components/ui/utils';
+import type { AgentThread } from './agent-activity';
 import { folderName as configDirName } from './directory-select';
 import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';
 import {
+  isWorkingRunStatus,
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
-import { TaskCount, TaskIcon } from './task-list';
+import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
+import type { AgentTaskRow } from './task-payload';
 import {
   formatDuration,
   type OpenTurn,
@@ -153,6 +158,56 @@ function formatUsd(costUsd: number): string {
 }
 
 /**
+ * What the sub-agent count is a count OF — the delegates themselves, behind the
+ * number.
+ *
+ * The count alone was the whole readout, and a number is not an answer to "what
+ * is it doing": REPORTED as "при наведении на поп-овер эйджентов: список
+ * текущих эйджентов". Each row states its own status through the app's one
+ * status vocabulary ({@link RunStatusIcon}), so a delegate that finished, one
+ * that failed and one still working are told apart here exactly as they are in
+ * the panel below.
+ *
+ * The empty case is a SENTENCE rather than an empty box, because the counter is
+ * now drawn at zero: "0" with nothing behind it reads as a readout that failed
+ * to load.
+ */
+function SubagentList({
+  threads,
+}: {
+  threads: readonly AgentThread[];
+}): React.JSX.Element {
+  if (threads.length === 0) {
+    return (
+      <p className="text-[11px] text-muted-foreground">
+        No sub-agents yet — this thread’s agent has delegated nothing.
+      </p>
+    );
+  }
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+      {threads.map((thread) => (
+        <li
+          key={thread.id}
+          className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <RunStatusIcon status={thread.status} />
+          <span className="min-w-0 flex-1 truncate text-foreground">
+            {thread.label}
+          </span>
+          <span
+            className={cn(
+              'shrink-0',
+              RUN_STATUS_META[thread.status].className,
+            )}>
+            {RUN_STATUS_META[thread.status].label}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * The open transcript's header: the same identity the sidebar row carries —
  * label, live status (spinning while running), last activity. The run's
  * working directory lives in the composer's folder chip below, not here.
@@ -180,6 +235,8 @@ export function ChatHeader({
   openTurn = null,
   runningSubagents = 0,
   tasks = null,
+  subagents = [],
+  taskRows = [],
 }: {
   label: string;
   isWorkflow: boolean;
@@ -266,14 +323,41 @@ export function ChatHeader({
    * are summarized instead of speaking its own dialect.
    */
   tasks?: { done: number; total: number } | null;
+  /**
+   * Every delegate this run has launched, for the list behind the count —
+   * running ones and the ones that have finished, in the order the agents panel
+   * holds them.
+   *
+   * The COUNT still comes from {@link runningSubagents}: it is a reading over
+   * every agent of the run, taken where the agents are, and re-deriving it here
+   * from a list assembled for a popover would be a second answer to a question
+   * the sidebar and the panel already answer once.
+   */
+  subagents?: readonly AgentThread[];
+  /**
+   * The task rows behind {@link tasks}' count — the agents' own lists, merged
+   * in the order the panel shows them.
+   */
+  taskRows?: readonly AgentTaskRow[];
 }): React.JSX.Element {
   return (
     // A header for the TRANSCRIPT, not for the window: the shell's title bar is
     // one band above every column (`components/title-bar.tsx`), and this row no
     // longer moves the window — dragging a row full of chips was surprising
     // once a real title bar existed.
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
-      <div className="flex min-w-0 items-center gap-2">
+    // ONE LINE, and nothing in it wraps. The row used to be `flex-wrap`, where
+    // wrapping is all-or-nothing: the identity group grows with the thread
+    // (agent, profile, status, elapsed, worked, spend) until it fills the row,
+    // and the whole right-hand group then drops to a SECOND LINE — the reported
+    // "subagent icon не должен переноситься на новую строку".
+    //
+    // Wrapping INSIDE the identity was tried next and is not the answer either:
+    // it kept the counters in place while orphaning "· worked 2.7s · $0.20" on
+    // a line of its own, leading middot and all. What gives instead is the
+    // TITLE, which is the one thing here that can be shortened and still read —
+    // it already truncates, and `min-w-0` is what lets it.
+    <div className="flex items-center gap-x-4 border-b border-border bg-card/60 px-4 py-2.5">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
             aria-hidden="true"
@@ -303,10 +387,13 @@ export function ChatHeader({
             {RUN_STATUS_META[status].label}
           </span>
         </span>
-        {status === 'running' ? (
+        {isWorkingRunStatus(status) ? (
           // WHILE running the question is "how long has this been going", not
           // "when did it last do something" — the relative time reads
-          // "just now" for the whole turn and answers nothing.
+          // "just now" for the whole turn and answers nothing. A HELD turn is
+          // still going, and the relative time is what made it read as
+          // finished: `idle · 1h` says a thread nobody has touched since
+          // breakfast, about one whose Stop button is live.
           <ElapsedTime since={turnStartedAt} />
         ) : (
           <span className="shrink-0 text-xs text-muted-foreground">
@@ -327,39 +414,67 @@ export function ChatHeader({
             the same half-answer the duration was on its own. */}
         <ThreadSpend costUsd={costUsd} />
       </div>
-      <div className="ml-auto flex flex-wrap items-center gap-1.5">
+      {/* `shrink-0` beside the identity's `flex-1 min-w-0`: the two counters
+          are a fixed handful of characters, so the row gives up width on the
+          side that has a truncating title rather than squeezing a number. */}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {/* What the agents panel is holding, at a glance. It used to BE that
             panel's toggle — "how much work is in here" was the one thing a bare
             chevron could not say, so the counts and the control were one
             button. The panel is always on screen now, so there is nothing left
-            to open and this is a readout: same figures, same place, no press.
-            Each counter renders only while it has something to count, so a
-            plain turn keeps the header exactly as it was. */}
-        {runningSubagents > 0 || (tasks !== null && tasks.total > 0) ? (
-          <span
-            data-slot="side-panel-counts"
-            title={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working${
-              tasks !== null && tasks.total > 0
-                ? ` · ${tasks.done} of ${tasks.total} ${tasks.total === 1 ? 'task' : 'tasks'} done`
-                : ''
-            }`}
-            className="flex shrink-0 items-center gap-2 px-1.5 py-1 text-xs tabular-nums text-muted-foreground">
-            {runningSubagents > 0 ? (
-              <span
-                data-slot="running-subagents"
-                className="flex items-center gap-1">
+            to OPEN; what a press does here is pin the readout each count holds
+            behind it.
+
+            The sub-agent counter is drawn WHATEVER the count — the reported
+            "здесь должна быть всегда иконка саб-эйджентов, даже если их ноль".
+            A counter that appears only once something is running answers "are
+            any working" with the same blank space as a header that never had
+            one, and the reader cannot tell which of the two they are looking
+            at. The task counter still comes and goes: a thread whose agent
+            keeps no list has no list to report on, where every thread has
+            delegates it could have launched and did not. */}
+        <span
+          data-slot="side-panel-counts"
+          className="flex shrink-0 items-center gap-2 text-xs tabular-nums text-muted-foreground">
+          <HoverPopover
+            slot="running-subagents"
+            label={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working`}
+            panelLabel="Sub-agents"
+            side="bottom"
+            triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+            // Bounded and scrolling, like every other list this app hangs off a
+            // count: a delegating turn can hold a dozen, and a panel that grows
+            // with them runs off the bottom of the window.
+            panelClassName="max-h-64 w-[18rem] overflow-y-auto"
+            trigger={
+              <>
                 <Bot aria-hidden="true" className="size-3.5 shrink-0" />
                 {runningSubagents}
-              </span>
-            ) : null}
-            {tasks !== null && tasks.total > 0 ? (
-              <span data-slot="open-tasks" className="flex items-center gap-1">
-                <TaskIcon className="size-3.5" />
-                <TaskCount done={tasks.done} total={tasks.total} />
-              </span>
-            ) : null}
-          </span>
-        ) : null}
+              </>
+            }>
+            <SubagentList threads={subagents} />
+          </HoverPopover>
+          {tasks !== null && tasks.total > 0 ? (
+            <HoverPopover
+              slot="open-tasks"
+              label={`${tasks.done} of ${tasks.total} ${tasks.total === 1 ? 'task' : 'tasks'} done`}
+              panelLabel="Task list"
+              side="bottom"
+              triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+              panelClassName="w-[20rem]"
+              trigger={
+                <>
+                  <TaskIcon className="size-3.5" />
+                  <TaskCount done={tasks.done} total={tasks.total} />
+                </>
+              }>
+              {/* The panel's own bounded list — it already scrolls itself and
+                  follows the task that is running, so a thirteen-row list opens
+                  on the row that matters rather than on five finished ones. */}
+              <TaskScrollRows tasks={taskRows} live={status === 'running'} />
+            </HoverPopover>
+          ) : null}
+        </span>
       </div>
     </div>
   );

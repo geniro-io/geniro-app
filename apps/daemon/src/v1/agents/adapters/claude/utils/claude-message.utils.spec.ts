@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { AgentEvent } from '../../adapter.types';
 import {
   mapClaudeMessage,
   mapClaudeStreamEvent,
@@ -1434,6 +1435,56 @@ describe('mapClaudeMessage — background tasks', () => {
     ]);
   });
 
+  it('carries what the unit SPENT off the notification that settles it', () => {
+    // The figures behind "in front of each agent i wanna see amount of
+    // tokens/costs/time". Probed on 2.1.237 against a real delegation: the
+    // notification is the only channel that states them, and it states exactly
+    // these three keys.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 'a71b21049ece3b941',
+          status: 'completed',
+          tool_use_id: 'toolu_01J4EGWm9tNfE1hQGUYw7TSj',
+          usage: { total_tokens: 26124, tool_uses: 0, duration_ms: 2029 },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'a71b21049ece3b941',
+        phase: 'settled',
+        unit: 'other',
+        toolCallId: 'toolu_01J4EGWm9tNfE1hQGUYw7TSj',
+        usage: { tokens: 26124, toolUses: 0, durationMs: 2029 },
+      },
+    ]);
+  });
+
+  it('says NOTHING about spend on a settle whose channel carries none', () => {
+    // `task_updated` is an id and a status patch, and this daemon maps both
+    // channels on purpose so a CLI dropping one still settles. An absent block
+    // therefore has to claim nothing rather than report zeros — the consumer
+    // merges announcements by preferring the last non-null field, and a record
+    // of nulls arriving second is indistinguishable from a measurement.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'task_updated',
+        task_id: 'ad83f0a35d8a3dfc9',
+        patch: { status: 'completed' },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(event).toMatchObject({ type: 'background_work', phase: 'settled' });
+    expect(
+      (event as Extract<AgentEvent, { type: 'background_work' }>).usage,
+    ).toBeUndefined();
+  });
+
   it('leaves the work OPEN for a status it does not recognise', () => {
     // The direction is the point: an unrecognised status delays a settle
     // (bounded by the turn's silence deadline) rather than declaring work
@@ -1611,5 +1662,91 @@ describe('mapClaudeMessage — what a failed turn reports about itself', () => {
         new ClaudeSessionCostLedger(),
       ),
     ).toEqual([{ type: 'error', message: 'it broke' }]);
+  });
+});
+
+describe('an api-error assistant line', () => {
+  /** The shape read off the author's own session store — see the predicate. */
+  const apiErrorLine = (
+    code: string,
+    text: string,
+  ): Record<string, unknown> => ({
+    type: 'assistant',
+    error: code,
+    request_id: 'req_011CeHzsz3E8dXUXzFMFsqZu',
+    is_api_error_message: true,
+    message: {
+      role: 'assistant',
+      model: '<synthetic>',
+      content: [{ type: 'text', text }],
+      usage: { input_tokens: 41234, output_tokens: 12 },
+    },
+  });
+
+  it('is the daemon reporting a failed request, never the agent talking', () => {
+    expect(
+      mapClaudeMessage(
+        apiErrorLine(
+          'server_error',
+          'API Error: Connection closed mid-response. The response above may be incomplete.',
+        ),
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([
+      {
+        type: 'notice',
+        message:
+          'API Error: Connection closed mid-response. The response above may be incomplete.',
+        severity: 'warning',
+        caption: 'api error',
+      },
+    ]);
+  });
+
+  it('never relays it as CLI-authored text, which picks the quiet chrome', () => {
+    // `origin: 'cli'` is for text the AGENT wrote, and the renderer drops a
+    // severity beside it — so stamping it here would put the report back in
+    // prose chrome, one step from the assistant bubble this replaced.
+    const [notice] = mapClaudeMessage(
+      apiErrorLine('rate_limit', "You've hit your weekly limit · resets 4pm"),
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(notice).toEqual({
+      type: 'notice',
+      message: "You've hit your weekly limit · resets 4pm",
+      severity: 'warning',
+      caption: 'api error',
+    });
+    expect(notice).not.toHaveProperty('origin');
+  });
+
+  it('publishes no window reading off a synthetic failure line', () => {
+    // The usage on it belongs to a request that FAILED. Lifting it would move
+    // the composer's meter on the strength of a request that produced nothing.
+    expect(
+      mapClaudeMessage(
+        apiErrorLine('server_error', 'Request timed out'),
+        new ClaudeSessionCostLedger(),
+      ).filter((event) => event.type === 'context_progress'),
+    ).toEqual([]);
+  });
+
+  it('leaves an ORDINARY assistant line alone', () => {
+    // The flag is the whole discriminator: the envelope is identical, and
+    // `request_id` rides ordinary lines too.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'assistant',
+          request_id: 'req_011CeHzsz3E8dXUXzFMFsqZu',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'API Error: is what I would say' }],
+          },
+        },
+        new ClaudeSessionCostLedger(),
+      ),
+    ).toEqual([{ type: 'text', text: 'API Error: is what I would say' }]);
   });
 });

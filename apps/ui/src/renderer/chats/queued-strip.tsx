@@ -1,4 +1,4 @@
-import { Clock, Pencil, SendHorizontal, X } from 'lucide-react';
+import { Clock, GripVertical, Pencil, SendHorizontal, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/ui/button';
@@ -50,6 +50,7 @@ export function QueuedStrip({
   steerStatus,
   onEdit,
   onRemove,
+  onReorder,
   onSteer,
 }: {
   messages: readonly QueuedStripMessage[];
@@ -85,9 +86,19 @@ export function QueuedStrip({
   onRemove: (id: string) => void;
   /** Send the entry with this id into the turn already running. */
   onSteer: (id: string) => void;
+  /**
+   * Move `id` to where `overId` currently sits.
+   *
+   * By ID on both sides, like every other control here and for the same
+   * reason: the queue drains on its own, so an index captured when the row
+   * rendered can address a different message by the time the pointer reaches
+   * it. A no-op when either id has already gone out.
+   */
+  onReorder: (id: string, overId: string) => void;
 }): React.JSX.Element | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
+  const [draggingId, setDraggingId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const steerBlocked = steerUnavailableReason !== null;
 
@@ -142,8 +153,42 @@ export function QueuedStrip({
         return (
           <div
             key={message.id}
+            // Dragged to reorder — REPORTED as "я хочу иметь возможность
+            // drag-and-drop передвигать queue сообщений, чтобы контролировать,
+            // какое сообщение следующим отправится первым". Same gesture as the
+            // sidebar's groups, and deliberately the same shape: the list
+            // rearranges under the pointer rather than jumping when the button
+            // comes up.
+            //
+            // NOT while this row is being edited, for the reason `group-header`
+            // records: a text field inside a draggable element cannot be
+            // selected with the mouse, because the drag starts instead.
+            draggable={editingId !== message.id}
+            onDragStart={(event) => {
+              // Firefox refuses to start a drag with no payload, and it is
+              // never read back — the id is already in state below.
+              event.dataTransfer.setData('text/plain', message.id);
+              event.dataTransfer.effectAllowed = 'move';
+              setDraggingId(message.id);
+            }}
+            onDragOver={(event) => {
+              if (draggingId === null || draggingId === message.id) {
+                return;
+              }
+              // Without this the drop is refused and the whole gesture ends in
+              // the browser's snap-back animation.
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              onReorder(draggingId, message.id);
+            }}
+            onDrop={(event) => event.preventDefault()}
+            onDragEnd={() => setDraggingId(null)}
             className={cn(
               'rounded-md bg-muted/50 text-xs text-muted-foreground',
+              // The row being carried, not the row it is over: the arrangement
+              // under the cursor is already the answer, so the only thing left
+              // to show is which one the pointer is holding.
+              draggingId === message.id && 'opacity-40',
               // Two shapes, deliberately. A queued row is a one-line summary
               // and stays one; the EDITOR is a block, because what it holds is
               // a composer prompt — the same kind of text as the box below it,
@@ -228,7 +273,45 @@ export function QueuedStrip({
               </>
             ) : (
               <>
-                <Clock aria-hidden="true" className="size-3 shrink-0" />
+                {/* The grip REPLACES the clock rather than joining it. The
+                    clock said "this is waiting", which the strip's own heading,
+                    the `sends next` note and the position all already say; what
+                    nothing said was that the row can be picked up. One glyph
+                    per row is the budget, and this is the one that adds
+                    something.
+
+                    A real button, not a decorative handle: dragging is the only
+                    way to reorder otherwise, which puts the feature out of
+                    reach of the keyboard entirely. `↑`/`↓` on it move the row,
+                    which is the same operation the drag performs. */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-5 shrink-0 cursor-grab text-muted-foreground active:cursor-grabbing"
+                  aria-label={`Reorder queued message ${position}`}
+                  title="Drag to reorder — or ↑ / ↓"
+                  onKeyDown={(event) => {
+                    const step =
+                      event.key === 'ArrowUp'
+                        ? -1
+                        : event.key === 'ArrowDown'
+                          ? 1
+                          : 0;
+                    if (step === 0) {
+                      return;
+                    }
+                    const target = messages[index + step];
+                    if (target === undefined) {
+                      return;
+                    }
+                    // Or the composer's own scroll container moves instead of
+                    // the row.
+                    event.preventDefault();
+                    onReorder(message.id, target.id);
+                  }}>
+                  <GripVertical className="size-3 shrink-0" />
+                </Button>
                 <span className="min-w-0 flex-1 truncate" title={message.text}>
                   {label}
                 </span>

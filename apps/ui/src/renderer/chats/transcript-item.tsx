@@ -16,7 +16,12 @@ import { MessageAttachments } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { NestedThreadContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
-import { isCliAuthored, isInfoNotice, isWarningNotice } from './system-payload';
+import {
+  isCliAuthored,
+  isInfoNotice,
+  isWarningNotice,
+  noticeCaption,
+} from './system-payload';
 import { ToolBodyView } from './tool-body-view';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
@@ -324,7 +329,11 @@ export const TranscriptItem = memo(function TranscriptItem({
         return (
           <DisclosureRow
             tone="warning"
-            caption="not applied"
+            // `not applied` is the DEGRADE's caption, not the level's: it is
+            // true of a setting the agent could not honour and false of the
+            // other loud-but-not-fatal thing, a request that failed and was
+            // retried. A producer that names its own kind gets that word.
+            caption={noticeCaption(item.payload) ?? 'not applied'}
             message={message}
           />
         );

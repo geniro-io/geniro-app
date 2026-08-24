@@ -131,7 +131,13 @@ export class ChatController {
     @Param('runId') runId: string,
     @Query() query: HistoryQueryDto,
   ): Promise<ItemWire[]> {
-    return this.chatService.getHistory(runId, query.afterSeq ?? -1);
+    return this.chatService.getHistory(
+      runId,
+      query.afterSeq ?? -1,
+      query.limit === undefined
+        ? undefined
+        : { limit: query.limit, beforeSeq: query.beforeSeq },
+    );
   }
 
   @Post(':runId/messages')

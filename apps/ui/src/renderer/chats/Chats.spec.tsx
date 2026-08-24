@@ -15,7 +15,9 @@ import type {
   VerdictAck,
 } from '../daemon-client';
 import { Chats } from './Chats';
+import { COMPOSER_MAX_LINES } from './composer-card';
 import type { LiveTextEvent } from './live-text';
+import { HISTORY_PAGE } from './use-chat-run';
 
 // Tell React this is an act()-aware environment (testing-library sets this for
 // you; with raw react-dom/client + react's act we set it ourselves).
@@ -764,6 +766,122 @@ describe('Chats transcript auto-scroll', () => {
     expect(container.textContent).toContain('a long reply');
   });
 
+  const jumpControl = (container: HTMLElement): HTMLButtonElement | null =>
+    container.querySelector<HTMLButtonElement>('[data-slot="jump-to-latest"]');
+
+  it('offers a way BACK to the tail once the reader is above it', async () => {
+    // REPORTED alongside the auto-scroll gap: the follow is silent by design,
+    // so once it is off the only way back was dragging the scrollbar through
+    // however much tool output arrived meanwhile.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // At the tail: the control is mounted but inert, so its appearance costs
+    // no layout under the reader.
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('true');
+    expect(jumpControl(container)?.tabIndex).toBe(-1);
+
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('false');
+    expect(jumpControl(container)?.tabIndex).toBe(0);
+  });
+
+  it('pressing it returns to the tail AND re-arms the follow', async () => {
+    // Both halves. Scrolling alone would land at the bottom and let the next
+    // streamed row leave it behind again — the same complaint one message on.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // Scroll UP, which is what switches the follow off.
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 3600,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      jumpControl(container)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+    expect(jumpControl(container)?.getAttribute('aria-hidden')).toBe('true');
+
+    // The re-arm, observed rather than asserted on a ref: a new item now moves
+    // the transcript again, which it would not have before the press.
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+    await act(async () => {
+      emitItem(msg(1, 'assistant', 'a later reply'));
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('sending a message re-arms the follow, wherever the reader had scrolled', async () => {
+    // Typing into the composer IS the statement that they are done reading
+    // further up — without this the answer to their own question arrived off
+    // screen, on a transcript frozen where they left it.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'and this?'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    await act(async () => {
+      setScrollPosition(container, {
+        scrollTop: 3600,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+      setScrollPosition(container, {
+        scrollTop: 0,
+        scrollHeight: 4000,
+        clientHeight: 400,
+      });
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    (Element.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+
+    await act(async () => {
+      emitItem(msg(11, 'assistant', 'the answer'));
+    });
+    expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
   it('jumps to the newest message when a chat with history is OPENED', async () => {
     // Opening is not "a new item arrived": activateRun empties the transcript
     // first, so the browser clamps the scroller to 0 and the history then
@@ -901,6 +1019,77 @@ describe('Chats transcript auto-scroll', () => {
 
     await clickRun(container, 'Second chat');
     expect(composerValue()).toBe('something else entirely');
+  });
+
+  it('keeps a chat’s context ring through a switch, with its OWN figure', async () => {
+    // REPORTED as "когда я переключаюсь между чатами, кружочек, в котором
+    // показан текущий контекст, отстаёт". The ring is derived from the LOADED
+    // transcript, and a switch clears it and refetches — so for the length of
+    // that fetch there was no reading at all. Measured in the running app at a
+    // 15ms sample: `43.1k of 1M` over four rows, then the meter gone with the
+    // rows, then `44k of 1M` over ten.
+    //
+    // The fetch is HELD here rather than resolved, because the gap IS the bug:
+    // a test that let the items land would pass with the fix deleted.
+    const usageItem = (runId: string, tokens: number): ChatItem => ({
+      id: `${runId}-turn`,
+      runId,
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: {
+          contextTokens: tokens,
+          contextWindowTokens: 1_000_000,
+          costUsd: null,
+        },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    });
+    const meterLabel = (container: HTMLElement): string | null =>
+      container
+        .querySelector('[data-slot="context-meter"] button[aria-expanded]')
+        ?.getAttribute('aria-label') ?? null;
+
+    api.listChats.mockResolvedValue([
+      run1,
+      { ...run1, id: 'r2', title: 'Second chat', status: 'completed' },
+    ]);
+    api.listRunItems.mockImplementation(
+      async ({ runId }: { runId: string }) => [
+        usageItem(runId, runId === 'r1' ? 44_000 : 43_100),
+      ],
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await clickRun(container, 'My chat');
+    expect(meterLabel(container)).toContain('44k of 1M');
+    await clickRun(container, 'Second chat');
+    expect(meterLabel(container)).toContain('43.1k of 1M');
+
+    // Now the switch back, with the history fetch left in flight — exactly the
+    // stretch the report is about.
+    let release: (() => void) | null = null;
+    api.listRunItems.mockImplementation(
+      async () =>
+        await new Promise<ChatItem[]>((resolve) => {
+          release = () => resolve([usageItem('r1', 44_000)]);
+        }),
+    );
+    await clickRun(container, 'My chat');
+
+    // The ring is still there, and it reads THIS chat's figure — not the one
+    // the composer was showing a moment ago under the other chat's name.
+    expect(meterLabel(container)).toContain('44k of 1M');
+    expect(meterLabel(container)).not.toContain('43.1k');
+
+    await act(async () => {
+      release?.();
+    });
+    expect(meterLabel(container)).toContain('44k of 1M');
   });
 
   it('DOES follow the tail for a viewport already at the bottom', async () => {
@@ -1647,7 +1836,10 @@ describe('Chats reconnect seam', () => {
       resolveJoin();
       await joined;
     });
-    expect(api.listRunItems).toHaveBeenCalledWith({ runId: 'r1' });
+    expect(api.listRunItems).toHaveBeenCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+    });
   });
 
   it('does not rebuild the autoscroll observer on every streamed token', async () => {
@@ -4233,17 +4425,230 @@ describe('Chats queued messages', () => {
     ).toBeTruthy();
   });
 
-  it('lets the BOTTOM row’s chips stack rather than run under Send', async () => {
-    // Found by rendering it, not by reasoning about it: at 760px "default
-    // effort" ran clean under the Send button — the exact collision the whole
-    // redesign was meant to remove, reproduced in the new row. Forcing the
-    // chips to shrink instead truncated their chevrons away, so they stopped
-    // reading as pickers at all.
+  it('states the run’s FOLDER above the textarea, on the right', async () => {
+    // REPORTED as "давай текущую папку проекта переместим просто над
+    // текст-эрией вправо". It used to lead the actions, beside Send.
     //
-    // Stacking is the fix, and it is only safe because the wrap happens INSIDE
-    // the chip box: the actions are its sibling, so they never move. Putting
-    // `flex-wrap` on the row itself would let Send drop to a line of its own,
-    // which is the very first shape this composer had and the first defect.
+    // Asserted on DOCUMENT POSITION and on `ml-auto`, because jsdom computes no
+    // layout: which node comes first and which one is pushed to the far edge
+    // are the DOM facts that decide where it lands, and they are exactly what a
+    // move back would change.
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    // ONE of them, which is not a formality: moving the chip up while leaving
+    // the old one in place renders the folder twice, and a `find` here passed
+    // on exactly that — the composer showed `geniro-run-cwd` above the textarea
+    // AND again beside Send.
+    const folders = [
+      ...container.querySelectorAll('[data-slot="chip"]'),
+    ].filter((chip) => chip.getAttribute('title') === '/proj');
+    expect(folders).toHaveLength(1);
+    const folder = folders[0]!;
+    expect(folder.textContent).toContain('proj');
+
+    const textarea = container.querySelector('textarea')!;
+    expect(
+      folder.compareDocumentPosition(textarea) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(classesOf(folder)).toContain('ml-auto');
+
+    // And no longer inside the card, which is where the actions row it used to
+    // lead lives — the document-position check above says "before the
+    // textarea", and this says "outside the box the textarea is in", which is
+    // the difference between above the card and on its first line.
+    const card = textarea.closest('[data-slot="composer-card"]');
+    expect(card).not.toBeNull();
+    expect(card!.contains(folder)).toBe(false);
+
+    // …and sitting DIRECTLY on it: "отступа практически должно не быть между
+    // директорией и текст-эйрией". The row carried `pb-1.5`, which read as a
+    // sibling block above the card rather than as its caption. jsdom computes
+    // no layout, so the padding class IS the mechanism and the only thing a
+    // test can observe — measured live at 0px between the chip and the card.
+    expect(
+      classesOf(folder.parentElement!).some((token) => token.startsWith('pb-')),
+    ).toBe(false);
+  });
+
+  it('opens a long chat on its newest page, and fetches older ones on scroll up', async () => {
+    // REPORTED: "иногда у нас разрастается чат с очень большим количеством
+    // сообщений … мы должны максимум загружать где-то 1,000 сообщений … а
+    // где-то на 70% подгружать все остальные сообщения, чтобы интерфейс не
+    // лагал". Measured on a real thread: 7,814 items are 18.9MB where the
+    // newest 1,000 are 0.63MB.
+    const page = (from: number, count: number): ChatItem[] =>
+      Array.from({ length: count }, (_, i) =>
+        msg(from + i, 'user', `m${from + i}`),
+      );
+    // A FULL page is the signal that more may exist behind it.
+    api.listRunItems.mockResolvedValue(page(1000, HISTORY_PAGE));
+
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+
+    expect(api.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+    });
+    // Said out loud, rather than leaving a conversation that appears to start
+    // mid-sentence.
+    expect(
+      container.querySelector('[data-slot="older-messages"]'),
+    ).not.toBeNull();
+
+    // Scrolling to the top of the loaded window asks for the page BEFORE it,
+    // keyed on the oldest seq on screen.
+    api.listRunItems.mockResolvedValue(page(0, 10));
+    const scroller = container.querySelector<HTMLElement>(
+      '[data-slot="transcript"]',
+    )!;
+    Object.defineProperty(scroller, 'scrollHeight', {
+      value: 10_000,
+      configurable: true,
+    });
+    Object.defineProperty(scroller, 'clientHeight', {
+      value: 1_000,
+      configurable: true,
+    });
+    scroller.scrollTop = 100;
+    await act(async () => {
+      scroller.dispatchEvent(new Event('scroll'));
+      await Promise.resolve();
+    });
+
+    expect(api.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+      beforeSeq: 1000,
+    });
+    // A SHORT page is the start of the conversation — the notice goes away.
+    expect(container.querySelector('[data-slot="older-messages"]')).toBeNull();
+  });
+
+  it('does not page a chat that arrived whole', async () => {
+    // The common case, and the one a threshold bug would break loudest: every
+    // scroll on every short thread firing a fetch that can only come back
+    // empty.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    api.listRunItems.mockClear();
+
+    const scroller = container.querySelector<HTMLElement>(
+      '[data-slot="transcript"]',
+    )!;
+    scroller.scrollTop = 0;
+    await act(async () => {
+      scroller.dispatchEvent(new Event('scroll'));
+      await Promise.resolve();
+    });
+
+    expect(api.listRunItems).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-slot="older-messages"]')).toBeNull();
+  });
+
+  it('lifts a file change OUT of its tool group — unless the user asked for folded steps', async () => {
+    // REPORTED: "у нас все еще должны быть группы, сколлапсированные с другими
+    // экшенами, но редактирование файлов должно быть вне этой группы". The
+    // split itself is pinned in `transcript-groups.spec`; what is pinned HERE
+    // is the wiring — that the transcript applies it, and that the OTHER
+    // setting still wins. Someone who asked for every step folded is asking for
+    // less on screen, and lifting the edits out would put more there.
+    const toolItem = (seq: number, name: string, input: unknown): ChatItem => ({
+      id: `t${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'tool_call',
+      role: 'assistant',
+      payload: { id: `tc${seq}`, name, input },
+      createdAt: 'now',
+    });
+    const stream = [
+      toolItem(1, 'Bash', { command: 'ls' }),
+      toolItem(2, 'Edit', {
+        file_path: '/proj/a.ts',
+        old_string: 'a',
+        new_string: 'b',
+      }),
+      toolItem(3, 'Bash', { command: 'pwd' }),
+    ];
+    api.listRunItems.mockResolvedValue(stream);
+
+    const first = await mount(makeClient().client);
+    await clickRun(first, 'My chat');
+    const groups = (el: HTMLElement): (string | null)[] =>
+      [...el.querySelectorAll('[data-role="tool-group"]')].map((g) =>
+        g.getAttribute('data-standalone'),
+      );
+    // Three pieces: the run before, the change on its own, the run after.
+    expect(groups(first)).toEqual([null, 'true', null]);
+
+    // Same transcript with the fold-everything setting on: ONE group, exactly
+    // as it was before any of this.
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings = vi.fn().mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      collapseToolSteps: true,
+    });
+    const second = await mount(makeClient().client);
+    await clickRun(second, 'My chat');
+    expect(groups(second)).toEqual([null]);
+  });
+
+  it('lets the textarea GROW with what is typed, up to seven lines — on BOTH composers', async () => {
+    // REPORTED as "вот этот текст в area должен расширяться, когда мы там
+    // пишем … сейчас его максимальное расширение составляет, не знаю, 3
+    // строки. Оно должно быть там 7 строк". It did not grow at all: both boxes
+    // were a fixed `rows` + `min-h-*` with `resize-none`, so the fourth line
+    // scrolled the first one out of sight at a constant height.
+    //
+    // Asserted on the classes because jsdom computes no layout — `field-sizing`
+    // and the cap ARE the mechanism here, the whole fix being one declaration,
+    // and there is nothing else a test could observe. The real growth is
+    // measured in a browser.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    // The new-run composer…
+    const start = container.querySelector('textarea')!;
+    expect(classesOf(start)).toContain('field-sizing-content');
+
+    // …and the open thread's follow-up composer, which is a SECOND call site:
+    // the report was about the one you type into every day, and fixing only the
+    // landing screen would leave it exactly as it was.
+    await clickRun(container, 'My chat');
+    const followUp = container.querySelector('textarea')!;
+    expect(classesOf(followUp)).toContain('field-sizing-content');
+
+    // Seven, not "some cap". `lh` keeps it seven LINES across the composer's
+    // two font sizes, where a pixel height would be six on one of them.
+    for (const box of [start, followUp]) {
+      const cap = classesOf(box).find((token) => token.startsWith('max-h-'));
+      expect(cap).toBe(`max-h-[calc(${COMPOSER_MAX_LINES}lh+1.375rem)]`);
+    }
+  });
+
+  it('keeps the BOTTOM row’s chips on ONE line, whatever the width', async () => {
+    // REPORTED, flatly: "они расползаются на две строки. Никогда такого быть не
+    // должно". The box used to WRAP, and the measurement that put it there —
+    // that shrinking the chips "truncated their chevrons away" — turned out not
+    // to hold: `Select`'s trigger keeps its icon and chevron `shrink-0` and
+    // gives up its `truncate`d LABEL instead.
+    //
+    // Asserted on the classes because jsdom computes no layout, so which
+    // element may wrap and which may shrink is the DOM fact that decides
+    // whether it does — the same reasoning `renderer-design-system` tests use
+    // elsewhere. Send is still a sibling of the box and still never shrinks.
     const { client } = makeClient();
     const container = await mount(client);
 
@@ -4251,12 +4656,15 @@ describe('Chats queued messages', () => {
     const actions = send.parentElement!;
     const chipBox = actions.previousElementSibling!;
 
-    expect(chipBox.className).toContain('flex-wrap');
+    expect(classesOf(chipBox)).not.toContain('flex-wrap');
     expect(chipBox.contains(send)).toBe(false);
     expect(classesOf(actions)).toContain('shrink-0');
-    // The chip's own `shrink-0` is overridden here — a single chip wider than
-    // the whole box has to give, or it collides again.
+    // Three rules, and the row wraps again — or overlaps — without any one of
+    // them: the chip may narrow, the trigger BUTTON follows its wrapper rather
+    // than keeping its content width, and the row itself never wraps.
     expect(chipBox.className).toContain('[&>*]:min-w-0');
+    expect(chipBox.className).toContain('[&>*]:shrink');
+    expect(chipBox.className).toContain('[&_[data-menu-trigger]]:min-w-0');
   });
 
   it('drops a staged image from the next message when it is removed', async () => {
@@ -4437,10 +4845,16 @@ describe('Chats queued messages', () => {
     });
 
     expect(row().textContent).not.toContain('running');
-    expect(row().textContent).toContain('idle');
-    // And the sentence stays: the badge says the agent has stopped, the line
-    // under it says what the process is still waiting for. Neither alone is
-    // the answer.
+    // `working`, and deliberately NOT `idle`, which this badge said for one
+    // release and had reported straight back — `i still see it seems like it
+    // finished but not`. The whole point of the state is that the thread has
+    // NOT finished, and `idle` is the one word on the palette that says it
+    // has.
+    expect(row().textContent).toContain('working');
+    expect(row().textContent).not.toContain('idle');
+    // And the sentence stays: the badge says nobody is being waited for, the
+    // line under it says what the process is still waiting on. Neither alone
+    // is the answer.
     expect(container.textContent).toContain('waiting on 2 background tasks');
   });
 
@@ -7169,9 +7583,11 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
   const pinned = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('[data-slot="pinned-request"]');
 
+  // The scroller by NAME, not by position: it was reached through the pinned
+  // card's `previousElementSibling`, so the jump-to-latest control landing
+  // between the two made this assert against that control's own text.
   const transcript = (container: HTMLElement): HTMLElement =>
-    container.querySelector<HTMLElement>('[data-slot="pinned-request"]')!
-      .previousElementSibling as HTMLElement;
+    container.querySelector<HTMLElement>('[data-slot="transcript"]')!;
 
   it('lifts the open card out of the transcript and leaves a marker in its slot', async () => {
     // Two live copies of one card would put two sets of buttons over a

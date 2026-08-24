@@ -9,6 +9,8 @@ import { cn } from '../components/ui/utils';
 import { formatRelativeTime } from './relative-time';
 import {
   awaitingPhrase,
+  HELD_ACTIVITY,
+  isWorkingRunStatus,
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
@@ -155,7 +157,30 @@ export const ChatListItem = memo(function ChatListItem({
       // `select-none`: without it a press-and-drag on the row starts a TEXT
       // selection instead of the drag, which is what "gets selected, but
       // doesn't drag" looks like from the other side of the screen.
-      className={cn('group select-none', dragging && 'opacity-40')}
+      className={cn(
+        'group select-none',
+        // An unseen row is marked on the ROW, not only in front of its name.
+        // Reported twice: a 6px dot was missed, a 10px one still was — "точку
+        // не видно… давай что-то более заметное, дополнительная линия или
+        // выделение". A mark the width of a glyph competes with every other
+        // glyph on a 260px rail; a bar down the row's own edge and a wash
+        // behind it are read by shape and area instead, which is what a mail
+        // client uses for the same job.
+        //
+        // The bar is a pseudo-element on the row's own box (`NavListItem` is
+        // `relative`), so it costs no layout and cannot push the title the way
+        // a leading element does — and it sits INSIDE the row, clear of the
+        // group's colour rail, which is the section's mark rather than this
+        // row's.
+        unseen &&
+          'before:absolute before:top-1.5 before:bottom-1.5 before:left-0 before:w-[3px] before:rounded-full before:bg-primary',
+        // The wash yields to the ACTIVE row: an open chat has its own
+        // highlight, and two backgrounds on one row would read as a third
+        // state. Moot in practice — opening a thread is what marks it seen —
+        // but the frame in between is exactly when the eye is on it.
+        unseen && !active && 'bg-primary/10',
+        dragging && 'opacity-40',
+      )}
       activateLabel={label}
       suspendActivation={editing}
       // Not while renaming: a text field inside a draggable element cannot be
@@ -309,13 +334,16 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="min-w-0 truncate text-muted-foreground">
             · {awaitingPhrase(awaiting)}
           </span>
-        ) : status === 'running' ? (
+        ) : isWorkingRunStatus(status) ? (
           /* Never conditional on there BEING a phrase: a null activity means
              "working, nothing named", not "say nothing", and treating the two
              the same is what made this row flicker once per tool call. See
-             {@link STANDING_ACTIVITY}. */
+             {@link STANDING_ACTIVITY} — and {@link HELD_ACTIVITY}, which is the
+             same fallback for a turn that is held rather than thinking. */
           <span className="min-w-0 truncate text-muted-foreground">
-            · {activity ?? STANDING_ACTIVITY}
+            ·{' '}
+            {activity ??
+              (status === 'waiting' ? HELD_ACTIVITY : STANDING_ACTIVITY)}
           </span>
         ) : null}
         {/* The time is for runs that have STOPPED — "when did this last do
@@ -323,8 +351,11 @@ export const ChatListItem = memo(function ChatListItem({
             it. A parked run is as live as a running one (its turn is open, its
             process is up), so it is excluded for the same reason `running` is
             — and on a 260px sidebar it was the third thing competing for the
-            line, which is what made the status label wrap onto two rows. */}
-        {status !== 'running' && status !== 'needs-input' ? (
+            line, which is what made the status label wrap onto two rows. A HELD
+            run is live on both of those counts too, so it is excluded with
+            them: `waiting · 24m` was the reported row, and the `24m` is exactly
+            the half of it that reads as a thread nobody has touched since. */}
+        {!isWorkingRunStatus(status) && status !== 'needs-input' ? (
           <span className="ml-auto pl-2 text-muted-foreground">
             {formatRelativeTime(lastActivityAt)}
           </span>

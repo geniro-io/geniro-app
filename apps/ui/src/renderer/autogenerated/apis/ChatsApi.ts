@@ -46,6 +46,8 @@ export interface ChatsApiDeleteChatRequest {
 export interface ChatsApiListRunItemsRequest {
     runId: string;
     afterSeq?: number;
+    limit?: number;
+    beforeSeq?: number;
 }
 
 export interface ChatsApiReadChatAttachmentRequest {
@@ -317,6 +319,14 @@ export class ChatsApi extends runtime.BaseAPI {
 
         if (requestParameters['afterSeq'] != null) {
             queryParameters['afterSeq'] = requestParameters['afterSeq'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        if (requestParameters['beforeSeq'] != null) {
+            queryParameters['beforeSeq'] = requestParameters['beforeSeq'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};

@@ -75,3 +75,28 @@ export function isWarningNotice(payload: unknown): boolean {
   const row = payload as { severity?: unknown; origin?: unknown };
   return row.severity === 'warning' && row.origin !== 'cli';
 }
+
+/**
+ * What the daemon called this row, in its own two or three words — the caption,
+ * where the reader learns what they are looking at before reading the sentence.
+ *
+ * `null` where the producer named none, which is every historical notice and
+ * leaves each severity's own default standing. It exists because that default
+ * is a sentence about ONE case: `not applied` describes the degrade the warning
+ * level was added for and says nothing true about a request that failed and was
+ * retried, which is the other thing that is loud without being fatal.
+ *
+ * Same `origin` guard as its two neighbours, and for the same reason: relayed
+ * agent prose must not be able to caption itself as an application advisory.
+ */
+export function noticeCaption(payload: unknown): string | null {
+  if (payload === null || typeof payload !== 'object') {
+    return null;
+  }
+  const row = payload as { caption?: unknown; origin?: unknown };
+  return typeof row.caption === 'string' &&
+    row.caption !== '' &&
+    row.origin !== 'cli'
+    ? row.caption
+    : null;
+}

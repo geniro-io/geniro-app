@@ -28,12 +28,28 @@ export function useChatTotals(
   api: Pick<ChatsApi, 'readChatTotals'> | null,
   runId: string | null,
   settledTurns: number,
-): { costUsd: number | null } {
+): { costUsd: number | null; turns: number | null; workedMs: number | null } {
   const [costUsd, setCostUsd] = useState<number | null>(null);
+  /**
+   * How many turns this thread holds, and what they worked — the DAEMON's
+   * count, over every `turn_complete` row the run has ever written.
+   *
+   * The header used to fold both out of the transcript this component holds,
+   * which was complete until the history became a WINDOW: a long thread now
+   * opens on its newest 1,000 items, so that fold would report a conversation's
+   * last few turns as the whole of it — a smaller number that reads as a
+   * shorter thread rather than as a partial one. The comment above already
+   * anticipated exactly this for the spend; the turn count and the worked time
+   * are the same question and now travel with it.
+   */
+  const [turns, setTurns] = useState<number | null>(null);
+  const [workedMs, setWorkedMs] = useState<number | null>(null);
 
   useEffect(() => {
     if (api === null || runId === null) {
       setCostUsd(null);
+      setTurns(null);
+      setWorkedMs(null);
       return;
     }
     let cancelled = false;
@@ -42,6 +58,8 @@ export function useChatTotals(
       .then((answer) => {
         if (!cancelled) {
           setCostUsd(answer.totals.costUsd);
+          setTurns(answer.totals.turns);
+          setWorkedMs(answer.totals.workedMs);
         }
       })
       // A spend the header cannot read is a header without a spend, never an
@@ -57,5 +75,5 @@ export function useChatTotals(
     };
   }, [api, runId, settledTurns]);
 
-  return { costUsd };
+  return { costUsd, turns, workedMs };
 }

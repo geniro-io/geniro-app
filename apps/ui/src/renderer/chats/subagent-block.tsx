@@ -3,6 +3,7 @@ import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { Button } from '../components/ui/button';
+import { formatTokens } from './agent-activity';
 import {
   BlockRequest,
   BlockResult,
@@ -76,26 +77,27 @@ function subagentTaskProgress(
 }
 
 /**
- * What is known about a delegate APART from what it said — the model it ran and
- * how long it took, when its CLI reports them.
+ * What is known about a delegate APART from what it said — the model it ran,
+ * what it spent, and how long it took, as its CLI reports them.
  *
- * Renders nothing when neither is known, which is every claude delegate: its
- * work is the thread itself, so a metadata line would only repeat the header.
- * For a CLI that streams none of that work this is the whole substance of the
- * card, which is why it is stated rather than left in the payload.
+ * `spendStated` is the caller saying it has ALREADY printed the figures. The
+ * block has: they sit on its header, where they are legible with the block
+ * still shut, so repeating them under it is one reading printed twice a couple
+ * of inches apart — the complaint this surface already has on record about its
+ * context meter. The detail DIALOG has no header of its own, so there they are
+ * the only statement of the delegate's cost and are always drawn.
  */
 function SubagentFacts({
   block,
+  spendStated,
 }: {
   block: SubagentBlockEntry;
+  spendStated: boolean;
 }): React.JSX.Element | null {
-  const facts: string[] = [];
-  if (block.model !== null) {
-    facts.push(block.model);
-  }
-  if (block.durationMs !== null) {
-    facts.push(`took ${formatElapsed(block.durationMs)}`);
-  }
+  const facts = [
+    ...(block.model === null ? [] : [block.model]),
+    ...(spendStated ? [] : subagentSpendParts(block)),
+  ];
   if (facts.length === 0) {
     return null;
   }
@@ -106,6 +108,55 @@ function SubagentFacts({
       {facts.join(' · ')}
     </p>
   );
+}
+
+/**
+ * The present facts, with a middot between each pair and nowhere else.
+ *
+ * Takes nulls so a caller can list every possible fact in reading order and let
+ * this decide which survive — the alternative being a separator condition that
+ * names its neighbours, which is what the header had and what it could not
+ * carry two more facts of.
+ */
+function joinFacts(facts: readonly React.ReactNode[]): React.ReactNode[] {
+  const present = facts.filter((fact) => fact !== null && fact !== false);
+  return present.flatMap((fact, index) =>
+    index === 0 ? [fact] : [<span key={`sep-${index}`}>·</span>, fact],
+  );
+}
+
+/**
+ * What this delegate COST, as the words the header prints — its tokens and how
+ * long it ran.
+ *
+ * REPORTED as "in front of each agent i wanna see amount of tokens/costs/time",
+ * against a transcript of collapsed delegate rows that said only
+ * `general-purpose · 49 tools`. Two of those three are here and the third is
+ * not, which is a measurement rather than a shortfall: probed on claude 2.1.237
+ * across every channel that says anything about a delegate — the
+ * `task_notification`'s `usage`, the launching call's `tool_use_result`, the
+ * delegate's own sidechain JSONL — none carries money, and the turn's `result`
+ * line prices the main thread and all of its delegates together with no way to
+ * split it. Showing a figure would mean inventing a price table, which is the
+ * one thing this app's usage code is written never to do.
+ *
+ * An empty list renders nothing at all: every CLI but claude reports none of
+ * this, and a `— tokens` placeholder on every delegate row would be noise about
+ * a blind spot the reader can do nothing with.
+ */
+function subagentSpendParts(block: SubagentBlockEntry): string[] {
+  const parts: string[] = [];
+  if (block.tokens !== null) {
+    parts.push(`${formatTokens(block.tokens)} tokens`);
+  }
+  if (block.durationMs !== null) {
+    // `took` stays on the word, header included. A bare `2s` on a row that
+    // already reads `49 tools · 26.1k tokens` is as easily read as an age —
+    // "this happened 2s ago" — which is the one thing it does not mean, and it
+    // is the same wording the detail dialog has always used.
+    parts.push(`took ${formatElapsed(block.durationMs)}`);
+  }
+  return parts;
 }
 
 /**
@@ -204,10 +255,13 @@ export function SubagentThread({
   block,
   nodes,
   chatAgentName,
+  spendStated = false,
 }: {
   block: SubagentBlockEntry;
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
+  /** The caller's own chrome already states the tokens and the duration. */
+  spendStated?: boolean;
 }): React.JSX.Element {
   const title = subagentTitle(block);
   // Read from the SAME source the header's own spinner uses, so the block
@@ -219,7 +273,7 @@ export function SubagentThread({
       {block.prompt ? (
         <BlockRequest label={`Task for ${title}`} text={block.prompt} />
       ) : null}
-      <SubagentFacts block={block} />
+      <SubagentFacts block={block} spendStated={spendStated} />
       {/* Above the (empty) thread rather than below the result: it explains why
           there is nothing between here and there, and a caveat placed after the
           result reads as a caveat ABOUT the result. */}
@@ -318,30 +372,44 @@ export const SubagentBlock = memo(function SubagentBlock({
                 shrunk rather than dropped. */}
             <InitialsAvatar name={title} colorKey={block.id} size="sm" />
             <BlockTitle>{title}</BlockTitle>
-            {/* The three facts about the delegate as ONE run of text with
-                middots, not three spans the header's `gap-2` pushes apart. They
-                answer one question — what this delegate is and how much it did —
-                and spaced out they read as three unrelated chips. */}
+            {/* Every fact about the delegate as ONE run of text with middots,
+                not a span per fact that the header's `gap-2` pushes apart. They
+                answer one question — what this delegate is and what it did —
+                and spaced out they read as unrelated chips.
+
+                Interleaved from a LIST rather than by a separator condition per
+                pair: at three facts that was already three conditions naming
+                each other, and adding the tokens and the duration would have
+                made it six, each of which is a place for a leading or doubled
+                middot to appear on some combination nobody thought to check. */}
             <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-              {block.kind && block.label ? <span>{block.kind}</span> : null}
-              {block.kind && block.label && toolCount > 0 ? (
-                <span>·</span>
-              ) : null}
-              {toolCount > 0 ? (
-                <span>
-                  {toolCount} tool{toolCount === 1 ? '' : 's'}
-                </span>
-              ) : null}
-              {/* On the header rather than only inside, because the block is
-                  CLOSED by default: "how far is this delegate through its own
-                  plan" is the one thing worth knowing without opening it. */}
-              {tasks !== null ? (
-                <>
-                  {block.kind || toolCount > 0 ? <span>·</span> : null}
-                  <ListChecks aria-hidden="true" className="size-3" />
-                  <TaskCount done={tasks.done} total={tasks.total} />
-                </>
-              ) : null}
+              {joinFacts([
+                block.kind && block.label ? (
+                  <span key="kind">{block.kind}</span>
+                ) : null,
+                toolCount > 0 ? (
+                  <span key="tools">
+                    {toolCount} tool{toolCount === 1 ? '' : 's'}
+                  </span>
+                ) : null,
+                /* What it spent, and how long it took — the reported ask. On
+                   the header and not only inside for the same reason the task
+                   progress is: the block is CLOSED by default, so a figure that
+                   needs a click is a figure nobody reads while scanning a
+                   column of twenty delegates. */
+                ...subagentSpendParts(block).map((part) => (
+                  <span key={part}>{part}</span>
+                )),
+                /* On the header rather than only inside, because the block is
+                   CLOSED by default: "how far is this delegate through its own
+                   plan" is the one thing worth knowing without opening it. */
+                tasks !== null ? (
+                  <span key="tasks" className="flex items-center gap-1">
+                    <ListChecks aria-hidden="true" className="size-3" />
+                    <TaskCount done={tasks.done} total={tasks.total} />
+                  </span>
+                ) : null,
+              ])}
             </span>
           </>
         }
@@ -367,6 +435,8 @@ export const SubagentBlock = memo(function SubagentBlock({
           block={block}
           nodes={nodes}
           chatAgentName={chatAgentName}
+          // The header above states them — see {@link SubagentFacts}.
+          spendStated
         />
       </BlockShell>
     </div>

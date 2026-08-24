@@ -15,6 +15,7 @@ import {
   pendingMcpServers,
   readMcpStatusReply,
 } from './utils/claude-mcp-ready.utils';
+import { isClaudeApiErrorLine } from './utils/claude-message.utils';
 
 /** What the driver needs from the adapter, injected so a spec needs no process. */
 export interface ClaudeTurnDriverDeps {
@@ -177,10 +178,74 @@ export class ClaudeTurnDriver implements TurnDriver {
       }
     }
     this.rememberApiFailure(obj);
-    return this.deps
+    const mapped = this.deps
       .mapMessage(obj)
       .flatMap((event) => this.trackWindow(event))
       .map((event) => this.withFailureDetail(event));
+    return this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj));
+  }
+
+  /**
+   * The api-error advisory, held one line so it cannot be published beside a
+   * terminal error that says the very same thing.
+   *
+   * See {@link reconcileApiNotice} for what it is held against and why one line
+   * is enough.
+   */
+  private heldApiNotice: Extract<AgentEvent, { type: 'notice' }> | null = null;
+
+  /**
+   * Withhold the api-error `notice` when the turn is about to END on that same
+   * sentence, and release it when the turn instead carried on.
+   *
+   * MEASURED over the author's own database — every api-error row a real
+   * claude run has produced (14, across four codes) — and the two populations
+   * are cleanly separable by what comes NEXT:
+   *
+   * - FATAL (4: `Connection lost mid-response`, `The response stopped
+   *   arriving`, `529 Overloaded` ×2): the next item is the turn's own `error`,
+   *   one seq later, 2–4ms later, carrying a BYTE-IDENTICAL message. Publishing
+   *   the notice there stacks an amber row directly on top of a red one saying
+   *   the same words.
+   * - RECOVERED (8, every one the image failure): the next item is real work —
+   *   1.3s to 29s later — with 15 to 211 further rows before the turn's
+   *   `turn_complete`. Here the notice is the ONLY record that anything went
+   *   wrong, so it must be published.
+   *
+   * ONE line of hold is therefore enough, and it is what keeps the recovered
+   * case in its right place: the notice is released ahead of whatever event
+   * proved the turn continued, which on the measured data is the very next
+   * item. Holding it to the terminal instead would file a failure that happened
+   * at row 6614 underneath row 6666.
+   *
+   * The `error` arm compares MESSAGES rather than assuming adjacency — the
+   * result line's own sentence is what it carries, and a turn that failed for
+   * an unrelated reason after recovering from an api error must still show
+   * both.
+   */
+  private reconcileApiNotice(
+    events: AgentEvent[],
+    fromApiErrorLine: boolean,
+  ): AgentEvent[] {
+    const held = this.heldApiNotice;
+    if (held !== null) {
+      this.heldApiNotice = null;
+      const swallowed =
+        events[0]?.type === 'error' && events[0].message === held.message;
+      if (!swallowed) {
+        events = [held, ...events];
+      }
+    }
+    // Gated on the LINE, never on the event shape: several unrelated producers
+    // emit a lone `notice` (the MCP-readiness advisory, a relayed compaction
+    // summary), and holding one of those would be this method silently taking
+    // charge of rows it knows nothing about.
+    const only = events.length === 1 ? events[0] : undefined;
+    if (fromApiErrorLine && only?.type === 'notice') {
+      this.heldApiNotice = only;
+      return [];
+    }
+    return events;
   }
 
   /**
@@ -211,14 +276,13 @@ export class ClaudeTurnDriver implements TurnDriver {
     if (typeof obj !== 'object' || obj === null) {
       return;
     }
+    if (!isClaudeApiErrorLine(obj)) {
+      return;
+    }
     const line = obj as {
-      is_api_error_message?: unknown;
       request_id?: unknown;
       error?: unknown;
     };
-    if (line.is_api_error_message !== true) {
-      return;
-    }
     const requestId =
       typeof line.request_id === 'string' ? line.request_id : undefined;
     const code = typeof line.error === 'string' ? line.error : undefined;

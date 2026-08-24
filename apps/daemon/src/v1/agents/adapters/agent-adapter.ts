@@ -45,6 +45,7 @@ import type {
   AgentSkillEntry,
   AgentSkillsInput,
   AgentSpawnInfo,
+  AgentTitleInput,
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
@@ -1665,6 +1666,39 @@ export abstract class AgentAdapter {
    * means this absence never reaches a surface.
    */
   readSessionTitle(_sessionId: string): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+
+  /**
+   * ASK this CLI to name the conversation, for one that writes no title of its
+   * own — the other half of {@link readSessionTitle}, and the one that costs
+   * something.
+   *
+   * Two methods rather than one because the two are not the same act: reading
+   * is free and can be done on every settled turn, while asking spawns a model
+   * call and is billed to the user. So this is not a fallback the base can
+   * apply for a CLI: an adapter opts in by overriding, and the caller is
+   * responsible for asking at most once per conversation.
+   *
+   * It exists because the alternative on claude is no LLM title at all —
+   * headless claude writes none anywhere on disk (see `ClaudeAdapter`'s class
+   * doc), so a chat opened with a pasted URL was named after that URL for good.
+   * REPORTED as exactly that.
+   *
+   * The turn it runs must be SEPARATE from the user's conversation and must not
+   * touch it: naming is geniro's business, and a question appended to the
+   * user's own session would show up in their transcript and in their context
+   * window. Compose the question with `titlePrompt` rather than writing one —
+   * the wording is where the quality lives and two copies of it will drift.
+   *
+   * Never throws. A null is the ordinary answer for "this CLI cannot", "the
+   * model refused" and "the reply could not be read" alike, because all three
+   * leave the derived title standing and the user sees no difference.
+   */
+  generateTitle(
+    _input: AgentTitleInput,
+    _options: AgentCommandOptions = {},
+  ): Promise<string | null> {
     return Promise.resolve(null);
   }
 

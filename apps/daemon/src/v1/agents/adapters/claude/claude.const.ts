@@ -456,6 +456,55 @@ export const CLAUDE_MODE_REJECTION_FLAG_PATTERN = /permission-mode/i;
 export const CLAUDE_MODE_REJECTION_VERDICT_PATTERN =
   /invalid|allowed choices|unknown/i;
 
+// ── Naming a conversation ─────────────────────────────────────────────────
+
+/**
+ * The argv of the throwaway turn that names a chat.
+ *
+ * `--output-format json` rather than the turns' `stream-json`: this is one
+ * short answer read at the end, not a stream, and the plain form puts it in a
+ * single object's `result`. The MCP pair is the same isolation an internal
+ * probe turn takes — a title has no use for the user's servers, and dialling
+ * them would cost seconds and launch their processes to write five words.
+ */
+export const CLAUDE_TITLE_ARGS: readonly string[] = [
+  '-p',
+  '--output-format',
+  'json',
+  CLAUDE_MCP_CONFIG_FLAG,
+  CLAUDE_EMPTY_MCP_CONFIG,
+  CLAUDE_STRICT_MCP_CONFIG_FLAG,
+];
+
+/**
+ * The model that writes the title, named rather than inherited from the chat.
+ *
+ * Naming a conversation is not the work the user is paying opus for, and the
+ * cost is per chat: measured on 2.1.237, one title on this model is ~$0.03,
+ * nearly all of it the CLI's own system prompt and tool definitions, which
+ * `-p` gives no way to withhold. An alias rather than a dated id, so an
+ * account that has moved on to the next haiku is not left with a model it can
+ * no longer run.
+ */
+export const CLAUDE_TITLE_MODEL = 'haiku';
+
+/**
+ * How long the naming turn may take before it is written off.
+ *
+ * Generous against the ~6s measured, because the alternative to waiting is not
+ * a faster title but the derived one standing for the life of the chat.
+ */
+export const CLAUDE_TITLE_TIMEOUT_MS = 60_000;
+
+/**
+ * The scratch folder the naming turn runs in.
+ *
+ * Nowhere in particular ON PURPOSE: this CLI loads a project's `CLAUDE.md` from
+ * its cwd, and running the naming turn in the user's repository would bill
+ * every new chat for that file (40KB in this one) to write five words.
+ */
+export const CLAUDE_TITLE_DIR_PREFIX = 'geniro-title-';
+
 // ── Agent-to-agent calls (MCP) ────────────────────────────────────────────
 
 /**

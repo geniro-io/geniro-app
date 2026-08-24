@@ -173,6 +173,29 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           backgroundOpen: event.backgroundOpen,
         },
       };
+    case 'shell_info':
+      // A DURABLE row for the same reason `task_list` is one, and unlike the
+      // `background_work` line it is derived from: it is the ONLY record that a
+      // detached command has finished. The launching tool call returned the
+      // moment the command was accepted, so nothing else in the transcript ever
+      // closes it, and a client replaying this conversation would go on showing
+      // it as running for as long as the chat exists.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/shell-activity.ts` reads these
+      // keys back to retire the shell they name. An item payload is
+      // `z.unknown()` on the wire BY DESIGN — every kind carries a different
+      // shape — so no generated type spans the two sides. Renaming a key here
+      // means renaming it there.
+      //
+      // `id` is the LAUNCHING TOOL CALL, spelled the way `subagent_info` and
+      // both halves of a tool call spell theirs, and written out even when null
+      // so the reader's two match paths (by call, else by the CLI's own work
+      // id) read an omitted key and a null one alike.
+      return {
+        kind: 'shell_info',
+        role: null,
+        payload: { id: event.toolCallId, workId: event.workId },
+      };
     case 'task_list':
       // A DURABLE row, unlike the other progress-shaped events above. The list
       // is not derivable from anything else in the transcript: a patch names
@@ -277,7 +300,8 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
 }
 
 /**
- * Whether this event announces that a DELEGATE has stopped working.
+ * Whether this event announces that WORK HAS ENDED — a delegate that has
+ * stopped, or a background shell that has.
  *
  * The two directions of one announcement (`spawn-cli`'s `announceDelegateWork`)
  * mean opposite things to the run's badge, and only one of them is the run
@@ -291,9 +315,21 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
  * carries the delegate's FACTS (its label, its prompt) claims nothing about its
  * liveness, and reading that as "it has stopped" would silence a run every time
  * the CLI described a delegate it had just launched.
+ *
+ * `shell_info` is the second such announcement and is UNCONDITIONALLY a close:
+ * it is only ever emitted on a settle (`spawn-cli`'s `announceShellWork`), the
+ * start of a command already being in the transcript as the tool call that made
+ * it. A detached command routinely outlives the turn that launched it, so this
+ * is not a corner case — without the exclusion, every `pnpm dev` finishing
+ * minutes after a chat settled would put that chat's badge back to `running`
+ * with nothing able to take it down, which is precisely the latched spinner the
+ * delegate half of this predicate exists to prevent.
  */
-export function closesADelegate(event: AgentEvent): boolean {
-  return event.type === 'subagent_info' && event.backgroundOpen === false;
+export function closesWork(event: AgentEvent): boolean {
+  return (
+    (event.type === 'subagent_info' && event.backgroundOpen === false) ||
+    event.type === 'shell_info'
+  );
 }
 
 /** The run status a terminal event implies, or null for a mid-turn event. */

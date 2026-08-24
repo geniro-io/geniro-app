@@ -63,9 +63,14 @@ const NO_MODEL_LABEL = 'pick a model';
  * shouldn't be just inactive button like that"). One rendering for every
  * model is also what stops the row rearranging itself as the model changes:
  * the chip keeps its shape and its vocabulary, and only the rows behind it
- * differ. The daemon's sentence is not dropped with the label — it becomes the
- * chip's hover title, which is where the four cases (no model yet, no such
- * axis, one fixed size, the CLI could not be asked) are told apart in words.
+ * differ. The daemon's sentence is not dropped with the label — it is the
+ * chip's hover title AND the open menu's own note, which is where the four
+ * cases (no model yet, no such axis, one fixed size, the CLI could not be
+ * asked) are told apart in words. Both, because they answer for different
+ * readers: the title serves someone who never opens the control, and the note
+ * serves someone who did — reported as "it didnt load contexts for cursor",
+ * where the panel offered its single `model default` row and said nothing, and
+ * the model in question (`kimi-k3`) does in fact have one fixed window.
  *
  * The ONE case that is still inert is `no-model`, and it says `pick a model`:
  * nothing has been asked yet, so there is no default window to report either —
@@ -200,6 +205,20 @@ export function ContextWindowSelect({
       groups={[
         { items: rows },
         {
+          // The daemon's sentence, IN the menu — not only on the trigger's
+          // hover title, which is where it used to live alone. With no sizes to
+          // offer, the panel is one `model default` row and nothing else, and a
+          // one-row picker that says nothing about why reads as a control that
+          // failed to fetch: reported as "it didnt load contexts for cursor"
+          // against `kimi-k3`, a model that genuinely runs at one fixed window
+          // (measured — its own handshake enumerates `reasoning` and no
+          // `context` parameter, while `claude-opus-5` on the same account and
+          // build enumerates `context = 300k|1m`). The answer was right and
+          // only the rendering was silent.
+          //
+          // The title stays too: the reason belongs to the CHIP as much as to
+          // the open panel, and a reader who never opens it is owed it.
+          note: fixedReason ?? undefined,
           items: [
             { value: MODEL_DEFAULT_CONTEXT_WINDOW, label: DEFAULT_ROW_LABEL },
           ],

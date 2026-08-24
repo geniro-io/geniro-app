@@ -33,6 +33,8 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  contextTokens: null,
+  contextWindowTokens: null,
   configDir: null,
   groupId: null,
   createdAt: 'now',
@@ -364,6 +366,93 @@ describe('useChatRun', () => {
 
     expect(harness.drain).toHaveBeenCalledTimes(1);
     expect(harness.drain).toHaveBeenCalledWith('r2');
+  });
+
+  it('updates a BACKGROUND thread’s preview line from the settle it never sees the items of', async () => {
+    // REPORTED as "i see last chat message will not be updated (if AI wrote new
+    // message) untill i will open this thread". `addItem` writes the preview
+    // and returns early on any run but the open one, so r2's line stayed on
+    // whatever the list was loaded with.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        summary: 'main did not move — the tag points at the same commit.',
+      } as RunStatusEvent);
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r2')?.lastMessage).toBe(
+      'main did not move — the tag points at the same commit.',
+    );
+  });
+
+  it('keeps the preview a WORDLESS settle would otherwise blank', async () => {
+    // `null` clears the notification's sentence — a turn that said nothing must
+    // not re-announce the previous one's words — but the preview is the
+    // thread's last MESSAGE, and a `/compact` turn did not delete it. The
+    // daemon still holds the line and puts it back on the next refetch, so
+    // blanking here would lose it for nothing.
+    chatApi.listChats.mockResolvedValue([
+      run1,
+      { ...run2, lastMessage: 'the answer from before the compaction' },
+    ]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        summary: null,
+      } as RunStatusEvent);
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r2')?.lastMessage).toBe(
+      'the answer from before the compaction',
+    );
+  });
+
+  it('releases the queue when the turn goes HELD, once per hold and not per report', async () => {
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    harness.queued.add('r1');
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', holdingFor: 2 } as RunStatusEvent);
+    });
+    expect(harness.drain).toHaveBeenCalledWith('r1');
+
+    // A hold re-announces on every unit that reports. The queue leaves one
+    // message per turn, so a second drain here would fire the whole strip into
+    // the same one.
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', holdingFor: 1 } as RunStatusEvent);
+    });
+    expect(harness.drain).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases the queue of a HELD run on opening it, with no terminal row in the transcript', async () => {
+    // The daemon DEFERS the terminal row while it holds, so this transcript is
+    // what a held turn's really looks like: the agent's last message, and
+    // nothing after it.
+    chatApi.listChats.mockResolvedValue([{ ...run1, holdingFor: 3 }, run2]);
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 1, 'user', 'go'),
+      msg('r1', 2, 'assistant', 'launched two agents'),
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+    harness.queued.add('r1');
+
+    await open(harness, 'r1');
+
+    expect(harness.drain).toHaveBeenCalledWith('r1');
   });
 
   it('fetches only the delta past the last rendered seq after a reconnect', async () => {

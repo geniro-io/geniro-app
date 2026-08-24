@@ -631,8 +631,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let approvalEncoder: CliTurnOptions['buildApprovalResponse'];
   /**
-   * Background work the CLI has started on this PROCESS and not reported on —
-   * see `AgentEvent`'s `background_work`.
+   * DELEGATES the CLI has started on this PROCESS and not reported on — see
+   * `AgentEvent`'s `background_work`, and {@link trackBackgroundWork} for why a
+   * backgrounded COMMAND is deliberately not in here.
    *
    * At SESSION scope, and that is the correction rather than a detail. It used
    * to live on the turn that happened to be open when the `started` line
@@ -665,6 +666,28 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * delegate's block. Session-scoped for the same reason as the set above.
    */
   const delegateWork = new Map<string, string>();
+  /**
+   * The SHELLS among {@link openWork}, as work-id → launching tool call — the
+   * twin of {@link delegateWork}, kept for the same reason and read by
+   * {@link announceShellWork}.
+   *
+   * Separate rather than one map with a kind, because the two are consulted to
+   * answer opposite questions: this one says "that settle belongs to a command
+   * the transcript is showing as running", the other says "that settle belongs
+   * to a delegate whose block must close". A single map would make each of them
+   * a filter over the other's entries.
+   */
+  const shellWork = new Map<string, string>();
+  /**
+   * The shells already ANNOUNCED as settled, so one unit's end is one row.
+   *
+   * A CLI may report the same ending on more than one channel — claude sends
+   * both `task_updated` and `task_notification` — and the row is durable, so a
+   * duplicate is stored for the life of the transcript. Session-scoped like its
+   * neighbours: an id is a few bytes and the alternative is a window in which a
+   * late second report writes the row again.
+   */
+  const settledShells = new Set<string>();
   /**
    * A terminal event that arrived with NO turn open while {@link openWork} was
    * still outstanding, held until the work reports.
@@ -1257,6 +1280,70 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     offTurnHoldTimer.unref?.();
   };
 
+  /**
+   * A background SHELL's end, announced as the row that closes it.
+   *
+   * The delegate twin above and this one split the SAME channel by what the
+   * unit is, because the two need opposite treatment: a delegate's own block
+   * already exists and is corrected (`subagent_info`), while a shell has no row
+   * of its own at all — only the tool call that launched it, which returned
+   * within the second. Announcing a shell as a delegate would put phantom
+   * sub-agents in the transcript, which is exactly what the delegate twin
+   * refuses to do in the other direction.
+   *
+   * Only the SETTLE is announced. A `started` is remembered (the pairing to the
+   * launching call is stated on that line and, on one of the two settle
+   * channels, nowhere else) and says nothing a client needs — the tool call is
+   * already the start.
+   */
+  const announceShellWork = (
+    event: Extract<AgentEvent, { type: 'background_work' }>,
+  ): void => {
+    if (event.phase === 'started') {
+      // Recorded for EVERY unit, delegate or not: a settle carries no kind, so
+      // which map answers for an id is decided here, where the CLI stated it.
+      if (event.unit !== 'agent' && event.toolCallId !== null) {
+        shellWork.set(event.id, event.toolCallId);
+      }
+      return;
+    }
+    // A delegate's settle is the other twin's business — it is matched against
+    // what the `started` recorded, so a unit this map never saw is silently not
+    // a shell and nothing is announced for it.
+    if (delegateWork.has(event.id)) {
+      return;
+    }
+    // ONCE per unit. A CLI is free to report one unit's end on both of its
+    // terminal channels, and claude does: measured on a real background `sleep`
+    // (2026-08-24, 2.1.237), `task_updated` and `task_notification` both landed
+    // within 7ms and wrote two identical rows into the transcript. The reader
+    // is idempotent, so the cost was noise rather than wrongness — but the rows
+    // are DURABLE, so it was noise stored forever, twice per background command.
+    if (settledShells.has(event.id)) {
+      return;
+    }
+    settledShells.add(event.id);
+    const toolCallId = event.toolCallId ?? shellWork.get(event.id) ?? null;
+    // Forgotten on the FIRST settle, unlike the delegate map: nothing here is
+    // waiting for a second line carrying figures — a shell's end is the whole
+    // of what this reports — so keeping the entry would only leak one string
+    // per background command for the life of the session.
+    shellWork.delete(event.id);
+    const announcement: AgentEvent = {
+      type: 'shell_info',
+      toolCallId,
+      workId: event.id,
+    };
+    // To whoever can carry it, on the same rule as the delegate announcement:
+    // a background command routinely OUTLIVES the turn that launched it, so
+    // the between-turn sink is the normal path here rather than the exception.
+    if (current) {
+      current.options.onEvent(announcement);
+      return;
+    }
+    opts.onBetweenTurnEvent?.(announcement);
+  };
+
   /** Hand a held off-turn terminal to the owner, once. */
   const releaseOffTurnHold = (): void => {
     const held = deferredOffTurnTerminal;
@@ -1280,9 +1367,34 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   const trackBackgroundWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
+    // The SHELL twin runs FIRST, and the order is load-bearing rather than
+    // arbitrary: it decides "is this a delegate?" by asking `delegateWork`,
+    // which the delegate twin DELETES from on the settle that carries figures.
+    // Called the other way round, a delegate's settle-with-usage found an empty
+    // map and was announced as a shell as well.
+    announceShellWork(event);
     announceDelegateWork(event);
     if (event.phase === 'started') {
-      openWork.add(event.id);
+      // Only a DELEGATE holds the turn. A backgrounded command does not: the
+      // agent that launched it has said its piece and is waiting for the user,
+      // and holding the turn for a `pnpm dev` that never ends reports the
+      // thread as working for as long as the server runs — the reported "it
+      // shows working even though you actually stopped".
+      //
+      // What the hold buys is that a unit's completion has a turn to arrive
+      // into, and for a shell that is now bought elsewhere: its end is a
+      // durable `shell_info` row (see {@link announceShellWork}) and anything
+      // the CLI says once it lands is carried by the owner's own between-turn
+      // path. A delegate keeps the hold because the continuation it triggers is
+      // a whole further turn of the agent's own, which is the incident this
+      // mechanism was built for.
+      //
+      // A unit the CLI did not classify counts as a shell — the same reading
+      // `announceDelegateWork` already takes, so a CLI that names no kinds
+      // cannot get delegate treatment through one path and not the other.
+      if (event.unit === 'agent') {
+        openWork.add(event.id);
+      }
       return;
     }
     if (!openWork.delete(event.id) || openWork.size > 0) {
@@ -1550,6 +1662,28 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       }
       terminator.disarm();
       resolveClosed();
+    }
+    // Every background command this process was still running dies WITH it —
+    // they are its own children, and the group is killed as a group. Nothing
+    // else will ever say so: a shell's end is reported by the CLI, and the CLI
+    // is what just ended. Announced here so the rows close honestly, since the
+    // client lists a detached command on the strength of that report rather
+    // than on the run's status — without it a `pnpm dev` from a reaped session
+    // is listed as running for the rest of that transcript's life.
+    //
+    // Before `releaseOffTurnHold`, so these rows precede the terminal event
+    // they were outstanding at.
+    for (const id of [...shellWork.keys()]) {
+      announceShellWork({
+        type: 'background_work',
+        id,
+        phase: 'settled',
+        // The CLI said neither, and neither is needed: the launching call was
+        // recorded on the `started`, and the kind is what put the id in this
+        // map in the first place.
+        unit: 'other',
+        toolCallId: null,
+      });
     }
     // Nothing can report now, so nothing is being waited for: whatever was held
     // for background work is handed over rather than dying with the process,

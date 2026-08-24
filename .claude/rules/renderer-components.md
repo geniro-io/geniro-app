@@ -32,6 +32,13 @@ paths:
      focus trap) and PORTALLED, since it opens from inside a transcript where
      `position: fixed` may be resolved against a transformed ancestor. A bare
      `<img>` is for chrome the user never inspects (`logo`).
+   - **`ansi-text` is the ONE way command output is drawn**, over the pure
+     `ansi.ts` parser beside it. A shell's escape sequences are not plain text:
+     rendered verbatim the escape byte is invisible and its tail is not, so a
+     coloured log reads as corrupted. Colours come from the `--ansi-*` tokens
+     (never from the stream — a terminal palette is built for a black
+     background), and anything that shows command output uses this rather than
+     re-deriving which sequences to honour.
    - `option-list` is the ONE way a set of pickable answer options is drawn,
      and its `arity` (`many` / `one` / `none`) is what decides the drawing —
      square boxes in a column for a checklist, round dots in a flow for a

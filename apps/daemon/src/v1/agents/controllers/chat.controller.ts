@@ -19,6 +19,7 @@ import type {
   ItemWire,
   LocalImageWire,
   RunWire,
+  ShellOutputWire,
 } from '../chat.types';
 import {
   AttachmentDataDto,
@@ -35,12 +36,15 @@ import {
   RenameRunDto,
   RunDto,
   SendMessageDto,
+  ShellOutputDto,
+  ShellOutputQueryDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { LocalImageService } from '../services/local-image.service';
+import { ShellOutputService } from '../services/shell-output.service';
 
 /**
  * Loopback chat REST surface (token-gated by the global LoopbackTokenGuard).
@@ -58,6 +62,7 @@ export class ChatController {
     private readonly chatService: ChatService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
+    private readonly shellOutput: ShellOutputService,
   ) {}
 
   @Post()
@@ -173,6 +178,27 @@ export class ChatController {
     @Query() query: LocalImageQueryDto,
   ): Promise<LocalImageWire> {
     return this.localImages.read(runId, query.path);
+  }
+
+  /**
+   * The terminal behind one command in the running-shells list.
+   *
+   * A QUERY parameter for the call id and not a path segment, matching the
+   * image route beside it: the id is the CLI's own token and nothing here
+   * should have to reason about which characters it may contain.
+   *
+   * Polled while a detached command runs — it is a bounded tail of one file, so
+   * unlike `:runId/metrics` (a round trip to the live CLI) it is cheap enough to
+   * ask again every couple of seconds.
+   */
+  @Get(':runId/shell-output')
+  @ApiOperation({ operationId: 'readShellOutput' })
+  @ZodResponse({ status: 200, type: ShellOutputDto })
+  readShellOutput(
+    @Param('runId') runId: string,
+    @Query() query: ShellOutputQueryDto,
+  ): Promise<ShellOutputWire> {
+    return this.shellOutput.read(runId, query.callId);
   }
 
   /**

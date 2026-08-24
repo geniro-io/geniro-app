@@ -72,6 +72,16 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * exists as the sum of its announcements: two of the three shapes on the wire
  * are patches, so a client that missed one cannot reconstruct the rest.
  *
+ * `shell_info` closes a BACKGROUND SHELL — a command the agent detached, whose
+ * launching tool call returned within the second while the command ran on for
+ * minutes. It is the only end signal such a command has: measured on claude
+ * 2.1.237, the CLI reports the completion to the MODEL out of band and to the
+ * conversation as a sentence the agent writes, so a reader folding "what is
+ * running" out of tool calls alone lists it forever. Persisted rather than
+ * streamed for the same reason `task_list` is — a reopened chat replays the
+ * transcript, and an ephemeral end would show every past background command as
+ * running again. It renders as NOTHING; it exists to close a row that is.
+ *
  * `unanswerable` closes an `approval_request` that can never be answered now:
  * its turn settled while the request was still pending, so the card on screen
  * is a dead control. The daemon says so explicitly rather than leaving the
@@ -101,6 +111,7 @@ export const ItemKindSchema = z
     'call_answer',
     'subagent_info',
     'task_list',
+    'shell_info',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

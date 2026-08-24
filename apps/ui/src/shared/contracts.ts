@@ -25,6 +25,17 @@ export interface DaemonHandle {
   token: string;
   /** Daemon version (semver). */
   version: string;
+  /**
+   * When THIS daemon launch began (ISO-8601, from the pidfile).
+   *
+   * Carried for one reason, and it is a liveness one rather than a display one:
+   * an agent's CLI process cannot outlive the daemon that spawned it, so
+   * anything a transcript shows as still running whose row predates this
+   * stamp is definitionally over — see `Chats.tsx`'s `shellsByAgent`, where a
+   * detached command is otherwise listed on the strength of a settle row the
+   * dead daemon never got to write.
+   */
+  startedAt: string;
 }
 
 /** Live status the renderer polls/subscribes to for the connection banner. */

@@ -1625,7 +1625,8 @@ export const ItemKind = {
     CallQuestion: 'call_question',
     CallAnswer: 'call_answer',
     SubagentInfo: 'subagent_info',
-    TaskList: 'task_list'
+    TaskList: 'task_list',
+    ShellInfo: 'shell_info'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 
@@ -2005,6 +2006,18 @@ export interface RunDto {
     contextWindow: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    contextWindowTokens: number | null;
+    /**
+     * 
      * @type {string}
      * @memberof RunDto
      */
@@ -2254,6 +2267,31 @@ export interface SetRunGroupDto {
      * @memberof SetRunGroupDto
      */
     groupId: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ShellOutputDto
+ */
+export interface ShellOutputDto {
+    /**
+     * the tail of the output file, decoded as UTF-8
+     * @type {string}
+     * @memberof ShellOutputDto
+     */
+    text: string;
+    /**
+     * earlier output was dropped — this is the tail of a longer file
+     * @type {boolean}
+     * @memberof ShellOutputDto
+     */
+    truncated: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShellOutputDto
+     */
+    unavailableReason: string | null;
 }
 
 /**

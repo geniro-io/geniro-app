@@ -42,6 +42,10 @@ function build(opts: {
    */
   renameDuringResolve?: string;
   firstUserMessageText?: string | null;
+  /** The agent's first reply, which a generated title is also written from. */
+  firstAssistantMessageText?: string | null;
+  /** What the CLI answers when ASKED to name the chat; null = it cannot. */
+  generatedTitle?: string | null;
   agentSessionId?: string | null;
 }) {
   const items = new Subject<RunItemEvent>();
@@ -91,8 +95,11 @@ function build(opts: {
       }
       return Promise.resolve(opts.nativeTitle ?? null);
     });
+  const generateTitle = vi.fn(() =>
+    Promise.resolve(opts.generatedTitle ?? null),
+  );
   const adapterFor = vi.fn(
-    () => ({ readSessionTitle }) as unknown as AgentAdapter,
+    () => ({ readSessionTitle, generateTitle }) as unknown as AgentAdapter,
   );
   // Records its arguments rather than asserting inside them: this runs within
   // `readNativeTitle`'s try/catch, so a failed `expect` there would surface as a
@@ -125,6 +132,8 @@ function build(opts: {
     {
       firstUserMessageText: () =>
         Promise.resolve(opts.firstUserMessageText ?? null),
+      firstAssistantMessageText: () =>
+        Promise.resolve(opts.firstAssistantMessageText ?? null),
     } as unknown as ItemDao,
     { getByRunNode } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
@@ -197,6 +206,7 @@ function build(opts: {
     getByRunNode,
     statuses,
     readSessionTitle,
+    generateTitle,
     adapterFor,
   };
 }
@@ -319,7 +329,7 @@ describe('ChatTitleService', () => {
   });
 
   it('stops re-asking once the agent has named the chat', async () => {
-    const { settle, readSessionTitle, retitle } = build({
+    const { settle, readSessionTitle, generateTitle, retitle } = build({
       run: { title: 'Fix Conflicts Worktree' },
       nativeTitle: 'Fix Conflicts Worktree',
       firstUserMessageText: 'look at the merge conflicts',
@@ -328,10 +338,13 @@ describe('ChatTitleService', () => {
     await settle();
     await settle();
 
-    // Asked once, found the title already in place, and did not write or keep
-    // re-reading the CLI's store for the rest of the conversation.
-    expect(readSessionTitle).toHaveBeenCalledTimes(1);
+    // A title that is not what this service would derive is not this service's
+    // to replace — the agent's own name reads exactly like the user's own — so
+    // it neither writes nor spends anything asking, on this turn or any later
+    // one. That check comes first precisely so asking is not spent to find out.
     expect(retitle).not.toHaveBeenCalled();
+    expect(readSessionTitle).not.toHaveBeenCalled();
+    expect(generateTitle).not.toHaveBeenCalled();
   });
 
   it('forgets a deleted run rather than holding its counter forever', async () => {
@@ -370,6 +383,94 @@ describe('ChatTitleService', () => {
     }
 
     expect(readSessionTitle).toHaveBeenCalledTimes(5);
+  });
+
+  it('ASKS the CLI to name a chat whose store holds no title', async () => {
+    // The reported defect, end to end: headless claude writes no title
+    // anywhere, so a chat opened with a pasted URL was named after that URL for
+    // good. Reading finds nothing and the ask is what produces a real name.
+    const { settle, retitle, generateTitle, statuses } = build({
+      run: { title: 'https://ticktick.com/webapp/#p/699/tasks/6a8 do this' },
+      nativeTitle: null,
+      firstUserMessageText:
+        'https://ticktick.com/webapp/#p/699/tasks/6a8 do this',
+      firstAssistantMessageText: 'I will start by fetching the TickTick task.',
+      generatedTitle: 'Implement TickTick task with screenshots',
+    });
+
+    await settle();
+
+    // It is asked about the EXCHANGE — the opening line names nothing on its
+    // own, which is exactly the shape that got reported.
+    expect(generateTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        opening: 'https://ticktick.com/webapp/#p/699/tasks/6a8 do this',
+        reply: 'I will start by fetching the TickTick task.',
+      }),
+    );
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Implement TickTick task with screenshots',
+      'https://ticktick.com/webapp/#p/699/tasks/6a8 do this',
+      expect.anything(),
+    );
+    expect(statuses.at(-1)?.title).toBe(
+      'Implement TickTick task with screenshots',
+    );
+  });
+
+  it('asks ONCE, however many turns the chat goes on for', async () => {
+    // Asking spawns a process and bills a model call, so a CLI that answered
+    // nothing must not be re-asked per turn for the life of the conversation.
+    // The read budget beside it is deliberately untouched — a null from an
+    // adapter that generates nothing means "no such mechanism", not "it failed".
+    const { settle, generateTitle, readSessionTitle } = build({
+      run: { title: 'add auto chat titles' },
+      nativeTitle: null,
+      firstUserMessageText: 'add auto chat titles',
+      generatedTitle: null,
+    });
+
+    for (let turn = 0; turn < 5; turn += 1) {
+      await settle();
+    }
+
+    expect(generateTitle).toHaveBeenCalledTimes(1);
+    expect(readSessionTitle).toHaveBeenCalledTimes(5);
+  });
+
+  it('does not ask when the CLI already wrote a title of its own', async () => {
+    // The cheap route wins: cursor names its own conversations, and spending a
+    // model call to re-answer a question already answered is the whole of what
+    // the ordering here is for.
+    const { settle, retitle, generateTitle } = build({
+      run: { title: 'look at the merge conflicts' },
+      nativeTitle: 'Fix Conflicts Worktree',
+      firstUserMessageText: 'look at the merge conflicts',
+    });
+
+    await settle();
+
+    expect(generateTitle).not.toHaveBeenCalled();
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Fix Conflicts Worktree',
+      'look at the merge conflicts',
+      expect.anything(),
+    );
+  });
+
+  it('keeps the derived title when the ask fails', async () => {
+    const { settle, retitle } = build({
+      run: { title: 'add auto chat titles' },
+      nativeTitle: null,
+      firstUserMessageText: 'add auto chat titles',
+      generatedTitle: null,
+    });
+
+    await settle();
+
+    expect(retitle).not.toHaveBeenCalled();
   });
 
   it('leaves a workflow run to its workflow label', async () => {

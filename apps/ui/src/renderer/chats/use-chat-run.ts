@@ -81,7 +81,14 @@ function queueMayDrainAfterReplay(
     lastItem !== undefined &&
     TERMINAL_KINDS.has(lastItem.kind) &&
     lastItem.nodeId === null;
-  return endedOnTerminal || run.status !== 'running';
+  // A HELD run counts as drainable even though its status is `running` and its
+  // transcript has no terminal row — the daemon is DEFERRING that row until the
+  // last delegate reports, which is why neither of the other two readings can
+  // see it. The turn itself is over; see the live announce's own hold drain for
+  // why that means the queue is owed its send. Without this the two replay
+  // paths (opening the chat, and the delta after a reconnect) were the one
+  // remaining way a queue could be released — and both refused a held run.
+  return endedOnTerminal || run.holdingFor > 0 || run.status !== 'running';
 }
 
 /** What the run lifecycle needs from the surfaces it does not own. */
@@ -299,6 +306,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [holding, setHolding] = useState<ReadonlyMap<string, number>>(
     new Map(),
   );
+  /**
+   * {@link holding} as the announce handler reads it — the hold has to be
+   * compared to its PREVIOUS value to spot the moment it begins, and that
+   * comparison decides whether to fire the drain. A `setHolding` updater cannot
+   * be where that happens: React invokes an updater twice under StrictMode and
+   * may discard the result of a render it throws away, so a send fired from
+   * inside one is a send fired an arbitrary number of times.
+   */
+  const holdingRef = useRef<ReadonlyMap<string, number>>(holding);
+  useEffect(() => {
+    holdingRef.current = holding;
+  }, [holding]);
   /**
    * What each run SAID as it last settled — the agent's closing words, or the
    * failure's message, as the daemon announced them.
@@ -659,16 +678,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           !endedOnTerminal
         ) {
           setStreaming(true);
-        } else if (
-          queueMayDrainAfterReplay(run, last) &&
-          hasQueuedMessages(runId)
-        ) {
+        }
+        // NOT an `else` to the branch above, and the one case where the two
+        // both fire is exactly what that costs: a HELD run is still `running`
+        // with no terminal row, so it takes the live-row branch AND is owed its
+        // drain. Every other run answers only one of them — a settled run
+        // cannot enter the first, and a genuinely working one is refused by
+        // `queueMayDrainAfterReplay`.
+        if (queueMayDrainAfterReplay(run, last) && hasQueuedMessages(runId)) {
           // The ONE drain decision a replay is allowed to make, and it is taken
           // from the daemon's own run status rather than from any transcript
           // row: the turn this chat was on finished while the user was looking
           // at another one, so the queue is owed its send. While the run is
-          // still `running` nothing is sent — Steer is the only way into a live
-          // turn.
+          // still `running` and not HELD nothing is sent — Steer is the only
+          // way into a live turn.
           drainQueueRef.current(runId);
         }
       } catch (err) {
@@ -833,11 +856,42 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // while the user is typically looking somewhere else, which is why it is
       // a broadcast rather than a message to the run's room.
       const named = event.title;
+      /**
+       * What the thread last SAID, onto the row's preview line.
+       *
+       * REPORTED as "i see last chat message will not be updated (if AI wrote
+       * new message) untill i will open this thread". The preview was written
+       * from `addItem`, which returns early on any run but the OPEN one — items
+       * are delivered to a single room and a client joins one at a time — so a
+       * background thread's line kept the message it was loaded with, and the
+       * first thing that corrected it was the user clicking the thread. The
+       * same shape, and the same fix, as `at` two fields up.
+       *
+       * `summary` is already the right sentence and is already on the wire: the
+       * daemon put it there precisely BECAUSE the row's `lastMessage` is
+       * enriched by the list endpoints alone and is therefore stale for exactly
+       * these runs (see `RunStatusEvent.summary`). Nothing new is sent; the
+       * sentence that was reaching the notification is now also reaching the
+       * line the notification is about.
+       *
+       * Only a non-empty string writes. `undefined` asserts nothing, as ever —
+       * but `null` differs here from what it means to the notification: there
+       * it CLEARS, because a wordless settle must not re-announce the previous
+       * turn's words, while a preview is the thread's last message and a turn
+       * that said nothing (a `/compact`) did not remove it. Blanking the row
+       * would lose a line the daemon still holds and would put back on the next
+       * refetch.
+       */
+      const spoke =
+        typeof event.summary === 'string' && event.summary.trim() !== ''
+          ? event.summary
+          : undefined;
       if (
         status !== null ||
         parked !== undefined ||
         at !== undefined ||
-        named !== undefined
+        named !== undefined ||
+        spoke !== undefined
       ) {
         setRuns((prev) =>
           prev.map((run) =>
@@ -847,6 +901,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
                   ...(at === undefined ? {} : { updatedAt: at }),
+                  ...(spoke === undefined ? {} : { lastMessage: spoke }),
                   // Applied only to a run that has none: the daemon guards this
                   // too, but the two decide from different snapshots — a rename
                   // typed while the naming was in flight is on screen HERE
@@ -911,31 +966,53 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         }
         return next;
       });
-      setHolding((prev) => {
-        // A real STATUS transition ends whatever hold was in effect — a turn
-        // that settled is not held, and a new turn starting has no hold yet.
-        // An activity-only announce carrying no `holdingFor` says nothing and
-        // must leave the reading alone.
-        const held =
-          event.holdingFor !== undefined
-            ? event.holdingFor > 0
-            : status !== null
-              ? false
-              : prev.has(event.runId);
-        // Unchanged means unchanged, and that is what preserves the START: a
-        // hold re-announces on every unit that reports, so rewriting the entry
-        // each time would restamp it and the parked stretch would never grow.
-        if (held === prev.has(event.runId)) {
-          return prev;
-        }
-        const next = new Map(prev);
+      // A real STATUS transition ends whatever hold was in effect — a turn
+      // that settled is not held, and a new turn starting has no hold yet.
+      // An activity-only announce carrying no `holdingFor` says nothing and
+      // must leave the reading alone.
+      const wasHeld = holdingRef.current.has(event.runId);
+      const held =
+        event.holdingFor !== undefined
+          ? event.holdingFor > 0
+          : status !== null
+            ? false
+            : wasHeld;
+      // Unchanged means unchanged, and that is what preserves the START: a
+      // hold re-announces on every unit that reports, so rewriting the entry
+      // each time would restamp it and the parked stretch would never grow.
+      if (held !== wasHeld) {
+        const next = new Map(holdingRef.current);
         if (held) {
           next.set(event.runId, Date.now());
         } else {
           next.delete(event.runId);
         }
-        return next;
-      });
+        // Written here as well as by the effect that mirrors the state: two
+        // announces can land in one tick, and the second must not compare
+        // itself against the reading the first already replaced.
+        holdingRef.current = next;
+        setHolding(next);
+      }
+      // The hold BEGINNING releases the queue, and it is the second half of a
+      // rule the composer already applies to a message being typed: a held turn
+      // is not a working agent. Its CLI printed its turn-end line and is sitting
+      // on an idle stdin so the delegates it launched have somewhere to report.
+      //
+      // Without this the queue waited for the hold to END, which is the whole
+      // of the reported "i can see conversation compacted, but still see some
+      // background job — so new messages from queue wasnt taken": three
+      // follow-ups sat in the strip while the turn they were queued behind had
+      // been over for minutes. The composer refused to queue a message typed in
+      // that window (`Chats.tsx`, the `holdingRef` gate on the send path) and
+      // that is exactly the judgement owed to messages queued BEFORE it.
+      //
+      // Once per transition, never per announce: a hold re-announces on every
+      // unit that reports, and a drain per report would fire the whole queue
+      // into one turn. `drainQueue` sends the head alone and the turn it starts
+      // fires the next one, so the queue still leaves in order.
+      if (held && !wasHeld && hasQueuedMessages(event.runId)) {
+        drainQueueRef.current(event.runId);
+      }
     });
     const selectedRun = activeRunIdRef.current;
     if (selectedRun) {

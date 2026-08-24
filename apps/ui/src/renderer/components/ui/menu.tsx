@@ -41,6 +41,21 @@ export interface MenuItem {
 /** A titled block of rows ("Recents", "Agents", "Workflows"). */
 export interface MenuGroup {
   label?: string;
+  /**
+   * A sentence about this block, in ordinary prose — why it is short, or why
+   * the row below is the only one.
+   *
+   * Distinct from {@link MenuGroup.label}, which is an 11px uppercase
+   * micro-label naming a block ("RECENTS"); a sentence set in that treatment
+   * outweighs every row beneath it. This wraps, is muted, and reads as an
+   * aside.
+   *
+   * It exists because a control that offers ONE row cannot explain itself from
+   * the trigger: the explanation lived in the chip's hover `title`, and nobody
+   * hovers a control they have already opened and decided is broken. Put the
+   * reason where the question is asked.
+   */
+  note?: string;
   items: MenuItem[];
 }
 
@@ -285,7 +300,21 @@ export function Menu({
   const visible = React.useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) {
-      return groups;
+      // An EMPTY group is dropped here exactly as the search branch below drops
+      // one it has filtered empty, and for a reason the search branch never had
+      // to state: a group renders as a `<div>` whose only content may be its
+      // rows, and the group AFTER it draws the hairline that separates blocks.
+      // So a caller passing a conditionally-empty group got a blank band with a
+      // rule under it — reported against the context-window chip on a cursor
+      // model that offers one fixed size, where the sizes group is empty and
+      // the `model default` row sits alone beneath an empty box. It reads as a
+      // menu that failed to load, which is exactly what it was taken for.
+      //
+      // Callers compose groups from data, so "this block has nothing in it" is
+      // ordinary rather than a caller mistake; the arithmetic above is already
+      // written against `visible` rather than `groups`, so nothing downstream
+      // notices.
+      return groups.filter((group) => group.items.length > 0);
     }
     return groups
       .map((group) => ({
@@ -449,6 +478,7 @@ export function Menu({
             return (
               <div
                 key={group.label ?? `group-${groupIndex}`}
+                data-slot="menu-group"
                 // A HAIRLINE between blocks rather than a full border on the
                 // block itself: with the rows inset, an edge-to-edge rule cut
                 // across the padding and made the panel look like two stacked
@@ -469,6 +499,13 @@ export function Menu({
                     data-slot="menu-group-heading"
                     className="px-2.5 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-[0.055em] text-muted-foreground">
                     {group.label}
+                  </p>
+                ) : null}
+                {group.note !== undefined ? (
+                  <p
+                    data-slot="menu-group-note"
+                    className="px-2.5 pb-1.5 pt-0.5 text-xs leading-snug text-muted-foreground">
+                    {group.note}
                   </p>
                 ) : null}
                 {group.items.map((item, itemIndex) => {

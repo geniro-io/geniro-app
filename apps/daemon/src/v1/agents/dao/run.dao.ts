@@ -73,6 +73,44 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * File how full this run's context window is, as the CLI just reported it.
+   *
+   * A bare `nativeUpdate` rather than `updateById`, and for the ordinary reason
+   * rather than `retitle`'s: this fires once per main-thread model response, so
+   * it must not read the row, hydrate an entity and flush it — nothing here
+   * needs the row's other columns, and loading them would put a whole run entity
+   * through the identity map several times a minute.
+   *
+   * Each half is written only when the reading HAS it, and neither is ever
+   * cleared. A reading that carries no window has said nothing about the
+   * model's, and overwriting a real denominator with silence leaves the ring a
+   * numerator it cannot divide; the mirror image holds for the count. That is
+   * also why both are optional rather than one call per pair — claude reports
+   * the count on every assistant line and the window on its result line alone,
+   * so the two genuinely arrive apart.
+   */
+  async rememberContext(
+    runId: string,
+    reading: {
+      contextTokens?: number | null;
+      contextWindowTokens?: number | null;
+    },
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const data: Partial<Run> = {};
+    if (positive(reading.contextTokens)) {
+      data.contextTokens = reading.contextTokens;
+    }
+    if (positive(reading.contextWindowTokens)) {
+      data.contextWindowTokens = reading.contextWindowTokens;
+    }
+    if (Object.keys(data).length === 0) {
+      return;
+    }
+    await this.getRepo(txEm).nativeUpdate({ id: runId }, data);
+  }
+
+  /**
    * Chat runs stuck in a non-terminal `running` state — used by the boot-time
    * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
    */
@@ -123,4 +161,15 @@ export class RunDao extends BaseDao<Run> {
       { disableIdentityMap: true },
     );
   }
+}
+
+/**
+ * A figure worth storing: a real number above zero.
+ *
+ * Zero is rejected as hard as null, and for the reason the renderer's own fold
+ * states — a turn that reported `0` measured nothing, and both halves of the
+ * ring read it as a denominator or a numerator that cannot be right.
+ */
+function positive(value: number | null | undefined): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }

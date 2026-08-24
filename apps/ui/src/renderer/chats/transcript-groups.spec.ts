@@ -85,6 +85,21 @@ describe('groupTranscript', () => {
     expect((entries[2] as ToolGroupEntry).pairs).toHaveLength(1);
   });
 
+  it('a background command SETTLING does not shred the group either', () => {
+    // `shell_info` is bookkeeping that renders as nothing — its only reader is
+    // the panel's running-shells fold. Treated as a narrative row it would
+    // close the open group, so a turn detaching three commands would have its
+    // tools chopped into one-call rows for rows nobody can see.
+    const entries = groupTranscript([
+      call('Bash', 't1'),
+      item('shell_info', { id: 't1', workId: 'bash_1' }),
+      call('Bash', 't2'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    expect((entries[0] as ToolGroupEntry).pairs).toHaveLength(2);
+  });
+
   it("another node's interleaved rows do NOT shred a node's tool run", () => {
     // A parallel branch (a callee's status/message) lands between the
     // caller's tool calls — the caller's group must keep accumulating.

@@ -85,8 +85,14 @@ export function liveRowKind(payload: unknown): LiveRowKind | null {
   return null;
 }
 
-/** Re-render once a second, so an elapsed readout counts real seconds. */
-function useSecondsTick(): void {
+/**
+ * Re-render once a second, so an elapsed readout counts real seconds.
+ *
+ * Exported for the agents panel's running-shell rows, which own their clock for
+ * the same reason these rows do (see below): a ticking number handed down as a
+ * prop re-renders whatever holds it, and the panel's holder is the whole run.
+ */
+export function useSecondsTick(): void {
   const [, tick] = useState(0);
   useEffect(() => {
     const id = window.setInterval(() => tick((n) => n + 1), 1_000);

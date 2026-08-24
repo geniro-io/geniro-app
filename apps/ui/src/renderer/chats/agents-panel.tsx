@@ -29,6 +29,8 @@ import {
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
+import type { ShellRun } from './shell-activity';
+import { ShellIcon, ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
 import { mcpScopeKey } from './use-agent-mcp';
@@ -265,6 +267,8 @@ export function AgentsPanel({
   agents,
   artifacts = [],
   tasksByAgent,
+  shellsByAgent,
+  onOpenShell,
   mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
@@ -369,6 +373,29 @@ export function AgentsPanel({
    * here — it belongs to its own block, whose header carries its count.
    */
   tasksByAgent?: ReadonlyMap<string, readonly AgentTaskRow[]>;
+  /**
+   * The shells each agent has RUNNING right now, keyed by `AgentDisplay.id` —
+   * the commands its CLI has started and not yet seen come back.
+   *
+   * Here for the same reason the task list is: it is per-agent state a reader
+   * opens this panel to read, and every other coding CLI answers "what is
+   * running" on its own screen rather than making the user hunt the last tool
+   * row in the conversation. An agent running nothing gets no section — this
+   * lists what is happening, and a heading over an empty box would report a
+   * quiet agent as a broken readout.
+   *
+   * Rendered as GIVEN, including the rule about which agents may contribute at
+   * all: the header's counter is the same reading over the same map, so the
+   * liveness gate lives at the one place both are fed from (`Chats.tsx`) and
+   * not in each of them.
+   */
+  shellsByAgent?: ReadonlyMap<string, readonly ShellRun[]>;
+  /**
+   * Show one command's own output. Absent leaves the rows listed but inert —
+   * the same rule the sub-agent rows follow: this panel never invents a surface
+   * it was not given.
+   */
+  onOpenShell?: (shell: ShellRun) => void;
   /*
    * There was a `subagentUnavailableReason` here — a panel-level paragraph
    * saying why a CLI lists no delegates. It has been removed: on cursor it was
@@ -639,6 +666,7 @@ export function AgentsPanel({
               const listedActive = listedThreads.filter(
                 (thread) => thread.status === 'running',
               ).length;
+              const shells = shellsByAgent?.get(agent.id) ?? [];
               const tasks = tasksByAgent?.get(agent.id) ?? [];
               const taskState = taskProgress(tasks);
               // Whether the list is still being WORKED, which is what decides
@@ -850,6 +878,34 @@ export function AgentsPanel({
                           </li>
                         ) : null}
                       </ul>
+                    </div>
+                  ) : null}
+                  {shells.length > 0 ? (
+                    /* ABOVE the task list, and under the delegates: the three
+                       sections read from most volatile to least. A shell is
+                       measured in seconds and is the thing a reader glances at
+                       the panel to check, while a task list moves once a
+                       minute and a delegate list once a turn. */
+                    <div
+                      data-slot="agent-shell-list"
+                      className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
+                      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <ShellIcon />
+                        {/* The count is the heading, not a figure beside one:
+                            with the finished commands deliberately absent (see
+                            `runningShellsByAgent`) there is no `done/total` to
+                            state, and "Shells" over three rows says nothing the
+                            rows do not. */}
+                        <span>
+                          {shells.length} shell
+                          {shells.length === 1 ? '' : 's'} running
+                        </span>
+                      </p>
+                      <ShellRows
+                        shells={shells}
+                        className="pl-0.5"
+                        onOpen={onOpenShell}
+                      />
                     </div>
                   ) : null}
                   {tasks.length > 0 ? (

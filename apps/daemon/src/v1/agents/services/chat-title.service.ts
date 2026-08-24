@@ -32,10 +32,15 @@ import { AgentEventBus } from './agent-events.bus';
  *
  * The title is asked of the CLI FIRST and derived only when it has none. That
  * order is the whole point — an agent that just read the exchange writes "Fix
- * conflicts worktree" where the host can only trim the user's opening line — and
- * the two shipped CLIs sit on opposite sides of it: cursor writes a generated
- * title into its own session store, while headless claude writes none at all
- * (measured; see `ClaudeAdapter`'s class doc).
+ * conflicts worktree" where the host can only trim the user's opening line.
+ *
+ * The two shipped CLIs reach an agent-written title by opposite routes, and
+ * neither can serve the other's. cursor WRITES one into its own session store,
+ * so it is read for free. Headless claude writes none anywhere (measured; see
+ * `ClaudeAdapter`'s class doc), so it is ASKED — a throwaway turn on a cheap
+ * model, once per conversation. Without that ask, a chat opened with a pasted
+ * URL was named after that URL for the rest of its life, which is what got
+ * REPORTED.
  */
 @Injectable()
 export class ChatTitleService implements OnModuleInit {
@@ -63,6 +68,14 @@ export class ChatTitleService implements OnModuleInit {
    * on delete, which the chat service has been bitten by before.
    */
   private readonly upgradesTried = new Map<string, number>();
+
+  /**
+   * Runs whose CLI has already been ASKED for a title — see {@link askForTitle}.
+   *
+   * Separate from {@link upgradesTried} because the two bound different costs,
+   * and torn down beside it on the same delete announcement.
+   */
+  private readonly generationTried = new Set<string>();
 
   constructor(
     private readonly em: EntityManager,
@@ -124,6 +137,7 @@ export class ChatTitleService implements OnModuleInit {
     // is keyed by.
     this.bus.allDeleted().subscribe((runId) => {
       this.upgradesTried.delete(runId);
+      this.generationTried.delete(runId);
     });
   }
 
@@ -190,17 +204,27 @@ export class ChatTitleService implements OnModuleInit {
    * The agent's own title for a run this service already named, or null when
    * there is nothing better to write.
    *
-   * It exists because cursor names a conversation only AFTER an exchange: the
-   * first turn's read routinely finds nothing, so the derived title is written
-   * and — named once — the agent's better one would never land on a chat started
-   * in this app, only on an imported one.
+   * Two CLIs reach an agent-written title by opposite routes and both end here.
+   * cursor names a conversation only AFTER an exchange, so the first turn's READ
+   * finds nothing and — named once — its better title would otherwise never land
+   * on a chat started in this app. claude writes no title anywhere headlessly,
+   * so there is nothing to read at all and it is ASKED instead
+   * ({@link AgentAdapter.generateTitle}).
    *
-   * Two things bound it, because this runs on every settled turn. The adapter is
-   * asked FIRST and a null ends the attempt before any transcript read — which
-   * is the whole cost for claude, whose base implementation answers null without
-   * touching disk. And the attempts are counted per run
-   * ({@link CHAT_TITLE_UPGRADE_TURNS}), so a conversation that is never going to
-   * be named stops being asked instead of paying a read per turn forever.
+   * The ownership check comes FIRST, before either route. It used to sit last,
+   * on the reasoning that the adapter's answer was the cheap half — true while
+   * every adapter answered null off memory, and false the moment one of them
+   * spends a model call. One indexed query is now what stands between a renamed
+   * chat and a spawn that could not have been used anyway.
+   *
+   * Two budgets, because the two routes cost different things. Reading is
+   * counted per run ({@link CHAT_TITLE_UPGRADE_TURNS}), so a conversation the
+   * agent is never going to name stops being asked. Asking happens at most ONCE
+   * per run: a title is as good as it will get on the first try, and a failure
+   * (a timeout, a refused model) that retried per turn would spawn a process per
+   * turn for the life of the chat. They are separate sets precisely so a CLI
+   * that generates nothing — where a null means "no such mechanism" rather than
+   * "it did not work" — keeps its full read budget.
    */
   private async upgrade(
     run: Run & { agentKind: AgentKind },
@@ -211,28 +235,65 @@ export class ChatTitleService implements OnModuleInit {
       return null;
     }
     this.upgradesTried.set(run.id, tried + 1);
-    const native = await this.readNativeTitle(run, em);
-    if (native === null) {
-      return null;
-    }
-    const candidate = titleFromText(native, CHAT_TITLE_MAX_CHARS);
-    if (candidate === '' || candidate === run.title) {
-      // Already the agent's own name — stop asking rather than re-reading its
-      // store for the rest of the conversation.
-      this.upgradesTried.set(run.id, CHAT_TITLE_UPGRADE_TURNS);
-      return null;
-    }
     // The title must still be the one this service derived. Anything else is
     // the user's, and a name they chose outranks the agent's.
     const opening = await this.itemDao.firstUserMessageText(run.id, em);
-    const derived =
-      opening === null ? null : titleFromText(opening, CHAT_TITLE_MAX_CHARS);
-    if (derived === null || derived !== run.title) {
+    if (
+      opening === null ||
+      titleFromText(opening, CHAT_TITLE_MAX_CHARS) !== run.title
+    ) {
       this.upgradesTried.set(run.id, CHAT_TITLE_UPGRADE_TURNS);
       return null;
     }
+    const better =
+      (await this.readNativeTitle(run, em)) ??
+      (await this.askForTitle(run, em, opening));
+    if (better === null) {
+      return null;
+    }
+    // Whatever the route, this run is done being asked: a read that answered is
+    // the agent's own name, and an ask is one-shot by construction.
     this.upgradesTried.set(run.id, CHAT_TITLE_UPGRADE_TURNS);
-    return candidate;
+    const candidate = titleFromText(better, CHAT_TITLE_MAX_CHARS);
+    return candidate === '' || candidate === run.title ? null : candidate;
+  }
+
+  /**
+   * The title this run's CLI writes when ASKED — for the CLI that keeps none of
+   * its own. Null once this run has already asked, whatever came back.
+   *
+   * The exchange is read here rather than in the adapter, which must not touch
+   * this app's database: the opening message is already in hand from the
+   * ownership check above, and the agent's first reply is fetched only on the
+   * one turn that asks.
+   *
+   * Every failure is a null and a log line, on the same terms as
+   * {@link readNativeTitle}: the derived title is already on screen and correct,
+   * so a CLI that could not be asked costs a better name and nothing else.
+   */
+  private async askForTitle(
+    run: Run & { agentKind: AgentKind },
+    em: EntityManager,
+    opening: string,
+  ): Promise<string | null> {
+    if (this.generationTried.has(run.id)) {
+      return null;
+    }
+    this.generationTried.add(run.id);
+    try {
+      return await this.adapters.for(run.agentKind).generateTitle({
+        opening,
+        reply: await this.itemDao.firstAssistantMessageText(run.id, em),
+        configDir: run.configDir,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `title generation for run ${run.id} failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      return null;
+    }
   }
 
   /** The CLI's own title, else one derived from the opening message. */

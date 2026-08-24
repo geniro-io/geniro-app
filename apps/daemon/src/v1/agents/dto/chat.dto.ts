@@ -12,6 +12,7 @@ import {
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   RunWireSchema,
+  ShellOutputWireSchema,
 } from '../chat.types';
 
 /**
@@ -213,6 +214,27 @@ export class LocalImageQueryDto extends createZodDto(
  * daemon minted nothing here.
  */
 export class LocalImageDto extends createZodDto(LocalImageWireSchema) {}
+
+/** Which command's terminal to open — the tool call that started it. */
+export class ShellOutputQueryDto extends createZodDto(
+  z.object({
+    callId: z
+      .string()
+      .describe(
+        'the id of the tool call that started the command, as the CLI spelled it',
+      ),
+  }),
+) {}
+
+/**
+ * One shell command's output — the tail of the file a DETACHED command is still
+ * writing, or the reply a foreground one already returned.
+ *
+ * One route for both, because the panel's rows do not distinguish them: a user
+ * clicking a running command wants what it has printed, and which of the two
+ * mechanisms holds that text is the daemon's problem, not theirs.
+ */
+export class ShellOutputDto extends createZodDto(ShellOutputWireSchema) {}
 
 /**
  * Acknowledgement of a cancel request. Shared with the workflow routes — the

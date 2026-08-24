@@ -3203,6 +3203,8 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       prompt: null,
       model: null,
       durationMs: null,
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: true,
     });
@@ -3241,6 +3243,8 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       prompt: null,
       model: null,
       durationMs: null,
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
     });
@@ -5064,6 +5068,8 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
       prompt: null,
       model: null,
       durationMs: null,
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
     });

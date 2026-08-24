@@ -200,8 +200,12 @@ function stubScript(handle) {
     getDaemonHandle: async () => (${h}),
     onDaemonRestarted: () => () => {},
     pickProjectFolder: async () => ${cwd}, pickAgentBinary: async () => null,
-    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false }),
-    updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...p }; },
+    // Every key the renderer WRITES is remembered, not just the one the
+    // harness happened to need first: a setting that cannot round-trip here
+    // looks exactly like a feature that does not work — the transcript's
+    // collapse-tool-steps switch was driven and read back as unchanged.
+    getSettings: async () => ({ onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...(window.__geniroSettings ?? {}) }),
+    updateSettings: async (p) => { if (p.notificationsEnabled !== undefined) window.__geniroNotificationsEnabled = p.notificationsEnabled; window.__geniroSettings = { ...(window.__geniroSettings ?? {}), ...p }; return { onboardingComplete: true, projectFolder: ${cwd}, recentFolders: [${cwd}], configDir: ${configDir}, recentConfigDirs: ${recentConfigDirs}, lastChatTarget: 'claude', cliPaths: {}, checkForUpdates: false, notificationsEnabled: window.__geniroNotificationsEnabled !== false, ...window.__geniroSettings }; },
     detectClis: async () => ([{ kind: 'claude', found: true, path: ${claude}, version: 'detected', loggedIn: null }, { kind: 'cursor-agent', found: ${cursorPath ? 'true' : 'false'}, path: ${cursor}, version: ${cursorPath ? "'detected'" : 'null'}, loggedIn: null }]),
     completeOnboarding: async () => {},
     // Settings' CLI sign-in resolves through the daemon and then hands the

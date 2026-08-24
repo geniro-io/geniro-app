@@ -9,6 +9,8 @@ import { cn } from '../components/ui/utils';
 import { formatRelativeTime } from './relative-time';
 import {
   awaitingPhrase,
+  HELD_ACTIVITY,
+  isWorkingRunStatus,
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
@@ -332,13 +334,16 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="min-w-0 truncate text-muted-foreground">
             · {awaitingPhrase(awaiting)}
           </span>
-        ) : status === 'running' ? (
+        ) : isWorkingRunStatus(status) ? (
           /* Never conditional on there BEING a phrase: a null activity means
              "working, nothing named", not "say nothing", and treating the two
              the same is what made this row flicker once per tool call. See
-             {@link STANDING_ACTIVITY}. */
+             {@link STANDING_ACTIVITY} — and {@link HELD_ACTIVITY}, which is the
+             same fallback for a turn that is held rather than thinking. */
           <span className="min-w-0 truncate text-muted-foreground">
-            · {activity ?? STANDING_ACTIVITY}
+            ·{' '}
+            {activity ??
+              (status === 'waiting' ? HELD_ACTIVITY : STANDING_ACTIVITY)}
           </span>
         ) : null}
         {/* The time is for runs that have STOPPED — "when did this last do
@@ -346,8 +351,11 @@ export const ChatListItem = memo(function ChatListItem({
             it. A parked run is as live as a running one (its turn is open, its
             process is up), so it is excluded for the same reason `running` is
             — and on a 260px sidebar it was the third thing competing for the
-            line, which is what made the status label wrap onto two rows. */}
-        {status !== 'running' && status !== 'needs-input' ? (
+            line, which is what made the status label wrap onto two rows. A HELD
+            run is live on both of those counts too, so it is excluded with
+            them: `waiting · 24m` was the reported row, and the `24m` is exactly
+            the half of it that reads as a thread nobody has touched since. */}
+        {!isWorkingRunStatus(status) && status !== 'needs-input' ? (
           <span className="ml-auto pl-2 text-muted-foreground">
             {formatRelativeTime(lastActivityAt)}
           </span>

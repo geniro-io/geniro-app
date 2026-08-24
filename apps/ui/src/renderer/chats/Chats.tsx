@@ -46,6 +46,7 @@ import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
 import { Dialog } from '../components/ui/dialog';
 import { Select } from '../components/ui/select';
+import { Spinner } from '../components/ui/spinner';
 import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import {
@@ -80,11 +81,12 @@ import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
 import { CliLoginContext } from './cli-login-context';
 import { compactionOnlyTurnEnds } from './compaction-payload';
-import { ComposerCard } from './composer-card';
+import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
+import { useContextReadings } from './context-reading';
 import { ContextWindowSelect } from './context-window-select';
 import { folderName } from './directory-select';
 import { EffortSelect } from './effort-select';
@@ -121,6 +123,7 @@ import { sortRunsForSidebar } from './run-order';
 import {
   displayRunStatus,
   isSettledRunStatus,
+  isWorkingRunStatus,
   type RunStatusKind,
 } from './run-status';
 import { isScrolledToBottom, nextFollowState } from './scroll-follow';
@@ -149,12 +152,14 @@ import {
   taskListsByAgent,
   taskProgress,
 } from './task-payload';
+import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
   collectSubagentBlocks,
   groupTranscript,
+  pullFileChangesOutOfGroups,
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -198,6 +203,17 @@ import { useUnseenRuns } from './use-unseen-runs';
  * a send is in flight, so an index captured at render time addresses a
  * different message by the time the user clicks.
  */
+/**
+ * How far up the loaded window a reader has to be before the page BEFORE it is
+ * fetched — 0.3 of the scrollable range, i.e. 70% of the way to the top.
+ *
+ * REPORTED as "где-то на 70% подгружать все остальные сообщения". A fraction
+ * rather than a pixel distance: the window is a thousand rows whose heights
+ * range from a one-line tool row to a screenful of diff, so the same pixel
+ * budget is half a screen on one thread and thirty on another.
+ */
+const OLDER_PAGE_AT = 0.3;
+
 interface QueuedMessage {
   id: string;
   text: string;
@@ -464,6 +480,15 @@ export function Chats({
    */
   const [aboveTail, setAboveTail] = useState(false);
   /**
+   * Whether a turn's tool rows start folded (`Settings.collapseToolSteps`).
+   *
+   * Re-read whenever this tab becomes VISIBLE rather than once at mount, on the
+   * same reasoning as the workflow library beside it: the switch lives on the
+   * Settings screen while this one stays mounted, so a mount-only read would
+   * leave the transcript folding by yesterday's answer until the app restarted.
+   */
+  const [collapseToolSteps, setCollapseToolSteps] = useState(false);
+  /**
    * Whether the transcript is currently glued to its tail.
    *
    * A ref, not state: it is read inside a `scroll` listener and a
@@ -471,6 +496,14 @@ export function Chats({
    * should, and none of its readers need to re-render when it flips.
    */
   const followingRef = useRef(true);
+  /**
+   * `loadOlder`, or null when this thread has nothing older to load.
+   *
+   * A ref because the scroll listener is deliberately keyed on the run alone —
+   * re-arming it per streamed token was measured churn — so it cannot close
+   * over a value that changes as pages arrive.
+   */
+  const loadOlderRef = useRef<(() => Promise<boolean>) | null>(null);
   /** Previous `scrollTop`, so a scroll can be told to have moved UP. */
   const lastScrollTopRef = useRef(0);
   // Messages written while the agent was still working — sent automatically,
@@ -590,6 +623,9 @@ export function Chats({
     activeRunId,
     activeRunIdRef,
     items,
+    hasOlder,
+    loadingOlder,
+    loadOlder,
     liveText,
     streaming,
     setStreaming,
@@ -617,6 +653,12 @@ export function Chats({
     drainQueueRef,
   });
 
+  // Null unless there IS something older, so the scroll listener's own guard is
+  // "can this thread page at all" rather than a second copy of that question.
+  useEffect(() => {
+    loadOlderRef.current = hasOlder ? loadOlder : null;
+  }, [hasOlder, loadOlder]);
+
   // Live mirror, so a callback that must not be rebuilt on every delta can
   // still ask whether a turn was in flight BEFORE it started one of its own —
   // which is what tells a failed send whether the working state is its to
@@ -627,6 +669,29 @@ export function Chats({
   useEffect(() => {
     holdingRef.current = holding;
   }, [holding]);
+
+  /**
+   * What each chat's context ring last read — see {@link useContextReadings}.
+   *
+   * Declared here, well above its two uses, because one of them is the DELETE
+   * path: a reading outliving the thread it describes is the one way a
+   * per-run cache could start lying, and the cleanup has to be reachable from
+   * where the run is destroyed.
+   */
+  const {
+    remember: rememberContextReading,
+    recall: recallContextReading,
+    forget: forgetContextReading,
+  } = useContextReadings();
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    void window.geniro
+      .getSettings()
+      .then((s) => setCollapseToolSteps(s.collapseToolSteps ?? false));
+  }, [active]);
 
   // The workflow library is editable on the Graphs page while this tab stays
   // mounted (hidden), so refetch it every time the tab becomes visible — a
@@ -1488,6 +1553,29 @@ export function Chats({
       // when the tail runs away from them — the button is about where the
       // viewport IS, not about what the transcript intends to do next.
       setAboveTail(!isScrolledToBottom(scroller));
+      // …and PAGE, once the reader is most of the way up. A chat opens on its
+      // newest 1,000 items (see `HISTORY_PAGE`), so the rest is fetched only if
+      // somebody actually goes looking for it.
+      //
+      // The threshold is a fraction rather than a pixel count on purpose: what
+      // matters is how much of the loaded window is still ahead of the reader,
+      // and that window is a thousand rows of wildly different heights.
+      if (
+        loadOlderRef.current !== null &&
+        scroller.scrollTop <=
+          (scroller.scrollHeight - scroller.clientHeight) * OLDER_PAGE_AT
+      ) {
+        // Hold the reader's place. Prepending a page inserts rows ABOVE the
+        // viewport, which pushes everything they were reading down by exactly
+        // the height that arrived — so the scroll offset is moved by the same
+        // amount, and nothing appears to move at all.
+        const before = scroller.scrollHeight;
+        void loadOlderRef.current().then((grew) => {
+          if (grew) {
+            scroller.scrollTop += scroller.scrollHeight - before;
+          }
+        });
+      }
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
     return () => scroller.removeEventListener('scroll', onScroll);
@@ -2030,6 +2118,9 @@ export function Chats({
       await (deleting.workflowId
         ? workflowApi.deleteWorkflowRun({ runId: deleting.id })
         : chatApi.deleteChat({ runId: deleting.id }));
+      // Nothing can ever show it again, so it must not be kept — the same rule
+      // the daemon's own per-run maps follow, announced there on the bus.
+      forgetContextReading(deleting.id);
       setDeleting(null);
       if (activeRunIdRef.current === deleting.id) {
         // The open transcript belongs to a run that no longer exists: leave its
@@ -2044,7 +2135,7 @@ export function Chats({
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleting, chatApi, workflowApi, newChat]);
+  }, [deleting, chatApi, workflowApi, newChat, forgetContextReading]);
 
   /**
    * Start one turn: mark the run working, send, render the user message
@@ -2477,6 +2568,43 @@ export function Chats({
       ...prev,
       [runId]: (prev[runId] ?? []).filter((message) => message.id !== id),
     }));
+  }, []);
+
+  /**
+   * Move one queued message to where another currently sits — the strip's
+   * drag, and its ↑/↓ keys.
+   *
+   * REPORTED as "я хочу иметь возможность drag-and-drop передвигать queue
+   * сообщений, чтобы контролировать, какое сообщение следующим отправится
+   * первым". The queue drains from the HEAD, so the arrangement is the whole
+   * decision — and it was fixed at the order things were typed in, with no way
+   * to promote the one that turned out to matter short of removing the others.
+   *
+   * Purely local, unlike the sidebar's group reorder: a queue lives in this
+   * component for the length of a turn and the daemon has never heard of it,
+   * so there is nothing to persist and no end-of-drag commit.
+   *
+   * Both ends are ids and BOTH are re-checked here, because the queue drains on
+   * its own: the row a pointer is over can go out mid-gesture, and moving a
+   * message to the position of one that no longer exists would put it at the
+   * end of the queue — the opposite of what the drag was for.
+   */
+  const reorderQueued = useCallback((id: string, overId: string): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId || id === overId) {
+      return;
+    }
+    setQueues((prev) => {
+      const queue = prev[runId] ?? [];
+      const from = queue.findIndex((message) => message.id === id);
+      const to = queue.findIndex((message) => message.id === overId);
+      if (from === -1 || to === -1) {
+        return prev;
+      }
+      const next = [...queue];
+      next.splice(to, 0, next.splice(from, 1)[0]!);
+      return { ...prev, [runId]: next };
+    });
   }, []);
 
   /**
@@ -3327,14 +3455,22 @@ export function Chats({
     // always a top-level `item` entry (`ownerOf` gives it NO_OWNER), so
     // filtering here reaches every one of them.
     const redundant = compactionOnlyTurnEnds(items);
-    const flow =
+    const folded =
       redundant.size === 0
         ? groupTranscript(items)
         : groupTranscript(items).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
           );
+    // File changes come OUT of their group — see
+    // `pullFileChangesOutOfGroups`. Here rather than inside the fold for the
+    // reason that function records: an ACP agent reports its change on the
+    // RESULT, which is attached after the call was grouped, so the same
+    // decision taken during the fold would miss every one of them.
+    const flow = collapseToolSteps
+      ? folded
+      : pullFileChangesOutOfGroups(folded);
     return buildTurnBlocks(buildSubagentBlocks(flow, items));
-  }, [items]);
+  }, [items, collapseToolSteps]);
   /**
    * The run's row has SETTLED — whatever it settled as.
    *
@@ -3466,6 +3602,29 @@ export function Chats({
    * once per turn rather than on every delta the turn streams.
    */
   const threadTotals = useChatTotals(chatApi, activeRunId, threadWorked.turns);
+  /**
+   * What the header states about the thread as a WHOLE — the daemon's answer
+   * where it has one, this component's fold where it does not.
+   *
+   * The fold is over the LOADED window now (a long chat opens on its newest
+   * 1,000 items), so it can only ever describe the tail of a long conversation.
+   * The daemon counts every `turn_complete` row the run ever wrote, which is
+   * the figure the header claims to be showing.
+   *
+   * It is a preference and not a replacement because the two measure worked
+   * time differently, and only one of them can answer for every CLI: the
+   * daemon reports the time the AGENT reported, which cursor never does over
+   * ACP — `workedMs` is null there, and the fold's wall-clock-minus-parked
+   * reading is the only figure that exists. So each side covers what the other
+   * cannot, and neither invents a number.
+   */
+  const threadTotalsShown = useMemo(
+    () => ({
+      ms: threadTotals.workedMs ?? threadWorked.ms,
+      turns: threadTotals.turns ?? threadWorked.turns,
+    }),
+    [threadTotals.workedMs, threadTotals.turns, threadWorked],
+  );
   /**
    * What THIS run is doing, for the live rows — the same sentence the sidebar
    * badge carries, so the transcript and the badge cannot say different things
@@ -3645,6 +3804,47 @@ export function Chats({
     liveText,
     subagentThreads,
   ]);
+
+  /**
+   * What the composer's ring shows — this chat's own context, and never
+   * another's.
+   *
+   * A CHAT only: a workflow run's nodes each hold a window of their own, so
+   * `agents[0]` there is one node among several and the ring is withheld
+   * exactly as it was.
+   *
+   * The fallback to {@link recallContextReading} is the fix for the reported
+   * lag. The derivation above reads the LOADED TRANSCRIPT, which a chat switch
+   * clears and refetches — so it answers null for the whole of that fetch, and
+   * the ring went value → gone → value under a name that had already changed.
+   * Recalling THIS run's own last reading fills that stretch with the one
+   * figure that cannot be wrong about it.
+   */
+  const chatContext = useMemo(() => {
+    if (activeRun === null || activeRun.workflowId) {
+      return { tokens: null, window: null };
+    }
+    const tokens = agents[0]?.contextTokens ?? null;
+    if (tokens !== null) {
+      return { tokens, window: agents[0]?.contextWindowTokens ?? null };
+    }
+    const recalled = recallContextReading(activeRun.id);
+    return recalled === null
+      ? { tokens: null, window: null }
+      : { tokens: recalled.tokens, window: recalled.window };
+  }, [activeRun, agents, recallContextReading]);
+  useEffect(() => {
+    // Filed only for the run it was measured on, and only once there IS a
+    // measurement — `remember` ignores a null rather than erasing what it
+    // holds, which is what makes the recall above survive the very fetch it
+    // exists to cover.
+    if (activeRunId !== null && chatContext.tokens !== null) {
+      rememberContextReading(activeRunId, {
+        tokens: chatContext.tokens,
+        window: chatContext.window,
+      });
+    }
+  }, [activeRunId, chatContext, rememberContextReading]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -4521,7 +4721,10 @@ export function Chats({
                               value={input}
                               rows={4}
                               aria-label="Task for the new run"
-                              className="min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                              className={cn(
+                                COMPOSER_TEXTAREA_GROWTH,
+                                'min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
+                              )}
                               placeholder={
                                 workflowSlug
                                   ? 'Describe the task for the workflow team…'
@@ -4701,8 +4904,8 @@ export function Chats({
                         status={activeRunStatus}
                         lastActivityAt={activeRun.updatedAt}
                         turnStartedAt={turnStartedAt}
-                        workedMs={threadWorked.ms}
-                        turnCount={threadWorked.turns}
+                        workedMs={threadTotalsShown.ms}
+                        turnCount={threadTotalsShown.turns}
                         costUsd={threadTotals.costUsd}
                         // Only while the run is actually live. A transcript
                         // whose last row is a user message describes an open
@@ -4752,77 +4955,101 @@ export function Chats({
                     <div
                       data-slot="transcript"
                       className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4">
-                      <RunSettledContext.Provider value={activeRunSettledAt}>
-                        <RunActivityContext.Provider value={activeActivity}>
-                          <TurnDurationContext.Provider value={turnDurations}>
-                            <SubagentDetailContext.Provider
-                              value={openSubagentDetail}>
-                              {transcriptEntries.map((entry) => {
-                                if (
-                                  entry.type !== 'item' ||
-                                  entry.item.kind !== 'approval_request'
-                                ) {
-                                  const key =
-                                    entry.type === 'item'
-                                      ? entry.item.id
-                                      : entry.id;
-                                  return (
-                                    <TranscriptEntryView
-                                      key={key}
-                                      entry={entry}
-                                      nodes={nodeMeta}
-                                      chatAgentName={
-                                        activeRun?.agentKind ?? null
-                                      }
-                                      soloAgent={soloAgent}
-                                    />
+                      {/* A chat opens on its newest 1,000 items, so a long one
+                    begins part-way through itself. SAID, rather than left as a
+                    conversation that appears to start mid-sentence — and it is
+                    the top row precisely because that is where a reader who has
+                    scrolled this far is looking. */}
+                      {hasOlder ? (
+                        <div
+                          data-slot="older-messages"
+                          className="flex items-center justify-center gap-1.5 py-1 text-xs text-muted-foreground">
+                          {loadingOlder ? (
+                            <>
+                              <Spinner />
+                              Loading earlier messages…
+                            </>
+                          ) : (
+                            'Scroll up for earlier messages'
+                          )}
+                        </div>
+                      ) : null}
+                      <CollapseToolStepsContext.Provider
+                        value={collapseToolSteps}>
+                        <RunSettledContext.Provider value={activeRunSettledAt}>
+                          <RunActivityContext.Provider value={activeActivity}>
+                            <TurnDurationContext.Provider value={turnDurations}>
+                              <SubagentDetailContext.Provider
+                                value={openSubagentDetail}>
+                                {transcriptEntries.map((entry) => {
+                                  if (
+                                    entry.type !== 'item' ||
+                                    entry.item.kind !== 'approval_request'
+                                  ) {
+                                    const key =
+                                      entry.type === 'item'
+                                        ? entry.item.id
+                                        : entry.id;
+                                    return (
+                                      <TranscriptEntryView
+                                        key={key}
+                                        entry={entry}
+                                        nodes={nodeMeta}
+                                        chatAgentName={
+                                          activeRun?.agentKind ?? null
+                                        }
+                                        soloAgent={soloAgent}
+                                      />
+                                    );
+                                  }
+                                  const item = entry.item;
+                                  // EVERY open request's card lives above the composer, so
+                                  // every one of them leaves a marker here. Keyed on openness
+                                  // rather than on the pinned id: keying on the pin gave the
+                                  // SECOND open question a fully live card in the scroller,
+                                  // which is the failure the pin exists to end. Leaving the
+                                  // live card here too would put two sets of buttons over one
+                                  // one-shot verdict channel; leaving nothing would silently
+                                  // drop a row out of the conversation's order.
+                                  if (openRequestId(item) !== null) {
+                                    return (
+                                      <MessageBubble
+                                        key={item.id}
+                                        variant="note">
+                                        {pinnedRequest?.id === item.id
+                                          ? '❓ waiting on your answer — the card is pinned below'
+                                          : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
+                                      </MessageBubble>
+                                    );
+                                  }
+                                  const askerName =
+                                    (item.nodeId
+                                      ? (nodeMeta.get(item.nodeId)?.name ??
+                                        item.nodeId)
+                                      : activeRun?.agentKind) ?? 'agent';
+                                  const card = (
+                                    <div className="w-full">
+                                      {approvalCardFor(item)}
+                                    </div>
                                   );
-                                }
-                                const item = entry.item;
-                                // EVERY open request's card lives above the composer, so
-                                // every one of them leaves a marker here. Keyed on openness
-                                // rather than on the pinned id: keying on the pin gave the
-                                // SECOND open question a fully live card in the scroller,
-                                // which is the failure the pin exists to end. Leaving the
-                                // live card here too would put two sets of buttons over one
-                                // one-shot verdict channel; leaving nothing would silently
-                                // drop a row out of the conversation's order.
-                                if (openRequestId(item) !== null) {
-                                  return (
-                                    <MessageBubble key={item.id} variant="note">
-                                      {pinnedRequest?.id === item.id
-                                        ? '❓ waiting on your answer — the card is pinned below'
-                                        : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                    </MessageBubble>
+                                  // A solo agent's card needs no identity frame either.
+                                  return soloAgent ? (
+                                    <div key={item.id}>{card}</div>
+                                  ) : (
+                                    <SenderRow
+                                      key={item.id}
+                                      name={askerName}
+                                      colorKey={item.nodeId ?? undefined}
+                                      time={formatClockTime(item.createdAt)}>
+                                      {card}
+                                    </SenderRow>
                                   );
-                                }
-                                const askerName =
-                                  (item.nodeId
-                                    ? (nodeMeta.get(item.nodeId)?.name ??
-                                      item.nodeId)
-                                    : activeRun?.agentKind) ?? 'agent';
-                                const card = (
-                                  <div className="w-full">
-                                    {approvalCardFor(item)}
-                                  </div>
-                                );
-                                // A solo agent's card needs no identity frame either.
-                                return soloAgent ? (
-                                  <div key={item.id}>{card}</div>
-                                ) : (
-                                  <SenderRow
-                                    key={item.id}
-                                    name={askerName}
-                                    colorKey={item.nodeId ?? undefined}
-                                    time={formatClockTime(item.createdAt)}>
-                                    {card}
-                                  </SenderRow>
-                                );
-                              })}
-                            </SubagentDetailContext.Provider>
-                          </TurnDurationContext.Provider>
-                        </RunActivityContext.Provider>
-                      </RunSettledContext.Provider>
+                                })}
+                              </SubagentDetailContext.Provider>
+                            </TurnDurationContext.Provider>
+                          </RunActivityContext.Provider>
+                        </RunSettledContext.Provider>
+                      </CollapseToolStepsContext.Provider>
                       <div ref={transcriptEndRef} />
                     </div>
 
@@ -4947,6 +5174,7 @@ export function Chats({
                         steerStatus={steerStatus}
                         onEdit={editQueued}
                         onRemove={removeQueued}
+                        onReorder={reorderQueued}
                         onSteer={(id) => void steerQueued(id)}
                       />
 
@@ -4963,18 +5191,17 @@ export function Chats({
                           />
                         ) : null}
                         <ComposerTopRow>
-                          {/* Only a workflow's trigger is left above the text, so for
-                      a single-agent thread this row collapses entirely
-                      (`empty:hidden`) and the card sits directly under the
-                      transcript.
+                          {/* A workflow's trigger, and the run's folder — and for
+                      a single-agent thread with no cwd this row still collapses
+                      entirely (`empty:hidden`).
 
-                      The three chips that used to live here moved INTO the
-                      card, because in an open thread none of them is what the
-                      row was built for. The row states what is still to be
-                      DECIDED about the run; in a thread the folder is already
-                      decided and unchangeable, so it reads better as a caption
-                      beside the actions, and the approval posture is a live
-                      per-turn control that belongs beside model and effort. The
+                      Two of the three chips that used to live here moved INTO
+                      the card and stayed there: the row states what is still to
+                      be DECIDED about the run, and the approval posture is a
+                      live per-turn control that belongs beside model and effort.
+                      The FOLDER came back up (see the chip below) — it is not a
+                      decision either, but it is a caption on the message rather
+                      than on the Send button. The
                       branch chip is gone outright: it was read-only anyway, and
                       naming live repo state under a transcript whose turns all
                       run against the tree the run STARTED on only invited a
@@ -4991,6 +5218,36 @@ export function Chats({
                               </span>
                             </Chip>
                           ) : null}
+                          {/* Where the run happens — ABOVE the textarea, hard
+                      right: "давай текущую папку проекта переместим просто над
+                      текст-эрией вправо".
+
+                      It spent a while beside Send, on the reading that a cwd
+                      fixed at creation is a caption on the button that
+                      dispatches the work rather than a picker among live ones.
+                      Up here it is a caption on the MESSAGE instead, which
+                      answers the same observation better — and it takes the one
+                      item whose label is user data off a line that may now never
+                      wrap, so the pickers below stop competing with a folder
+                      name for width.
+
+                      `ml-auto` rather than a `justify-end` on the row: the
+                      workflow trigger chip beside it still reads from the left,
+                      and this is the only thing here that belongs on the other
+                      edge. `shrink` overrides `Chip`'s own `shrink-0` for the
+                      reason it did below — the label is the user's own folder
+                      name and the full path is on hover, so it is the right
+                      thing to truncate first. */}
+                          {activeRun?.cwd ? (
+                            <Chip
+                              title={activeRun.cwd}
+                              className="ml-auto max-w-56 min-w-0 shrink">
+                              <FolderOpen />
+                              <span className="truncate">
+                                {folderName(activeRun.cwd)}
+                              </span>
+                            </Chip>
+                          ) : null}
                         </ComposerTopRow>
                         <ComposerCard>
                           <AttachmentStrip
@@ -5002,7 +5259,10 @@ export function Chats({
                             rows={2}
                             aria-label="Message the agent"
                             disabled={activeRun?.workflowId != null}
-                            className="min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0"
+                            className={cn(
+                              COMPOSER_TEXTAREA_GROWTH,
+                              'min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
+                            )}
                             placeholder={
                               activeRun?.workflowId
                                 ? 'Workflow runs take one task — press + to start another.'
@@ -5033,35 +5293,16 @@ export function Chats({
                           <ComposerBottomRow
                             actions={
                               <>
-                                {/* Where the run happens, to the LEFT of Send/Stop.
+                                {/* The run's FOLDER is not here any more — it moved
+                          ABOVE the textarea (see the top row). It led the
+                          actions for a while, on the reading that a cwd fixed
+                          at creation is a caption on the button that dispatches
+                          the work rather than a picker among live ones; it is a
+                          caption on the MESSAGE now, which answers the same
+                          observation without putting the one user-data label on
+                          a line that may never wrap.
 
-                          It is not an action, and it is deliberately not in the
-                          chip row either: a run's cwd is fixed at creation, so
-                          it can never be picked from here. Leading the actions
-                          line it reads as a caption on the button that
-                          dispatches the work — "this goes to geniro-app" —
-                          rather than as a dead picker among live ones.
-
-                          It leads rather than trails because the line ends on
-                          the button, and mid-turn that button is Stop: a label
-                          sitting after the one control that destroys work reads
-                          as belonging to it.
-
-                          `shrink` overrides `Chip`'s own `shrink-0`: this is
-                          the one item on a non-shrinking line whose label is
-                          user data, so it must be the thing that truncates
-                          before Send is pushed off. */}
-                                {activeRun?.cwd ? (
-                                  <Chip
-                                    title={activeRun.cwd}
-                                    className="max-w-40 min-w-0 shrink">
-                                    <FolderOpen />
-                                    <span className="truncate">
-                                      {folderName(activeRun.cwd)}
-                                    </span>
-                                  </Chip>
-                                ) : null}
-                                {/* The run's config directory is NOT repeated here.
+                          The run's config directory is NOT repeated here.
                           It is in the header, beside the agent, because it is
                           the same kind of fact — fixed for the run's life, and
                           about what the conversation IS rather than where this
@@ -5185,6 +5426,11 @@ export function Chats({
                                 <ContextWindowSelect
                                   windows={agentContextWindows.windows}
                                   value={activeRun.contextWindow}
+                                  // The window the AGENT reported for this
+                                  // thread — the ring's own denominator, so the
+                                  // chip and the meter beside it cannot state
+                                  // two different windows for one model.
+                                  windowTokens={chatContext.window}
                                   nextTurnOnly={streaming}
                                   unavailableReason={
                                     agentContextWindows.unavailableReason
@@ -5240,16 +5486,8 @@ export function Chats({
                                   runId={
                                     activeRun.workflowId ? null : activeRun.id
                                   }
-                                  contextTokens={
-                                    activeRun.workflowId
-                                      ? null
-                                      : (agents[0]?.contextTokens ?? null)
-                                  }
-                                  contextWindowTokens={
-                                    activeRun.workflowId
-                                      ? null
-                                      : (agents[0]?.contextWindowTokens ?? null)
-                                  }
+                                  contextTokens={chatContext.tokens}
+                                  contextWindowTokens={chatContext.window}
                                   // Why there will never be a figure, when that is the
                                   // case — so the empty spot answers for itself. Only
                                   // for a single-agent chat: a workflow run's agents
@@ -5268,7 +5506,7 @@ export function Chats({
                                   // re-reading and a chat that says it is
                                   // running cannot disagree about whether
                                   // anything is happening.
-                                  live={activeRunStatus === 'running'}
+                                  live={isWorkingRunStatus(activeRunStatus)}
                                   // Opens UPWARD. This row sits at the bottom of the
                                   // composer, inside the app shell's
                                   // `overflow-hidden` main — roughly 20px below a

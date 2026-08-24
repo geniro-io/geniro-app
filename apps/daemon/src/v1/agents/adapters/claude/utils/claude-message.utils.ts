@@ -11,6 +11,7 @@ import type {
   AgentMcpServer,
   AgentMcpServerStatus,
   AgentUsage,
+  BackgroundUnitUsage,
 } from '../../adapter.types';
 import {
   CLAUDE_ABORTED_TERMINAL_REASONS,
@@ -54,6 +55,38 @@ import {
  * be a false positive, and serializing that base64 to look for prose it cannot
  * contain was the cost this replaced.
  */
+/**
+ * Whether an `assistant` line is the CLI reporting a FAILED REQUEST rather than
+ * the agent talking.
+ *
+ * This CLI ships such a report in the ordinary assistant envelope — same
+ * `type`, same `message.content[].text` — so without the flag the two are
+ * indistinguishable, and `request_id` is no help because it rides ordinary
+ * lines too. Read off the author's own session store, where 55 of them are
+ * recorded across four codes:
+ *
+ *   {"type":"assistant","error":"server_error","is_api_error_message":true,
+ *    "message":{"content":[{"type":"text",
+ *      "text":"API Error: Connection closed mid-response. …"}]}}
+ *
+ * The `error` code is `server_error` (connection closed / stalled / timed out /
+ * 529 / ENOTFOUND), `rate_limit` ("You've hit your weekly limit · resets 4pm"),
+ * or `authentication_failed` — and the flag is the ONE thing common to all of
+ * them, which is why the predicate reads it and never the prose.
+ *
+ * The wire spells it `is_api_error_message`; the session JSONL spells the same
+ * fact `isApiErrorMessage`. Only the wire spelling is read here — this mapper
+ * is fed stdout, and `claude-sessions.utils.ts` owns the file's envelope.
+ *
+ * ONE spelling for the daemon's two readers: this mapper, which turns the line
+ * into a `notice`, and `ClaudeTurnDriver.rememberApiFailure`, which keeps the
+ * code and the request id for the error the turn may end on.
+ */
+export function isClaudeApiErrorLine(obj: unknown): boolean {
+  const root = asRecord(obj);
+  return root !== null && root.is_api_error_message === true;
+}
+
 export function isPermissionChannelFailure(content: unknown): boolean {
   if (typeof content === 'string') {
     return hasFailureMarkers(content);
@@ -186,6 +219,34 @@ const INIT_STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
   'pending',
   'disabled',
 ]);
+
+/**
+ * What one background unit spent, off a `system/task_notification` line.
+ *
+ * Undefined — never a record of nulls — when the line carries no `usage` block
+ * at all, which is what a non-terminal notification and an older CLI both look
+ * like. The consumer merges these announcements by preferring the last non-null
+ * field, so an all-null record would be harmless; `undefined` is nonetheless
+ * the honest shape for "this line said nothing about it" and keeps the
+ * lifecycle event's own field optional.
+ *
+ * The key names are the CLI's (`total_tokens` / `tool_uses` / `duration_ms`),
+ * read off a live 2.1.237 delegation rather than from any document. There is no
+ * cost among them, and not for want of looking — see `subagent_info.tokens`.
+ */
+function readClaudeTaskUsage(
+  root: Record<string, unknown>,
+): BackgroundUnitUsage | undefined {
+  const usage = asRecord(root.usage);
+  if (usage === null) {
+    return undefined;
+  }
+  return {
+    tokens: asNumber(usage.total_tokens),
+    toolUses: asNumber(usage.tool_uses),
+    durationMs: asNumber(usage.duration_ms),
+  };
+}
 
 /**
  * The `mcp_servers` rows of a `system/init` line.
@@ -391,6 +452,14 @@ function mapClaudeLine(
                 // which is the only line that states it.
                 unit: 'other',
                 toolCallId: asString(root.tool_use_id),
+                // What the unit spent. Only `task_notification` carries it —
+                // `task_updated` is an id and a status patch — so the two
+                // channels this daemon deliberately maps from both stay safe:
+                // an `undefined` here claims nothing, and the notification's
+                // figures are not lost if the updated line happens to arrive
+                // second. Probed on 2.1.237 against a real delegation:
+                // `{total_tokens: 26124, tool_uses: 0, duration_ms: 2029}`.
+                usage: readClaudeTaskUsage(root),
               },
             ]
           : [];
@@ -457,6 +526,53 @@ function mapClaudeLine(
       const message = asRecord(root.message);
       if (!message) {
         return [];
+      }
+      // A FAILED REQUEST, not the agent speaking — see {@link isClaudeApiErrorLine}
+      // for the shape and the four codes it arrives under.
+      //
+      // REPORTED as «Я вижу вот такие ошибки в чате», against a transcript where
+      // `API Error: Connection closed mid-response.` sat in an ordinary
+      // assistant bubble, indistinguishable from an answer. It is the CLI's own
+      // sentence about its own transport, so it belongs in the daemon's chrome
+      // rather than in the agent's.
+      //
+      // `warning`, not the red failure chrome, and never `origin: 'cli'`:
+      //
+      // - Not `origin: 'cli'`, which exists for text the AGENT authored — a
+      //   compaction summary of a conversation that can hold file contents and
+      //   web pages, and so must not be able to dress itself as an advisory.
+      //   This line is written by the CLI about its own request, and the flag
+      //   that marks it is one the model cannot set, so there is no
+      //   impersonation to defend against and the row is a real advisory.
+      // - `warning` because this is not the turn's ENDING. The commonest code
+      //   is `server_error`, which this CLI retries: the turn carries on and
+      //   completes, so red would be a lie about what happened. When it IS
+      //   fatal (`rate_limit`, `authentication_failed`) the turn's own `result`
+      //   line produces the red `error` event a few lines later — carrying the
+      //   code and the request id `ClaudeTurnDriver` remembered off THIS line —
+      //   so the failure is still reported once, in the place that ends the turn.
+      //
+      // Returned ALONE. The rest of this branch reads a real request's usage
+      // and content blocks; a synthetic failure line has no window reading
+      // worth publishing and no tool calls to lift.
+      if (isClaudeApiErrorLine(root)) {
+        const reported = asArray(message.content)
+          .map((block) => asString(asRecord(block)?.text))
+          .filter((text): text is string => text !== null && text !== '')
+          .join('\n');
+        return reported === ''
+          ? []
+          : [
+              {
+                type: 'notice',
+                message: reported,
+                severity: 'warning',
+                // Named, because the level's default caption (`not applied`)
+                // describes a setting the agent could not honour and says
+                // nothing true about a request that failed.
+                caption: 'api error',
+              },
+            ];
       }
       const events: AgentEvent[] = [];
       // Lifted BEFORE the content blocks so the meter moves as soon as the

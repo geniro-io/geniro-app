@@ -4,6 +4,7 @@ import {
   CircleDashed,
   CircleX,
   Clock,
+  Hourglass,
   Loader2,
   MessageCircleQuestion,
   MinusCircle,
@@ -14,12 +15,13 @@ import { cn } from '../components/ui/utils';
 
 /**
  * Everything a run or a node can be, display-wise: the run statuses, the
- * node-only `skipped`, the "hasn't started yet" `idle`, and `needs-input` —
- * which no daemon row ever carries. See {@link displayRunStatus}.
+ * node-only `skipped`, the "hasn't started yet" `idle`, and the two no daemon
+ * row ever carries — `needs-input` and `waiting`. See {@link displayRunStatus}.
  */
 export type RunStatusKind =
   | 'pending'
   | 'running'
+  | 'waiting'
   | 'needs-input'
   | 'completed'
   | 'failed'
@@ -46,6 +48,18 @@ export const RUN_STATUS_META: Record<
     label: 'pending',
   },
   running: { icon: Loader2, className: 'text-primary', label: 'running' },
+  // Accent-toned like `running`, because that is what it IS — work is going on
+  // and nobody is being waited for. What it must NOT do is spin: the state
+  // routinely lasts twenty minutes (a background task with no end holds the
+  // turn until the silence deadline), and a spinner running that long over an
+  // answer the agent finished writing is the defect this state was carved out
+  // of `running` to fix.
+  //
+  // The label says `working` rather than `waiting` for the same reason it is
+  // no longer `idle`: the row already carries `· waiting on 6 background
+  // tasks` beside it ({@link HELD_ACTIVITY}), so the badge's job is to say the
+  // thread is not finished, and the phrase's is to say what it is on.
+  waiting: { icon: Hourglass, className: 'text-primary', label: 'working' },
   // Warning-toned, not accent: it is the one state that will not advance on
   // its own, so it must read as "you are the blocker" rather than as another
   // shade of busy — and the icon is deliberately not a spinner, for the same
@@ -135,11 +149,8 @@ export function displayRunStatus({
    * and the process is alive only until background work it launched reports
    * back (the daemon's `turn_held` → `holdingFor` on the run row).
    *
-   * Ranked BELOW a live delegate and ABOVE `streaming`, which is the whole of
-   * the rule. A delegate that is demonstrably producing rows is work, and the
-   * run is running; a task that is merely outstanding is not, and the live
-   * plane cannot tell the difference — it is still open in both cases, because
-   * holding it open is exactly what a hold does.
+   * Ranked ABOVE every other live reading — see the ordering comment in the
+   * body, which is where the reason lives.
    *
    * The reported "done but showing like it's working", and it is a different
    * defect from the one that phrase last named: the sentence under the badge
@@ -149,10 +160,15 @@ export function displayRunStatus({
    * screenshot that came back showed `running · 20m 18s` under an answer the
    * agent had finished writing twenty minutes earlier.
    *
-   * `idle` is the app's own word for this state — the composer already says
-   * "the agent is idle, waiting on its background tasks" — and it is not a
-   * SETTLED status, so nothing downstream reads the run as finished: the turn
-   * is genuinely still open and its late rows still land.
+   * It answers `waiting`, which was `idle` for one release and should not have
+   * been. `idle` is the word the COMPOSER uses to the user ("the agent is idle,
+   * waiting on its background tasks"), where a whole sentence carries it; on a
+   * badge the word stands alone, and it came straight back reported twice over
+   * — `i still see it seems like it finished but not`, over a header reading
+   * `idle · 1h` above a live Stop button and a `waiting on 1 background task`
+   * line. Neither status is SETTLED, so nothing downstream reads the run as
+   * finished either way: what changed is that the badge no longer says the
+   * opposite of what the row beneath it says.
    */
   heldForBackgroundWork?: boolean;
 }): RunStatusKind {
@@ -168,16 +184,28 @@ export function displayRunStatus({
   if (status === 'failed' || status === 'cancelled') {
     return status;
   }
-  // A delegate still producing rows is WORK, and it outranks a hold — it is
-  // what the hold is waiting for.
+  // Held: the agent has stopped and only its background work keeps the turn
+  // open.
+  //
+  // It leads both of the readings below, and that ORDER is the fix for the
+  // reported "I see the chat is idle, and the moment I click it that changes
+  // to another status". `subagentRunning` is derived from the LOADED
+  // transcript, so it is knowable for the focused run and never for any other
+  // — a held run therefore read `running` in the header and `idle` in its own
+  // sidebar row, and clicking it swapped one for the other in front of the
+  // user. Deciding the hold first makes the two readings identical, because a
+  // hold is a fact the run row carries about every run alike.
+  //
+  // Nothing is lost by ranking a live delegate under it: the case that rule
+  // was written for — a delegating turn with nothing streaming, reading as its
+  // stale `completed` row — is a turn that is NOT held, so it still falls
+  // through to `subagentRunning` below.
+  if (heldForBackgroundWork) {
+    return 'waiting';
+  }
+  // A delegate still producing rows is WORK, whatever the run row says.
   if (subagentRunning) {
     return 'running';
-  }
-  // Held: the agent has stopped and only listeners keep the turn open. Above
-  // `streaming` because the live plane is open in both cases — keeping it open
-  // is what a hold IS — so it cannot tell them apart.
-  if (heldForBackgroundWork) {
-    return 'idle';
   }
   if (streaming) {
     return 'running';
@@ -225,6 +253,34 @@ export function awaitingPhrase(kind: RunAwaiting): string {
 export const STANDING_ACTIVITY = 'Working…';
 
 /**
+ * The same fallback for a run whose turn is HELD — see `heldForBackgroundWork`.
+ *
+ * A second constant rather than a reuse of {@link STANDING_ACTIVITY}, because
+ * the two nulls do not mean the same thing. A running run with no named
+ * activity is thinking; a held one is not doing anything at all, and its whole
+ * state is what it is outstanding on. `Working…` there would also read as a
+ * stutter under a badge that already says `working`.
+ *
+ * The daemon names the count while the window is connected (`waiting on 6
+ * background tasks`); this is what a window that reconnected mid-hold shows,
+ * the activity plane being events-only.
+ */
+export const HELD_ACTIVITY = 'waiting on background work';
+
+/**
+ * Something is working on this run RIGHT NOW, with nobody being waited for.
+ *
+ * The one predicate for "this thread is live", so the three places that ask —
+ * the sidebar row's phrase, the same row's relative time, the header's elapsed
+ * clock — cannot answer it differently. `needs-input` is deliberately not here:
+ * that turn is open too, but it is open on the USER, which every call site
+ * already handles separately.
+ */
+export function isWorkingRunStatus(status: RunStatusKind): boolean {
+  return status === 'running' || status === 'waiting';
+}
+
+/**
  * This run has stopped for good — nothing further will arrive for it.
  *
  * Deliberately takes the status {@link displayRunStatus} produced rather than
@@ -233,8 +289,9 @@ export const STANDING_ACTIVITY = 'Working…';
  * own header.
  *
  * `pending` and `idle` are NOT settled: they are states a run has yet to leave,
- * not ones it has finished in. `needs-input` is not either — the turn is open
- * and waiting on a human.
+ * not ones it has finished in. Neither are `needs-input` and `waiting` — both
+ * are open turns, one blocked on a human and the other on background work the
+ * run itself launched.
  */
 export function isSettledRunStatus(status: RunStatusKind): boolean {
   return (

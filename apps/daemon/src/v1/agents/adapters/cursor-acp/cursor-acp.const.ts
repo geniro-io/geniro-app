@@ -673,3 +673,62 @@ export const CURSOR_SESSION_STORE_DB_NAME = 'store.db';
  * neighbour is — the adapter spells the path and its spec spells it back.
  */
 export const CURSOR_SESSION_META_NAME = 'meta.json';
+
+// ---------------------------------------------------------------------------
+// This CLI reporting its OWN failure — as an assistant message, under end_turn
+// ---------------------------------------------------------------------------
+
+/**
+ * What every failure arm of this CLI's ACP layer opens its message chunk with.
+ *
+ * A LITERAL in the shipped bundle, not a wording: `2996.index.js` writes
+ * `` `\n\nError: ${String(e)}` `` for the general case and a hardcoded
+ * `"\n\nError: [unauthenticated] …"` for the auth one. Named here rather than
+ * inline because `utils/cursor-agent-failure.utils.ts` matches it and that
+ * file's spec spells it back — the two must not drift.
+ */
+export const CURSOR_AGENT_FAILURE_PREFIX = 'Error: ';
+
+/**
+ * The four names `String(e)` can put after that prefix — this CLI's own error
+ * CLASSES, read off `index.js`, where each is a `get kind()` getter:
+ * `class R extends B{get kind(){return"RetriableError"}}`, and the same shape
+ * for the other three.
+ *
+ * A class name rather than a phrase is the whole reason this match is sound:
+ * an agent writing about an error writes prose, not `RetriableError:` directly
+ * after a chunk-opening `Error: `.
+ */
+export const CURSOR_AGENT_FAILURE_ERROR_KINDS: readonly string[] = [
+  'RetriableError',
+  'NonRetriableError',
+  'ActionRequiredError',
+  'CancelledError',
+];
+
+/**
+ * The one failure arm that carries no class name — the CLI substitutes its own
+ * sentence for a `connect` `Unauthenticated` code, so this is matched on the
+ * bracketed code that opens it instead.
+ */
+export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
+
+/**
+ * The four sentences an `ActionRequiredError` is REPLACED by — this arm drops
+ * the class name entirely and sends the sentence alone, with no `Error: `
+ * prefix, so these are the anchor.
+ *
+ * Read off the same catch block:
+ *   {login:"Please sign in to continue", upgrade:"Upgrade your plan to continue",
+ *    payment:"Add a payment method to continue", config:"Check your settings to continue"}
+ *
+ * The arm's own fallback for an action with no sentence (`e.message`) is
+ * deliberately absent: it is unanchored text, and matching it would risk
+ * putting the agent's own words in the failure chrome.
+ */
+export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [
+  'Please sign in to continue',
+  'Upgrade your plan to continue',
+  'Add a payment method to continue',
+  'Check your settings to continue',
+];

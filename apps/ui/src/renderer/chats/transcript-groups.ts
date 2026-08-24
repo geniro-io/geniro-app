@@ -18,7 +18,12 @@ import {
   type ToolOperation,
   toolOperationOf,
 } from './tool-kind';
-import { resultDiffsOf, toolResultText } from './tool-render';
+import {
+  resultDiffsOf,
+  toolInputBody,
+  toolResultBody,
+  toolResultText,
+} from './tool-render';
 import { payloadString } from './transcript-payload';
 
 /**
@@ -85,6 +90,15 @@ export interface ToolGroupEntry {
    */
   closed: boolean;
   pairs: ToolPair[];
+  /**
+   * This entry is ONE file change lifted out of a run of tool calls — draw the
+   * row alone, with no summary line of its own.
+   *
+   * See {@link pullFileChangesOutOfGroups}. Absent on every group the fold
+   * produces, so a transcript with the setting off is byte-identical to what it
+   * was.
+   */
+  standalone?: boolean;
 }
 
 export interface ItemEntry {
@@ -236,6 +250,20 @@ export interface SubagentBlockEntry {
   model: string | null;
   /** How long it took, when the CLI reported it. */
   durationMs: number | null;
+  /**
+   * What it SPENT — tokens, and how many tools it called — when the CLI
+   * reported them.
+   *
+   * Reported as a delegate settles rather than accumulated from its rows here,
+   * because a CLI's own figure counts what a row cannot see: its system prompt,
+   * its tool listings, and every request it made behind one visible step. On
+   * the probed delegate the gap is the whole reading — 26,124 tokens for a
+   * conversation whose entire visible content is the word PONG.
+   *
+   * No COST beside them, deliberately. See `SubagentDeclaration.tokens`.
+   */
+  tokens: number | null;
+  toolUses: number | null;
   /**
    * Why this block opens onto no conversation — the daemon's own sentence, from
    * the CLI whose delegate this is.
@@ -866,6 +894,8 @@ export function buildSubagentBlocks(
       prompt: inputString(launch?.call, 'prompt') ?? declared?.prompt ?? null,
       model: declared?.model ?? null,
       durationMs: declared?.durationMs ?? null,
+      tokens: declared?.tokens ?? null,
+      toolUses: declared?.toolUses ?? null,
       stepsUnavailableReason: declared?.stepsUnavailableReason ?? null,
       backgroundOpen: declared?.backgroundOpen ?? null,
       returned: launch?.result != null,
@@ -1458,6 +1488,114 @@ function diffPathOf(result: ChatItem | null): string | null {
  * otherwise be reported as an edit of nothing, and the total is the honest
  * answer for a call this cannot describe.
  */
+/**
+ * Does this call have a CHANGE TO A FILE to show?
+ *
+ * REPORTED as "I wanna see all file edits, so it should be automatically open,
+ * like claude cli" — the transcript folded every edit behind two presses (the
+ * group's chevron, then the row's), so the one part of a turn a reader has to
+ * check by eye was the part hidden hardest. It decides what is OPEN, and — since
+ * {@link pullFileChangesOutOfGroups} — which rows are lifted out of a group.
+ *
+ * Only file changes, and deliberately not "everything". A turn's reads, greps
+ * and command output are the material an agent worked FROM; unfolding those
+ * too would bury the diff in the wall of text this fold exists to prevent.
+ *
+ * Asked of BOTH directions, because the two shipped transports report a change
+ * at opposite ends of one call: claude discloses it in the arguments
+ * (`Edit`'s `old_string`/`new_string`, `Write`'s `content`), while an ACP agent
+ * discloses no arguments at all and returns `diffs` on the result. Keying on
+ * either alone would open the diffs of one CLI and none of the other's — and it
+ * is also why the split above runs on the FOLD'S OUTPUT rather than inside it:
+ * a result arrives after its call, so a decision taken while grouping would
+ * read as "not an edit" for every ACP agent.
+ *
+ * The last clause is the guard rather than the rule: a tool this classifies as
+ * an edit but nothing renders as a diff (`MultiEdit`, whose arguments are a
+ * list) still has arguments worth reading, but a row with NO body opens onto
+ * blank space and would read as a broken disclosure.
+ *
+ * Lives here rather than beside its renderer because it is a fact about a
+ * {@link ToolPair}, and because the splitter is in this module: `tool-group.tsx`
+ * imports from here, so the reverse would close a value cycle.
+ */
+export function showsFileChange(pair: ToolPair): boolean {
+  const payload: unknown = pair.call.payload;
+  const name = payloadString(payload, 'name') ?? 'tool';
+  const input = (payload as { input?: unknown } | null)?.input;
+  const body = toolInputBody(name, input);
+  if (body?.kind === 'diff') {
+    return true;
+  }
+  if (pair.result !== null) {
+    const result =
+      (pair.result.payload as { result?: unknown } | null)?.result ?? null;
+    if (toolResultBody(input, result).kind === 'diff') {
+      return true;
+    }
+  }
+  const operation = toolOperationOf(payload);
+  return (operation === 'edit' || operation === 'create') && body !== null;
+}
+
+/**
+ * Lift every FILE CHANGE out of its tool group, leaving the calls around it
+ * grouped as before.
+ *
+ * REPORTED: "у нас все еще должны быть группы, сколлапсированные с другими
+ * экшенами, но редактирование файлов должно быть вне этой группы … если агент
+ * сделал несколько shell-tool колов, у нас должна быть еще одна группа
+ * «collapse» … а отдельно блок с редактированием файла". The group already
+ * OPENED itself when it held an edit, and that is the shape being fixed: it
+ * opened the reads, greps and commands with it, so the diff a reader came for
+ * arrived at the bottom of everything the agent had done to find it.
+ *
+ * So `[bash, bash, edit, read, write]` becomes a collapsed `bash, bash`, the
+ * edit on its own, a collapsed `read`, and the write on its own. The
+ * surrounding runs keep the fold they always had — they are the material, not
+ * the result — and a group holding no change is untouched.
+ *
+ * Only when the user has left file edits expanded, which is the same condition
+ * the auto-open follows: someone who has asked for every step folded is asking
+ * for less on screen, and lifting the edits out would put more there.
+ *
+ * Identity is the segment's OWN first call, exactly as the fold names a group,
+ * so the pieces of a split run carry distinct React keys and each keeps its own
+ * expansion state instead of inheriting the run's.
+ */
+export function pullFileChangesOutOfGroups(
+  entries: readonly TranscriptEntry[],
+): TranscriptEntry[] {
+  return entries.flatMap((entry): TranscriptEntry[] => {
+    if (entry.type !== 'tools' || !entry.pairs.some(showsFileChange)) {
+      return [entry];
+    }
+    const out: TranscriptEntry[] = [];
+    let run: ToolPair[] = [];
+    const flushRun = (): void => {
+      if (run.length > 0) {
+        out.push({ ...entry, id: run[0]!.call.id, pairs: run });
+        run = [];
+      }
+    };
+    for (const pair of entry.pairs) {
+      if (showsFileChange(pair)) {
+        flushRun();
+        out.push({
+          ...entry,
+          id: pair.call.id,
+          pairs: [pair],
+          standalone: true,
+        });
+        continue;
+      }
+      run.push(pair);
+    }
+    flushRun();
+    return out;
+  });
+}
+
 export function toolGroupSummary(pairs: readonly ToolPair[]): string {
   const { spoken, accounted } = foldToolGroup(pairs);
   const parts = spoken.map((phrase) => phrase.text);

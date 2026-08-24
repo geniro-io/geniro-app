@@ -10,6 +10,7 @@ import {
   collectSubagentBlocks,
   countTools,
   groupTranscript,
+  pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
   subagentBlockStatus,
   toolCallSummary,
@@ -1991,5 +1992,118 @@ describe('groupTranscript task lists', () => {
       tasks('patch', [{ id: '1', title: 'x' }], 'tc-1'),
     ]);
     expect(countTools(entries)).toBe(0);
+  });
+});
+
+describe('pullFileChangesOutOfGroups', () => {
+  /** An `Edit` as claude discloses it — the change is in the ARGUMENTS. */
+  const edit = (
+    id: string,
+    path: string,
+    nodeId: string | null = 'orch',
+  ): ChatItem =>
+    call(
+      'Edit',
+      id,
+      { file_path: path, old_string: 'before', new_string: 'after' },
+      nodeId,
+    );
+
+  const shapeOf = (entries: readonly TranscriptEntry[]): string[] =>
+    entries.map((entry) =>
+      entry.type !== 'tools'
+        ? entry.type
+        : `${entry.standalone === true ? 'edit' : 'group'}:${entry.pairs
+            .map((pair) => payloadString(pair.call.payload, 'name'))
+            .join('+')}`,
+    );
+
+  it('splits a run at each file change, leaving the calls around it grouped', () => {
+    // REPORTED: "у нас все еще должны быть группы, сколлапсированные с другими
+    // экшенами, но редактирование файлов должно быть вне этой группы … если
+    // агент сделал несколько shell-tool колов, у нас должна быть еще одна
+    // группа «collapse» … а отдельно блок с редактированием файла".
+    const folded = groupTranscript([
+      call('Bash', 'c1', { command: 'ls' }),
+      call('Bash', 'c2', { command: 'grep x' }),
+      edit('c3', 'src/a.ts'),
+      call('Read', 'c4', { file_path: 'src/b.ts' }),
+      edit('c5', 'src/b.ts'),
+    ]);
+    // The whole run is ONE group before the split — which is the shape being
+    // fixed, not a detail of the fixture.
+    expect(shapeOf(folded)).toEqual(['group:Bash+Bash+Edit+Read+Edit']);
+
+    expect(shapeOf(pullFileChangesOutOfGroups(folded))).toEqual([
+      'group:Bash+Bash',
+      'edit:Edit',
+      'group:Read',
+      'edit:Edit',
+    ]);
+  });
+
+  it('leaves a group with no file change exactly as it was', () => {
+    // Identity, not equality: an untouched run must not be rebuilt, or every
+    // group in a long transcript remounts on a setting nobody changed.
+    const folded = groupTranscript([
+      call('Bash', 'c1', { command: 'ls' }),
+      call('Read', 'c2', { file_path: 'src/b.ts' }),
+    ]);
+    const split = pullFileChangesOutOfGroups(folded);
+    expect(split).toHaveLength(1);
+    expect(split[0]).toBe(folded[0]);
+  });
+
+  it('lifts a change an ACP agent reports on its RESULT, not its arguments', () => {
+    // The two shipped transports disclose a change at opposite ends of one
+    // call, and the result arrives AFTER the call was grouped — which is the
+    // whole reason this runs on the fold's output rather than inside it. Taken
+    // during the fold, every cursor edit would read as "not an edit".
+    const folded = groupTranscript([
+      call('Bash', 'c1', { command: 'ls' }),
+      call('write', 'c2', {}),
+      result('c2', {
+        diffs: [{ path: 'src/a.ts', oldText: 'before', newText: 'after' }],
+      }),
+    ]);
+    expect(shapeOf(folded)).toEqual(['group:Bash+write']);
+
+    expect(shapeOf(pullFileChangesOutOfGroups(folded))).toEqual([
+      'group:Bash',
+      'edit:write',
+    ]);
+  });
+
+  it('gives every piece of a split run its own identity', () => {
+    // The pieces are React keys AND the handle each row's expansion state hangs
+    // off. Reusing the run's id would give three siblings one key.
+    const folded = groupTranscript([
+      call('Bash', 'c1', { command: 'ls' }),
+      edit('c2', 'src/a.ts'),
+      call('Bash', 'c3', { command: 'ls' }),
+    ]);
+    const ids = pullFileChangesOutOfGroups(folded).map((entry) =>
+      entry.type === 'tools' ? entry.id : '',
+    );
+    expect(new Set(ids).size).toBe(3);
+  });
+
+  it('carries the group’s own facts onto every piece', () => {
+    // `closed`, the node and the sub-agent thread all decide whether a piece
+    // spins and where it is filed. A split that dropped them would put a
+    // delegate's edit in the main flow with a spinner that never stops.
+    const folded = groupTranscript([
+      call('Bash', 'c1', { command: 'ls' }, 'node-a'),
+      edit('c2', 'src/a.ts', 'node-a'),
+    ]);
+    const group = folded[0] as ToolGroupEntry;
+    group.closed = true;
+    const split = pullFileChangesOutOfGroups([group]) as ToolGroupEntry[];
+    expect(split).toHaveLength(2);
+    for (const piece of split) {
+      expect(piece.closed).toBe(true);
+      expect(piece.nodeId).toBe(group.nodeId);
+      expect(piece.parentToolUseId).toBe(group.parentToolUseId);
+    }
   });
 });

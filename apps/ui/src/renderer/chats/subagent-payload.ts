@@ -49,6 +49,17 @@ export interface SubagentDeclaration {
   prompt: string | null;
   model: string | null;
   durationMs: number | null;
+  /**
+   * What the delegate SPENT — every token it used, and how many tools it
+   * called — when its CLI reports them.
+   *
+   * There is no cost beside them, and that is a measurement rather than an
+   * omission: the daemon's `subagent_info` doc block records every channel that
+   * was probed for one. A price cannot be derived from the turn's own total
+   * either, which covers the main thread and all of its delegates at once.
+   */
+  tokens: number | null;
+  toolUses: number | null;
   stepsUnavailableReason: string | null;
   /**
    * Whether the CLI says this delegate is still working in the BACKGROUND —
@@ -90,11 +101,9 @@ export function readSubagentDeclaration(
     kind: str(record.kind),
     prompt: str(record.prompt),
     model: str(record.model),
-    durationMs:
-      typeof record.durationMs === 'number' &&
-      Number.isFinite(record.durationMs)
-        ? record.durationMs
-        : null,
+    durationMs: num(record.durationMs),
+    tokens: num(record.tokens),
+    toolUses: num(record.toolUses),
     stepsUnavailableReason: str(record.stepsUnavailableReason),
     backgroundOpen:
       typeof record.backgroundOpen === 'boolean' ? record.backgroundOpen : null,
@@ -113,6 +122,8 @@ export function mergeSubagentDeclarations(
     prompt: next.prompt ?? base.prompt,
     model: next.model ?? base.model,
     durationMs: next.durationMs ?? base.durationMs,
+    tokens: next.tokens ?? base.tokens,
+    toolUses: next.toolUses ?? base.toolUses,
     stepsUnavailableReason:
       next.stepsUnavailableReason ?? base.stepsUnavailableReason,
     // Same last-non-null rule, and it is what carries the pair: the `started`
@@ -124,4 +135,16 @@ export function mergeSubagentDeclarations(
 
 function str(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * A figure, or null for anything that is not one.
+ *
+ * `Number.isFinite` and not a bare `typeof`: the payload crosses JSON, where a
+ * `NaN` or an `Infinity` that got in would otherwise render as `NaN tokens` on
+ * the block header. Zero IS kept — `0 tool uses` is a real reading about a
+ * delegate that called none, and is exactly what the probe measured.
+ */
+function num(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }

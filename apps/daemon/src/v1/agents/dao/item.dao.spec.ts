@@ -87,6 +87,57 @@ describe('ItemDao (in-memory sqlite)', () => {
       ]);
     });
 
+    it('takes the NEWEST items when given a window, still in seq order', async () => {
+      // REPORTED as "мы должны максимум загружать где-то 1,000 сообщений …
+      // чтобы интерфейс не лагал". Measured on a real thread: 7,814 items are
+      // 18.9MB where its newest 1,000 are 0.63MB.
+      //
+      // Both halves matter and they pull opposite ways: the LIMIT has to take
+      // the tail of the conversation (a chat opens on what was last said), and
+      // the rows have to come back ASCENDING because every reader downstream —
+      // the fold, the call/result pairing, the turn scan — is written against a
+      // transcript in the order it happened.
+      for (let seq = 0; seq < 6; seq += 1) {
+        await insert('run-a', seq);
+      }
+
+      expect(
+        (await dao.getByRun('run-a', -1, undefined, { limit: 2 })).map(
+          (i) => i.seq,
+        ),
+      ).toEqual([4, 5]);
+    });
+
+    it('pages BACKWARDS with beforeSeq, and runs out at the start', async () => {
+      for (let seq = 0; seq < 5; seq += 1) {
+        await insert('run-a', seq);
+      }
+
+      const page = (before: number): Promise<number[]> =>
+        dao
+          .getByRun('run-a', -1, undefined, { limit: 2, beforeSeq: before })
+          .then((rows) => rows.map((i) => i.seq));
+
+      expect(await page(5)).toEqual([3, 4]);
+      expect(await page(3)).toEqual([1, 2]);
+      // A SHORT page is how the client learns it has reached the beginning —
+      // there is no separate "hasMore" on the wire, so this is the signal.
+      expect(await page(1)).toEqual([0]);
+      expect(await page(0)).toEqual([]);
+    });
+
+    it('scopes a window to its own run, like every other read here', async () => {
+      await insert('run-a', 0);
+      await insert('run-b', 1);
+      await insert('run-a', 2);
+
+      expect(
+        (await dao.getByRun('run-a', -1, undefined, { limit: 5 })).map(
+          (i) => i.seq,
+        ),
+      ).toEqual([0, 2]);
+    });
+
     it("never leaks another run's items", async () => {
       await insert('run-a', 0);
       await insert('run-b', 0);

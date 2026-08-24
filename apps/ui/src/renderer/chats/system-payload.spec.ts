@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isCliAuthored, isInfoNotice, isWarningNotice } from './system-payload';
+import {
+  isCliAuthored,
+  isInfoNotice,
+  isWarningNotice,
+  noticeCaption,
+} from './system-payload';
 
 describe('isCliAuthored', () => {
   it('recognises text the CLI wrote and geniro is only relaying', () => {
@@ -97,5 +102,47 @@ describe('isWarningNotice', () => {
   it('is safe on a payload that is not an object at all', () => {
     expect(isWarningNotice(null)).toBe(false);
     expect(isWarningNotice(42)).toBe(false);
+  });
+});
+
+describe('noticeCaption', () => {
+  it('reads the kind the daemon named this row', () => {
+    expect(
+      noticeCaption({
+        message: 'API Error: Connection closed mid-response.',
+        severity: 'warning',
+        caption: 'api error',
+      }),
+    ).toBe('api error');
+  });
+
+  it('leaves the severity default standing when nothing named a kind', () => {
+    // Every historical notice, and why the key is stamped only when set: the
+    // degrades that came first are captioned `not applied` by the row itself.
+    expect(
+      noticeCaption({
+        message: 'effort max is unavailable',
+        severity: 'warning',
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses a caption to RELAYED agent text that asks for one', () => {
+    // The same trust boundary its two neighbours hold: a caption is the row
+    // saying what KIND of app advisory it is, so relayed prose must not pick
+    // its own.
+    expect(
+      noticeCaption({
+        message: 'a summary of your conversation',
+        origin: 'cli',
+        caption: 'api error',
+      }),
+    ).toBeNull();
+  });
+
+  it('is safe on an empty caption and on a payload that is not an object', () => {
+    expect(noticeCaption({ message: 'x', caption: '' })).toBeNull();
+    expect(noticeCaption({ message: 'x', caption: 7 })).toBeNull();
+    expect(noticeCaption(null)).toBeNull();
   });
 });

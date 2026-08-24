@@ -86,6 +86,33 @@ describe('ChatHeader', () => {
     );
   });
 
+  it('never lets the counters wrap onto a line of their own', async () => {
+    // REPORTED against a screenshot: "subagent icon не должен переноситься на
+    // новую строку". The outer row used to wrap, and wrapping there is
+    // all-or-nothing — the identity group grows with the thread until the whole
+    // right-hand group drops to a second line.
+    //
+    // Asserted on the emitted classes, not on computed style: Tailwind is a
+    // build step and jsdom loads no stylesheet, so `getComputedStyle` reports
+    // the default for every element here and would pass with the fix deleted.
+    // The class IS the mechanism, so the class is the observable.
+    const el = render(
+      <ChatHeader {...baseProps} runningSubagents={2} agentKind="claude" />,
+    );
+    const counts = el.querySelector('[data-slot="side-panel-counts"]')!;
+    const row = counts.parentElement!.parentElement!;
+
+    expect(row.className).not.toContain('flex-wrap');
+    // Nor inside the identity — that variant kept the counters in place while
+    // orphaning "· worked 2.7s · $0.20" on a line of its own.
+    expect(row.firstElementChild!.className).not.toContain('flex-wrap');
+    // It gives up width on the side that can truncate, never on the numbers.
+    expect(counts.parentElement!.className).toContain('shrink-0');
+    expect(row.firstElementChild!.className).toContain('min-w-0');
+    expect(row.firstElementChild!.className).toContain('flex-1');
+    expect(el.querySelector('h2')!.className).toContain('truncate');
+  });
+
   it('keeps the sub-agent counter on screen at ZERO', async () => {
     // REPORTED: "здесь должна быть всегда иконка саб-эйджентов, даже если их
     // ноль". A counter that appears only once something is running answers "are

@@ -33,6 +33,28 @@ export const GENIRO_MCP_CALL_TOOLS = [
 ] as const;
 
 /**
+ * What ONE unit of background work consumed, as its CLI reported it when the
+ * unit settled.
+ *
+ * Deliberately not {@link AgentUsage}, which is a TURN's accounting: this is a
+ * flat total for a piece of work that ran inside a turn, and the two overlap in
+ * one field only. Filling out the turn shape here would mean publishing a dozen
+ * nulls no CLI has ever answered for a delegate — and the one figure it would
+ * imply is available, `costUsd`, is exactly the one that is not (see
+ * `subagent_info.tokens`).
+ *
+ * Every field nullable on the usual terms: a CLI reports what it reports.
+ */
+export interface BackgroundUnitUsage {
+  /** Every token the unit spent, prompt and completion together. */
+  tokens: number | null;
+  /** How many tool calls it made. */
+  toolUses: number | null;
+  /** How long it ran, as the CLI measured it. */
+  durationMs: number | null;
+}
+
+/**
  * Token/cost accounting for a completed turn. Fields are nullable because not
  * every CLI version reports every figure — the defensive mappers fill what the
  * stream provides and leave the rest null.
@@ -632,6 +654,25 @@ type AgentEventBody =
        * severity is exactly the impersonation `origin` exists to prevent.
        */
       severity?: 'info' | 'warning';
+      /**
+       * What KIND of notice this is, in two or three words — the row's caption,
+       * where the reader learns what they are looking at before reading the
+       * sentence.
+       *
+       * Absent takes the renderer's default for the severity, which is what
+       * every historical producer means. It exists because that default is a
+       * SENTENCE about one case: a `warning` is captioned `not applied`, which
+       * is true of the degrades the level was added for (an effort the model
+       * does not offer) and false of the other thing that is loud-but-not-fatal
+       * — a request that FAILED and was retried. One default phrase for a whole
+       * severity is how the second producer comes to file its row under the
+       * first's explanation.
+       *
+       * Meaningless beside `origin: 'cli'` and dropped there, by the same rule
+       * as {@link severity}: relayed agent text is not an advisory, so it does
+       * not get to caption itself as one.
+       */
+      caption?: string;
     }
   | {
       /**
@@ -673,6 +714,23 @@ type AgentEventBody =
       model: string | null;
       /** How long it took, when the CLI reports it. */
       durationMs: number | null;
+      /**
+       * How many tokens the delegate spent, and how many tools it called, when
+       * the CLI reports them — {@link BackgroundUnitUsage}.
+       *
+       * There is deliberately no COST field beside them. Probed on claude
+       * 2.1.237 across every channel that says anything about a delegate: the
+       * `task_notification` reports `{total_tokens, tool_uses, duration_ms}`,
+       * the launching call's `tool_use_result` adds `resolvedModel` and a token
+       * breakdown, the delegate's own sidechain JSONL holds no money figure at
+       * all, and the turn's `result` line prices the whole turn — its
+       * `modelUsage[model].costUSD` covers the main thread and every delegate
+       * together, with no way to split it. Deriving one would mean carrying a
+       * price table this app has no source for, so the delegate is reported in
+       * the units its CLI actually measured.
+       */
+      tokens: number | null;
+      toolUses: number | null;
       /**
        * {@link AdapterConfig.subagents.stepsUnavailableReason} — why this
        * delegate's own conversation is absent. Null for a CLI that streams it.
@@ -792,6 +850,22 @@ type AgentEventBody =
        * `started` rather than expecting both ends to carry it.
        */
       toolCallId: string | null;
+      /**
+       * What this unit CONSUMED, when the CLI states it as the unit settles.
+       *
+       * Only ever on a `settled` phase — nothing is consumed before the work
+       * runs — and only from a CLI whose settle channel carries it. Undefined
+       * everywhere else, which reads the same as every field being null.
+       *
+       * It rides the lifecycle event rather than being read straight into a
+       * `subagent_info` by the adapter for one reason: this channel carries
+       * shell commands and a delegate's own sub-work alongside the delegates,
+       * and only `runCliSession` knows which is which — it recorded the unit
+       * kind from the `started`, and the settle line does not restate it. An
+       * adapter announcing the figures itself would put a phantom sub-agent in
+       * the transcript for every backgrounded `sleep`.
+       */
+      usage?: BackgroundUnitUsage;
     }
   | {
       /**

@@ -141,6 +141,11 @@ describe('displayRunStatus', () => {
     // tailed log): nothing settles it, so the turn stands until the daemon's
     // 30-minute silence deadline. The screenshot that came back read
     // `running · 20m 18s` under an answer finished twenty minutes earlier.
+    //
+    // The answer was `idle` for one release, and that word came straight back
+    // reported: `i still see it seems like it finished but not`. `waiting` is
+    // the same non-spinning, non-settled state under a badge that no longer
+    // contradicts the `waiting on 1 background task` line beneath it.
     expect(
       displayRunStatus({
         status: 'running',
@@ -148,20 +153,45 @@ describe('displayRunStatus', () => {
         awaitingAnswer: false,
         heldForBackgroundWork: true,
       }),
-    ).toBe('idle');
+    ).toBe('waiting');
   });
 
-  it('keeps a held run RUNNING while a delegate is still producing rows', () => {
-    // Delegates are units of the same background work a hold waits on, so the
-    // two arrive together — and only one of them means the run is idle. A
-    // sub-agent that is demonstrably working is work.
+  it('reads a held run the SAME whether or not a delegate is producing rows', () => {
+    // The reported "I see the chat is idle, and the moment I click on it that
+    // changes to another status". `subagentRunning` is derived from the loaded
+    // transcript, so it is knowable for the focused run alone — while it
+    // outranked the hold, one run had two readings and the click swapped them
+    // in front of the user.
+    //
+    // Pinning the two calls EQUAL rather than each against a literal is the
+    // point: the defect was the difference, and a pair of separate literals
+    // would go on passing if one of them drifted back.
+    const held = {
+      status: 'running',
+      streaming: true,
+      awaitingAnswer: false,
+      heldForBackgroundWork: true,
+    } as const;
+    expect(displayRunStatus({ ...held, subagentRunning: true })).toBe(
+      displayRunStatus({ ...held, subagentRunning: false }),
+    );
+    expect(displayRunStatus({ ...held, subagentRunning: true })).toBe(
+      'waiting',
+    );
+  });
+
+  it('still calls a delegate running when the turn is NOT held', () => {
+    // What the ranking above must not cost: a delegating turn with nothing
+    // streaming and no hold reads as its stale row — the reported "thread says
+    // completed while sub-agents are visibly working" — so a live delegate has
+    // to keep outranking the row itself.
     expect(
       displayRunStatus({
-        status: 'running',
-        streaming: true,
+        status: 'completed',
+        streaming: false,
         awaitingAnswer: false,
         subagentRunning: true,
-        heldForBackgroundWork: true,
+        heldForBackgroundWork: false,
       }),
     ).toBe('running');
   });
@@ -224,6 +254,7 @@ describe('RUN_STATUS_META', () => {
     const kinds: RunStatusKind[] = [
       'pending',
       'running',
+      'waiting',
       'needs-input',
       'completed',
       'failed',
@@ -252,6 +283,7 @@ describe('isSettledRunStatus', () => {
   const unsettled: RunStatusKind[] = [
     'pending',
     'running',
+    'waiting',
     'needs-input',
     'idle',
   ];
@@ -265,8 +297,9 @@ describe('isSettledRunStatus', () => {
   it('reports every state a run can still leave as unsettled', () => {
     // `needs-input` is the one worth naming: the turn is OPEN and waiting on a
     // human, so work genuinely is in flight and its spinners must keep
-    // running. `pending` and `idle` are states a run has yet to leave, not
-    // ones it has finished in.
+    // running. `waiting` is the other open turn — held while background work
+    // it launched reports back. `pending` and `idle` are states a run has yet
+    // to leave, not ones it has finished in.
     for (const kind of unsettled) {
       expect(isSettledRunStatus(kind), kind).toBe(false);
     }

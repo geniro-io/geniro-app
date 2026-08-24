@@ -154,6 +154,20 @@ export class RenameRunDto extends createZodDto(renameRunSchema) {}
 export const historyQuerySchema = z.object({
   /** Replay cursor — return only items with seq greater than this. */
   afterSeq: z.coerce.number().int().optional(),
+  /**
+   * At most this many items, taken from the END of the conversation — the
+   * newest ones. Absent means the whole transcript, which is what the reconnect
+   * replay wants and what every caller did before paging existed.
+   *
+   * Bounded here rather than trusted: this is the one query whose cost scales
+   * with a number the client picks, and a thread of 7,814 items is 18.9MB.
+   */
+  limit: z.coerce.number().int().min(1).max(5000).optional(),
+  /**
+   * Page BACKWARDS: only items before this seq. Paired with `limit` to walk a
+   * long conversation towards its start, one window at a time.
+   */
+  beforeSeq: z.coerce.number().int().optional(),
 });
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 

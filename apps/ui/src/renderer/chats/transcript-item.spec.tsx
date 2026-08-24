@@ -384,6 +384,44 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.querySelector('[data-role="note"]')).toBeNull();
   });
 
+  it('captions a degrade `not applied`, and a named notice by its own kind', () => {
+    // One severity, two kinds. `not applied` is true of the setting the agent
+    // could not honour and FALSE of the other loud-but-not-fatal thing — a
+    // failed request, which reaches the transcript as `api error` — so the
+    // phrase belongs to the producer that means it, not to the level.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message: "this model does not offer 'effort=max'",
+          severity: 'warning',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain('not applied');
+
+    // Re-rendered on the same root, so the first row is genuinely replaced —
+    // which is what makes the negative assertion below mean anything.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message:
+            'API Error: Connection closed mid-response. The response above may be incomplete.',
+          severity: 'warning',
+          caption: 'api error',
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain('api error');
+    expect(container.textContent).not.toContain('not applied');
+    // Still the degrade chrome, never the agent's own bubble: the whole point
+    // is that this stops reading as something the agent said.
+    expect(container.querySelector('[data-role="warning"]')).not.toBeNull();
+  });
+
   it('keeps the failure chrome for a daemon notice that says nothing about severity', () => {
     // Every historical notice — a withheld capability, a degrade — is an
     // advisory, and absent must go on meaning `warning`. Without this the info

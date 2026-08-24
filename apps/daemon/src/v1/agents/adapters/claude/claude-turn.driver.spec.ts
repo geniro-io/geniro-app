@@ -441,6 +441,89 @@ describe('the request the provider failed', () => {
     is_api_error_message: true,
   };
 
+  /** The notice the mapper now makes of that line. */
+  const API_NOTICE = {
+    type: 'notice' as const,
+    message: 'API Error: Connection lost mid-response.',
+    severity: 'warning' as const,
+    caption: 'api error',
+  };
+
+  it('withholds the advisory when the turn ENDS on the very same sentence', () => {
+    // MEASURED over every api-error row a real claude run has produced: the
+    // four FATAL ones are followed by the turn's own `error` at the next seq,
+    // 2–4ms later, carrying a byte-identical message. Publishing both stacks an
+    // amber row directly on a red one saying the same words.
+    const driver = driverOver([
+      [API_NOTICE],
+      [{ type: 'error', message: 'API Error: Connection lost mid-response.' }],
+    ]);
+
+    expect(driver.onMessage(apiErrorLine)).toEqual([]);
+    expect(driver.onMessage({ type: 'result', is_error: true })).toEqual([
+      {
+        type: 'error',
+        message: 'API Error: Connection lost mid-response.',
+        detail: {
+          code: 'model_not_found',
+          requestId: 'req_011CeAL4KP2RkG9YEPGrdi2n',
+        },
+      },
+    ]);
+  });
+
+  it('publishes it AHEAD of the work that proved the turn carried on', () => {
+    // The other eight measured rows: the turn recovered and ran for 15 to 211
+    // more items. Here the advisory is the only record that anything went
+    // wrong, and it belongs where it happened — not at the terminal, which on
+    // that data was up to 211 rows later.
+    const driver = driverOver([
+      [API_NOTICE],
+      [{ type: 'tool_call', id: 't1', name: 'Read', input: null }],
+    ]);
+
+    expect(driver.onMessage(apiErrorLine)).toEqual([]);
+    expect(driver.onMessage({ type: 'assistant' })).toEqual([
+      API_NOTICE,
+      { type: 'tool_call', id: 't1', name: 'Read', input: null },
+    ]);
+  });
+
+  it('still shows both when the turn fails for an UNRELATED reason', () => {
+    // Adjacency is not the discriminator — the messages are. A turn that
+    // recovered from an api error and then died of something else has two
+    // things to report, and reporting one would hide the other.
+    const driver = driverOver([
+      [API_NOTICE],
+      [{ type: 'error', message: 'claude run failed (aborted_tools)' }],
+    ]);
+
+    driver.onMessage(apiErrorLine);
+    expect(driver.onMessage({ type: 'result', is_error: true })).toEqual([
+      API_NOTICE,
+      expect.objectContaining({ message: 'claude run failed (aborted_tools)' }),
+    ]);
+  });
+
+  it('never takes charge of a lone notice some OTHER producer wrote', () => {
+    // The MCP-readiness advisory and a relayed compaction summary are both lone
+    // notices. Gating on the event shape would have this method silently
+    // holding back rows it knows nothing about.
+    const driver = driverOver([
+      [
+        {
+          type: 'notice',
+          message: 'still starting: ticktick',
+          severity: 'info',
+        },
+      ],
+    ]);
+
+    expect(driver.onMessage({ type: 'system', subtype: 'whatever' })).toEqual([
+      { type: 'notice', message: 'still starting: ticktick', severity: 'info' },
+    ]);
+  });
+
   it('carries the request id from the line that reported it to the error', () => {
     // The two halves arrive on DIFFERENT lines — the id on the synthetic
     // assistant line, the failure one line later — so a per-line mapper cannot

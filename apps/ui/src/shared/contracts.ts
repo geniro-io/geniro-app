@@ -168,6 +168,22 @@ export interface Settings {
    */
   notificationsEnabled: boolean;
   /**
+   * Keep the transcript's intermediate steps FOLDED — a turn's tool calls stay
+   * closed however interesting the app judges them.
+   *
+   * The default is off, which is the behaviour that was itself asked for: an
+   * edit opens on its diff, because "I wanna see all file edits, so it should
+   * be automatically open, like claude cli". This is the other reading of the
+   * same transcript, reported by the same user against a turn that edited a
+   * dozen files — "хочу настройку, чтобы автоматически коллапсить все
+   * промежуточные шаги… при которой группа остается закрытой по дефолту" — so
+   * it is a preference rather than a correction, and it is stated as one.
+   *
+   * It decides only what is OPEN when a row first appears. Every row is still
+   * drawn, still counted in its group's header, and still one press away.
+   */
+  collapseToolSteps: boolean;
+  /**
    * Spawn the daemon with a Node inspector on loopback, so real Chrome
    * DevTools can attach to it from `chrome://inspect`.
    *
@@ -282,6 +298,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkForUpdates: true,
   sidebarCollapsed: false,
   notificationsEnabled: true,
+  collapseToolSteps: false,
   daemonInspect: null,
   claudeBrowserTools: false,
   customInstructions: '',

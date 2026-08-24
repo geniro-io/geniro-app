@@ -25,6 +25,23 @@ import { payloadString } from './transcript-item';
 const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 
 /**
+ * How many transcript items one fetch brings back.
+ *
+ * REPORTED as "иногда у нас разрастается чат с очень большим количеством
+ * сообщений … мы должны максимум загружать где-то 1,000 сообщений … чтобы
+ * интерфейс не лагал". Measured on the author's own longest thread: 7,814 items
+ * are 18.9MB of payload, whose newest 1,000 are 0.63MB — so opening that chat
+ * moved thirty times the bytes anybody was going to look at, parsed them, held
+ * them, folded them eight times over and rendered every row.
+ *
+ * The window is the END of the conversation, never its start: a chat opens on
+ * what was last said, and every reading the app takes off the transcript that
+ * is not the transcript itself (is a turn open, is a card unanswered, what is
+ * the agent doing) is about its tail.
+ */
+export const HISTORY_PAGE = 1000;
+
+/**
  * May a REPLAYED transcript release this run's queue?
  *
  * The one rule, in one place. A replay carries every past turn's terminal item,
@@ -108,6 +125,15 @@ export interface ChatRunState {
    */
   activeRunIdRef: RefObject<string | null>;
   items: ChatItem[];
+  /** The loaded window does not reach the start of the conversation. */
+  hasOlder: boolean;
+  /** A page of older items is in flight. */
+  loadingOlder: boolean;
+  /**
+   * Load the page before the oldest item on screen. Resolves true when rows
+   * were prepended, so the caller can hold the reader's scroll position.
+   */
+  loadOlder: () => Promise<boolean>;
   liveText: ReadonlyMap<string, LiveState>;
   streaming: boolean;
   setStreaming: Dispatch<SetStateAction<boolean>>;
@@ -175,6 +201,31 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [runs, setRuns] = useState<ChatRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
+  /**
+   * The loaded window may not reach the start of the conversation.
+   *
+   * False on a thread whose whole history is on screen, which is nearly all of
+   * them — see {@link HISTORY_PAGE}. The transcript reads it to decide whether
+   * scrolling up should fetch, and to say so while it does.
+   */
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  /**
+   * Mirror of {@link items}, so the stable `loadOlder` can read the oldest row
+   * on screen without being re-created on every streamed item — which would
+   * re-arm the transcript's scroll listener several times a second.
+   */
+  const itemsRef = useRef<ChatItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+  /**
+   * A page fetch is in flight — a REF, not the state above, because the scroll
+   * handler fires many times a second and reads this to decide whether to ask
+   * again. State is one commit behind, which is several more identical
+   * requests.
+   */
+  const loadingOlderRef = useRef(false);
   // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
   // never replayed, and cleared whenever the durable transcript is refetched.
   const [liveText, setLiveText] =
@@ -559,6 +610,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       pendingScrollRef.current = true;
       setActiveRunId(runId);
       setItems([]);
+      // Both belong to the thread being left. `hasOlder` is answered by the
+      // fetch below; clearing it first stops the incoming thread from offering
+      // to page through a conversation it has not read yet.
+      setHasOlder(false);
+      setLoadingOlder(false);
+      loadingOlderRef.current = false;
       setLiveText(EMPTY_LIVE_TEXT);
       setStreaming(false);
       setError(null);
@@ -566,7 +623,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // buffered through addItem; the seq de-dupe reconciles the overlap.
       try {
         await client.joinRun(runId);
-        const history = await chatApi.listRunItems({ runId });
+        const history = await chatApi.listRunItems({
+          runId,
+          limit: HISTORY_PAGE,
+        });
+        // A FULL page may have more behind it; a short one is the whole
+        // conversation. Asking for one more item than the page would be the
+        // other way to know, and this one costs no extra row — the worst case
+        // is one page-load that comes back empty on a thread of exactly 1,000.
+        setHasOlder(history.length === HISTORY_PAGE);
         // The user may have switched runs while this fetch was in flight —
         // a stale completion must not replay items or re-arm Stop/streaming
         // (and cross-contaminate errors) for the CURRENTLY active run.
@@ -907,6 +972,59 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     [client],
   );
 
+  /**
+   * Fetch the page BEFORE the oldest item on screen and prepend it.
+   *
+   * Guarded by a ref rather than by the loading state: the transcript calls
+   * this from a scroll handler, which fires many times a second, and state is
+   * one commit behind — several identical pages would already be in flight.
+   *
+   * Answers whether it changed anything, so the caller can restore the scroll
+   * position only when rows were actually inserted above the viewport.
+   */
+  const loadOlder = useCallback(async (): Promise<boolean> => {
+    const runId = activeRunIdRef.current;
+    if (runId === null || loadingOlderRef.current) {
+      return false;
+    }
+    const oldest = itemsRef.current[0];
+    if (oldest === undefined) {
+      return false;
+    }
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const page = await chatApi.listRunItems({
+        runId,
+        limit: HISTORY_PAGE,
+        beforeSeq: oldest.seq,
+      });
+      // The user may have switched threads while this was in flight; a stale
+      // page must not be spliced into somebody else's conversation.
+      if (activeRunIdRef.current !== runId) {
+        return false;
+      }
+      setHasOlder(page.length === HISTORY_PAGE);
+      if (page.length === 0) {
+        return false;
+      }
+      // Prepended WHOLE rather than through `addItem`: that path is written for
+      // the newest row and would re-sort the entire transcript once per item.
+      // These are older than everything held, already in seq order, and cannot
+      // collide — they were selected strictly below the oldest seq on screen.
+      setItems((prev) => [...page, ...prev]);
+      return true;
+    } catch {
+      // A page that will not load is a transcript that stops growing upward,
+      // never an error banner over a conversation the user is reading. The next
+      // scroll asks again.
+      return false;
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlder(false);
+    }
+  }, [chatApi]);
+
   return {
     runs,
     setRuns,
@@ -915,6 +1033,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunId,
     activeRunIdRef,
     items,
+    hasOlder,
+    loadingOlder,
+    loadOlder,
     liveText,
     streaming,
     setStreaming,

@@ -82,6 +82,7 @@ export function Settings({
   >({});
   const [checkForUpdates, setCheckForUpdates] = useState(true);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [collapseToolSteps, setCollapseToolSteps] = useState(false);
   const [claudeBrowserTools, setClaudeBrowserTools] = useState(false);
   const [customInstructions, setCustomInstructions] = useState('');
   const [forgetting, setForgetting] = useState(false);
@@ -179,6 +180,7 @@ export function Settings({
       }
       if (!notificationsDirtyRef.current) {
         setNotificationsEnabled(s.notificationsEnabled);
+        setCollapseToolSteps(s.collapseToolSteps ?? false);
         setClaudeBrowserTools(s.claudeBrowserTools);
       }
       if (!daemonInspectDirtyRef.current) {
@@ -478,6 +480,17 @@ export function Settings({
     [persist],
   );
 
+  const onToggleCollapseToolSteps = useCallback(
+    (next: boolean): void => {
+      setCollapseToolSteps(next);
+      // Nothing to restart: the transcript re-reads this whenever the chat tab
+      // becomes visible, which is the next thing that happens after leaving
+      // this screen.
+      void persist({ collapseToolSteps: next });
+    },
+    [persist],
+  );
+
   /**
    * Post one banner on demand and say what the platform did with it.
    *
@@ -685,6 +698,27 @@ export function Settings({
             Banners when an agent asks something and when a turn ends; clicking
             one opens that chat. Never for the chat you are watching, or a turn
             you stopped.
+          </p>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <h2 className="text-lg font-medium">Transcript</h2>
+          <div className="flex items-center gap-3">
+            <Switch
+              id="settings-collapse-tool-steps"
+              checked={collapseToolSteps}
+              onCheckedChange={onToggleCollapseToolSteps}
+            />
+            <Label
+              htmlFor="settings-collapse-tool-steps"
+              className="cursor-pointer">
+              Keep intermediate steps collapsed
+            </Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            A turn's tool calls start folded, file edits included. Every row is
+            still there — one press opens it, and the group header still counts
+            them.
           </p>
         </section>
 

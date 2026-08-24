@@ -16,10 +16,12 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
 /**
- * Names a chat once its first turn has finished.
+ * Names a chat from its first message, then improves the name once the CLI has
+ * one of its own.
  *
  * An untitled run falls through to its agent kind in `runLabel`, so a chat that
- * is never named renders as the CLI that ran it.
+ * is not named YET renders as the CLI that ran it — which is what naming on
+ * `turn_complete` alone left on screen for the whole of a first turn.
  *
  * It SUBSCRIBES to the bus rather than being called from `ChatService`: the bus
  * is where a settled turn already announces itself, so nothing on the execution
@@ -75,7 +77,34 @@ export class ChatTitleService implements OnModuleInit {
     this.bus.all().subscribe((event) => {
       // `nodeId` is the cheap half of the chat-run test and costs no query: the
       // chat path persists null, the graph executor persists a node's id.
-      if (event.item.kind !== 'turn_complete' || event.item.nodeId !== null) {
+      if (event.item.nodeId !== null) {
+        return;
+      }
+      // The user's OWN message names the chat at once, without waiting for the
+      // turn to end.
+      //
+      // REPORTED as "AutoTitle не работает — он просто название агента сейчас
+      // выводит", with a screenshot of a sidebar row reading `claude` under a
+      // turn that was still running. Nothing was broken: an untitled run falls
+      // through to its agent kind, and the naming fired on `turn_complete` — so
+      // every new chat was labelled after its CLI for the whole of its first
+      // turn, which is minutes on the work this app is for, and is exactly the
+      // stretch a user is watching the sidebar to find it in.
+      //
+      // The later pass is unchanged and still does the interesting half: this
+      // one can only trim the opening line, while `upgrade` replaces it with
+      // the name the AGENT gave the conversation once there is one.
+      if (event.item.kind === 'message' && event.item.role === 'user') {
+        void this.name(event.runId, true).catch((err) => {
+          this.logger.warn(
+            `failed to name run ${event.runId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+        return;
+      }
+      if (event.item.kind !== 'turn_complete') {
         return;
       }
       // Fire-and-forget with the failure OWNED here, exactly as the usage
@@ -107,7 +136,7 @@ export class ChatTitleService implements OnModuleInit {
    * requires that title to be exactly what this service would derive today. A
    * rename stops matching on both counts, so nothing can overwrite it.
    */
-  private async name(runId: string): Promise<void> {
+  private async name(runId: string, unnamedOnly = false): Promise<void> {
     if (this.naming.has(runId)) {
       return;
     }
@@ -115,6 +144,13 @@ export class ChatTitleService implements OnModuleInit {
     try {
       const em = this.em.fork();
       const run = await this.runDao.getById(runId, em);
+      // The message path names an UNNAMED run and stops there. Letting it reach
+      // `upgrade` would spend that run's few attempts — and a session read
+      // apiece — on every message the user ever sends, to ask a question only a
+      // finished turn can have changed the answer to.
+      if (unnamedOnly && run?.title !== null) {
+        return;
+      }
       if (
         !run ||
         // A workflow run is labelled by its workflow, which `runLabel` already

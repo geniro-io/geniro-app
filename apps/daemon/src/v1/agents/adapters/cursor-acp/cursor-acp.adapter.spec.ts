@@ -1057,6 +1057,8 @@ describe('CursorAcpAdapter — background sub-agents', () => {
         prompt: null,
         model: null,
         durationMs: null,
+        tokens: null,
+        toolUses: null,
         stepsUnavailableReason: expect.stringContaining(
           'not the work inside it',
         ),
@@ -1123,6 +1125,8 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       prompt: 'Your task is simple and self-contained: …',
       model: 'claude-opus-5-thinking-high',
       durationMs: 13075,
+      tokens: null,
+      toolUses: null,
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
     });

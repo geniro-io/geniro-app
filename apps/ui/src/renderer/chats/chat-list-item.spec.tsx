@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ChatListItem } from './chat-list-item';
-import { STANDING_ACTIVITY } from './run-status';
+import { HELD_ACTIVITY, STANDING_ACTIVITY } from './run-status';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -420,6 +420,44 @@ describe('ChatListItem — the running row never goes phrase-less', () => {
       <ChatListItem {...props({ status: 'completed', activity: null })} />,
     );
 
+    expect(container.textContent).not.toContain(STANDING_ACTIVITY);
+  });
+});
+
+describe('ChatListItem — a HELD row reads as live, not as history', () => {
+  it('keeps the daemon’s phrase and drops the relative time', async () => {
+    // The reported row: `⟳ idle · 24m`, on a thread that turned out to be
+    // waiting on six background tasks. Both halves said "finished a while
+    // ago" — the badge in a word, the `24m` in a number — so both are pinned
+    // here. The elapsed clock belongs to a run that has STOPPED, and this one
+    // has not: its turn is open and its process is up.
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          status: 'waiting',
+          activity: 'waiting on 6 background tasks',
+        })}
+      />,
+    );
+
+    expect(container.textContent).toContain('waiting on 6 background tasks');
+    // `formatRelativeTime` renders the row's 5-minute-old `lastActivityAt` as
+    // the bare `5m` — spelled the way the component actually produces it, not
+    // as a plausible-looking `5m ago` that no branch of this row can emit and
+    // that would therefore pass with the gate deleted.
+    expect(container.textContent).not.toContain('5m');
+  });
+
+  it('falls back to its OWN standing phrase, not the running one', async () => {
+    // The activity plane is events-only, so a window that reconnected
+    // mid-hold has no phrase to show. `Working…` there would stutter under a
+    // badge already reading `working` — and would describe an agent that is
+    // thinking, which a held one is not.
+    const container = await mount(
+      <ChatListItem {...props({ status: 'waiting', activity: null })} />,
+    );
+
+    expect(container.textContent).toContain(HELD_ACTIVITY);
     expect(container.textContent).not.toContain(STANDING_ACTIVITY);
   });
 });

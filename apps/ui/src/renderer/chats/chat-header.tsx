@@ -9,6 +9,7 @@ import { folderName as configDirName } from './directory-select';
 import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';
 import {
+  isWorkingRunStatus,
   RUN_STATUS_META,
   RunStatusIcon,
   type RunStatusKind,
@@ -344,8 +345,19 @@ export function ChatHeader({
     // one band above every column (`components/title-bar.tsx`), and this row no
     // longer moves the window — dragging a row full of chips was surprising
     // once a real title bar existed.
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border bg-card/60 px-4 py-2.5">
-      <div className="flex min-w-0 items-center gap-2">
+    // ONE LINE, and nothing in it wraps. The row used to be `flex-wrap`, where
+    // wrapping is all-or-nothing: the identity group grows with the thread
+    // (agent, profile, status, elapsed, worked, spend) until it fills the row,
+    // and the whole right-hand group then drops to a SECOND LINE — the reported
+    // "subagent icon не должен переноситься на новую строку".
+    //
+    // Wrapping INSIDE the identity was tried next and is not the answer either:
+    // it kept the counters in place while orphaning "· worked 2.7s · $0.20" on
+    // a line of its own, leading middot and all. What gives instead is the
+    // TITLE, which is the one thing here that can be shortened and still read —
+    // it already truncates, and `min-w-0` is what lets it.
+    <div className="flex items-center gap-x-4 border-b border-border bg-card/60 px-4 py-2.5">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {isWorkflow ? (
           <WorkflowIcon
             aria-hidden="true"
@@ -375,10 +387,13 @@ export function ChatHeader({
             {RUN_STATUS_META[status].label}
           </span>
         </span>
-        {status === 'running' ? (
+        {isWorkingRunStatus(status) ? (
           // WHILE running the question is "how long has this been going", not
           // "when did it last do something" — the relative time reads
-          // "just now" for the whole turn and answers nothing.
+          // "just now" for the whole turn and answers nothing. A HELD turn is
+          // still going, and the relative time is what made it read as
+          // finished: `idle · 1h` says a thread nobody has touched since
+          // breakfast, about one whose Stop button is live.
           <ElapsedTime since={turnStartedAt} />
         ) : (
           <span className="shrink-0 text-xs text-muted-foreground">
@@ -399,7 +414,10 @@ export function ChatHeader({
             the same half-answer the duration was on its own. */}
         <ThreadSpend costUsd={costUsd} />
       </div>
-      <div className="ml-auto flex flex-wrap items-center gap-1.5">
+      {/* `shrink-0` beside the identity's `flex-1 min-w-0`: the two counters
+          are a fixed handful of characters, so the row gives up width on the
+          side that has a truncating title rather than squeezing a number. */}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
         {/* What the agents panel is holding, at a glance. It used to BE that
             panel's toggle — "how much work is in here" was the one thing a bare
             chevron could not say, so the counts and the control were one

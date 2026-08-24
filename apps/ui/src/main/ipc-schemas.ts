@@ -135,6 +135,7 @@ export const settingsPatchSchema = z.strictObject({
   checkForUpdates: z.boolean().optional(),
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
+  collapseToolSteps: z.boolean().optional(),
   claudeBrowserTools: z.boolean().optional(),
   // The user's own prose — bounded in SIZE because the value ends up in a
   // spawned CLI's argv (and, on ACP, is re-sent every turn), and screened for

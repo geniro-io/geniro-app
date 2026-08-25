@@ -707,6 +707,26 @@ export class AcpTurnDriver implements TurnDriver {
   private resumed = false;
   /** The model asked for, so a refusal can name it. */
   private requestedModelId: string | null = null;
+  /**
+   * The model this turn is RUNNING as, as the AGENT stated it.
+   *
+   * Read from the session reply's `models.currentModelId` — the agent's own
+   * answer, never what geniro asked for, so a model this agent declined or
+   * never offered cannot be announced as the one in use. When the turn does
+   * switch, the requested id replaces it: the switch is what the frame asks
+   * for, and the reply describing the result arrives after the prompt has gone
+   * out. A refusal is not silent (`onErrorReply` posts a notice), so the window
+   * announced in that case is knowably approximate rather than invented.
+   *
+   * It exists because ACP carries NO model announcement of its own. Only
+   * claude emitted `turn_model`, so a cursor chat had nothing to scale its
+   * meter against until its first turn COMPLETED, and the cross-run window
+   * cache — which files a measurement under the model that reported it — could
+   * never be written from this transport at all. Which is the same gap the
+   * Max Mode mapping needed closed: a window measured under a setting is only
+   * useful if it is filed under the model it was measured on.
+   */
+  private currentModelId: string | null = null;
   /** The last `<id>=<value>` parameter asked for, so a refusal can name it. */
   private requestedParameter: string | null = null;
 
@@ -1315,6 +1335,18 @@ export class AcpTurnDriver implements TurnDriver {
       parameters: [],
     };
     const wanted = selection.model?.trim();
+    // The agent's own statement first, so a turn that names no model — or one
+    // whose model is refused below — still announces what it is running as.
+    const announced = readAcpCurrentModelId(sessionResult);
+    if (announced !== null && announced !== '') {
+      this.currentModelId = announced;
+    }
+    if (wanted) {
+      this.currentModelId = wanted;
+    }
+    if (this.currentModelId !== null) {
+      events.push({ type: 'turn_model', model: this.currentModelId });
+    }
     // Parameters are applied EVEN WHEN the model needs no change — they are a
     // separate axis, and a run that keeps the agent's current model while
     // choosing a different effort is the ordinary case for a chat left on
@@ -1881,7 +1913,15 @@ export class AcpTurnDriver implements TurnDriver {
       contextModel:
         this.contextReading?.windowTokens == null
           ? null
-          : this.contextReading.model,
+          : // The reading's own name when it carries one; otherwise the model
+            // the AGENT said it was running as. cursor's session store records
+            // a full breakdown and names no model at all, so without the
+            // fallback every window this transport measures is unattributable —
+            // and a figure nobody can file is a figure the next turn cannot
+            // reuse. The `windowTokens == null` guard above is untouched: a
+            // model id here is still a label ON a denominator, never a name
+            // offered with nothing being measured.
+            (this.contextReading.model ?? this.currentModelId),
       // The field is `costUsd`: report an amount only when the agent priced the
       // turn in USD, rather than silently relabelling another currency.
       costUsd:

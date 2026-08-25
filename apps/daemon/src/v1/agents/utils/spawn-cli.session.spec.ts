@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fakeSpawn } from '../__tests__/fake-child';
+import { type FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
-import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
+import {
+  HELD_TERMINAL_GRACE_MS,
+  runCliSession,
+  runHeadlessCli,
+  type SessionLogger,
+} from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -872,6 +877,30 @@ describe('runHeadlessCli keeps the one-turn contract', () => {
  * permission requests answered with no card ever shown — while the run reported
  * `completed` and its delegates rendered as `stopped`.
  */
+
+/**
+ * Report a unit and let the released hold's grace expire.
+ *
+ * A release no longer settles the turn on the spot: the CLI is about to open a
+ * continuation (that is how it learns a delegate finished), so the hold stays
+ * open for {@link HELD_TERMINAL_GRACE_MS} to give the existing discard rule a
+ * chance to see it — see `spawn-cli.ts`. Every case here that expects the turn
+ * to END on a report has to let that window pass, and the ones that expect it
+ * to CONTINUE deliberately do not.
+ */
+async function reportAndLetTheGracePass(
+  child: FakeChild,
+  work: string,
+): Promise<void> {
+  vi.useFakeTimers();
+  try {
+    line(child, { work, phase: 'settled' });
+    await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe('a turn whose background work outlives its result', () => {
   it('holds for a DELEGATE and not for a backgrounded command', async () => {
     // The hold buys a turn for the agent's OWN continuation to land in, which
@@ -925,11 +954,75 @@ describe('a turn whose background work outlives its result', () => {
       isError: false,
     });
 
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await handle?.done;
 
     expect(events.at(-1)).toEqual(COMPLETE);
     expect(settled).toBe(true);
+  });
+
+  it('does not settle on the report itself — the continuation lands first', async () => {
+    // THE reported defect. The hold ends when the last delegate reports, and
+    // that is exactly the moment the CLI is about to speak again: the way it
+    // LEARNS a delegate finished is a task notification, which opens a whole
+    // further turn of its own. So the release fired one breath before the
+    // continuation and geniro settled, painted `completed` and posted a
+    // notification into the gap. REPORTED as "выполняет её, говорит мне «done»,
+    // но потом сразу продолжает работать… я получаю фейковую нотификацию".
+    // TRACED on run `309e0822`: released 13:02:48, badge `completed` the same
+    // second, agent writing again ten seconds later and working for thirteen
+    // more minutes.
+    const events: AgentEvent[] = [];
+    let settled = false;
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    vi.useFakeTimers();
+    try {
+      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+      line(child, { done: true });
+      line(child, { work: 'task-1', phase: 'settled' });
+      // Halfway through the window — nothing has settled yet, which is the
+      // whole change: before it, the terminal went out on the report.
+      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS / 2);
+      expect(settled).toBe(false);
+      expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
+
+      // …and then the continuation the report triggered begins.
+      line(child, { says: 'Explorer returned with substantial findings.' });
+      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS * 2);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // The held result is DROPPED, not merely delayed: it describes a turn that
+    // has since continued, so the turn now ends on its NEXT terminal.
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
+
+    line(child, { done: true });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('still settles when the agent really has finished', async () => {
+    // The other half, and what stops the grace becoming a hang: a turn nothing
+    // follows ends on its own, one window later. That is the cost of the fix —
+    // a genuine ending waits ten seconds — and it is the right way round: a
+    // late "done" is a wait, an early one is a lie.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    await reportAndLetTheGracePass(child, 'task-1');
+    await handle?.done;
+
+    expect(events.at(-1)).toEqual(COMPLETE);
   });
 
   it('ends the hold when the agent starts producing again', async () => {
@@ -974,7 +1067,7 @@ describe('a turn whose background work outlives its result', () => {
     // …and the stale result is GONE rather than merely unannounced: releasing
     // it when the last unit reports would settle the turn in the middle of the
     // answer the agent is now writing.
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
@@ -1030,7 +1123,7 @@ describe('a turn whose background work outlives its result', () => {
     ]);
     expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
 
-    line(child, { work: 'forever', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'forever');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1043,7 +1136,7 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { work: 'task-2', phase: 'started', unit: 'agent' });
     line(child, { done: true });
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await Promise.resolve();
 
     // Held, and the count came DOWN as the first unit reported — the sentence
@@ -1053,7 +1146,7 @@ describe('a turn whose background work outlives its result', () => {
       { type: 'turn_held', open: 1 },
     ]);
 
-    line(child, { work: 'task-2', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-2');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1067,6 +1160,8 @@ describe('a turn whose background work outlives its result', () => {
 
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
+    // Deliberately NOT graced: a stray closes nothing, so it releases nothing
+    // and there is no window to wait out.
     line(child, { work: 'somebody-elses-task', phase: 'settled' });
     await Promise.resolve();
 
@@ -1077,9 +1172,15 @@ describe('a turn whose background work outlives its result', () => {
       { type: 'turn_held', open: 1 },
     ]);
 
-    line(child, { work: 'task-1', phase: 'settled' });
-    // A second report for the same task must not release a second terminal.
-    line(child, { work: 'task-1', phase: 'settled' });
+    vi.useFakeTimers();
+    try {
+      line(child, { work: 'task-1', phase: 'settled' });
+      // A second report for the same task must not release a second terminal.
+      line(child, { work: 'task-1', phase: 'settled' });
+      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
+    } finally {
+      vi.useRealTimers();
+    }
     await handle?.done;
 
     expect(events.at(-1)).toEqual(COMPLETE);
@@ -1105,7 +1206,7 @@ describe('a turn whose background work outlives its result', () => {
     // announced ONCE: the second result did not re-enter the hold.
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
 
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await handle?.done;
 
     expect(events.at(-1)).toEqual({ ...COMPLETE, finalText: 'LAUNCHED' });
@@ -1546,7 +1647,7 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
 
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1564,7 +1665,7 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
 
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     expect(between.at(-1)).toEqual(COMPLETE);
   });
 
@@ -1589,7 +1690,7 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await Promise.resolve();
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
-    line(child, { work: 'task-1', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'task-1');
     await handle?.done;
   });
 

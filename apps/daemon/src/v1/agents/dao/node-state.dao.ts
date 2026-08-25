@@ -115,4 +115,25 @@ export class NodeStateDao extends BaseDao<NodeState> {
     }
     await em.flush();
   }
+
+  /**
+   * Forget the CLI session this node was resuming, so the next turn starts a
+   * fresh one.
+   *
+   * The mechanism behind a geniro-performed compaction
+   * (`AgentGeniroCommand.replacesSession`): the conversation shrinks exactly
+   * when the id the CLI resumes stops being recorded. A row that does not exist
+   * is already in that state, which is why this writes nothing rather than
+   * creating one — there is no session to forget.
+   */
+  async clearSessionId(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      { agentSessionId: null },
+    );
+  }
 }

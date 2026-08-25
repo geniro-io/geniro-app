@@ -14,6 +14,84 @@ export function slashQuery(input: string): string | null {
   return match ? match[1]! : null;
 }
 
+/**
+ * The name of a slash command this agent does not have, or null when the
+ * message is safe to send.
+ *
+ * This exists because of what the transports do with an unknown command:
+ * nothing. The Agent Client Protocol says a client sends a command as an
+ * ordinary prompt and leaves recognising it to the agent, and specifies nothing
+ * at all about one the agent never advertised — so a name that is not in
+ * `available_commands_update` reaches the model as prose and is answered as
+ * prose. Reported against a cursor chat: `/summarize` (a command of that CLI's
+ * interactive shell, absent from its ACP server) produced a paragraph of the
+ * agent reasoning about what the user might have meant. The same holds for
+ * claude's stream-json stdin. So the check has to live on the client, and this
+ * is the client.
+ *
+ * The list it checks against is the list the `/` popup shows, which is what
+ * makes the refusal explainable — whatever the popup offers, sends.
+ *
+ * Three things deliberately pass through:
+ *
+ * - an EMPTY list, which is what a folder whose skills are still loading looks
+ *   like. Blocking there would refuse every command for the first seconds of a
+ *   chat, and the failure it prevents is a wasted turn rather than a lost one.
+ * - anything that is not command-SHAPED, most of all an absolute path
+ *   (`/Users/…/file.ts`), which is an ordinary thing to paste into a composer
+ *   and would otherwise be refused as a command nobody has. The name may not
+ *   contain a second `/`, which is the whole of that rule.
+ *
+ * Arguments are allowed to run over several lines, because a real invocation's
+ * routinely do (`/geniro:implement` followed by a pasted spec).
+ */
+export function unknownSlashCommand(
+  input: string,
+  skills: readonly AgentSkill[],
+): string | null {
+  if (skills.length === 0) {
+    return null;
+  }
+  // A name, then either end-of-message or the arguments. The name character
+  // class excludes `/`, which is what keeps a path out of this.
+  const match = /^\/([A-Za-z0-9][\w:.-]*)(?:\s[\s\S]*)?$/.exec(input.trim());
+  const name = match?.[1];
+  if (name === undefined) {
+    return null;
+  }
+  return skills.some((skill) => skill.name === name) ? null : name;
+}
+
+/**
+ * The geniro command a message invokes, or null.
+ *
+ * `source: 'geniro'` is the daemon's own word for "this app performs this, the
+ * CLI does not" — and what a geniro command needs is an IDLE agent, since it
+ * rewrites what the turn is asked and may replace the CLI's session. Handing
+ * one to a running turn would deliver it as prose, which is the whole defect;
+ * QUEUEING one is no better, because the queue's drain retries a busy run for
+ * a few seconds and then stops, on the reading that the turn's own ending will
+ * fire it again — which is exactly the ending that just fired it.
+ *
+ * Matching the whole bare command mirrors the daemon's own lookup
+ * (`AgentAdapter.geniroCommandFor`): these take no arguments, so a sentence
+ * after one is the user talking.
+ */
+export function geniroCommandName(
+  input: string,
+  skills: readonly AgentSkill[],
+): string | null {
+  const name = input.trim().startsWith('/') ? input.trim().slice(1) : null;
+  if (name === null) {
+    return null;
+  }
+  return skills.some(
+    (skill) => skill.name === name && skill.source === 'geniro',
+  )
+    ? name
+    : null;
+}
+
 /** Prefix matches first (the common case), then substring matches; stable. */
 export function filterSkills(
   skills: readonly AgentSkill[],

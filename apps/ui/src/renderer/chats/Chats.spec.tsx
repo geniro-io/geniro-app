@@ -7960,7 +7960,12 @@ describe('Chats — running shells', () => {
         payload: {
           id: 'sh-1',
           name: 'Bash',
-          result: 'Command running in background with ID: bash_1.',
+          // The launch reply as the CLI actually writes it — every arm of
+          // its own ternary ends with the output path, and the reader now
+          // requires that whole announcement rather than a bare `ID:`
+          // (see `shell-activity.ts` → `readLaunchHandle`).
+          result:
+            'Command running in background with ID: bash_1. Output is being written to: /tmp/bash_1.log.',
           isError: false,
         },
       },
@@ -8000,7 +8005,12 @@ describe('Chats — running shells', () => {
         payload: {
           id: 'sh-1',
           name: 'Bash',
-          result: 'Command running in background with ID: bash_1.',
+          // The launch reply as the CLI actually writes it — every arm of
+          // its own ternary ends with the output path, and the reader now
+          // requires that whole announcement rather than a bare `ID:`
+          // (see `shell-activity.ts` → `readLaunchHandle`).
+          result:
+            'Command running in background with ID: bash_1. Output is being written to: /tmp/bash_1.log.',
           isError: false,
         },
       },
@@ -8033,7 +8043,12 @@ describe('Chats — running shells', () => {
         payload: {
           id: 'sh-1',
           name: 'Bash',
-          result: 'Command running in background with ID: bash_1.',
+          // The launch reply as the CLI actually writes it — every arm of
+          // its own ternary ends with the output path, and the reader now
+          // requires that whole announcement rather than a bare `ID:`
+          // (see `shell-activity.ts` → `readLaunchHandle`).
+          result:
+            'Command running in background with ID: bash_1. Output is being written to: /tmp/bash_1.log.',
           isError: false,
         },
       },
@@ -8066,7 +8081,12 @@ describe('Chats — running shells', () => {
         payload: {
           id: 'sh-1',
           name: 'Bash',
-          result: 'Command running in background with ID: bash_1.',
+          // The launch reply as the CLI actually writes it — every arm of
+          // its own ternary ends with the output path, and the reader now
+          // requires that whole announcement rather than a bare `ID:`
+          // (see `shell-activity.ts` → `readLaunchHandle`).
+          result:
+            'Command running in background with ID: bash_1. Output is being written to: /tmp/bash_1.log.',
           isError: false,
         },
       },

@@ -4,9 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import type { AgentTitleInput } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { ItemWire, RunItemEvent, RunStatusEvent } from '../chat.types';
-import { SINGLE_AGENT_NODE } from '../chat.types';
+import { CHAT_TITLE_UPGRADE_TURNS, SINGLE_AGENT_NODE } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
@@ -95,7 +96,10 @@ function build(opts: {
       }
       return Promise.resolve(opts.nativeTitle ?? null);
     });
-  const generateTitle = vi.fn(() =>
+  // Typed on the INPUT, so a spec can assert what a later ask was given —
+  // `vi.fn(() => …)` infers a zero-arity call signature and its `mock.calls`
+  // become `[]`, which no assertion can reach into.
+  const generateTitle = vi.fn((_input: AgentTitleInput) =>
     Promise.resolve(opts.generatedTitle ?? null),
   );
   const adapterFor = vi.fn(
@@ -134,6 +138,13 @@ function build(opts: {
         Promise.resolve(opts.firstUserMessageText ?? null),
       firstAssistantMessageText: () =>
         Promise.resolve(opts.firstAssistantMessageText ?? null),
+      // A later ask reads the newest exchange rather than the opening one —
+      // real text, so a spec asserting the retry carries something cannot pass
+      // on a double that answers null for everything.
+      lastUserMessageText: () =>
+        Promise.resolve('so the ETA bindings are the problem'),
+      lastAssistantMessageText: () =>
+        Promise.resolve('Yes — I rewrote them and the suite is green.'),
     } as unknown as ItemDao,
     { getByRunNode } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
@@ -419,24 +430,44 @@ describe('ChatTitleService', () => {
     );
   });
 
-  it('asks ONCE, however many turns the chat goes on for', async () => {
-    // Asking spawns a process and bills a model call, so a CLI that answered
-    // nothing must not be re-asked per turn for the life of the conversation.
-    // The read budget beside it is deliberately untouched — a null from an
-    // adapter that generates nothing means "no such mechanism", not "it failed".
+  it('re-asks across later turns, then stops — bounded by the read budget', async () => {
+    // Asking spawns a process and bills a model call, so a chat nobody can
+    // name must stop costing one. But asking ONCE was wrong, which is the
+    // reported "we fixed it twice and the title still is not set": an opening
+    // that is a bare link has nothing nameable in it (measured on 2.1.237 —
+    // the naming turn answers "I need to see the Slack thread…"), so the first
+    // ask can only be declined and the chat wore its opening line for good.
     const { settle, generateTitle, readSessionTitle } = build({
-      run: { title: 'add auto chat titles' },
+      run: { title: 'https://slack/x' },
       nativeTitle: null,
-      firstUserMessageText: 'add auto chat titles',
+      firstUserMessageText: 'https://slack/x',
       generatedTitle: null,
     });
 
-    for (let turn = 0; turn < 5; turn += 1) {
+    for (let turn = 0; turn < 8; turn += 1) {
       await settle();
     }
 
-    expect(generateTitle).toHaveBeenCalledTimes(1);
-    expect(readSessionTitle).toHaveBeenCalledTimes(5);
+    expect(generateTitle).toHaveBeenCalledTimes(CHAT_TITLE_UPGRADE_TURNS);
+    expect(readSessionTitle).toHaveBeenCalledTimes(CHAT_TITLE_UPGRADE_TURNS);
+  });
+
+  it('gives a LATER ask what the conversation has since said', async () => {
+    // The whole reason a retry is worth making: the same two messages would
+    // reproduce the same refusal. The first ask carries no `latest`, because
+    // there is nothing later than the opening yet.
+    const { settle, generateTitle } = build({
+      run: { title: 'https://slack/x' },
+      nativeTitle: null,
+      firstUserMessageText: 'https://slack/x',
+      generatedTitle: null,
+    });
+
+    await settle();
+    expect(generateTitle.mock.calls[0]?.[0]).toMatchObject({ latest: null });
+
+    await settle();
+    expect(generateTitle.mock.calls[1]?.[0]?.latest).not.toBeNull();
   });
 
   it('does not ask when the CLI already wrote a title of its own', async () => {

@@ -25,6 +25,47 @@ export const popoverSurface =
   'absolute z-50 rounded-xl border border-border/60 bg-popover shadow-panel-lg';
 
 /**
+ * The gap between a trigger and the panel it opens.
+ *
+ * It belongs to NEITHER, which is why `HoverPopover` delays its close: the
+ * pointer crosses 6px that are not the trigger and not yet the panel.
+ */
+const GAP_PX = 6;
+
+/** How close to the window edge a panel may come before it is pushed back. */
+const EDGE_MARGIN_PX = 8;
+
+/**
+ * The floor under a flipped panel's `max-height`.
+ *
+ * A trigger pinned against an edge can leave a side with almost nothing, and
+ * clamping to that produces a panel a few pixels tall — less readable than one
+ * that overhangs slightly and scrolls. Reaching this means the window is too
+ * short for the content either way.
+ */
+const MIN_PANEL_PX = 120;
+
+/** The other side. */
+function flip(side: 'top' | 'bottom'): 'top' | 'bottom' {
+  return side === 'top' ? 'bottom' : 'top';
+}
+
+/**
+ * Keep an offset inside the window: never under the margin, never so far that
+ * the panel's far edge crosses the other one.
+ *
+ * `max` LAST, so a panel wider than the window keeps its near edge on screen
+ * rather than being pushed off the opposite side to satisfy a bound it cannot
+ * meet.
+ */
+function clamp(offset: number, ceiling: number): number {
+  return Math.max(
+    EDGE_MARGIN_PX,
+    Math.min(offset, Math.max(EDGE_MARGIN_PX, ceiling)),
+  );
+}
+
+/**
  * An anchored panel holding ARBITRARY content, for the cases `Menu` cannot
  * serve — it renders a list of values, and the composer's overflow needs the
  * real controls (each with its own menu) rather than rows describing them.
@@ -82,6 +123,16 @@ export function Popover({
   children: React.ReactNode;
 }): React.JSX.Element | null {
   const panelRef = React.useRef<HTMLDivElement | null>(null);
+  /**
+   * The mounted panel, as STATE rather than only a ref, so measuring can
+   * re-run once it exists.
+   *
+   * Placement is two passes and has to be: the panel is not rendered until the
+   * trigger has been measured (see the hold below), so the first pass cannot
+   * know how tall it is. The second pass, which this dependency schedules, is
+   * the one that can flip it.
+   */
+  const [panelEl, setPanelEl] = React.useState<HTMLDivElement | null>(null);
   const [box, setBox] = React.useState<React.CSSProperties | null>(null);
 
   // Measured on open, and re-measured while open on scroll or resize — a fixed
@@ -99,14 +150,59 @@ export function Popover({
         return;
       }
       const rect = trigger.getBoundingClientRect();
+      const panel = panelEl?.getBoundingClientRect();
+      const height = panel?.height ?? 0;
+      const width = panel?.width ?? 0;
+      // What each side actually has, once the 6px gap and the edge margin are
+      // taken out of it.
+      const below = window.innerHeight - rect.bottom - GAP_PX - EDGE_MARGIN_PX;
+      const above = rect.top - GAP_PX - EDGE_MARGIN_PX;
+      // FLIP rather than let it run off the edge. REPORTED as "этот поповер
+      // иногда заезжает за пределы окна видимого", against a group's options
+      // opened on the last row of the sidebar: the panel is `fixed` precisely
+      // so no ancestor can clip it, which also means no ancestor can stop it.
+      // The requested side is kept whenever it fits, so a panel that has room
+      // never moves; the other side is taken only when it has more.
+      const wanted = side === 'top' ? above : below;
+      const other = side === 'top' ? below : above;
+      // An UNMEASURED panel (the first pass, before it mounts) keeps the
+      // requested side. `height === 0` is not "fits in no space" — it is "we
+      // do not know yet", and flipping on it would move every panel on the
+      // frame before the one that could tell.
+      const fits = height === 0 || height <= wanted;
+      const placed = !fits && other > wanted ? flip(side) : side;
+      const room = placed === 'top' ? above : below;
+      // A panel too tall for EITHER side scrolls inside itself rather than
+      // overflowing — the last resort, and the reason this is a max rather
+      // than a height.
+      const maxHeight = Math.max(MIN_PANEL_PX, room);
+      // The same clamp across, and each alignment keeps its OWN edge pinned:
+      // swapping `end` to a computed `left` would make the panel paint at the
+      // trigger's right edge on the first pass (width is 0 until it mounts)
+      // and jump left on the second — the very flicker the hold below exists
+      // to prevent.
+      const across =
+        align === 'end'
+          ? {
+              right: clamp(
+                window.innerWidth - rect.right,
+                window.innerWidth - width - EDGE_MARGIN_PX,
+              ),
+            }
+          : {
+              left: clamp(
+                rect.left,
+                window.innerWidth - width - EDGE_MARGIN_PX,
+              ),
+            };
       setBox({
         position: 'fixed',
-        ...(side === 'top'
-          ? { bottom: window.innerHeight - rect.top + 6 }
-          : { top: rect.bottom + 6 }),
-        ...(align === 'end'
-          ? { right: window.innerWidth - rect.right }
-          : { left: rect.left }),
+        ...(placed === 'top'
+          ? { bottom: window.innerHeight - rect.top + GAP_PX }
+          : { top: rect.bottom + GAP_PX }),
+        ...across,
+        maxHeight,
+        overflowY: 'auto',
       });
     };
     measure();
@@ -116,7 +212,7 @@ export function Popover({
       window.removeEventListener('resize', measure);
       document.removeEventListener('scroll', measure, true);
     };
-  }, [open, anchor, side, align, triggerRef]);
+  }, [open, anchor, side, align, triggerRef, panelEl]);
 
   React.useEffect(() => {
     if (!open) {
@@ -156,7 +252,10 @@ export function Popover({
 
   return (
     <div
-      ref={panelRef}
+      ref={(node) => {
+        panelRef.current = node;
+        setPanelEl(node);
+      }}
       role="dialog"
       aria-label={label}
       style={box ?? undefined}

@@ -111,6 +111,55 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Write (or clear) the summary a geniro compaction owes this run's next turn
+   * — see {@link Run.pendingContext}.
+   *
+   * A bare `nativeUpdate` for `rememberContext`'s reason: nothing here needs the
+   * row's other columns, and the caller is holding a fork whose entity may
+   * predate the turn that just settled.
+   */
+  async setPendingContext(
+    runId: string,
+    context: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { pendingContext: context },
+    );
+  }
+
+  /**
+   * Take the summary this run is owed, clearing it in the SAME statement, and
+   * report what was taken.
+   *
+   * Read-then-clear rather than a read followed by a write: the column is
+   * consumed exactly once, and two turns racing for it — a follow-up delivered
+   * as another opens — would otherwise both read the summary and both prepend
+   * it. `nativeUpdate` reports how many rows the predicate matched, so the
+   * loser is told it took nothing rather than being handed a copy.
+   */
+  async takePendingContext(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    const repo = this.getRepo(txEm);
+    const run = await repo.findOne(
+      { id: runId },
+      { disableIdentityMap: true, fields: ['pendingContext'] },
+    );
+    const pending = run?.pendingContext ?? null;
+    if (pending === null) {
+      return null;
+    }
+    const cleared = await repo.nativeUpdate(
+      { id: runId, pendingContext: pending },
+      { pendingContext: null },
+    );
+    return cleared > 0 ? pending : null;
+  }
+
+  /**
    * Chat runs stuck in a non-terminal `running` state — used by the boot-time
    * reconcile to close runs a crash / SIGKILL / restart left mid-turn.
    */

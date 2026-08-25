@@ -35,6 +35,7 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
+import { withCarriedContext } from '../utils/carried-context';
 import {
   closesWork,
   mapEventToItem,
@@ -120,8 +121,8 @@ export class ChatService implements OnModuleInit {
    * side effect.
    */
   onModuleInit(): void {
-    this.sessions.onClosed((runId) => {
-      void this.settleAfterSessionClosed(runId);
+    this.sessions.onClosed((runId, interrupted) => {
+      void this.settleAfterSessionClosed(runId, interrupted);
     });
   }
 
@@ -501,6 +502,12 @@ export class ChatService implements OnModuleInit {
      */
     customInstructions?: string;
     /**
+     * Whether cursor turns on this run ask for Max Mode. Snapshotted like the
+     * instructions above; absent means the client did not say, which the
+     * adapter reads as its own default.
+     */
+    cursorMaxMode?: boolean;
+    /**
      * A conversation this CLI already holds, taken over instead of started —
      * the new thread resumes it, and opens on the transcript it already had.
      */
@@ -554,6 +561,7 @@ export class ChatService implements OnModuleInit {
         // are one state in the row, and the turn input below cannot hand an
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
+        cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
@@ -1628,8 +1636,25 @@ export class ChatService implements OnModuleInit {
    * that turn settles itself, and the session it is closing is being REPLACED
    * (`it could not serve the next turn`) rather than abandoned — nor for one
    * being deleted, whose rows are on their way out.
+   *
+   * **A close that INTERRUPTED work owes the user a sentence**, which is the
+   * `interrupted` half. Restoring the badge is right either way, but the badge
+   * it restores is the status the off-turn stretch took over — routinely
+   * `completed`, from a turn that ended before the agent carried on — so a
+   * cut-off agent left a thread reading `completed` over eleven pending tasks
+   * with nothing anywhere naming what happened. REPORTED as "Тред сам по себе
+   * остановился … я должен писать ему какое-то сообщение, чтобы он продолжил",
+   * and the transcript agreed with the badge rather than with the truth. The
+   * eviction that caused THAT case cannot happen any more (`OFF_TURN_ACTIVE_MS`
+   * in the registry), so this is the net under the cases that remain — and it
+   * is deliberately gated on the work being RECENT rather than fired on every
+   * close, because reaping a session that has sat quiet for half an hour is
+   * housekeeping and a row per chat would be noise.
    */
-  private async settleAfterSessionClosed(runId: string): Promise<void> {
+  private async settleAfterSessionClosed(
+    runId: string,
+    interrupted = false,
+  ): Promise<void> {
     this.clearDelegateLease(runId);
     const restoreTo = this.offTurnRuns.get(runId);
     if (
@@ -1641,12 +1666,48 @@ export class ChatService implements OnModuleInit {
     }
     this.offTurnRuns.delete(runId);
     try {
+      if (interrupted) {
+        await this.noteInterruptedSession(runId);
+      }
       await this.restoreOffTurnBadge(runId, restoreTo);
     } catch (err: unknown) {
       this.logger.error(
         `run ${runId} failed to settle after its session closed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+
+  /**
+   * Say in the TRANSCRIPT that the agent was cut off, not merely in the log.
+   *
+   * A WARNING, and one of the few that is genuinely about geniro rather than
+   * about the agent: the CLI was working and this app stopped it. The sentence
+   * names the recovery, because there is one and it is not obvious — the
+   * conversation is intact, so the next message resumes it with everything the
+   * agent had said still in the thread.
+   *
+   * Best-effort, like every other note here: the process is already gone, and
+   * failing to explain that must not also fail the badge restore that follows.
+   */
+  private async noteInterruptedSession(runId: string): Promise<void> {
+    await this.persist(
+      this.em.fork(),
+      runId,
+      await this.seqs.reserve(runId),
+      'system',
+      null,
+      {
+        message:
+          'The agent was still working when geniro closed its process, so it ' +
+          'stopped here. Nothing is lost — send a message to pick the thread ' +
+          'up where it left off.',
+        severity: 'warning',
+      },
+    ).catch((err: unknown) => {
+      this.logger.error(
+        `run ${runId} interrupted-session note failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   /**
@@ -1733,11 +1794,28 @@ export class ChatService implements OnModuleInit {
         'run is missing a working directory or agent',
       );
     }
+    // Resolved BEFORE the claim, because the busy branch below needs it and
+    // the claim must stay the first thing that can be raced. A pure lookup
+    // against this CLI's own static list — no probe, no await.
+    const geniroCommand = this.adapterFor(run.agentKind).geniroCommandFor(text);
     // Reserve the run synchronously BEFORE any further await — this closes the
     // check-then-act window where two concurrent messages would both pass the
     // busy check, share one `maxSeq` base, allocate colliding seq values (the
     // renderer then de-dupes by seq and silently drops one), and spawn two CLIs.
     if (!this.registry.tryClaim(runId)) {
+      // A geniro command is never handed to a running turn. Delivery there
+      // writes the message into the CLI's own conversation, where `/compact`
+      // is either the wrong CLI's word or a rewrite that never happens — and
+      // on a CLI whose compaction geniro performs, the turn that would carry
+      // it out is the very turn already in flight. Refused rather than queued
+      // for the same reason: what the user asked to compact is what is being
+      // said right now, so the command should be re-issued once it has been.
+      if (geniroCommand) {
+        throw new ConflictException(
+          'RUN_BUSY',
+          `/${geniroCommand.name} needs the agent to be idle — wait for this turn to finish`,
+        );
+      }
       // A turn holds the run. That used to be the end of it — the message went
       // back as RUN_BUSY and sat in the renderer's queue until the CLI process
       // exited, so "send this next" meant "after everything currently running
@@ -1823,6 +1901,11 @@ export class ChatService implements OnModuleInit {
       // here is exactly what would respawn this run's CLI process mid-thread
       // (`AgentAdapter.sessionKey` hashes it).
       const customInstructions = settings.customInstructions ?? undefined;
+      // Off the ROW for the same reason, and `?? undefined` rather than
+      // `?? false`: a run created before the column existed says nothing about
+      // Max Mode, and the adapter's own default is the right reading of that —
+      // every such run did in fact use it.
+      const cursorMaxMode = settings.cursorMaxMode ?? undefined;
 
       // Store the bytes BEFORE persisting the item: the payload records only
       // the attachment rows, so an item written first would reference files
@@ -1877,6 +1960,25 @@ export class ChatService implements OnModuleInit {
       }
       approvalMode = resolved.mode;
 
+      /**
+       * What the CLI is actually asked this turn.
+       *
+       * Two rewrites, in this order. A geniro command REPLACES the text with
+       * what its adapter says this CLI needs — the transcript still records the
+       * `/compact` the user typed, because the rewrite is what the agent is
+       * asked, not what the conversation says was asked. And a run owed a
+       * carried summary gets it prepended, once: a geniro compaction drops the
+       * agent's session, so without this the next turn opens on an agent that
+       * has forgotten the conversation it just summarised.
+       *
+       * The take is read-and-clear, so the column cannot ride a second prompt —
+       * including this one's own retry.
+       */
+      const turnPrompt = withCarriedContext(
+        await this.runDao.takePendingContext(runId, em),
+        geniroCommand ? geniroCommand.prompt : text,
+      );
+
       const node = await this.nodeStateDao.getByRunNode(
         runId,
         SINGLE_AGENT_NODE,
@@ -1903,6 +2005,16 @@ export class ChatService implements OnModuleInit {
 
       let chain: Promise<void> = Promise.resolve();
       let sawTerminal = false;
+      /**
+       * How this turn ENDED, kept because a geniro compaction may only be
+       * committed for a turn that finished.
+       *
+       * `sawTerminal` alone cannot answer it — a cancelled turn and a failed
+       * one both set it — and dropping the agent's session on the strength of a
+       * turn the user stopped mid-summary would throw the conversation away in
+       * exchange for half a paragraph.
+       */
+      let settledStatus: RunStatus | null = null;
       /**
        * The last thing the agent SAID this turn — what a settle announcement
        * carries so a client can tell the user what happened rather than merely
@@ -2087,13 +2199,14 @@ export class ChatService implements OnModuleInit {
         runId,
         adapter,
         {
-          prompt: text,
+          prompt: turnPrompt,
           cwd,
           model,
           effort,
           contextWindow,
           configDir,
           customInstructions,
+          cursorMaxMode,
           resumeSessionId,
           approvalMode,
           // A human is watching a chat: let the agent ask, and stream its
@@ -2179,6 +2292,7 @@ export class ChatService implements OnModuleInit {
                   SINGLE_AGENT_NODE,
                   event.contextWindowTokens,
                   event.contextModel ?? null,
+                  contextWindow,
                 );
               }
               // The live plane is what lets the meter move DURING the turn
@@ -2206,6 +2320,7 @@ export class ChatService implements OnModuleInit {
                 SINGLE_AGENT_NODE,
                 adapter.getConfig().kind,
                 event.model,
+                contextWindow,
               );
               return;
             }
@@ -2220,6 +2335,7 @@ export class ChatService implements OnModuleInit {
                 SINGLE_AGENT_NODE,
                 event.usage?.contextWindowTokens ?? null,
                 event.usage?.contextModel ?? null,
+                contextWindow,
               );
               // …and the DURABLE copy of the same pair. It is the same write
               // the live readings above make, taken here because this is the
@@ -2638,6 +2754,7 @@ export class ChatService implements OnModuleInit {
               // Set only after the write succeeds: if it throws, the finalizer
               // still writes a synthetic completion rather than leaving 'running'.
               sawTerminal = true;
+              settledStatus = status;
             }
           });
         },
@@ -2782,6 +2899,20 @@ export class ChatService implements OnModuleInit {
                 );
               },
             );
+            settledStatus = 'completed';
+          }
+          // LAST, once the transcript is drained and the run's status is
+          // final: this is the only step that destroys something (the CLI's
+          // own conversation), so it must not run beside writes that could
+          // still fail the turn.
+          if (geniroCommand?.replacesSession === true) {
+            await this.commitCarriedCompaction(
+              em,
+              runId,
+              geniroCommand.name,
+              settledStatus,
+              lastAgentText,
+            );
           }
         })
         .catch((err: unknown) => {
@@ -2818,6 +2949,82 @@ export class ChatService implements OnModuleInit {
       this.registry.release(runId);
       throw err;
     }
+  }
+
+  /**
+   * Finish a compaction geniro performed ITSELF: drop the CLI's conversation
+   * and put the summary aside for the turn that replaces it.
+   *
+   * Two writes and they are ordered, because only one order is recoverable. The
+   * summary is stored FIRST: a daemon that dies between them leaves a run whose
+   * session is intact and whose next turn carries the summary as well — a
+   * conversation that repeats itself, which is untidy. The reverse leaves a
+   * dropped session with nothing to carry, which is the conversation gone.
+   *
+   * A turn that did not COMPLETE, or completed saying nothing, commits neither
+   * and says so. That covers the cases that matter: the user pressed Stop
+   * partway through the summary, the CLI failed, the agent answered with
+   * whitespace. Destroying the conversation on the strength of any of those
+   * buys the user nothing and costs them everything they were working on — so
+   * the compaction is ABANDONED, in a transcript row rather than silently,
+   * because the user asked for something and is entitled to know it did not
+   * happen.
+   */
+  private async commitCarriedCompaction(
+    em: EntityManager,
+    runId: string,
+    commandName: string,
+    settledStatus: RunStatus | null,
+    summary: string | null,
+  ): Promise<void> {
+    const carried = summary?.trim() ?? '';
+    if (settledStatus !== 'completed' || carried === '') {
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        {
+          message:
+            settledStatus === 'completed'
+              ? `/${commandName} produced no summary — the conversation was left as it was.`
+              : `/${commandName} did not finish — the conversation was left as it was.`,
+          // A WARNING, and the one of the pair that is: the user asked for
+          // something and it did not happen.
+          severity: 'warning',
+        },
+      ).catch((err: unknown) => {
+        this.logger.error(
+          `run ${runId} abandoned-compaction note failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+      return;
+    }
+    await this.runDao.setPendingContext(runId, carried, em);
+    await this.nodeStateDao.clearSessionId(runId, SINGLE_AGENT_NODE, em);
+    await this.persist(
+      em,
+      runId,
+      await this.seqs.reserve(runId),
+      'system',
+      null,
+      {
+        // INFO, not the failure chrome every other daemon notice wears: this
+        // row reports the thing the user just ASKED for having worked, and
+        // rendered as a warning it reads as the compaction having gone wrong.
+        message:
+          'Conversation compacted. The agent starts fresh from the summary ' +
+          'above; everything before it is no longer in its context.',
+        severity: 'info',
+      },
+    ).catch((err: unknown) => {
+      // The compaction ITSELF has already happened — this row only explains
+      // it, and losing the explanation must not look like losing the work.
+      this.logger.error(
+        `run ${runId} compaction note failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
   }
 
   /**

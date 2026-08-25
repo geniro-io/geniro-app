@@ -9,6 +9,7 @@ import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
 import { TaskListCard } from './task-list';
+import { ThinkingDisclosure } from './thinking-block';
 import { ToolGroup } from './tool-group';
 import type { TranscriptEntry, TurnBlockEntry } from './transcript-groups';
 import {
@@ -117,12 +118,19 @@ export const TurnBlock = memo(function TurnBlock({
       if (liveRowKind(item.payload) !== null) {
         return <TranscriptItem key={item.id} item={item} nodes={nodes} />;
       }
+      // The SAME fold the standalone bubble uses — one disclosure shared, two
+      // bodies, because a turn block renders reasoning as markdown and the
+      // bubble prints it verbatim. Sharing the body instead would make one of
+      // them change how it draws prose.
+      const reasoning = payloadString(item.payload, 'text') ?? '';
       return (
         <div key={item.id} data-role="reasoning">
-          <MarkdownContent
-            content={payloadString(item.payload, 'text') ?? ''}
-            className="text-muted-foreground italic"
-          />
+          <ThinkingDisclosure text={reasoning}>
+            <MarkdownContent
+              content={reasoning}
+              className="text-muted-foreground italic"
+            />
+          </ThinkingDisclosure>
         </div>
       );
     }

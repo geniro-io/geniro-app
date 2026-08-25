@@ -1,4 +1,11 @@
-import { Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
+import { totalmem } from 'node:os';
+
+import {
+  Injectable,
+  Logger,
+  type OnApplicationShutdown,
+  Optional,
+} from '@nestjs/common';
 
 import type {
   AgentEvent,
@@ -30,19 +37,123 @@ import type {
 export const SESSION_IDLE_MS = 30 * 60_000;
 
 /**
- * How many run-scoped processes may live at once.
+ * What one kept CLI process costs in memory.
  *
- * A CLI holding ten MCP servers is a few hundred megabytes, so this is a real
- * ceiling and not a formality: without it, opening a dozen chats would keep a
- * dozen of them. Eviction takes the least-recently-used IDLE session — never
- * one with a turn in flight, which would kill work the user is watching.
+ * MEASURED 2026-08-25 on the author's own machine, over the four claude
+ * sessions the daemon was holding: 1202MB, 1129MB, 905MB, 897MB — mean
+ * ~1.01GB. That is the HEAVY case and deliberately so, since it is the one the
+ * ceiling exists for: a CLI with ten MCP servers dialled, which is what a
+ * working chat looks like here. A CLI with none is a fraction of it, so this
+ * over-estimates in the safe direction.
  */
-export const MAX_LIVE_SESSIONS = 3;
+export const SESSION_MEMORY_COST_BYTES = 1024 ** 3;
+
+/**
+ * How much of the machine's memory the kept sessions may claim between them.
+ *
+ * An eighth. Not a number anybody can derive — what it encodes is that these
+ * processes are a CACHE (every one of them can be closed and re-opened with
+ * `--resume`, costing latency and nothing else), so they get a slice rather
+ * than a share of what is free: the user's editor, browser and the agents'
+ * own subprocesses have the rest, and none of them announce themselves here.
+ */
+const SESSION_MEMORY_SHARE = 1 / 8;
+
+/**
+ * The floor. Below two there is no point keeping any: the benefit is a chat
+ * staying warm while you work in another one, and at one the second chat
+ * evicts the first every time you switch.
+ */
+const MIN_LIVE_SESSIONS = 2;
+
+/**
+ * The cap, and it is not about memory — a 512GB machine would compute 64.
+ * Past about a dozen the constraint stops being the hardware and starts being
+ * the person: those are conversations somebody is meant to be following, and a
+ * ceiling that scales without bound is not a ceiling. The idle window reaps
+ * what is genuinely abandoned either way.
+ */
+const MAX_LIVE_SESSIONS_CAP = 16;
+
+/**
+ * How many run-scoped processes may live at once, for a machine of this size.
+ *
+ * A CLI holding ten MCP servers is about a gigabyte, so this is a real ceiling
+ * and not a formality: without it, opening a dozen chats would keep a dozen of
+ * them. It was a flat `3`, which is the whole reason it is now computed — three
+ * is right for a 16GB laptop and absurd on the 128GB machine this was reported
+ * from, where it meant paying a cold start (~6.5s and every MCP server
+ * rebooted) on the fourth chat while 110GB sat free. REPORTED as "что за max
+ * live session… это очень мало!", and the answer asked for was to derive it
+ * rather than pick a better constant.
+ *
+ * Derived from TOTAL memory, never from what is free right now: free memory
+ * depends on what the machine happened to be doing when the daemon booted, so
+ * the same computer would get a different ceiling on each launch and no
+ * behaviour here would be reproducible. Memory is also the only axis — cores
+ * do not bound how many idle processes may sit in RAM.
+ *
+ * Pure and exported so it is testable at sizes this machine is not: see the
+ * spec, which pins the curve rather than whatever the test host happens to
+ * have.
+ */
+export function sessionCeilingFor(totalMemoryBytes: number): number {
+  const affordable = Math.floor(
+    (totalMemoryBytes * SESSION_MEMORY_SHARE) / SESSION_MEMORY_COST_BYTES,
+  );
+  return Math.min(
+    MAX_LIVE_SESSIONS_CAP,
+    Math.max(MIN_LIVE_SESSIONS, affordable),
+  );
+}
+
+/** The ceiling this daemon runs under — {@link sessionCeilingFor} of this box. */
+export const MAX_LIVE_SESSIONS = sessionCeilingFor(totalmem());
+
+/**
+ * How long after its last off-turn row a session is still treated as WORKING.
+ *
+ * `session.idle` means "no turn of OURS in flight", which is also true of a CLI
+ * running flat out between turns — a delegate reporting back, a continuation
+ * the agent opened for itself. {@link touchOffTurn} already had to teach the
+ * idle WINDOW that difference; eviction never learned it, and the two are the
+ * same fact used for two decisions.
+ *
+ * What that cost is measured, on the reporter's own run `309e0822` (2026-08-25,
+ * reconstructed from `geniro.db` and the debug log): a claude thread ran on
+ * after its turn settled, wrote its twelve-task plan, said "Starting T1", and
+ * its last row landed at 13:16:09 — one second before `evictIfFull` picked it
+ * as the least-recently-used idle session and closed the process. The chat then
+ * sat for 22 minutes reading `completed` with 11 of 12 tasks pending, until the
+ * user typed "status?" to restart it. REPORTED as "Тред сам по себе остановился
+ * … я должен писать ему какое-то сообщение, чтобы он продолжил".
+ *
+ * Five minutes, the same span and the same reasoning as `ChatService`'s
+ * `DELEGATE_ROW_LEASE_MS`: it is the answer to "how long do we go on believing
+ * a quiet stretch is still work", and two different answers to one question is
+ * how the badge and the process come to disagree about whether a chat is busy.
+ *
+ * It can only ever push the registry OVER the ceiling, never refuse a turn —
+ * `evictIfFull` already has that arm, for the case where every session is busy,
+ * and this widens what counts as busy rather than adding a new outcome.
+ */
+export const OFF_TURN_ACTIVE_MS = 5 * 60_000;
 
 interface SessionEntry {
   session: AgentSession;
   /** When this run's last turn ended; drives both eviction and expiry. */
   lastUsedAt: number;
+  /**
+   * When the CLI last produced a row with no turn of ours open, or 0 for a
+   * session that has never done so.
+   *
+   * Separate from {@link lastUsedAt}, which both this and a settling turn
+   * refresh: the two mean different things to eviction. A session whose turn
+   * ended a moment ago is merely RECENT, and evicting it costs a respawn; one
+   * writing rows this second is WORKING, and evicting it costs the work. Only
+   * the second is exempt, so a busy chat is not confused with a fresh one.
+   */
+  offTurnActiveAt: number;
   timer: ReturnType<typeof setTimeout> | null;
   /**
    * The between-turn approval policy, in a holder the session reads THROUGH.
@@ -85,7 +196,23 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   private readonly logger = new Logger(AgentSessionRegistry.name);
   private readonly entries = new Map<string, SessionEntry>();
   private shuttingDown = false;
-  private readonly closeListeners = new Set<(runId: string) => void>();
+  private readonly closeListeners = new Set<
+    (runId: string, interrupted: boolean) => void
+  >();
+
+  /**
+   * This registry's ceiling, defaulting to what the machine affords.
+   *
+   * A constructor argument purely as a TEST SEAM — the specs pin a fixed value
+   * so the eviction cases mean the same thing on a 16GB CI box and on a 128GB
+   * desktop, where the computed ceiling differs by a factor of eight. `@Optional`
+   * is what lets Nest instantiate this with no provider for `Number`.
+   */
+  private readonly ceiling: number;
+
+  constructor(@Optional() ceiling?: number) {
+    this.ceiling = ceiling ?? MAX_LIVE_SESSIONS;
+  }
 
   /**
    * Told whenever a run's process is closed — the one signal that no further
@@ -100,8 +227,13 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    * daemon is seconds from exiting, and a listener writing rows into a
    * database that is closing behind it can only lose. The next boot's
    * reconcile owns those runs instead.
+   *
+   * `interrupted` says whether the process was still WORKING when it was
+   * closed ({@link worksOffTurn}) — the difference between housekeeping and
+   * cutting a running agent off, which the listener cannot see from here and
+   * which decides whether the transcript owes the user a sentence.
    */
-  onClosed(listener: (runId: string) => void): void {
+  onClosed(listener: (runId: string, interrupted: boolean) => void): void {
     this.closeListeners.add(listener);
   }
 
@@ -206,6 +338,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     const entry: SessionEntry = {
       session,
       lastUsedAt: Date.now(),
+      offTurnActiveAt: 0,
       timer: null,
       policy,
     };
@@ -331,7 +464,22 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       return;
     }
     entry.lastUsedAt = Date.now();
+    entry.offTurnActiveAt = entry.lastUsedAt;
     entry.timer.refresh();
+  }
+
+  /**
+   * Is this session carrying on by ITSELF — working, with no turn of ours open?
+   *
+   * The third thing eviction must not take, beside a turn in flight and a
+   * parked question. See {@link OFF_TURN_ACTIVE_MS} for the run this was
+   * measured on.
+   */
+  private worksOffTurn(entry: SessionEntry): boolean {
+    return (
+      entry.offTurnActiveAt > 0 &&
+      Date.now() - entry.offTurnActiveAt < OFF_TURN_ACTIVE_MS
+    );
   }
 
   private arm(runId: string, entry: SessionEntry): void {
@@ -370,9 +518,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
-   * Make room for one more process by closing the least-recently-used IDLE
-   * session. A session with a turn in flight is never evicted — that would
-   * kill work the user is watching to make room for work they just asked for.
+   * Make room for one more process by closing the least-recently-used session
+   * that is not DOING anything. A session with a turn in flight, one parked on
+   * a question, and one carrying on by itself between turns are all exempt —
+   * evicting any of them kills work the user is watching to make room for work
+   * they just asked for.
    */
   private evictIfFull(): void {
     // A dead session is not busy, whatever `idle` says about it. Dropping these
@@ -393,7 +543,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         this.closeEntry(runId, entry, 'it can no longer serve a turn');
       }
     }
-    while (this.entries.size >= MAX_LIVE_SESSIONS) {
+    while (this.entries.size >= this.ceiling) {
       let oldest: [string, SessionEntry] | null = null;
       for (const candidate of this.entries) {
         // `parked` alongside `idle`, not folded into it: a session holding a
@@ -401,7 +551,15 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         // (no turn in flight) and busy in the sense that matters here. Evicting
         // it kills the question rather than the process — the CLI takes the
         // close as a refusal, and the user's answer arrives at nothing.
-        if (!candidate[1].session.idle || candidate[1].session.parked) {
+        // `worksOffTurn` alongside the two: a CLI writing rows between turns is
+        // idle in the only sense `idle` claims and busy in the sense that
+        // matters here, exactly as `parked` is. Reported as a thread that
+        // "остановился и ничего не делает" — see {@link OFF_TURN_ACTIVE_MS}.
+        if (
+          !candidate[1].session.idle ||
+          candidate[1].session.parked ||
+          this.worksOffTurn(candidate[1])
+        ) {
           continue;
         }
         if (oldest === null || candidate[1].lastUsedAt < oldest[1].lastUsedAt) {
@@ -413,7 +571,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         // the alternative is refusing a turn the user asked for, or killing
         // one that is running.
         this.logger.warn(
-          `all ${this.entries.size} agent sessions are busy — starting another over the ${MAX_LIVE_SESSIONS} ceiling`,
+          `all ${this.entries.size} agent sessions are busy — starting another over the ${this.ceiling} ceiling`,
         );
         return;
       }
@@ -422,6 +580,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   private closeEntry(runId: string, entry: SessionEntry, reason: string): void {
+    // Read BEFORE the entry is dropped and the timer disarmed — both are what
+    // the answer is computed from.
+    const interrupted = this.worksOffTurn(entry);
     this.disarm(entry);
     this.entries.delete(runId);
     try {
@@ -440,7 +601,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     for (const listener of this.closeListeners) {
       try {
-        listener(runId);
+        listener(runId, interrupted);
       } catch (err) {
         // One listener's failure must not stop the others, and must never stop
         // a close: this runs inside `evictIfFull` and the teardown path, where

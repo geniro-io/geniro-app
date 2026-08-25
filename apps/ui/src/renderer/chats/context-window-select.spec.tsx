@@ -63,8 +63,6 @@ const CURSOR_WINDOWS = [
  */
 const REASON_NO_MODEL =
   'pick a model to see the context-window sizes it offers';
-const REASON_FIXED_WINDOW =
-  'grok-4.6 runs at one fixed context window — pick a model that offers a choice.';
 const REASON_PROBE_FAILED =
   'cursor-agent could not be asked which context windows this model offers';
 const REASON_NO_AXIS =
@@ -102,7 +100,6 @@ describe('ContextWindowSelect', () => {
   });
 
   it.each([
-    ['a model with one fixed size', REASON_FIXED_WINDOW, 'fixed-window'],
     ['a probe that could not be taken', REASON_PROBE_FAILED, 'unreadable'],
     ['a CLI with no such axis at all', REASON_NO_AXIS, 'no-axis'],
   ] as const)(
@@ -158,27 +155,22 @@ describe('ContextWindowSelect', () => {
 
   it('says WHY inside the open menu when it has no sizes to offer, and draws no empty block above the row', () => {
     // REPORTED as "It didnt load contexts for cursor. CHeck it", over a
-    // `kimi-k3` composer. The daemon was right — that model's own handshake
-    // enumerates `reasoning` and no `context` parameter, while `claude-opus-5`
-    // on the same account and build enumerates `context = 300k|1m` — so the
-    // panel correctly had one row. What made it read as a failed fetch was the
-    // rendering: an empty sizes BLOCK above the lone row, and an explanation
-    // that lived only in the trigger's hover title.
+    // composer whose panel correctly had one row. What made it read as a
+    // failed fetch was the rendering: an empty sizes BLOCK above the lone row,
+    // and an explanation that lived only in the trigger's hover title.
     const el = render(
       <ContextWindowSelect
         windows={[]}
         value={null}
-        unavailableReason="kimi-k3 runs at one fixed context window — pick a model that offers a choice."
-        unavailableKind="fixed-window"
+        unavailableReason={REASON_NO_AXIS}
+        unavailableKind="no-axis"
         onChange={() => {}}
       />,
     );
     act(() => {
       trigger(el)!.click();
     });
-    expect(el.textContent).toContain(
-      'kimi-k3 runs at one fixed context window',
-    );
+    expect(el.textContent).toContain(REASON_NO_AXIS);
     // One block, not two: the sizes group is empty, and an empty group renders
     // as a bare band with the next group's hairline under it.
     expect(el.querySelectorAll('[data-slot="menu-group"]')).toHaveLength(1);

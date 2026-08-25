@@ -1,3 +1,5 @@
+import { readTitleAnswer } from '../../utils/title-prompt.utils';
+
 /**
  * The title this CLI wrote, read back out of its `--output-format json` reply.
  *
@@ -28,25 +30,9 @@ export function readClaudeTitleReply(stdout: string | null): string | null {
   if (row.is_error === true) {
     return null;
   }
-  const result = typeof row.result === 'string' ? row.result.trim() : '';
-  return result === '' ? null : unwrapTitle(result);
-}
-
-/**
- * The title itself, with the packaging a model adds when it ignores the ask.
- *
- * Only the two forms that are unambiguously packaging: a whole answer inside
- * matching quotes, and a trailing full stop. Neither can be part of a title a
- * reader wanted — a name ending in `.` is not one, and a fully-quoted answer is
- * the model quoting itself — while anything more (stripping a leading `Title:`,
- * say) starts matching prose, which the prompt already asks against.
- */
-function unwrapTitle(text: string): string {
-  const dequoted =
-    (text.startsWith('"') && text.endsWith('"')) ||
-    (text.startsWith('“') && text.endsWith('”')) ||
-    (text.startsWith("'") && text.endsWith("'"))
-      ? text.slice(1, -1).trim()
-      : text;
-  return dequoted.endsWith('.') ? dequoted.slice(0, -1).trim() : dequoted;
+  const result = typeof row.result === 'string' ? row.result : '';
+  // What counts as an ANSWER is the shared prompt's business, not this CLI's:
+  // the two are one contract, and a model that explains itself instead of
+  // naming the chat does it on every transport.
+  return result.trim() === '' ? null : readTitleAnswer(result);
 }

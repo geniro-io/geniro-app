@@ -11,7 +11,6 @@ import { Chip } from '../components/ui/chip';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import { folderName } from './directory-select';
-import { formatElapsed } from './live-row';
 import { formatRelativeTime } from './relative-time';
 import {
   isWorkingRunStatus,
@@ -48,31 +47,21 @@ function useSecondTick(active: boolean): void {
 }
 
 /**
- * How long the turn on screen has been running, ticking every second.
+ * The counters' trigger — one constant, because there are three of them.
  *
- * Its own component so the second-by-second re-render stays here instead of
- * repainting the whole header — the same reason the transcript's live rows own
- * their clocks. Renders nothing without a start time, so the header can place
- * it unconditionally.
+ * The TYPE SIZE is on the button and has to be: `global.css`'s base rule sets
+ * `button { font-size: var(--text-base) }`, which DEFEATS an inherited size,
+ * so the row's own `text-xs` reached the icons and not the numbers beside
+ * them. Measured on the reported screenshot — the digits were 15px medium
+ * against 14px glyphs, taller and heavier than the icon they belong to and
+ * than every other word on the header line. REPORTED as "давай сделаем меньше
+ * вот эти циферки… значки оставь одного размера, а вот циферки уменьшим": the
+ * icons are untouched at `size-3.5`, and the numbers come back to the 12px the
+ * row asked for in the first place. `font-normal` for the same reason — the
+ * same base rule also makes them medium, so a count read as emphasis.
  */
-function ElapsedTime({
-  since,
-}: {
-  since: string | null;
-}): React.JSX.Element | null {
-  useSecondTick(since !== null);
-  const startedAt = since === null ? NaN : Date.parse(since);
-  if (!Number.isFinite(startedAt)) {
-    return null;
-  }
-  return (
-    <span
-      className="shrink-0 text-xs tabular-nums text-muted-foreground"
-      title="How long this turn has been running">
-      · {formatElapsed(Date.now() - startedAt)}
-    </span>
-  );
-}
+const COUNT_TRIGGER_CLASS =
+  'gap-1 rounded-md px-1 py-0.5 text-xs font-normal hover:bg-accent';
 
 /**
  * What this thread has WORKED — the settled turns plus the one in flight,
@@ -238,7 +227,6 @@ export function ChatHeader({
   configDir = null,
   status,
   lastActivityAt,
-  turnStartedAt = null,
   workedMs = 0,
   turnCount = 0,
   costUsd = null,
@@ -298,18 +286,6 @@ export function ChatHeader({
   status: RunStatusKind;
   lastActivityAt: string;
   /**
-   * When the turn currently on screen began — the ISO timestamp of the message
-   * that started it. Drives the running clock; null while nothing is running.
-   *
-   * A TIMESTAMP rather than an elapsed number, for the same reason the
-   * daemon's `thinkingSince` is one: a duration computed by the owner freezes
-   * at the moment it was passed, and keeping it moving would mean re-rendering
-   * the header once a second from above. It is read from the transcript, so it
-   * survives a reload mid-turn — a clock started at mount would restart at zero
-   * and claim a four-minute turn had just begun.
-   */
-  turnStartedAt?: string | null;
-  /**
    * What this thread has WORKED in total — the sum of its turns, not the span
    * from its first message to its last.
    *
@@ -337,7 +313,8 @@ export function ChatHeader({
    * still for the whole of a turn: the reported defect was a header sitting on
    * `worked 64m 34s` while the agent visibly worked. Handed over as the turn's
    * pieces rather than as a number, because a number would freeze the instant
-   * it was computed — the same reason {@link turnStartedAt} is a timestamp.
+   * it was computed — a timestamp rather than an elapsed count, for the same
+   * reason `turn-duration.ts` records against its own.
    */
   openTurn?: OpenTurn | null;
   /** Delegates working right now. */
@@ -448,23 +425,31 @@ export function ChatHeader({
             {RUN_STATUS_META[status].label}
           </span>
         </span>
-        {isWorkingRunStatus(status) ? (
-          // WHILE running the question is "how long has this been going", not
-          // "when did it last do something" — the relative time reads
-          // "just now" for the whole turn and answers nothing. A HELD turn is
-          // still going, and the relative time is what made it read as
-          // finished: `idle · 1h` says a thread nobody has touched since
-          // breakfast, about one whose Stop button is live.
-          <ElapsedTime since={turnStartedAt} />
-        ) : (
+        {/* NOTHING while it runs — {@link WorkedTime} is the clock then, and it
+            ticks. There used to be a second one here, this turn's raw wall
+            clock, and on a thread's first turn the two are the same number
+            twice: REPORTED against `running · 21s · worked 21s` as "у нас
+            сейчас два раза показывается таймер… нам нужен только таймер,
+            сколько он в целом работал".
+
+            Only the RUNNING half goes. Settled, this slot says when the thread
+            last spoke, which is a different question from how much work is in
+            it — the pair `completed · 4m · worked 1h 41m 5s` is two answers,
+            not one twice. And the reason the wall clock was here at all is
+            answered by what replaces it: the relative time reads "just now"
+            for a whole turn, which is why it cannot be shown while running,
+            and `worked` moves every second, which is what the relative time
+            could not do.
+
+            What is genuinely lost is the wait on an APPROVAL card: `worked`
+            pauses there by design, so a thread parked for ten minutes now
+            shows the seconds it worked rather than the minutes it waited. The
+            card is on screen saying so. */}
+        {isWorkingRunStatus(status) ? null : (
           <span className="shrink-0 text-xs text-muted-foreground">
             · {formatRelativeTime(lastActivityAt)}
           </span>
         )}
-        {/* Beside the relative time, and deliberately NOT instead of it: the
-            two answer different questions ("when did this last speak" vs "how
-            much work is in here"), and it was the second that had no answer
-            anywhere in the app once a turn had settled. */}
         <WorkedTime
           settledMs={workedMs}
           turnCount={turnCount}
@@ -502,7 +487,7 @@ export function ChatHeader({
             label={`${runningSubagents} sub-${runningSubagents === 1 ? 'agent' : 'agents'} working`}
             panelLabel="Sub-agents"
             side="bottom"
-            triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+            triggerClassName={COUNT_TRIGGER_CLASS}
             // Bounded and scrolling, like every other list this app hangs off a
             // count: a delegating turn can hold a dozen, and a panel that grows
             // with them runs off the bottom of the window.
@@ -526,7 +511,7 @@ export function ChatHeader({
             label={`${shells.length} shell${shells.length === 1 ? '' : 's'} running`}
             panelLabel="Shells"
             side="bottom"
-            triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+            triggerClassName={COUNT_TRIGGER_CLASS}
             // Bounded and scrolling, like the delegates' — a fan-out can hold a
             // dozen, and the rows are long (a command, not a name).
             panelClassName="max-h-64 w-[22rem] overflow-y-auto"
@@ -544,7 +529,7 @@ export function ChatHeader({
               label={`${tasks.done} of ${tasks.total} ${tasks.total === 1 ? 'task' : 'tasks'} done`}
               panelLabel="Task list"
               side="bottom"
-              triggerClassName="gap-1 rounded-md px-1 py-0.5 hover:bg-accent"
+              triggerClassName={COUNT_TRIGGER_CLASS}
               panelClassName="w-[20rem]"
               trigger={
                 <>

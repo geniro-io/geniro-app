@@ -113,6 +113,50 @@ describe('ChatHeader', () => {
     expect(el.querySelector('h2')!.className).toContain('truncate');
   });
 
+  it('sizes the counters on the BUTTON, where an inherited size cannot reach', async () => {
+    // REPORTED as "давай сделаем меньше вот эти циферки… значки оставь одного
+    // размера": the digits were drawn larger and heavier than the icons beside
+    // them and than every other word on the header line. The row asks for
+    // `text-xs`, but `global.css`'s base rule sets `button { font-size:
+    // var(--text-base) }` — which DEFEATS inheritance, since the size is then
+    // set on the button itself — so the row's size reached the glyphs and not
+    // the numbers. The fix has to be ON each trigger, and that is what this
+    // pins: put the classes back on the wrapper alone and the counters go
+    // 15px medium again.
+    //
+    // Classes, not `getComputedStyle` — jsdom loads no stylesheet, so every
+    // computed size here is the default and the assertion would pass with the
+    // fix deleted. Same reasoning as the wrap test above.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        runningSubagents={2}
+        tasks={{ done: 3, total: 8 }}
+        shells={[]}
+        agentKind="claude"
+      />,
+    );
+    const triggers = [
+      ...el.querySelectorAll<HTMLElement>(
+        '[data-slot="side-panel-counts"] button',
+      ),
+    ];
+    // All three of them — the constant exists so one cannot be missed.
+    expect(triggers).toHaveLength(3);
+    for (const trigger of triggers) {
+      expect(trigger.className).toContain('text-xs');
+      expect(trigger.className).toContain('font-normal');
+    }
+    // And the ICONS are untouched: the ask was to shrink the numbers, not the
+    // glyphs, so a later "make it all smaller" cannot pass this by shrinking
+    // both.
+    for (const icon of el.querySelectorAll(
+      '[data-slot="side-panel-counts"] svg',
+    )) {
+      expect(icon.getAttribute('class')).toContain('size-3.5');
+    }
+  });
+
   it('keeps the sub-agent counter on screen at ZERO', async () => {
     // REPORTED: "здесь должна быть всегда иконка саб-эйджентов, даже если их
     // ноль". A counter that appears only once something is running answers "are
@@ -224,49 +268,60 @@ describe('ChatHeader — how long this turn has been running', () => {
     vi.useRealTimers();
   });
 
-  it('counts up from the turn’s own start, ticking every second', () => {
-    // While running, "when did it last do something" reads "just now" for the
-    // whole turn and answers nothing; "how long has this been going" is the
-    // question actually being asked.
+  it('shows ONE clock while a turn is running, and it is the worked total', () => {
+    // REPORTED against `running · 21s · worked 21s`: "у нас сейчас два раза
+    // показывается таймер… нам нужен только таймер, сколько он в целом
+    // работал". This turn's raw wall clock used to sit here, and on a thread's
+    // first turn the two are the same number printed twice.
+    //
+    // The relative time is NOT what takes its place while running — it reads
+    // "just now" for a whole turn and answers nothing, which is why the wall
+    // clock was here at all. `worked` answers it instead, because it ticks.
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-04T00:00:40Z'));
+    vi.setSystemTime(new Date('2026-08-04T00:00:21Z'));
     const el = render(
       <ChatHeader
         {...baseProps}
-        turnStartedAt="2026-08-04T00:00:00.000Z"
-        lastActivityAt="2026-08-04T00:00:39.000Z"
+        status="running"
+        workedMs={0}
+        turnCount={0}
+        lastActivityAt="2026-08-04T00:00:00.000Z"
+        openTurn={{
+          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+          parkedMs: 0,
+          openSince: [],
+        }}
       />,
     );
 
-    expect(el.textContent).toContain('40s');
-
-    act(() => {
-      // Advancing the fake timers moves the mocked clock with them, which is
-      // what makes this a test of the ticking rather than of the first render.
-      vi.advanceTimersByTime(25_000);
-    });
-    // Real seconds, not a value frozen at render: an elapsed number passed in
-    // from above would still read 40s here.
-    expect(el.textContent).toContain('1m 5s');
+    expect(el.textContent).toContain('worked 21s');
+    // Exactly one duration on the line — the pair is what was reported.
+    expect(el.textContent?.match(/21s/g)).toHaveLength(1);
+    expect(el.querySelector('[data-slot="thread-worked"]')).not.toBeNull();
   });
 
-  it('measures from the TRANSCRIPT, so a reload mid-turn does not restart it', () => {
-    // A clock started at mount would report a four-minute turn as brand new
-    // every time the window reopened.
+  it('still says when a SETTLED thread last spoke, beside what it worked', () => {
+    // Only the running half went. `completed · 4m · worked 1h 41m 5s` is two
+    // different answers — "when did this last speak" and "how much work is in
+    // here" — not one of them twice, and the second had no answer anywhere in
+    // the app before it was added.
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-04T00:04:00Z'));
     const el = render(
-      <ChatHeader {...baseProps} turnStartedAt="2026-08-04T00:00:00.000Z" />,
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={600_000}
+        turnCount={5}
+        lastActivityAt="2026-08-04T00:00:00.000Z"
+      />,
     );
 
-    expect(el.textContent).toContain('4m 0s');
-  });
-
-  it('shows no clock when nothing has started a turn', () => {
-    const el = render(<ChatHeader {...baseProps} turnStartedAt={null} />);
-
-    expect(el.textContent).toContain('running');
-    expect(el.textContent).not.toMatch(/\d+s/);
+    // Two different figures on one line: when it last spoke, and what it
+    // worked. The relative time renders bare (`· 4m`), so asserting both
+    // strings is what shows they are not one value read twice.
+    expect(el.textContent).toContain('· 4m·');
+    expect(el.textContent).toContain('worked 10m 0s');
   });
 
   it('names the config directory this run belongs to, leaf on the chip and path on hover', () => {
@@ -358,7 +413,6 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         {...baseProps}
         workedMs={600_000}
         turnCount={5}
-        turnStartedAt="2026-08-04T00:00:00.000Z"
         openTurn={{
           startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
           parkedMs: 0,

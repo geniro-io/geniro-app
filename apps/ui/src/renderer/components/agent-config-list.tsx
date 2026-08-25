@@ -88,6 +88,22 @@ export interface AgentConfigListProps {
    */
   onSignOut?: (kind: CliKind) => void;
   /**
+   * That agent's OWN settings, drawn inside its card — whatever is true of one
+   * CLI and of no other.
+   *
+   * REPORTED as "все специфические, именно к агентам специфичные настройки
+   * должны быть там": cursor's Max Mode and claude's browser tools each had a
+   * section of their own further down the page, so a reader looking for what
+   * they could change about cursor found half of it in the card named cursor
+   * and half two screens below, under a heading that named a topic instead.
+   *
+   * Passed IN rather than built here, which is the rule the daemon's adapters
+   * follow as well: this component knows how to draw a card, not what is true
+   * of claude. It also keeps onboarding — which shares this list — free of
+   * settings that belong to a running app, by simply passing none.
+   */
+  agentSettings?: Partial<Record<CliKind, React.ReactNode>>;
+  /**
    * A sign-in the daemon is running right now, rendered on the card it belongs
    * to. Absent on onboarding, and absent between attempts.
    *
@@ -241,6 +257,7 @@ export function AgentConfigList({
   onSignOut,
   profileScopedKinds,
   login,
+  agentSettings,
 }: AgentConfigListProps): React.JSX.Element {
   return (
     <div className="flex flex-col gap-3">
@@ -290,6 +307,11 @@ export function AgentConfigList({
                 </Button>
               </div>
             </Field>
+
+            {/* This agent's own settings, between what identifies the binary
+                and what says who is signed in — the card reads top-to-bottom
+                as which binary, how it behaves, whose account. */}
+            {agentSettings?.[kind] ?? null}
 
             {/* A card FOOTER, not a tinted panel. This used to be a `NoteBox`
                 inside the card, which put a box in a box and set a bordered

@@ -39,11 +39,19 @@ export interface SkillsServiceOptions {
   resolveVersionFn?: AgentVersionService['resolve'];
 }
 
-/** Popup ordering: the user's own entries first, CLI-reported extras last. */
+/**
+ * Popup ordering: this app's own commands, then the user's own entries, then
+ * CLI-reported extras.
+ *
+ * `geniro` leads because those names are RESERVED — `ChatService` dispatches
+ * them by name whatever else a folder happens to hold — so a scanned skill
+ * sharing one would be a row the popup offers and the send never runs.
+ */
 const SOURCE_RANK: Record<AgentSkillWire['source'], number> = {
-  project: 0,
-  user: 1,
-  cli: 2,
+  geniro: 0,
+  project: 1,
+  user: 2,
+  cli: 3,
 };
 
 interface CatalogEntry {
@@ -110,6 +118,18 @@ export class SkillsService {
       homeDir: this.homeDir,
     });
     const byName = new Map<string, AgentSkillEntry>();
+    // FIRST, ahead of the disk scan, because these names are reserved rather
+    // than merely ranked: `ChatService` looks a send up against the same
+    // adapter list, so a project skill called `compact` that won the row would
+    // be offered by the popup and never be what ran.
+    for (const command of adapter.listGeniroCommands()) {
+      byName.set(command.name, {
+        name: command.name,
+        description: command.description,
+        kind: 'command',
+        source: 'geniro',
+      });
+    }
     for (const skill of scanned) {
       if (!byName.has(skill.name)) {
         byName.set(skill.name, skill);

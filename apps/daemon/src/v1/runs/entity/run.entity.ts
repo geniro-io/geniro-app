@@ -145,6 +145,28 @@ export class Run extends TimestampsEntity {
   customInstructions: string | null = null;
 
   /**
+   * Whether this run's cursor turns ask for **Max Mode** — the window every
+   * model that carries no `context` parameter of its own runs at.
+   *
+   * A SNAPSHOT of the user's setting, taken when the run is created, on the
+   * same terms as {@link customInstructions} above: flipping the switch
+   * changes the next chat rather than the one already open, so a conversation
+   * runs at the window it was started at for its whole life. The alternative —
+   * a live read — would silently move a thread between a 200k and a 1M window
+   * between two messages, which is the one thing a context meter must not do.
+   *
+   * NULL means "this run predates the setting", and the adapter reads that as
+   * the default rather than as OFF: every run created before it was stored ran
+   * with Max Mode on, and reading their absence as a `false` would quietly
+   * shrink every existing cursor conversation's window.
+   *
+   * `boolean` rather than `text`, and nullable, so the `safe: true` schema
+   * sync adds the column additively with no migration.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  cursorMaxMode: boolean | null = null;
+
+  /**
    * The sidebar group this run is filed under ({@link RunGroup.id}), or null
    * for one sitting loose at the bottom of the list.
    *
@@ -157,4 +179,26 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'string', nullable: true })
   groupId: string | null = null;
+
+  /**
+   * A summary of everything this conversation held BEFORE geniro compacted it,
+   * waiting to be handed to the next turn — null whenever nothing is owed.
+   *
+   * Only a CLI whose compaction geniro performs itself
+   * (`AgentGeniroCommand.replacesSession`) ever writes here. Such a compaction
+   * drops the agent's own session, which is the entire point and also the
+   * entire risk: the new session starts knowing nothing, so the summary the
+   * compaction just produced is the ONLY thing standing between the user and a
+   * conversation that has forgotten itself. It is therefore durable rather than
+   * held in memory — a daemon restarted between the compaction and the next
+   * message would otherwise lose exactly the thing the compaction was for.
+   *
+   * Consumed once: the next turn prepends it and clears the column in the same
+   * write, so it cannot ride a second prompt. A CLI that compacts its own
+   * history never touches this, and neither does a workflow run.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'text', nullable: true })
+  pendingContext: string | null = null;
 }

@@ -28,6 +28,7 @@ import type {
   AgentEffortListing,
   AgentErrorRecovery,
   AgentEvent,
+  AgentGeniroCommand,
   AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServerHealth,
@@ -971,6 +972,35 @@ export abstract class AgentAdapter {
       }
     }
     return captured;
+  }
+
+  /**
+   * The slash commands geniro ITSELF adds to this CLI — see
+   * {@link AgentGeniroCommand}. Static, so it costs no spawn and cannot fail.
+   */
+  listGeniroCommands(): readonly AgentGeniroCommand[] {
+    return this.getConfig().geniroCommands;
+  }
+
+  /**
+   * The geniro command a composer message INVOKES, or null when it is ordinary
+   * prose.
+   *
+   * The whole message must be the bare command. A geniro command rewrites what
+   * the agent is asked, so a message that merely BEGINS with one would have the
+   * user's own sentence silently discarded — and `/compact do it thoroughly`
+   * reads far more like a user talking than like an invocation with arguments.
+   * These commands take none.
+   */
+  geniroCommandFor(text: string): AgentGeniroCommand | null {
+    const trimmed = text.trim();
+    if (!trimmed.startsWith('/')) {
+      return null;
+    }
+    const name = trimmed.slice(1);
+    return (
+      this.listGeniroCommands().find((command) => command.name === name) ?? null
+    );
   }
 
   /**

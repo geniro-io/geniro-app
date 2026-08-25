@@ -11,6 +11,11 @@ import {
   WorkingRow,
 } from './live-row';
 
+// `ThinkingRow`'s text shape renders a bounded, tail-following box
+// (`ThinkingScroller`), and jsdom implements no element scrolling at all — the
+// same stub `Chats.spec.tsx` installs for the transcript's own auto-scroll.
+Element.prototype.scrollTo = vi.fn();
+
 const roots: Root[] = [];
 
 function render(node: React.ReactNode): HTMLElement {

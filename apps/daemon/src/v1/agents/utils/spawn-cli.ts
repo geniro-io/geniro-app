@@ -480,6 +480,36 @@ const TURN_END_EXIT_GRACE_MS = 2000;
  * servers, and the next turn reuses it. Only the turn is given up on.
  */
 const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
+/**
+ * How long a RELEASED hold waits before it settles the turn.
+ *
+ * The hold ends when the last delegate reports — and that is exactly the
+ * moment the CLI is about to speak again, because the way it learns a delegate
+ * finished is a task notification, which opens a whole further turn of its own.
+ * So the release fires one breath before the continuation, and geniro settled
+ * the turn, painted `completed` and posted a NOTIFICATION into that gap.
+ * REPORTED as "запускает какую-то фоновую задачу, выполняет её, говорит мне
+ * «done», но потом сразу продолжает работать… я получаю фейковую нотификацию".
+ * TRACED in the reporter's own daemon log on run `309e0822`: held at 13:00:45,
+ * `releasing the held 'turn_complete' — its background work has reported` at
+ * 13:02:48, badge `completed` in the same second, and the agent writing
+ * "Explorer returned with substantial findings" ten seconds later, then working
+ * on for another thirteen minutes.
+ *
+ * The mechanism for this already existed and was one step out of reach: a
+ * main-thread event DISCARDS a held terminal ({@link RESUMES_A_HELD_TURN}), so
+ * a turn that visibly continues runs on to its next terminal instead. It only
+ * ever ran BEFORE the release, and the continuation lands just after. All this
+ * does is keep the hold open a moment longer so the existing rule can see it.
+ *
+ * Ten seconds, from the 22 releases in that log: the agent was producing again
+ * within 4s of 18 of them, within 8.3s of 20, and the two stragglers (15.3s,
+ * 39.2s) are the shape a fresh user message makes. It costs nothing in the
+ * common case — the turn does continue, so the settle was never due — and in
+ * the genuine-ending case it delays a badge and a notification by ten seconds,
+ * which is the right way round: a late "done" is a wait, an early one is a lie.
+ */
+export const HELD_TERMINAL_GRACE_MS = 10_000;
 
 /**
  * Main-thread events that prove the MODEL is producing again, and so end a
@@ -700,6 +730,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * door.
    */
   let deferredOffTurnTerminal: AgentEvent | null = null;
+  /**
+   * Bounds the {@link HELD_TERMINAL_GRACE_MS} pause on a released hold.
+   *
+   * Session-scoped and single, because `openWork` is: only one hold can be
+   * emptying at a time, so the in-turn and off-turn releases can never both be
+   * waiting.
+   */
+  let heldReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
   let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
   /**
@@ -990,6 +1029,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * next turn adopts it — see {@link pendingApprovals}.
    */
   function handleOrphanEvent(event: AgentEvent): void {
+    // The off-turn twin of the in-turn discard: the CLI speaking again means
+    // the continuation this hold was released for has begun, so the held
+    // terminal describes a stretch that is demonstrably not over. Dropped
+    // rather than released — the run then settles on the continuation's OWN
+    // result, exactly as a turn does. Without it the grace merely delays a
+    // wrong answer by ten seconds.
+    if (
+      deferredOffTurnTerminal !== null &&
+      event.parentToolUseId === undefined &&
+      RESUMES_A_HELD_TURN.has(event.type)
+    ) {
+      opts.logger?.debug?.(
+        `${opts.command}: dropping the off-turn hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
+      );
+      deferredOffTurnTerminal = null;
+      cancelHeldRelease();
+      if (offTurnHoldTimer) {
+        clearTimeout(offTurnHoldTimer);
+        offTurnHoldTimer = null;
+      }
+    }
     if (event.type === 'background_work') {
       // Turn plumbing wherever it arrives. It is NOT forwarded to the owner as
       // an event (it maps to no row, so the owner drops it anyway) — what the
@@ -1150,6 +1210,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     turn.terminalEmitted = true;
     turn.deferredTerminal = null;
+    cancelHeldRelease();
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -1296,6 +1357,32 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * channels, nowhere else) and says nothing a client needs — the tool call is
    * already the start.
    */
+  /** Drop a pending grace — the hold is being resolved another way. */
+  const cancelHeldRelease = (): void => {
+    if (heldReleaseTimer) {
+      clearTimeout(heldReleaseTimer);
+      heldReleaseTimer = null;
+    }
+  };
+
+  /**
+   * Settle a released hold, but not for another {@link HELD_TERMINAL_GRACE_MS}
+   * — long enough for the continuation the report is about to trigger.
+   *
+   * The caller's `release` re-reads whatever it holds, so a hold that was
+   * DISCARDED in the meantime (the main thread spoke) resolves to nothing and
+   * this becomes a no-op. That is the whole design: nothing new decides when a
+   * turn is over, the existing rule just gets a moment to apply.
+   */
+  const releaseHeldAfterGrace = (release: () => void): void => {
+    cancelHeldRelease();
+    heldReleaseTimer = setTimeout(() => {
+      heldReleaseTimer = null;
+      release();
+    }, HELD_TERMINAL_GRACE_MS);
+    heldReleaseTimer.unref?.();
+  };
+
   const announceShellWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
@@ -1405,17 +1492,30 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // `settled` for unknown work must release nothing.
     const held = current?.deferredTerminal;
     if (held && current) {
+      const turn = current;
       opts.logger?.debug?.(
-        `${opts.command}: releasing the held '${held.type}' — its background work has reported`,
+        `${opts.command}: releasing the held '${held.type}' — its background work has reported, settling in ${HELD_TERMINAL_GRACE_MS}ms unless the agent speaks`,
       );
-      finishTurn(current, held);
+      releaseHeldAfterGrace(() => {
+        // RE-READ, never the `held` captured above: the main thread speaking in
+        // the meantime discards it, and settling the captured copy would end
+        // the turn in the middle of the answer that discarded it.
+        const due = turn.deferredTerminal;
+        if (due) {
+          finishTurn(turn, due);
+        }
+      });
       return;
     }
     if (deferredOffTurnTerminal) {
       opts.logger?.debug?.(
-        `${opts.command}: releasing an off-turn '${deferredOffTurnTerminal.type}' — its background work has reported`,
+        `${opts.command}: releasing an off-turn '${deferredOffTurnTerminal.type}' — its background work has reported, settling in ${HELD_TERMINAL_GRACE_MS}ms unless the agent speaks`,
       );
-      releaseOffTurnHold();
+      releaseHeldAfterGrace(() => {
+        if (deferredOffTurnTerminal) {
+          releaseOffTurnHold();
+        }
+      });
     }
   };
 
@@ -1559,6 +1659,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       opts.logger?.debug?.(
         `${opts.command}: releasing the hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
+      // Dropping it IS how a pending grace is answered — the timer re-reads
+      // this field and finds nothing due. One mechanism rather than two: a
+      // separate `clearTimeout` here would be a second place that has to be
+      // kept in step with every future way a hold can be discarded, and the
+      // one that got forgotten would settle a turn mid-answer.
       turn.deferredTerminal = null;
       turn.options.onEvent({ type: 'turn_held', open: 0 });
     }
@@ -1689,6 +1794,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // for background work is handed over rather than dying with the process,
     // which would leave the run reading `running` with no process behind it.
     openWork.clear();
+    cancelHeldRelease();
     releaseOffTurnHold();
     if (current) {
       settleTurn(current, 'the process ended');

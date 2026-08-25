@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import {
   CURSOR_ACP_SESSIONS_DIR_NAME,
   CURSOR_HOME_DIR_NAME,
+  CURSOR_MAX_MODE_CONFIG_KEY,
   CURSOR_PROFILE_DIR_PREFIX,
   CURSOR_SEEDED_CONFIG_FILE,
 } from '../cursor-acp.const';
@@ -51,6 +52,28 @@ export interface CursorProfileSeed {
    * profile would change every turn's path for no gain here.
    */
   model?: string;
+  /**
+   * Cursor's **Max Mode** — the window every model that carries no `context`
+   * parameter of its own runs at ({@link CURSOR_MAX_MODE_CONFIG_KEY} holds the
+   * measurements, both directions).
+   *
+   * Seeded rather than sent, because it is not on the protocol at all: it is a
+   * key the CLI reads out of its config directory, so the only way a client
+   * chooses it is by writing the config that CLI will read — which is what
+   * makes it spawn-time rather than a frame.
+   *
+   * A TURN always names it, and always `true` ({@link CURSOR_MAX_MODE}).
+   * Written explicitly rather than inherited: the profile is a COPY of the
+   * user's own `cli-config.json`, so leaving the key alone does not mean "off"
+   * — it means whatever they last left their terminal on, and the same geniro
+   * chat then ran at 200k or at 1M according to a switch flipped in another
+   * app.
+   *
+   * Left `undefined` the key is untouched. That is what the PROBE profiles do:
+   * a handshake asks a model which parameters it offers, and the answer does
+   * not depend on this flag, so a probe has no reason to state it.
+   */
+  maxMode?: boolean;
 }
 
 /**
@@ -128,8 +151,22 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
   } catch {
     // Absent, unreadable, or a directory — the CLI writes its own defaults.
   }
-  if (seed.model !== undefined && seed.model !== '') {
-    writeSeededModel(configPath, seed.model);
+  const patch: Record<string, unknown> = {
+    ...(seed.model !== undefined && seed.model !== ''
+      ? {
+          model: { modelId: seed.model },
+          selectedModel: { modelId: seed.model, parameters: [] },
+        }
+      : {}),
+    // `!== undefined` rather than a truthiness test: `false` is a REAL choice
+    // here (turn Max Mode off over a user whose own config leaves it on), and
+    // only an absent seed means "leave the inherited value alone".
+    ...(seed.maxMode !== undefined
+      ? { [CURSOR_MAX_MODE_CONFIG_KEY]: seed.maxMode }
+      : {}),
+  };
+  if (Object.keys(patch).length > 0) {
+    patchSeededConfig(configPath, patch);
   }
   if (seed.sessionStoreDir !== undefined) {
     // Deliberately NOT swallowed, unlike the config copy above. A missing config
@@ -144,13 +181,18 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
 }
 
 /**
- * Point a seeded `cli-config.json` at one model.
+ * Merge geniro's own keys into a seeded `cli-config.json`.
  *
- * The two keys the CLI reads its selection from, and no others: `model.modelId`
- * is what it opens with, `selectedModel` is the parameterized form the ACP
- * handshake resolves. `parameters` is emptied deliberately — a probe asks what
- * the model OFFERS, and carrying the user's stored values for a different model
- * would have the CLI resolve an axis this one may not have.
+ * TWO settings arrive here and both are top-level keys of that file. The MODEL
+ * is written as the two keys the CLI reads its selection from and no others:
+ * `model.modelId` is what it opens with, `selectedModel` is the parameterized
+ * form the ACP handshake resolves. `parameters` is emptied deliberately — a
+ * probe asks what the model OFFERS, and carrying the user's stored values for a
+ * different model would have the CLI resolve an axis this one may not have.
+ * MAX MODE is one boolean; see {@link CURSOR_MAX_MODE_CONFIG_KEY}.
+ *
+ * ONE read-modify-write for both, rather than one per setting: the two are
+ * seeded together and a second pass would re-read a file this call just wrote.
  *
  * Best-effort on purpose: an unreadable or absent config leaves the profile
  * exactly as it was, and the handshake then reports the CLI's own default
@@ -159,7 +201,10 @@ export function seedCursorProfile(seed: CursorProfileSeed): string {
  * a control the user cannot reach, while one wrongly offered is refused with a
  * sentence.
  */
-function writeSeededModel(configPath: string, model: string): void {
+function patchSeededConfig(
+  configPath: string,
+  patch: Record<string, unknown>,
+): void {
   let config: Record<string, unknown> = {};
   try {
     const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
@@ -174,14 +219,7 @@ function writeSeededModel(configPath: string, model: string): void {
     // No config to merge into — write one carrying only the model.
   }
   try {
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        ...config,
-        model: { modelId: model },
-        selectedModel: { modelId: model, parameters: [] },
-      }),
-    );
+    writeFileSync(configPath, JSON.stringify({ ...config, ...patch }));
   } catch {
     // The profile is still usable; it just opens on the CLI's own model.
   }

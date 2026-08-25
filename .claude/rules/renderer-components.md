@@ -45,6 +45,16 @@ paths:
      pick-one, and NO indicator at all where the click is itself the
      submission. Never reach for `chip` here: chips are `whitespace-nowrap`
      footer controls, and an option label is routinely a whole sentence.
+   - **`popover` keeps its panel INSIDE the window — it flips and it clamps.**
+     `anchor="viewport"` places the panel `fixed` so no ancestor can clip it,
+     which also means no ancestor can stop it: a trigger on the last sidebar
+     row opened a panel that ran off the bottom edge (reported). The requested
+     side is kept whenever the panel fits, the other is taken only when it has
+     more room, a panel too tall for either scrolls inside itself, and the
+     across-axis offset is clamped so a wide panel cannot cross the far edge.
+     Placement is TWO passes by necessity — the panel is not rendered until the
+     trigger is measured, so the first pass cannot know its height, and an
+     unmeasured height means "not known yet" rather than "fits nowhere".
    - **A container that CLIPS declares it, rather than each picker inside it
      coping.** `menu`/`popover` place panels absolutely, which any scrolling
      ancestor cuts — and `overflow-x: visible` cannot be restored on a box that

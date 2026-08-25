@@ -61,7 +61,16 @@ export function SkillMenu({
               {skill.description}
             </span>
           ) : null}
-          <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+          {/* A `geniro` row is a command this app adds to the CLI — it exists
+              nowhere outside geniro, so its badge is the app's own accent
+              rather than the muted tone every discovered source shares. */}
+          <span
+            className={cn(
+              'ml-auto shrink-0 text-[11px]',
+              skill.source === 'geniro'
+                ? 'font-medium text-primary'
+                : 'text-muted-foreground',
+            )}>
             {skill.source}
           </span>
         </button>

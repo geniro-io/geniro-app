@@ -93,6 +93,63 @@ describe('seedCursorProfile', () => {
     );
   });
 
+  it('writes Max Mode ON — the window a model with no `context` parameter runs at', () => {
+    // Measured on 2026.08.11-e8db854 with this flag as the ONLY difference
+    // between two ACP turns: kimi-k3 reports 200,000 with it off and 1,048,576
+    // with it on. See CURSOR_MAX_MODE_CONFIG_KEY.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"approvalMode":"allowlist"}');
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      maxMode: true,
+    });
+
+    const config: unknown = JSON.parse(
+      readFileSync(join(dir, 'cli-config.json'), 'utf8'),
+    );
+    expect(config).toMatchObject({ maxMode: true, approvalMode: 'allowlist' });
+  });
+
+  it('writes Max Mode OFF over a user whose own config leaves it ON', () => {
+    // The half that has to be written explicitly. The profile is a COPY of the
+    // user's config, so "off" cannot be expressed by leaving the key alone —
+    // before this, a geniro chat's window silently followed a switch flipped in
+    // the user's own terminal.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"maxMode":true}');
+
+    const dir = seedCursorProfile({
+      baseDir: base,
+      homeDir: home,
+      maxMode: false,
+    });
+
+    expect(
+      (
+        JSON.parse(readFileSync(join(dir, 'cli-config.json'), 'utf8')) as {
+          maxMode: unknown;
+        }
+      ).maxMode,
+    ).toBe(false);
+  });
+
+  it('leaves an inherited Max Mode alone when the seed names none', () => {
+    // The third state, which the PROBE profiles take: a handshake asking what
+    // parameters a model offers gets the same answer either way, so it states
+    // nothing — and stating `false` there would write a setting nobody chose
+    // into a directory that is about to ask a question.
+    const base = tempDir('cursor-profiles-');
+    const home = fakeHome('{"maxMode":true}');
+
+    const dir = seedCursorProfile({ baseDir: base, homeDir: home });
+
+    expect(readFileSync(join(dir, 'cli-config.json'), 'utf8')).toBe(
+      '{"maxMode":true}',
+    );
+  });
+
   it('still names the model when the user has no config to merge into', () => {
     // The defensive branch: an absent or unreadable source config must not cost
     // the turn its model, or a fresh machine silently runs every chat on the

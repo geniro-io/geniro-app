@@ -153,9 +153,25 @@ export function Dialog({
             content wants to manage its own scrolling (the session picker, which
             pins its search field above a scrolling list) makes its ROOT
             `h-full` and puts `overflow-y-auto` on the part that should move;
-            this box then has nothing left to scroll and shows no second bar. */}
+            this box then has nothing left to scroll and shows no second bar.
+
+            `break-words` because a dialog routinely NAMES something the user
+            did not choose the spelling of — a chat title, a folder, a path, an
+            error the daemon composed — and any of those can be one unbreakable
+            token. Reported against the delete confirm, whose chat title was a
+            pasted URL: it ran straight off the card's right edge and was cut,
+            so the sentence asking the user to confirm a destructive action was
+            unreadable. Wrapping is the only answer that keeps it readable —
+            this box already scrolls vertically, which forces the horizontal
+            axis non-visible, so an overflowing line is CLIPPED rather than
+            reachable. Set here, at the one box every dialog's content sits in,
+            because the next long token will be in a different dialog.
+
+            `break-word` rather than `anywhere`: it breaks a word only when the
+            word alone cannot fit, so ordinary prose is untouched, and it leaves
+            `white-space: pre` content (a code block) to scroll as it should. */}
         <MenuAnchorContext.Provider value="viewport">
-          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 break-words">
             {children}
           </div>
         </MenuAnchorContext.Provider>

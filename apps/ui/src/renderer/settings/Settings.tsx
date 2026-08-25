@@ -30,6 +30,40 @@ import { useCliLogin } from '../use-cli-login';
 import { useDebouncedPersist } from './use-debounced-persist';
 
 /**
+ * One agent-specific switch, drawn inside that agent's card.
+ *
+ * A local shape rather than a shared component: it is a `Switch`, a `Label`
+ * and a note — the same three the page's other sections already compose — and
+ * the only thing it adds is that they sit in a card rather than in a section.
+ * Promote it the moment a third surface wants the arrangement.
+ */
+function AgentSetting({
+  id,
+  checked,
+  onCheckedChange,
+  label,
+  note,
+}: {
+  id: string;
+  checked: boolean;
+  onCheckedChange: (next: boolean) => void;
+  label: string;
+  note: string;
+}): React.JSX.Element {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-3">
+        <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
+        <Label htmlFor={id} className="cursor-pointer">
+          {label}
+        </Label>
+      </div>
+      <p className="text-xs text-muted-foreground">{note}</p>
+    </div>
+  );
+}
+
+/**
  * Whether this instructions value can actually be written to settings.json.
  *
  * `settingsPatchSchema` refuses an over-long value AND one carrying control
@@ -84,6 +118,7 @@ export function Settings({
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [collapseToolSteps, setCollapseToolSteps] = useState(false);
   const [claudeBrowserTools, setClaudeBrowserTools] = useState(false);
+  const [cursorMaxMode, setCursorMaxMode] = useState(true);
   const [customInstructions, setCustomInstructions] = useState('');
   const [forgetting, setForgetting] = useState(false);
   /** What the last purge reached, in words — `null` until one has run. */
@@ -182,6 +217,7 @@ export function Settings({
         setNotificationsEnabled(s.notificationsEnabled);
         setCollapseToolSteps(s.collapseToolSteps ?? false);
         setClaudeBrowserTools(s.claudeBrowserTools);
+        setCursorMaxMode(s.cursorMaxMode);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -536,6 +572,18 @@ export function Settings({
     [persist],
   );
 
+  const onToggleMaxMode = useCallback(
+    (next: boolean): void => {
+      setCursorMaxMode(next);
+      // Nothing to apply to a running turn: the value is snapshotted onto each
+      // run as it is created, and cursor writes it into the throwaway profile
+      // it builds per turn. So this reaches the NEXT chat, which is what the
+      // note under the switch says.
+      void persist({ cursorMaxMode: next });
+    },
+    [persist],
+  );
+
   const onToggleBrowserTools = useCallback(
     (next: boolean): void => {
       setClaudeBrowserTools(next);
@@ -623,6 +671,30 @@ export function Settings({
             onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
             onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
             profileScopedKinds={profileScopedKinds}
+            // Whatever is true of ONE CLI lives on that CLI's card. Both of
+            // these used to be sections of their own further down the page,
+            // which is what got reported: the settings for cursor were half in
+            // the card named cursor and half under a heading named Browser.
+            agentSettings={{
+              claude: (
+                <AgentSetting
+                  id="settings-claude-browser-tools"
+                  checked={claudeBrowserTools}
+                  onCheckedChange={onToggleBrowserTools}
+                  label="Let claude drive your browser (Claude in Chrome)"
+                  note="Needs Anthropic’s Chrome extension and a browser running it. Off by default: 22 extra tools in every prompt, paid for on each. Flipping this restarts the daemon."
+                />
+              ),
+              'cursor-agent': (
+                <AgentSetting
+                  id="settings-cursor-max-mode"
+                  checked={cursorMaxMode}
+                  onCheckedChange={onToggleMaxMode}
+                  label="Max Mode — run models at their largest context window"
+                  note="On by default: without it a model with no window of its own runs at 200k where Cursor gives it 1M. Billed at the model’s API rate plus 20% on legacy request-based plans. Applies to new chats."
+                />
+              ),
+            }}
             login={
               login.login
                 ? {
@@ -786,27 +858,6 @@ export function Settings({
               </pre>
             </details>
           ) : null}
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-medium">Browser</h2>
-          <div className="flex items-center gap-3">
-            <Switch
-              id="settings-claude-browser-tools"
-              checked={claudeBrowserTools}
-              onCheckedChange={onToggleBrowserTools}
-            />
-            <Label
-              htmlFor="settings-claude-browser-tools"
-              className="cursor-pointer">
-              Let claude drive your browser (Claude in Chrome)
-            </Label>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Needs Anthropic’s Chrome extension and a browser running it. Off by
-            default: 22 extra tools in every prompt, paid for on each. Flipping
-            this restarts the daemon.
-          </p>
         </section>
 
         <section className="flex flex-col gap-3">

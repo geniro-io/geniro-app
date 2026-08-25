@@ -1765,3 +1765,44 @@ describe('AgentAdapter pty wrapper', () => {
     expect(spawnedCommand).toBe('/usr/bin/script');
   });
 });
+
+describe('geniroCommandFor', () => {
+  // The REAL adapters, because "does this CLI have `/compact`, and what does it
+  // send" is exactly the declaration under test.
+  const claude = new ClaudeAdapter();
+  const cursor = new CursorAcpAdapter();
+
+  it('matches only the whole bare command', () => {
+    expect(claude.geniroCommandFor('/compact')?.name).toBe('compact');
+    expect(claude.geniroCommandFor('  /compact  ')?.name).toBe('compact');
+    // These commands take no arguments, so a sentence after one is the user
+    // talking — and a partial match would silently discard what they wrote.
+    expect(claude.geniroCommandFor('/compact do it thoroughly')).toBeNull();
+    expect(claude.geniroCommandFor('please /compact')).toBeNull();
+    expect(claude.geniroCommandFor('/compaction')).toBeNull();
+    expect(claude.geniroCommandFor('compact')).toBeNull();
+  });
+
+  it('sends each CLI what THAT CLI needs, and only replaces a session where it must', () => {
+    // claude has a compaction of its own and keeps its session; cursor has
+    // none over ACP, so geniro asks for a summary and drops the session.
+    const own = claude.geniroCommandFor('/compact');
+    expect(own?.prompt).toBe('/compact');
+    expect(own?.replacesSession).toBe(false);
+
+    const ours = cursor.geniroCommandFor('/compact');
+    expect(ours?.prompt).not.toBe('/compact');
+    expect(ours?.prompt).toMatch(/summar/i);
+    expect(ours?.replacesSession).toBe(true);
+  });
+
+  it('answers null for a CLI that declares no geniro commands', () => {
+    class BareAdapter extends ClaudeAdapter {
+      override getConfig(): AdapterConfig {
+        return { ...super.getConfig(), geniroCommands: [] };
+      }
+    }
+    expect(new BareAdapter().geniroCommandFor('/compact')).toBeNull();
+    expect(new BareAdapter().listGeniroCommands()).toEqual([]);
+  });
+});

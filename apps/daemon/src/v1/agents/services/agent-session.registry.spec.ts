@@ -18,9 +18,23 @@ import type {
 } from '../utils/spawn-cli';
 import {
   AgentSessionRegistry,
-  MAX_LIVE_SESSIONS,
+  OFF_TURN_ACTIVE_MS,
   SESSION_IDLE_MS,
+  SESSION_MEMORY_COST_BYTES,
+  sessionCeilingFor,
 } from './agent-session.registry';
+
+/**
+ * The ceiling every case in this file runs under, PINNED.
+ *
+ * The production one is derived from the machine's memory, so it is 2 on a
+ * 16GB CI box and 16 on the desktop this was written on — and an eviction case
+ * that builds `MAX_LIVE_SESSIONS` sessions and then asserts which of the first
+ * three went would mean something different on each. The registry takes it as
+ * a constructor argument for exactly this, and the derivation is pinned on its
+ * own below rather than through these.
+ */
+const CEILING = 3;
 
 const INPUT: AgentTurnInput = { prompt: 'p', cwd: '/proj' };
 
@@ -550,13 +564,48 @@ describe('AgentSessionRegistry — ending a process', () => {
   });
 });
 
+describe('sessionCeilingFor', () => {
+  const GB = SESSION_MEMORY_COST_BYTES;
+
+  it('scales the ceiling with the machine, an eighth of memory at a time', () => {
+    // The whole reason this stopped being a constant. REPORTED as "что за max
+    // live session… это очень мало!" against a flat 3 on a 128GB machine,
+    // where the fourth chat paid a ~6.5s cold start and a full MCP reboot with
+    // 110GB sitting free. Pinned at sizes rather than as a formula, because a
+    // test that recomputes the arithmetic under test passes whatever the
+    // arithmetic is.
+    expect(sessionCeilingFor(32 * GB)).toBe(4);
+    expect(sessionCeilingFor(64 * GB)).toBe(8);
+    expect(sessionCeilingFor(128 * GB)).toBe(16);
+  });
+
+  it('keeps two on a small machine rather than falling to one or none', () => {
+    // At one there is nothing to keep: the benefit is a chat staying warm
+    // while you work in another, and one slot means the second chat evicts the
+    // first on every switch — worse than the per-turn spawn this replaced,
+    // which at least did not pretend to cache anything.
+    expect(sessionCeilingFor(8 * GB)).toBe(2);
+    expect(sessionCeilingFor(4 * GB)).toBe(2);
+    // Absurd inputs land on the floor rather than on 0 or a negative.
+    expect(sessionCeilingFor(0)).toBe(2);
+  });
+
+  it('caps a very large machine instead of scaling without bound', () => {
+    // Past a dozen the constraint is the person, not the hardware — these are
+    // conversations somebody is meant to be following. Without the cap a 1TB
+    // box would hold 128 CLI processes it was never going to use.
+    expect(sessionCeilingFor(512 * GB)).toBe(16);
+    expect(sessionCeilingFor(1024 * GB)).toBe(16);
+  });
+});
+
 describe('AgentSessionRegistry — the ceiling', () => {
   it('evicts the least-recently-used idle session to make room', async () => {
     vi.useFakeTimers();
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
-    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+    for (let i = 0; i < CEILING; i += 1) {
       registry.startTurn(`run-${i}`, adapter, INPUT, noop);
       await at(sessions, i).endTurn();
       // Distinct `lastUsedAt` values, so "least recently used" is a real order
@@ -569,7 +618,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // run-0 was the oldest, and it is the one that went.
     expect(at(sessions, 0).closes).toBe(1);
     expect(at(sessions, 1).closes).toBe(0);
-    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+    expect(registry.liveCount).toBe(CEILING);
   });
 
   it('evicts a newer idle session rather than the oldest one holding a card', async () => {
@@ -578,10 +627,10 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // question rather than the process: the CLI takes the close as a refusal
     // and the verdict the user is about to give arrives at nothing.
     vi.useFakeTimers();
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
-    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+    for (let i = 0; i < CEILING; i += 1) {
       registry.startTurn(`run-${i}`, adapter, INPUT, noop);
       await at(sessions, i).endTurn();
       vi.advanceTimersByTime(1_000);
@@ -593,7 +642,122 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(at(sessions, 0).closes).toBe(0);
     // The next-oldest went instead, so the ceiling is still enforced.
     expect(at(sessions, 1).closes).toBe(1);
-    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('evicts a newer idle session rather than the oldest one still working off-turn', async () => {
+    // The reported defect, as a unit. A CLI carrying on between turns reports
+    // `idle === true` — there is no turn of OURS in flight — so the age scan
+    // took it, and on run 309e0822 it took the session ONE SECOND after its
+    // last row: the thread then read `completed` over eleven pending tasks
+    // until the user typed a message to restart it. `parked` is exempted for
+    // the same reason directly above; this is the third such state.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop, undefined, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    // The other two are then USED, which is what makes run-0 the oldest by age
+    // while being the one still working — the production shape, and the only
+    // arrangement that tests anything. An off-turn row refreshes `lastUsedAt`
+    // as a settling turn does, so simply touching run-0 makes it the NEWEST and
+    // the scan would spare it whether or not the exemption exists.
+    for (const index of [1, 2]) {
+      vi.advanceTimersByTime(1_000);
+      registry.startTurn(`run-${index}`, adapter, INPUT, noop, undefined, noop);
+      await at(sessions, index).endTurn();
+    }
+
+    registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(at(sessions, 1).closes).toBe(1);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('goes over the ceiling rather than evicting any session that is working off-turn', async () => {
+    // The exemption cannot become a refusal: with every session working, the
+    // scan finds no candidate and the existing all-busy arm takes over. Going
+    // over is the lesser harm — the alternative is killing live work to make
+    // room for work the user just asked for.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop, undefined, noop);
+      await at(sessions, i).endTurn();
+      at(sessions, i).emitBetweenTurn(`Bash-${i}`);
+    }
+
+    registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
+
+    for (let i = 0; i < CEILING; i += 1) {
+      expect(at(sessions, i).closes).toBe(0);
+    }
+    expect(registry.liveCount).toBe(CEILING + 1);
+  });
+
+  it('evicts a session whose off-turn work went quiet long ago', async () => {
+    // The other half of the same rule, and what stops the exemption becoming
+    // permanent: one off-turn row must not make a session un-evictable for the
+    // rest of the day. Past the window it is an ordinary candidate again.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+
+    for (let i = 0; i < CEILING; i += 1) {
+      registry.startTurn(`run-${i}`, adapter, INPUT, noop, undefined, noop);
+      await at(sessions, i).endTurn();
+      vi.advanceTimersByTime(1_000);
+    }
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    vi.advanceTimersByTime(OFF_TURN_ACTIVE_MS + 1_000);
+    // The one that worked is now the LEAST attractive candidate by age — an
+    // off-turn row refreshes `lastUsedAt` as a settling turn does — so the
+    // other two are parked to leave it as the only one the scan can reach.
+    // Without the expiry there is no candidate at all and the registry goes
+    // over the ceiling instead, which is what this separates.
+    at(sessions, 1).parked = true;
+    at(sessions, 2).parked = true;
+
+    registry.startTurn('run-new', adapter, INPUT, noop, undefined, noop);
+
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(registry.liveCount).toBe(CEILING);
+  });
+
+  it('tells a close listener whether the close INTERRUPTED work', async () => {
+    // What the listener cannot see for itself, and what decides whether the
+    // transcript owes the user a sentence: `ChatService` writes a row naming
+    // the cut-off only for the first of these, because a row on every reap
+    // would be one per chat and say nothing.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    const closed: [string, boolean][] = [];
+    registry.onClosed((runId, interrupted) =>
+      closed.push([runId, interrupted]),
+    );
+
+    registry.startTurn('run-working', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).emitBetweenTurn('Bash-1');
+    registry.close('run-working');
+
+    registry.startTurn('run-quiet', adapter, INPUT, noop, undefined, noop);
+    await at(sessions, 1).endTurn();
+    registry.close('run-quiet');
+
+    expect(closed).toEqual([
+      ['run-working', true],
+      ['run-quiet', false],
+    ]);
   });
 
   it('drops a dead session rather than evicting a live one to make room for it', async () => {
@@ -604,10 +768,10 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // idle session being closed instead, respawning that run's CLI and
     // re-booting the user's MCP servers.
     vi.useFakeTimers();
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
-    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+    for (let i = 0; i < CEILING; i += 1) {
       registry.startTurn(`run-${i}`, adapter, INPUT, noop);
       await at(sessions, i).endTurn();
       vi.advanceTimersByTime(1_000);
@@ -616,19 +780,19 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // yet landed — so `closed` has not fired and only the eviction scan can
     // notice. It is also the least attractive eviction candidate by age, which
     // is what makes this discriminating.
-    at(sessions, MAX_LIVE_SESSIONS - 1).dieWithoutSettling();
+    at(sessions, CEILING - 1).dieWithoutSettling();
 
     registry.startTurn('run-new', adapter, INPUT, noop);
 
-    expect(at(sessions, MAX_LIVE_SESSIONS - 1).closes).toBe(1);
+    expect(at(sessions, CEILING - 1).closes).toBe(1);
     // The oldest LIVE session survived — under the old scan it was the one
     // that went.
     expect(at(sessions, 0).closes).toBe(0);
-    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+    expect(registry.liveCount).toBe(CEILING);
   });
 
   it('forgets a session the moment its process dies, without waiting to be asked', async () => {
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
     registry.startTurn('run-1', adapter, INPUT, noop);
@@ -656,7 +820,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // that run respawns and re-boots every MCP server the user's CLI loads,
     // which is the exact harm `drops a dead session rather than evicting a
     // live one` was written to remove, reached through a new door.
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { spawn, children } = recordingSpawn();
     const adapter = new SessionfulAdapter(spawn);
 
@@ -676,7 +840,7 @@ describe('AgentSessionRegistry — the ceiling', () => {
     await stopped.done;
     await settleRegistry();
     expect(at(children, 2).kills).toBe(0);
-    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS);
+    expect(registry.liveCount).toBe(CEILING);
 
     // A fourth chat's first message: one slot has to be given back.
     registry.startTurn('run-new', adapter, INPUT, noop);
@@ -697,16 +861,16 @@ describe('AgentSessionRegistry — the ceiling', () => {
     // The alternative is evicting work the user is watching to make room for
     // work they just asked for — a worse trade than briefly holding one extra
     // process.
-    const registry = new AgentSessionRegistry();
+    const registry = new AgentSessionRegistry(CEILING);
     const { adapter, sessions } = fakeAdapter();
 
-    for (let i = 0; i < MAX_LIVE_SESSIONS; i += 1) {
+    for (let i = 0; i < CEILING; i += 1) {
       registry.startTurn(`run-${i}`, adapter, INPUT, noop); // all still busy
     }
 
     registry.startTurn('run-new', adapter, INPUT, noop);
 
     expect(sessions.every((s) => s.closes === 0)).toBe(true);
-    expect(registry.liveCount).toBe(MAX_LIVE_SESSIONS + 1);
+    expect(registry.liveCount).toBe(CEILING + 1);
   });
 });

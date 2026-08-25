@@ -135,6 +135,7 @@ export const settingsPatchSchema = z.strictObject({
   checkForUpdates: z.boolean().optional(),
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
+  cursorMaxMode: z.boolean().optional(),
   collapseToolSteps: z.boolean().optional(),
   claudeBrowserTools: z.boolean().optional(),
   // The user's own prose — bounded in SIZE because the value ends up in a

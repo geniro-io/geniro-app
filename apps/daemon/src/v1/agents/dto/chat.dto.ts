@@ -84,6 +84,16 @@ export const createChatSchema = z.object({
    */
   customInstructions: CustomInstructionsSchema.optional(),
   /**
+   * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
+   * snapshotted onto the run ({@link Run.cursorMaxMode}).
+   *
+   * Sent by the client for the reason `customInstructions` is: the setting
+   * lives in the ELECTRON process's `settings.json`, which the daemon never
+   * opens. OMITTED means "the client did not say", which the adapter reads as
+   * its own default — not as OFF.
+   */
+  cursorMaxMode: z.boolean().optional(),
+  /**
    * A conversation this CLI already holds (`GET /v1/agents/sessions`), taken
    * over by the new thread instead of a fresh session being started.
    *

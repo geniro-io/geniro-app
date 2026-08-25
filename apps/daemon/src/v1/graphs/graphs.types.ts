@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   ChatApprovalModeSchema,
   ClaudeModesCapabilitySchema,
+  CustomInstructionsSchema,
 } from '../agents/chat.types';
 import {
   AgentKindSchema,
@@ -14,10 +15,12 @@ import {
  * The workflow domain model — the zod half of the Geniro graph-core port
  * (geniro apps/api graphs.types.ts:134-167), trimmed to geniro-app's node
  * shapes: a `kind`-discriminated union of agent nodes (CLI coding agents
- * carrying agent/model/role/approval — no template+config indirection) and
+ * carrying agent/model/role/approval — no template+config indirection),
  * trigger nodes (the graph's entry points, geniro-style: a run fires a
- * trigger, never an agent directly). YAML files (`*.geniro.yaml`) are the
- * source of truth for these shapes; SQLite stores runtime/history only.
+ * trigger, never an agent directly) and instruction nodes (free-text blocks
+ * wired to the agents they apply to, which run nothing themselves). YAML
+ * files (`*.geniro.yaml`) are the source of truth for these shapes; SQLite
+ * stores runtime/history only.
  */
 
 /**
@@ -32,7 +35,7 @@ export const WORKFLOW_AGENT_KINDS = AgentKindSchema.options;
  * — nothing else has to change for the graph validation and the builder to
  * understand it.
  */
-export const NODE_KINDS = ['agent', 'trigger'] as const;
+export const NODE_KINDS = ['agent', 'trigger', 'instruction'] as const;
 export const NodeKindSchema = z.enum(NODE_KINDS).meta({ id: 'NodeKind' });
 export type NodeKind = z.infer<typeof NodeKindSchema>;
 
@@ -46,9 +49,16 @@ export type TriggerKind = z.infer<typeof TriggerKindSchema>;
 /**
  * Edge kinds: `data` — the producer's final text feeds the consumer's prompt
  * (the DAG flow); `call` — the source may invoke the target at runtime via
- * the call_agent tool (grants permission only; no data flows along it).
+ * the call_agent tool (grants permission only; no data flows along it);
+ * `instruction` — the source instruction block's text is appended to the
+ * target's turn instructions (no data flows and nothing is ordered, the same
+ * way a `call` edge orders nothing).
+ *
+ * Only `data` participates in the DAG: `buildEdgeMaps` and `computeRunOrder`
+ * ignore everything else, which is what lets an instruction block attach to a
+ * node without becoming one of its producers.
  */
-export const EDGE_KINDS = ['data', 'call'] as const;
+export const EDGE_KINDS = ['data', 'call', 'instruction'] as const;
 export const EdgeKindSchema = z.enum(EDGE_KINDS).meta({ id: 'EdgeKind' });
 export type EdgeKind = z.infer<typeof EdgeKindSchema>;
 
@@ -83,6 +93,7 @@ export const NODE_CONNECTION_RULES: Record<
       { edge: 'data', kind: 'agent', multiple: true },
       { edge: 'data', kind: 'trigger' }, // at most one trigger feeds an agent
       { edge: 'call', kind: 'agent', multiple: true },
+      { edge: 'instruction', kind: 'instruction', multiple: true },
     ],
     outputs: [
       { edge: 'data', kind: 'agent', multiple: true },
@@ -94,6 +105,13 @@ export const NODE_CONNECTION_RULES: Record<
     // out to any number of agents. Call wires never touch triggers.
     inputs: [],
     outputs: [{ edge: 'data', kind: 'agent', multiple: true }],
+  },
+  instruction: {
+    // An instruction block is written, never produced: nothing may feed one,
+    // and it only ever hands its text to agents. Data and call wires never
+    // touch it — it runs no CLI and has no output to order.
+    inputs: [],
+    outputs: [{ edge: 'instruction', kind: 'agent', multiple: true }],
   },
 };
 
@@ -227,6 +245,39 @@ export const WorkflowTriggerNodeSchema = z
   .meta({ id: 'WorkflowTriggerNode' });
 
 /**
+ * One instruction block — free text wired to the agents it applies to.
+ *
+ * It is NOT an execution step: it runs no CLI, holds no slot, never enters the
+ * run order and never settles. Each wired agent's turn is composed with this
+ * text in it; `composeTurnInstructions` owns where it ranks against the user's
+ * global instructions and that node's own `role`.
+ */
+export const WorkflowInstructionNodeSchema = z
+  .object({
+    ...workflowNodeBase,
+    kind: z.literal('instruction'),
+    /**
+     * Bounded and control-character-free through the SAME schema the user's
+     * global custom instructions use, because it reaches the same place: the
+     * composed block that becomes claude's `--append-system-prompt` argv. A
+     * NUL there makes `spawn` throw SYNCHRONOUSLY, and a workflow is a file
+     * that can be IMPORTED, so the text is not necessarily written by the
+     * person who runs it — the block would fail every wired node of every run,
+     * with nothing on screen naming a character the builder renders as
+     * nothing.
+     *
+     * It still admits the EMPTY string: a block is dropped on the canvas
+     * before it is written, so refusing `''` would make a freshly-added node
+     * unsaveable. The builder flags an empty one instead (`node-validate.ts`),
+     * where it can be shown beside the field.
+     */
+    instructions: CustomInstructionsSchema.describe(
+      'Instruction text appended to every wired agent’s turn',
+    ),
+  })
+  .meta({ id: 'WorkflowInstructionNode' });
+
+/**
  * One node of a workflow DAG, discriminated by `kind`. Strict: `kind` is
  * required on every node — legacy kind-less files are normalized once by the
  * store (no compatibility shim lives in the schema).
@@ -235,6 +286,7 @@ export const WorkflowNodeSchema = z
   .discriminatedUnion('kind', [
     WorkflowAgentNodeSchema,
     WorkflowTriggerNodeSchema,
+    WorkflowInstructionNodeSchema,
   ])
   .meta({ id: 'WorkflowNode' });
 
@@ -244,15 +296,16 @@ export const WorkflowNodeSchema = z
  * depends on `from`; producers run first) — that is the geniro-app execution
  * semantics; the Geniro source models edges the other way around
  * (`edge.from` depends on `edge.to`), so the ported topo-sort operates on
- * this repo's producer→consumer direction. `call` edges order nothing and
- * feed nothing — they only grant the call_agent tool (see `EDGE_KINDS`).
+ * this repo's producer→consumer direction. `call` and `instruction` edges
+ * order nothing and feed no prompt context — the first grants the call_agent
+ * tool, the second carries instruction text (see `EDGE_KINDS`).
  */
 export const WorkflowEdgeSchema = z
   .object({
     from: z.string().min(1).describe('Source node id'),
     to: z.string().min(1).describe('Target node id'),
     kind: EdgeKindSchema.describe(
-      "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool",
+      "Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text",
     ),
     label: z.string().optional().describe('Optional edge label'),
   })
@@ -305,6 +358,20 @@ export const WorkflowYamlSchema = WorkflowSchema.extend({
         WorkflowTriggerNodeSchema.extend({
           trigger: TriggerKindSchema.default('manual'),
         }),
+        WorkflowInstructionNodeSchema.extend({
+          // Leniency layered ON the bounded schema, never a fresh `z.string()`:
+          // re-declaring the field here would silently drop its cap and its
+          // control-character refusal for the ONE path that reads files from
+          // disk — which is the only path a hostile workflow arrives by.
+          //
+          // `nullish`, not `.default()`: a hand-written `instructions:` with
+          // nothing after it parses as NULL, which a default never fires for,
+          // so the block a user scaffolded and had not filled in yet made its
+          // whole workflow unopenable.
+          instructions: CustomInstructionsSchema.nullish().transform(
+            (value) => value ?? '',
+          ),
+        }),
       ]),
     )
     .default([]),
@@ -314,6 +381,9 @@ export const WorkflowYamlSchema = WorkflowSchema.extend({
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 export type WorkflowAgentNode = z.infer<typeof WorkflowAgentNodeSchema>;
 export type WorkflowTriggerNode = z.infer<typeof WorkflowTriggerNodeSchema>;
+export type WorkflowInstructionNode = z.infer<
+  typeof WorkflowInstructionNodeSchema
+>;
 export type WorkflowEdge = z.infer<typeof WorkflowEdgeSchema>;
 export type WorkflowLayout = z.infer<typeof WorkflowLayoutSchema>;
 export type Workflow = z.infer<typeof WorkflowSchema>;

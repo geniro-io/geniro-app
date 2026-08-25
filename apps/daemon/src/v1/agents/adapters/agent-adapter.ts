@@ -1412,6 +1412,7 @@ export abstract class AgentAdapter {
     return composeTurnInstructions({
       includePreamble: includePreamble && input.internalProbe !== true,
       customInstructions: input.customInstructions,
+      instructionBlocks: input.instructionBlocks,
       systemPrompt: input.systemPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
     });
@@ -1624,6 +1625,9 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // On the same composed block and the same reasoning: two graph nodes
+      // wired to different instruction blocks must not share a process.
+      input.instructionBlocks ?? null,
       input.callSurfacePrompt ?? null,
       // Decides whether the host preamble is composed, so it is argv too. No
       // internal probe uses a kept session today (they all call `start()`),

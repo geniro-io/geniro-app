@@ -5,6 +5,7 @@ import {
   autoLayout,
   canvasSnapshot,
   edgeId,
+  flowNodeFor,
   fromFlow,
   nextNodeId,
   toFlow,
@@ -204,5 +205,72 @@ describe('autoLayout', () => {
     const layout = await autoLayout(WF);
     expect(Object.keys(layout).sort()).toEqual(['coder', 'reviewer']);
     expect(layout.coder!.x).toBeLessThan(layout.reviewer!.x);
+  });
+});
+
+describe('instruction blocks on the canvas', () => {
+  const NOTED: Workflow = {
+    name: 'noted',
+    nodes: [
+      { id: 'writer', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'style', kind: 'instruction', instructions: 'Be terse.' },
+    ],
+    edges: [{ from: 'style', to: 'writer', kind: 'instruction' }],
+  };
+
+  it('maps a block to its own canvas type and back', () => {
+    const flow = toFlow(NOTED);
+    expect(flow.nodes.find((n) => n.id === 'style')?.type).toBe('instruction');
+    // The React Flow `type` is what selects the instruction edge component AND
+    // what `fromFlow` reads the kind back off. Left untyped it would be a DATA
+    // edge — the one kind that orders the run — so the block would become a
+    // producer of the agent it is only meant to instruct.
+    expect(flow.edges[0]?.type).toBe('instruction');
+
+    const back = fromFlow({ name: 'noted' }, flow.nodes, flow.edges);
+    expect(back.nodes).toEqual(NOTED.nodes);
+    expect(back.edges).toEqual(NOTED.edges);
+  });
+
+  it('mints block ids under their own prefix', () => {
+    expect(nextNodeId(new Set(['instruction-1']), 'instruction')).toBe(
+      'instruction-2',
+    );
+  });
+});
+
+describe('flowNodeFor', () => {
+  // ONE kind -> React Flow `type` mapping, shared by `toFlow` and the builder's
+  // add path. They used to carry a branch each, and the add path's copy is the
+  // one a new kind is easiest to forget — a node typed `agent` by mistake
+  // renders as an agent card over instruction data.
+  it('maps every kind to its own canvas type', () => {
+    const at = { x: 0, y: 0 };
+    expect(
+      flowNodeFor({ id: 't', kind: 'trigger', trigger: 'manual' }, at).type,
+    ).toBe('trigger');
+    expect(
+      flowNodeFor({ id: 'i', kind: 'instruction', instructions: '' }, at).type,
+    ).toBe('instruction');
+    expect(
+      flowNodeFor(
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        at,
+      ).type,
+    ).toBe('agent');
+  });
+
+  it('carries the node through as its own data', () => {
+    const node = {
+      id: 'i',
+      kind: 'instruction' as const,
+      instructions: 'Be terse.',
+    };
+    expect(flowNodeFor(node, { x: 4, y: 5 })).toEqual({
+      id: 'i',
+      type: 'instruction',
+      position: { x: 4, y: 5 },
+      data: { node },
+    });
   });
 });

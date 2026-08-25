@@ -13,10 +13,11 @@ import type {
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
-import type {
-  ClaudeModesCapability,
-  ItemWire,
-  RunWire,
+import {
+  type ClaudeModesCapability,
+  type ItemWire,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
+  type RunWire,
 } from '../../agents/chat.types';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
@@ -60,6 +61,8 @@ import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
   computeRunOrder,
+  isExecutableNode,
+  isNonExecutableNode,
   onDemandNodeIds,
 } from '../utils/graph-order';
 import {
@@ -88,6 +91,13 @@ const MAX_PARALLEL_NODES = 4;
  * callers (four callers holding four slots, zero left for their callees).
  */
 const MAX_PARALLEL_SUB_TURNS = 4;
+
+/**
+ * How several instruction blocks wired to one node are joined — the blank
+ * line `composeTurnInstructions` puts between the parts, so a block reads as
+ * its own paragraph rather than running into its neighbour.
+ */
+const INSTRUCTION_BLOCK_SEPARATOR = '\n\n';
 
 export interface StartWorkflowRunInput {
   /** Library slug — persisted as `Run.workflowId`. */
@@ -414,6 +424,12 @@ export class GraphExecutorService {
     // revokeRun call for symmetry with the settle path.
     try {
       for (const node of input.workflow.nodes) {
+        // A node that never runs gets no state row at all. `pending` is a
+        // promise that something will happen to it, and an instruction block
+        // would wear that chip for the life of the run without ever leaving it.
+        if (isNonExecutableNode(node)) {
+          continue;
+        }
         await this.nodeStateDao.createPending(run.id, node.id, em);
       }
     } catch (err) {
@@ -664,7 +680,75 @@ export class GraphExecutorService {
     // Call-only callees run per CallBroker call — never scheduled, never in
     // the settled denominator (an uncalled one settles 'skipped' at run end).
     const onDemand = onDemandNodeIds(nodes, workflow.edges);
-    const dagNodes = nodes.filter((n) => !onDemand.has(n.id));
+    // Two separate exclusions, and they must not be folded together: an
+    // on-demand callee RUNS (just not on the walk) and settles 'skipped' when
+    // nothing called it, while an instruction block never runs at all and has
+    // no outcome to report.
+    const dagNodes = nodes
+      .filter(isExecutableNode)
+      .filter((n) => !onDemand.has(n.id));
+    // The instruction text each agent node is wired to, in NODE-LIST order —
+    // the order the YAML file and the builder's own list already put the
+    // blocks in, so two blocks on one agent read the same way every run.
+    const blocksOf = new Map<string, { label: string; text: string }[]>();
+    for (const source of nodes) {
+      if (source.kind !== 'instruction') {
+        continue;
+      }
+      const text = source.instructions.trim();
+      if (!text) {
+        continue;
+      }
+      const block = { label: source.name ?? source.id, text };
+      for (const edge of workflow.edges) {
+        if (edge.kind !== 'instruction' || edge.from !== source.id) {
+          continue;
+        }
+        const blocks = blocksOf.get(edge.to);
+        if (blocks) {
+          blocks.push(block);
+        } else {
+          blocksOf.set(edge.to, [block]);
+        }
+      }
+    }
+    // The schema's cap is per FIELD; what reaches argv is the JOIN, and a
+    // node's instruction in-degree is unbounded (`multiple: true`). So the
+    // join is bounded too, against the same ceiling — an imported workflow
+    // could otherwise wire enough full-length blocks to one agent to exceed
+    // ARG_MAX, and every turn of that node would then die inside `spawn`.
+    // WHOLE blocks are withheld and named on the transcript: a half-sentence
+    // instruction is worse than a missing one, and a silent drop is worse than
+    // both. A block that does not fit is SKIPPED rather than ending the walk,
+    // so a later short one still gets through — the kept blocks stay in
+    // node-list order either way, and this loses less of what the user wrote.
+    const instructionTextOf = new Map<string, string>();
+    const overflowedBlocks: { nodeId: string; labels: string[] }[] = [];
+    for (const [nodeId, blocks] of blocksOf) {
+      const kept: string[] = [];
+      const overflowed: string[] = [];
+      let length = 0;
+      for (const block of blocks) {
+        const joined =
+          kept.length === 0
+            ? block.text.length
+            : length + INSTRUCTION_BLOCK_SEPARATOR.length + block.text.length;
+        if (joined > MAX_CUSTOM_INSTRUCTIONS_CHARS) {
+          overflowed.push(block.label);
+          continue;
+        }
+        kept.push(block.text);
+        length = joined;
+      }
+      if (kept.length > 0) {
+        instructionTextOf.set(nodeId, kept.join(INSTRUCTION_BLOCK_SEPARATOR));
+      }
+      if (overflowed.length > 0) {
+        overflowedBlocks.push({ nodeId, labels: overflowed });
+      }
+    }
+    const instructionsFor = (nodeId: string): string | null =>
+      instructionTextOf.get(nodeId) ?? null;
     // Caller → callee agent nodes, from the call edges. Drives the broker's
     // dispatch, each caller's MCP endpoint grant, and its awareness block.
     const calleesOf = new Map<string, WorkflowAgentNode[]>();
@@ -1101,6 +1185,9 @@ export class GraphExecutorService {
         // a standing preference. Joining them here would put that ordering in
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
+        // Joined here because the order of several blocks is a graph fact no
+        // adapter could recover; ranked by `composeTurnInstructions`.
+        instructionBlocks: instructionsFor(node.id),
         // Null means the run predates the setting — the adapter's own default
         // is the right reading of that, never OFF.
         cursorMaxMode: cursorMaxMode ?? undefined,
@@ -1809,6 +1896,17 @@ export class GraphExecutorService {
           message:
             `'${setting.name}' names ${setting.setting} (${setting.value}) ` +
             `that will be ignored: ${setting.reason}`,
+        });
+      });
+    }
+    // Same reason and the same place: a fact about the run's CONFIGURATION
+    // that the builder never had the chance to refuse.
+    for (const overflow of overflowedBlocks) {
+      enqueue(async () => {
+        await persistItem(null, 'system', null, {
+          message:
+            `'${overflow.nodeId}' is wired to more instruction text than one turn can carry — ` +
+            `${overflow.labels.join(', ')} will not be sent`,
         });
       });
     }

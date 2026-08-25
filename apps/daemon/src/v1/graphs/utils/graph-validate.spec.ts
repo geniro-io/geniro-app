@@ -440,3 +440,112 @@ describe('validateRunnableGraph — call-only producers', () => {
     );
   });
 });
+
+function instructionBlock(id: string): WorkflowNode {
+  return { id, kind: 'instruction', instructions: 'Be terse.' };
+}
+
+function instructionEdge(from: string, to: string): WorkflowEdge {
+  return { from, to, kind: 'instruction' };
+}
+
+describe('validateRunnableGraph and instruction blocks', () => {
+  it('accepts an instruction block that nothing feeds', () => {
+    const nodes = [trigger('t'), node('a'), instructionBlock('style')];
+    const edges = [data('t', 'a'), instructionEdge('style', 'a')];
+    expect(() => validateRunnableGraph(nodes, edges)).not.toThrow();
+  });
+
+  // An instruction edge hands text to its target; it does not put the target
+  // on a trigger path. An agent wired ONLY to a block is still an agent
+  // nothing will ever start, which is what this check exists to catch.
+  it('does not let an instruction edge stand in for a trigger path', () => {
+    const nodes = [
+      trigger('t'),
+      node('a'),
+      node('orphan'),
+      instructionBlock('style'),
+    ];
+    const edges = [
+      data('t', 'a'),
+      instructionEdge('style', 'a'),
+      instructionEdge('style', 'orphan'),
+    ];
+    expect(errorCode(() => validateRunnableGraph(nodes, edges))).toBe(
+      'GRAPH_UNTRIGGERED_NODE',
+    );
+  });
+});
+
+describe('validateWorkflowGraph and instruction edges', () => {
+  it('accepts an instruction block feeding several agents', () => {
+    const nodes = [node('a'), node('b'), instructionBlock('style')];
+    const edges = [
+      instructionEdge('style', 'a'),
+      instructionEdge('style', 'b'),
+    ];
+    expect(() => validateWorkflowGraph(nodes, edges)).not.toThrow();
+  });
+
+  it('refuses an instruction edge pointed at a trigger', () => {
+    const nodes = [trigger('t'), instructionBlock('style')];
+    expect(
+      errorCode(() =>
+        validateWorkflowGraph(nodes, [instructionEdge('style', 't')]),
+      ),
+    ).toBe('GRAPH_EDGE_RULE');
+  });
+
+  it('refuses a data edge out of an instruction block', () => {
+    const nodes = [node('a'), instructionBlock('style')];
+    expect(
+      errorCode(() => validateWorkflowGraph(nodes, [data('style', 'a')])),
+    ).toBe('GRAPH_EDGE_RULE');
+  });
+});
+
+describe('refusal wording per edge kind', () => {
+  // "feed" is true of data flow alone. Telling a user an instruction edge
+  // "cannot feed" a trigger names the one thing that wire never does.
+  it('names what each wire does rather than calling every wire a feed', () => {
+    const nodes = [trigger('t'), node('a'), instructionBlock('style')];
+    const message = (edges: WorkflowEdge[]): string => {
+      try {
+        validateWorkflowGraph(nodes, edges);
+        return '';
+      } catch (err) {
+        return (err as BadRequestException).getMessage();
+      }
+    };
+    expect(message([instructionEdge('style', 't')])).toContain(
+      "cannot instruct kind 'trigger'",
+    );
+    expect(message([data('a', 't')])).toContain("cannot feed kind 'trigger'");
+    expect(message([call('t', 'a')])).toContain("cannot call kind 'agent'");
+  });
+});
+
+describe('an unknown edge kind gets a neutral verb', () => {
+  // The `?? 'connect to'` fallback exists so a kind outside the enum is not
+  // described with a verb that would be wrong. Unentered, a later "this is
+  // dead code" pass removes it and the next edge kind silently inherits
+  // "feed" — the exact wrongness the verb table was added to end.
+  it('says "connect to" rather than inheriting a wrong verb', () => {
+    const rules = { a: { inputs: [], outputs: [] } };
+    try {
+      validateEdgeRules(
+        [
+          { id: 'x', kind: 'a' },
+          { id: 'y', kind: 'a' },
+        ],
+        [{ from: 'x', to: 'y', kind: 'mystery' }],
+        rules,
+      );
+      expect.unreachable('expected a rule rejection');
+    } catch (err) {
+      expect((err as BadRequestException).getMessage()).toContain(
+        "cannot connect to kind 'a'",
+      );
+    }
+  });
+});

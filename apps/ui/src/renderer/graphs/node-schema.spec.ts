@@ -131,3 +131,68 @@ describe('makeHandleId', () => {
     expect(makeHandleId('target', 'call', 'agent')).toBe('target-call-agent');
   });
 });
+
+describe('instruction wiring (real registry)', () => {
+  it('allows an instruction edge block → agent and nothing else', () => {
+    expect(canConnect('instruction', 'instruction', 'agent')).toBe(true);
+    expect(canConnect('instruction', 'instruction', 'trigger')).toBe(false);
+    expect(canConnect('instruction', 'agent', 'agent')).toBe(false);
+    // A block produces no output to order and runs nothing to be called.
+    expect(canConnect('data', 'instruction', 'agent')).toBe(false);
+    expect(canConnect('call', 'agent', 'instruction')).toBe(false);
+  });
+
+  it('carries its own React Flow type, distinct from data and call', () => {
+    expect(flowEdgeType('instruction')).toEqual({ type: 'instruction' });
+    expect(flowEdgeKind({ type: 'instruction' })).toBe('instruction');
+    // An unknown type is data flow, which is what keeps "no type" honest.
+    expect(flowEdgeKind({ type: 'mystery' })).toBe('data');
+  });
+
+  it('reads an instruction drag off either handle', () => {
+    expect(
+      connectionEdgeKind(
+        makeHandleId('source', 'instruction', 'agent'),
+        undefined,
+      ),
+    ).toBe('instruction');
+    expect(
+      connectionEdgeKind(
+        undefined,
+        makeHandleId('target', 'instruction', 'instruction'),
+      ),
+    ).toBe('instruction');
+    // A collapsed drag with no handle ids stays data flow.
+    expect(connectionEdgeKind(undefined, undefined)).toBe('data');
+  });
+
+  it('describes the block’s one editable field', () => {
+    expect(NODE_TYPE_SCHEMAS.instruction.map((f) => f.key)).toContain(
+      'instructions',
+    );
+  });
+});
+
+describe('connectionEdgeKind resolves from the SOURCE end', () => {
+  // The two ends can name different annotation kinds — an instruction block's
+  // only output dropped onto an agent's expanded `call` row. Answering with
+  // the target's kind yields a wire `canConnect` refuses, so the drop does
+  // nothing and the user is told nothing.
+  it('answers instruction for a block’s output dropped on a call row', () => {
+    const kind = connectionEdgeKind(
+      makeHandleId('source', 'instruction', 'agent'),
+      makeHandleId('target', 'call', 'agent'),
+    );
+    expect(kind).toBe('instruction');
+    expect(canConnect(kind, 'instruction', 'agent')).toBe(true);
+  });
+
+  it('still reads a call drag whose other end is a collapsed data handle', () => {
+    expect(
+      connectionEdgeKind(
+        makeHandleId('source', 'data', 'agent'),
+        makeHandleId('target', 'call', 'agent'),
+      ),
+    ).toBe('call');
+  });
+});

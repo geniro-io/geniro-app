@@ -1,7 +1,7 @@
 import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
-import { agentNode } from '../__tests__/workflow-node';
+import { agentNode, instructionNode } from '../__tests__/workflow-node';
 import type { Workflow } from '../graphs.types';
 import { parseWorkflowYaml, serializeWorkflowYaml } from './workflow-yaml';
 
@@ -359,5 +359,160 @@ edges:
     };
     const out = serializeWorkflowYaml(wf, 'nodes: [\nname: :');
     expect(parseWorkflowYaml(out)).toEqual(wf);
+  });
+});
+
+const INSTRUCTION_SOURCE = `name: with-notes
+nodes:
+  # the house style every writer shares
+  - id: style
+    kind: instruction
+    instructions: Prefer short sentences.
+  - id: writer
+    kind: agent
+    agent: claude
+edges:
+  - from: style
+    to: writer
+    kind: instruction
+`;
+
+describe('instruction nodes', () => {
+  it('parses an instruction node and its edge', () => {
+    const wf = parseWorkflowYaml(INSTRUCTION_SOURCE);
+    expect(instructionNode(wf.nodes[0]).instructions).toBe(
+      'Prefer short sentences.',
+    );
+    expect(wf.edges).toEqual([
+      { from: 'style', to: 'writer', kind: 'instruction' },
+    ]);
+  });
+
+  // A block is dropped on the canvas before it is written, so the YAML schema
+  // has to accept one that names no text at all.
+  it('defaults a block that names no key at all', () => {
+    const wf = parseWorkflowYaml(
+      'name: n\nnodes:\n  - id: style\n    kind: instruction\n',
+    );
+    expect(instructionNode(wf.nodes[0]).instructions).toBe('');
+  });
+
+  // A hand-written `instructions:` with nothing after it parses as NULL, not
+  // undefined — which a plain `.default('')` never fires for, so a block a
+  // user scaffolded and had not filled in yet made its whole workflow
+  // unopenable. This is the case the schema's `.nullish()` exists for.
+  it('accepts a block whose key is present but empty', () => {
+    const wf = parseWorkflowYaml(
+      'name: n\nnodes:\n  - id: style\n    kind: instruction\n    instructions:\n',
+    );
+    expect(instructionNode(wf.nodes[0]).instructions).toBe('');
+  });
+
+  // The merge path writes each kind's own fields back from a per-kind
+  // registry; a field missing from that registry is silently dropped on every
+  // save of a pre-existing file, which a plain round trip cannot catch.
+  it('keeps the instruction text through a comment-preserving save', () => {
+    const wf = parseWorkflowYaml(INSTRUCTION_SOURCE);
+    instructionNode(wf.nodes[0]).instructions =
+      'Prefer short sentences. Cite files.';
+    const out = serializeWorkflowYaml(wf, INSTRUCTION_SOURCE);
+    expect(out).toContain('# the house style every writer shares');
+    expect(parseWorkflowYaml(out).nodes[0]).toEqual({
+      id: 'style',
+      kind: 'instruction',
+      instructions: 'Prefer short sentences. Cite files.',
+    });
+  });
+
+  it('drops the previous kind’s keys when a node flips to instruction', () => {
+    const source = `name: n
+nodes:
+  - id: style
+    kind: agent
+    agent: claude
+    approval: auto
+    role: old role
+edges: []
+`;
+    const flipped: Workflow = {
+      name: 'n',
+      nodes: [{ id: 'style', kind: 'instruction', instructions: 'Be terse.' }],
+      edges: [],
+    };
+    const out = serializeWorkflowYaml(flipped, source);
+    expect(out).not.toContain('role:');
+    expect(out).not.toContain('approval:');
+    expect(parseWorkflowYaml(out).nodes[0]).toEqual({
+      id: 'style',
+      kind: 'instruction',
+      instructions: 'Be terse.',
+    });
+  });
+});
+
+const FIELD_COMMENT_SOURCE = `name: annotated
+nodes:
+  - id: coder
+    kind: agent
+    # which CLI drives this node
+    agent: claude
+    model: opus
+    role: You write the code.
+edges: []
+`;
+
+describe('comment-preserving merge — node FIELD comments', () => {
+  // Every other fixture here puts its comments above a NODE or the document.
+  // A comment on a node FIELD is the position the merge can destroy without
+  // any of them noticing: `YAMLMap.delete` drops the pair carrying the key's
+  // comment and the following `set` re-appends the key at the end, so the
+  // annotation is gone and the file's field order is rewritten — on every
+  // canvas save, for a value that did not even change.
+  it('keeps a comment written on a node field, and the file’s field order', () => {
+    const wf = parseWorkflowYaml(FIELD_COMMENT_SOURCE);
+    agentNode(wf.nodes[0]).model = 'sonnet';
+    const out = serializeWorkflowYaml(wf, FIELD_COMMENT_SOURCE);
+
+    expect(out).toContain('# which CLI drives this node');
+    expect(out.indexOf('agent:')).toBeLessThan(out.indexOf('model:'));
+    expect(out.indexOf('model:')).toBeLessThan(out.indexOf('role:'));
+    expect(agentNode(parseWorkflowYaml(out).nodes[0]).model).toBe('sonnet');
+  });
+
+  it('clears a field the canvas removed without disturbing its neighbours', () => {
+    const wf = parseWorkflowYaml(FIELD_COMMENT_SOURCE);
+    delete agentNode(wf.nodes[0]).role;
+    const out = serializeWorkflowYaml(wf, FIELD_COMMENT_SOURCE);
+
+    expect(out).toContain('# which CLI drives this node');
+    expect(out).not.toContain('role:');
+    expect(agentNode(parseWorkflowYaml(out).nodes[0]).model).toBe('opus');
+  });
+});
+
+describe('instruction text is bounded like the user’s own instructions', () => {
+  // The text becomes claude's `--append-system-prompt` argv, where a NUL makes
+  // `spawn` throw SYNCHRONOUSLY — and a workflow is a FILE, which can be
+  // imported from someone else. Refusing it at the parse is the only place
+  // that can name the problem; the builder renders the character as nothing.
+  it('refuses a control character in a block', () => {
+    const source =
+      'name: n\nnodes:\n  - id: style\n    kind: instruction\n    instructions: "a\\u0000b"\n';
+    try {
+      parseWorkflowYaml(source);
+      expect.unreachable('expected a schema rejection');
+    } catch (err) {
+      expect(err).toBeInstanceOf(BadRequestException);
+      const exception = err as BadRequestException;
+      expect(exception.errorCode).toBe('WORKFLOW_YAML_INVALID');
+      expect(exception.getMessage()).toContain('nodes.0.instructions');
+    }
+  });
+
+  it('still accepts an empty block — one is dropped before it is written', () => {
+    const wf = parseWorkflowYaml(
+      'name: n\nnodes:\n  - id: style\n    kind: instruction\n    instructions: ""\n',
+    );
+    expect(instructionNode(wf.nodes[0]).instructions).toBe('');
   });
 });

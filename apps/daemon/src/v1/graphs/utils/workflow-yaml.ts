@@ -2,8 +2,9 @@ import { BadRequestException } from '@packages/common';
 import { Document, isMap, isSeq, parseDocument, type YAMLMap } from 'yaml';
 
 import {
+  NODE_KINDS,
+  type NodeKind,
   type Workflow,
-  type WorkflowAgentNode,
   type WorkflowEdge,
   type WorkflowNode,
   WorkflowYamlSchema,
@@ -53,63 +54,87 @@ function setOrDelete(map: YAMLMap, key: string, value: unknown): void {
 }
 
 /**
- * Every agent-node field the comment-preserving MERGE path writes back.
+ * Every kind-specific field the comment-preserving MERGE path writes back,
+ * per node kind.
  *
- * The envelope (`id`, `name`) and `kind` are patched separately, so this is
- * exactly "the rest of an agent node". Membership is type-checked by
- * `node[field]` below, but membership is the easy half — COMPLETENESS is what
- * matters: a field missing here is silently dropped on every save of a
- * pre-existing file, and a plain round trip cannot catch it (the no-source
- * path goes through `workflowToPlain`, a JSON round trip that emits
- * everything). `AgentOnlyFieldsAreComplete` below turns that silent data loss
- * into a compile error the moment a field is added to the schema.
+ * The envelope (`id`, `name`) and `kind` are patched separately, so each entry
+ * is exactly "the rest of a node of that kind". COMPLETENESS is what matters:
+ * a field missing here is silently dropped on every save of a pre-existing
+ * file, and a plain round trip cannot catch it (the no-source path goes
+ * through `workflowToPlain`, a JSON round trip that emits everything).
+ * `KindFieldsAreComplete` below turns that silent data loss into a compile
+ * error the moment a field is added to any node schema.
  */
-const AGENT_ONLY_FIELDS = [
-  'agent',
-  'model',
-  'effort',
-  'contextWindow',
-  'description',
-  'role',
-  'approval',
-  'configDir',
-] as const;
+/** Everything on a node of `K` except the shared envelope and the discriminant. */
+type KindOnlyField<K extends NodeKind> = Exclude<
+  keyof Extract<WorkflowNode, { kind: K }>,
+  'id' | 'name' | 'kind'
+>;
 
-/** Everything on an agent node except the shared envelope and the discriminant. */
-type AgentOnlyField = Exclude<keyof WorkflowAgentNode, 'id' | 'name' | 'kind'>;
+const KIND_ONLY_FIELDS = {
+  agent: [
+    'agent',
+    'model',
+    'effort',
+    'contextWindow',
+    'description',
+    'role',
+    'approval',
+    'configDir',
+  ],
+  trigger: ['trigger'],
+  instruction: ['instructions'],
+} as const satisfies { [K in NodeKind]: readonly KindOnlyField<K>[] };
+
+/** Every schema field {@link KIND_ONLY_FIELDS} forgot, across all kinds. */
+type MissingKindField = {
+  [K in NodeKind]: Exclude<
+    KindOnlyField<K>,
+    (typeof KIND_ONLY_FIELDS)[K][number]
+  >;
+}[NodeKind];
 
 /**
- * Compile-time completeness guard for {@link AGENT_ONLY_FIELDS}. Resolves to
- * `never` — and so fails to accept the `true` below — while any agent-node
- * field is missing from the list, naming the offender in the error.
+ * Compile-time completeness guard for {@link KIND_ONLY_FIELDS}. Resolves to
+ * the missing field's own NAME — and so fails to accept the `true` below —
+ * while any node field is absent from its kind's list, so the error says which.
+ * The tuple wrapper stops the union distributing, which would otherwise let
+ * one complete kind's `true` absorb another kind's `never`.
  */
-type AgentOnlyFieldsAreComplete =
-  Exclude<AgentOnlyField, (typeof AGENT_ONLY_FIELDS)[number]> extends never
-    ? true
-    : never;
-const _agentOnlyFieldsAreComplete: AgentOnlyFieldsAreComplete = true;
-void _agentOnlyFieldsAreComplete;
-const TRIGGER_ONLY_FIELDS = ['trigger'] as const;
+type KindFieldsAreComplete = [MissingKindField] extends [never]
+  ? true
+  : MissingKindField;
+const _kindFieldsAreComplete: KindFieldsAreComplete = true;
+void _kindFieldsAreComplete;
 
 function patchNodeItem(item: YAMLMap, node: WorkflowNode): void {
   item.set('kind', node.kind);
   setOrDelete(item, 'name', node.name);
-  // Patch this kind's fields and drop the other kind's — a hand-edited file
-  // that flipped a node's kind must not keep stale cross-kind keys.
-  if (node.kind === 'agent') {
-    for (const field of TRIGGER_ONLY_FIELDS) {
-      setOrDelete(item, field, undefined);
+  // Drop the OTHER kinds' fields — a hand-edited file that flipped a node's
+  // kind must not keep stale cross-kind keys — then write THIS kind's back in
+  // place. Deleting this kind's first would be the same result by a shorter
+  // route and is not: `YAMLMap.delete` drops the pair carrying the key's
+  // comments, and the `set` that follows re-APPENDS it, so every comment the
+  // user wrote on a node field is lost and the file's field order is rewritten
+  // on every save — the one thing this whole merge path exists to prevent.
+  const own = new Set<string>(KIND_ONLY_FIELDS[node.kind]);
+  for (const kind of NODE_KINDS) {
+    for (const field of KIND_ONLY_FIELDS[kind]) {
+      // Skipped by NAME rather than by kind: two kinds sharing a field name
+      // would otherwise put this node's own key through delete-then-set again.
+      if (!own.has(field)) {
+        setOrDelete(item, field, undefined);
+      }
     }
-    for (const field of AGENT_ONLY_FIELDS) {
-      setOrDelete(item, field, node[field]);
-    }
-  } else {
-    for (const field of AGENT_ONLY_FIELDS) {
-      setOrDelete(item, field, undefined);
-    }
-    for (const field of TRIGGER_ONLY_FIELDS) {
-      setOrDelete(item, field, node[field]);
-    }
+  }
+  // The field list is correlated with `node.kind` at the type level but TS
+  // cannot follow that correlation through an index, so the read is widened.
+  // The two guards above are what keep it honest: `satisfies` proves every
+  // name is a real field of its kind, and `KindFieldsAreComplete` proves no
+  // field of that kind is missing.
+  const fields = node as Record<string, unknown>;
+  for (const field of KIND_ONLY_FIELDS[node.kind]) {
+    setOrDelete(item, field, fields[field]);
   }
 }
 

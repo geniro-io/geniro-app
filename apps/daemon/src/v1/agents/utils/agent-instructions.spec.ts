@@ -93,3 +93,40 @@ describe('composeTurnInstructions', () => {
     ).toBe(`${GENIRO_UI_PREAMBLE}\n\nBE TERSE`);
   });
 });
+
+describe('composeTurnInstructions — instruction blocks', () => {
+  // Order IS precedence here, and the block sits between the two fields it is
+  // a peer of: below a preference the user set for every agent, above the role
+  // of the one node it happens to reach.
+  it('ranks the blocks below the user instructions and above the node role', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        instructionBlocks: 'BLOCK',
+        systemPrompt: 'ROLE',
+        callSurfacePrompt: 'CALLS',
+      }),
+    ).toBe('GLOBAL\n\nBLOCK\n\nROLE\n\nCALLS');
+  });
+
+  it('drops a blank block instead of joining an empty paragraph', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+        instructionBlocks: '   ',
+        systemPrompt: 'ROLE',
+      }),
+    ).toBe('GLOBAL\n\nROLE');
+  });
+
+  it('is absent for a plain chat turn, which has no canvas to wire one on', () => {
+    expect(
+      composeTurnInstructions({
+        includePreamble: false,
+        customInstructions: 'GLOBAL',
+      }),
+    ).toBe('GLOBAL');
+  });
+});

@@ -29,7 +29,7 @@ const ENVELOPE_FIELDS: readonly NodeSchemaField[] = [
   },
   {
     key: 'kind',
-    type: 'agent | trigger',
+    type: 'agent | trigger | instruction',
     required: true,
     description: 'Node kind — selects the fields below and connection rules.',
   },
@@ -110,6 +110,16 @@ export const NODE_TYPE_SCHEMAS: Record<NodeKind, readonly NodeSchemaField[]> = {
         'How this trigger fires — manual: you submit the run prompt by hand.',
     },
   ],
+  instruction: [
+    ...ENVELOPE_FIELDS,
+    {
+      key: 'instructions',
+      type: 'string',
+      required: true,
+      description:
+        'Text appended to the turn of every agent wired to this block — after your global custom instructions, before that node’s own role.',
+    },
+  ],
 };
 
 // AGENT_MODEL_OPTIONS moved to `renderer/agent-models.ts` — the chat composer
@@ -168,6 +178,13 @@ export const NODE_CONNECTION_RULES: Record<
         description:
           'agents wired here may invoke this node on demand during a run.',
       },
+      {
+        edge: 'instruction',
+        kind: 'instruction',
+        multiple: true,
+        description:
+          'every instruction block wired here is appended to this node’s turn.',
+      },
     ],
     outputs: [
       {
@@ -199,6 +216,21 @@ export const NODE_CONNECTION_RULES: Record<
       },
     ],
   },
+  instruction: {
+    // A block is written, never produced: nothing may feed one, and it only
+    // ever hands its text to agents. It runs nothing, so it has no output to
+    // order and no turn to be called into.
+    inputs: [],
+    outputs: [
+      {
+        edge: 'instruction',
+        kind: 'agent',
+        multiple: true,
+        description:
+          'appends this block’s text to every connected agent’s turn — it never runs itself.',
+      },
+    ],
+  },
 };
 
 /**
@@ -219,27 +251,59 @@ export function makeHandleId(
 }
 
 /**
- * The canvas edge ⇄ EdgeKind discriminator, in ONE place: a call edge
- * carries React Flow `type: 'call'` (which also renders it through the
- * registered call component); a data edge carries no type (React Flow's
- * default). Every canvas producer/consumer routes through this pair —
- * re-deriving the mapping inline is how a rename silently misses a site.
+ * The kinds that are NOT data flow. Each carries its own React Flow `type`,
+ * spelled exactly as the edge kind, which is also what selects its registered
+ * component (`annotation-edge.tsx`). A data edge carries no type at all —
+ * React Flow's default — so "no type" and "data" stay the same statement.
  */
-export function flowEdgeKind(edge: { type?: string }): EdgeKind {
-  return edge.type === 'call' ? 'call' : 'data';
-}
+export const ANNOTATION_EDGE_KINDS = [
+  'call',
+  'instruction',
+] as const satisfies readonly EdgeKind[];
 
-/** Spreadable inverse of {@link flowEdgeKind} for building canvas edges. */
-export function flowEdgeType(edgeKind: EdgeKind): { type?: 'call' } {
-  return edgeKind === 'call' ? { type: 'call' } : {};
+/** An edge kind that is not data flow — the type the list narrows to. */
+export type AnnotationEdgeKind = (typeof ANNOTATION_EDGE_KINDS)[number];
+
+/**
+ * The one membership test over that list. It is a type GUARD rather than a
+ * boolean so the two mappings below need no cast: derived from the list, so
+ * renaming an `EdgeKind` member breaks here instead of silently leaving a
+ * mapping that returns a kind which no longer exists.
+ */
+export function isAnnotationEdgeKind(
+  value: string | undefined,
+): value is AnnotationEdgeKind {
+  return ANNOTATION_EDGE_KINDS.some((kind) => kind === value);
 }
 
 /**
- * The edge kind a drag is wiring, read off the handles it grabbed: a call
- * handle on EITHER end makes it a call wire (the other end may be a collapsed
- * stack's data handle — onConnect normalizes the pair afterwards). Everything
- * else — collapsed pills, missing handle ids — stays data flow, which is what
- * makes the collapsed-drag-is-data-flow rule hold.
+ * The canvas edge ⇄ EdgeKind discriminator, in ONE place. Every canvas
+ * producer/consumer routes through this pair — re-deriving the mapping inline
+ * is how a rename silently misses a site.
+ */
+export function flowEdgeKind(edge: { type?: string }): EdgeKind {
+  return isAnnotationEdgeKind(edge.type) ? edge.type : 'data';
+}
+
+/** Spreadable inverse of {@link flowEdgeKind} for building canvas edges. */
+export function flowEdgeType(edgeKind: EdgeKind): {
+  type?: AnnotationEdgeKind;
+} {
+  return edgeKind === 'data' ? {} : { type: edgeKind };
+}
+
+/**
+ * The edge kind a drag is wiring, read off the handles it grabbed: an
+ * annotation handle makes it that kind of wire (the other end may be a
+ * collapsed stack's data handle — onConnect normalizes the pair afterwards).
+ * Everything else — collapsed pills, missing handle ids — stays data flow,
+ * which is what makes the collapsed-drag-is-data-flow rule hold.
+ *
+ * **The SOURCE end decides.** The two ends can name different annotation
+ * kinds — an instruction block's only output dropped onto an agent's expanded
+ * `call` row — and answering with the target's kind yields a wire the rules
+ * refuse, so `isValidConnection` blocks the drop and the user gets silence
+ * instead of the edge they aimed at.
  */
 export function connectionEdgeKind(
   sourceHandle: string | null | undefined,
@@ -247,9 +311,12 @@ export function connectionEdgeKind(
 ): EdgeKind {
   const edgeOf = (handle: string | null | undefined): string | undefined =>
     handle?.split('-')[1];
-  return edgeOf(sourceHandle) === 'call' || edgeOf(targetHandle) === 'call'
-    ? 'call'
-    : 'data';
+  const source = edgeOf(sourceHandle);
+  if (isAnnotationEdgeKind(source)) {
+    return source;
+  }
+  const target = edgeOf(targetHandle);
+  return isAnnotationEdgeKind(target) ? target : 'data';
 }
 
 /**

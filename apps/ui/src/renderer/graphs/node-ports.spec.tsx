@@ -87,17 +87,21 @@ describe('NodePorts', () => {
     // plural label + rule-type count — so input and output stay symmetric.
     expect(container.textContent).toContain('inputs');
     expect(container.textContent).toContain('outputs');
-    expect(container.textContent).toContain('3 connections');
+    // Four input rules: data from an agent, data from a trigger, a call wire,
+    // and an instruction block.
+    expect(container.textContent).toContain('4 connections');
     expect(container.textContent).toContain('2 connections');
     // Per-type labels are NOT visible while collapsed.
     expect(container.textContent).not.toContain('trigger');
-    // Every rule handle exists (call ones included, so persisted call edges
-    // stay attached while collapsed); only the top of each stack is painted —
-    // which is why a collapsed drag always starts a DATA edge.
+    // Every rule handle exists (the annotation ones included, so persisted
+    // call and instruction edges stay attached while collapsed); only the top
+    // of each stack is painted — which is why a collapsed drag always starts a
+    // DATA edge.
     expect(handles()).toEqual([
       { id: 'target-data-agent', hidden: false },
       { id: 'target-data-trigger', hidden: true },
       { id: 'target-call-agent', hidden: true },
+      { id: 'target-instruction-instruction', hidden: true },
       { id: 'source-data-agent', hidden: false },
       { id: 'source-call-agent', hidden: true },
     ]);
@@ -125,11 +129,12 @@ describe('NodePorts', () => {
     expect(container.textContent).toContain('call');
     expect(container.textContent).not.toContain('connection');
     expect(handles().every((h) => !h.hidden)).toBe(true);
-    // The call handles are individually wireable once expanded.
+    // The annotation handles are individually wireable once expanded.
     expect(handles().map((h) => h.id)).toEqual([
       'target-data-agent',
       'target-data-trigger',
       'target-call-agent',
+      'target-instruction-instruction',
       'source-data-agent',
       'source-call-agent',
     ]);

@@ -1,8 +1,8 @@
 import { BadRequestException } from '@packages/common';
 
-import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
+import type { EdgeKind, WorkflowEdge, WorkflowNode } from '../graphs.types';
 import { NODE_CONNECTION_RULES } from '../graphs.types';
-import { onDemandNodeIds } from './graph-order';
+import { isNonExecutableNode, onDemandNodeIds } from './graph-order';
 
 /**
  * Structural graph validation, ported from Geniro's
@@ -12,6 +12,33 @@ import { onDemandNodeIds } from './graph-order';
  * rejected by `computeRunOrder` (graph-order.ts), matching the source's
  * split.
  */
+
+/**
+ * What each wire DOES, for a refusal message. "feed" is true of data flow
+ * alone — a `call` edge grants a tool and an `instruction` edge hands over
+ * text, so saying either "cannot feed" names the one thing it never does.
+ *
+ * TWIN PARSER: `EDGE_VERBS` / `edgeVerb` in
+ * `apps/ui/src/renderer/graphs/node-validate.ts`. The builder shows the same
+ * refusal live on the card before a save is attempted, and this vocabulary
+ * crosses no typed HTTP response, so a wording changed here must be changed
+ * there. Typed by `EdgeKind` so a new kind fails the build rather than
+ * silently inheriting a verb.
+ */
+const EDGE_VERBS: Record<EdgeKind, string> = {
+  data: 'feed',
+  call: 'call',
+  instruction: 'instruct',
+};
+
+/**
+ * Loose on the way in because `validateEdgeRules` is generic over the kind
+ * strings — a kind outside the enum gets the neutral verb rather than a wrong
+ * one, on the same reasoning as `GRAPH_UNKNOWN_NODE_KIND`.
+ */
+function edgeVerb(edgeKind: string): string {
+  return (EDGE_VERBS as Record<string, string>)[edgeKind] ?? 'connect to';
+}
 
 /** Structural shape of one connection rule (see `ConnectionRule`). */
 interface EdgeRule {
@@ -99,7 +126,7 @@ export function validateEdgeRules(
     if (!outRule || !inRule) {
       throw new BadRequestException(
         'GRAPH_EDGE_RULE',
-        `Edge '${edge.from}' → '${edge.to}' is not allowed: kind '${fromKind}' cannot ${edge.kind === 'call' ? 'call' : 'feed'} kind '${toKind}'`,
+        `Edge '${edge.from}' → '${edge.to}' is not allowed: kind '${fromKind}' cannot ${edgeVerb(edge.kind)} kind '${toKind}'`,
       );
     }
 
@@ -189,6 +216,10 @@ export function validateWorkflowGraph(
  * what starts a graph, you never invoke an agent directly. In a cycle-free
  * graph "every root is a trigger" ⟺ "every node is reachable from a
  * trigger", so one root scan covers both.
+ *
+ * Nodes that never run at all are outside the question entirely — an
+ * instruction block with no wires is inert rather than stranded, so it is
+ * flagged in the builder beside the field and never refused at run start.
  */
 export function validateRunnableGraph(
   nodes: readonly { id: string; kind: string; name?: string }[],
@@ -206,12 +237,23 @@ export function validateRunnableGraph(
       'Workflow has no trigger — add a Manual trigger and connect it to your first agent(s)',
     );
   }
-  // Any incoming edge legalizes a node: a data edge puts it on a trigger
-  // path; a call edge makes it an on-demand callee (invoked at runtime, not
-  // scheduled), so a call-only node is a valid team member.
-  const hasIncoming = new Set(edges.map((e) => e.to));
+  // An incoming DATA or CALL edge legalizes a node: a data edge puts it on a
+  // trigger path; a call edge makes it an on-demand callee (invoked at
+  // runtime, not scheduled), so a call-only node is a valid team member. An
+  // `instruction` edge legalizes NOTHING — it hands text to its target, so an
+  // agent whose only wire is an instruction block is still an agent nothing
+  // will ever start, which is exactly what this check exists to catch.
+  // An ALLOWLIST, matching `onDemandNodeIds`: the two kinds that legalize a
+  // node are named, so a future edge kind cannot legalize one by default and
+  // leave an agent in the walk that nothing ever seeds.
+  const hasIncoming = new Set(
+    edges
+      .filter((e) => e.kind === 'data' || e.kind === 'call')
+      .map((e) => e.to),
+  );
   const untriggered = nodes.find(
-    (n) => n.kind !== 'trigger' && !hasIncoming.has(n.id),
+    (n) =>
+      n.kind !== 'trigger' && !isNonExecutableNode(n) && !hasIncoming.has(n.id),
   );
   if (untriggered) {
     throw new BadRequestException(

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@packages/common';
 
-import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
+import type { NodeKind, WorkflowEdge, WorkflowNode } from '../graphs.types';
 
 /**
  * Producer/consumer adjacency of a workflow DAG. `producersOf.get(id)` is the
@@ -56,7 +56,16 @@ export function onDemandNodeIds(
   const callTargets = new Set<string>();
   const dataTargets = new Set<string>();
   for (const edge of edges) {
-    (edge.kind === 'call' ? callTargets : dataTargets).add(edge.to);
+    // Only these two kinds answer the question. An `instruction` edge feeds
+    // no prompt and orders nothing, so counting it as a data input would make
+    // a call-only callee look DAG-scheduled the moment somebody wired an
+    // instruction block to it — the node would then be waited on by a walk
+    // that never launches it.
+    if (edge.kind === 'call') {
+      callTargets.add(edge.to);
+    } else if (edge.kind === 'data') {
+      dataTargets.add(edge.to);
+    }
   }
   const onDemand = new Set<string>();
   for (const node of nodes) {
@@ -69,6 +78,52 @@ export function onDemandNodeIds(
     }
   }
   return onDemand;
+}
+
+/**
+ * The node kinds the DAG walk can launch. Everything else is a node that never
+ * runs at all — today an instruction block, whose text is composed into the
+ * turns of the agents it is wired to and which starts no CLI of its own.
+ *
+ * A different question from {@link onDemandNodeIds}, which excludes nodes that
+ * DO run, just not on the walk: an uncalled on-demand callee settles `skipped`
+ * at run end, and reporting an instruction block that way would put a status
+ * on a node that was never going to have one.
+ */
+const EXECUTABLE_KINDS = [
+  'agent',
+  'trigger',
+] as const satisfies readonly NodeKind[];
+
+/** A node the walk can launch — the type {@link isExecutableNode} narrows to. */
+export type ExecutableNode = Extract<
+  WorkflowNode,
+  { kind: (typeof EXECUTABLE_KINDS)[number] }
+>;
+
+/**
+ * Narrowing form, for the executor: what survives this filter is exactly what
+ * `schedule()` knows how to launch.
+ *
+ * The type is DERIVED from the list, so the two cannot come to disagree — add
+ * a kind here without giving `schedule()` a way to launch it and `launchNode`
+ * stops accepting what the filter now yields. What it does NOT catch is a kind
+ * added to `NODE_KINDS` and left off this list: that one is simply never
+ * scheduled, which is the safe direction to fail in and the reason the list is
+ * an allowlist rather than a denylist.
+ */
+export function isExecutableNode(node: WorkflowNode): node is ExecutableNode {
+  return EXECUTABLE_KINDS.some((kind) => kind === node.kind);
+}
+
+/**
+ * Loose twin of {@link isExecutableNode} for callers holding structurally-typed
+ * nodes — `validateRunnableGraph`, which exempts these from needing a trigger.
+ * Both read the same list, so validation and execution cannot come to disagree
+ * about which nodes never run.
+ */
+export function isNonExecutableNode(node: { kind: string }): boolean {
+  return !EXECUTABLE_KINDS.some((kind) => kind === node.kind);
 }
 
 /**

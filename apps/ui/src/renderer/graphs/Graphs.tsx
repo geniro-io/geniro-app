@@ -6,6 +6,7 @@ import {
   type Connection,
   Controls,
   type Edge,
+  type EdgeProps,
   PanOnScrollMode,
   ReactFlow,
   type ReactFlowInstance,
@@ -18,18 +19,21 @@ import {
   Download,
   Pencil,
   Plus,
+  ScrollText,
   Trash2,
   Upload,
   Wand2,
   Workflow as WorkflowIcon,
   Zap,
 } from 'lucide-react';
+import type { ComponentType } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { DaemonHandle } from '../../shared/contracts';
 import type {
   ApprovalMode as WorkflowApproval,
   WorkflowAgentNode,
+  WorkflowInstructionNode,
   WorkflowNode,
   WorkflowSummaryDto as WorkflowSummary,
   WorkflowTriggerNode,
@@ -57,12 +61,13 @@ import { createDaemonApis } from '../daemon-api';
 import { useCapabilities } from '../use-capabilities';
 import { AgentAvatar } from './agent-avatar';
 import { AgentNode } from './agent-node';
+import { CallEdge, InstructionEdge } from './annotation-edge';
 import { BuilderStatusBar } from './builder-status-bar';
-import { CallEdge } from './call-edge';
 import {
   autoLayout,
   canvasSnapshot,
   edgeId,
+  flowNodeFor,
   fromFlow,
   type GraphFlowNode,
   nextNodeId,
@@ -70,13 +75,15 @@ import {
   NODE_WIDTH,
   toFlow,
 } from './graph-doc';
+import { InstructionNode } from './instruction-node';
 import {
   NODE_DND_MIME,
   NodePalette,
   type PaletteItem,
+  paletteNode,
   parsePaletteItem,
 } from './node-palette';
-import type { NodeKind } from './node-schema';
+import type { AnnotationEdgeKind, NodeKind } from './node-schema';
 import {
   canConnect,
   connectionEdgeKind,
@@ -92,9 +99,23 @@ import { clearViewport, loadViewport, saveViewport } from './viewport-store';
 import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
 
-const NODE_TYPES = { agent: AgentNode, trigger: TriggerNode };
-// Data edges keep React Flow's default; call edges render dashed amber.
-const EDGE_TYPES = { call: CallEdge };
+const NODE_TYPES = {
+  agent: AgentNode,
+  trigger: TriggerNode,
+  instruction: InstructionNode,
+};
+// Data edges keep React Flow's default; the annotation kinds render dashed,
+// each in its own tone (`annotation-edge.tsx`). Keyed by the union so a kind
+// added there without a component here is a compile error rather than a wire
+// that silently draws as data flow.
+// `satisfies`, not an annotation: React Flow's own `EdgeTypes` index signature
+// is narrower than `ComponentType<EdgeProps>`, so annotating would widen the
+// value away from what `<ReactFlow edgeTypes>` accepts. This checks the KEYS
+// and leaves the values inferred.
+const EDGE_TYPES = {
+  call: CallEdge,
+  instruction: InstructionEdge,
+} satisfies Record<AnnotationEdgeKind, ComponentType<EdgeProps>>;
 // Hoisted so ReactFlow sees stable identities — a fresh array/object per
 // render (and drags render per frame) defeats its internal memoization.
 const DELETE_KEY_CODES = ['Delete', 'Backspace'];
@@ -484,27 +505,7 @@ export function Graphs({
       const maxX = nodes.reduce((max, n) => Math.max(max, n.position.x), -260);
       // Toolbar adds stack to the right; a drop lands where it was dropped.
       const at = position ?? { x: maxX + 260, y: 40 };
-      const node: GraphFlowNode =
-        item.kind === 'trigger'
-          ? {
-              id,
-              type: 'trigger',
-              position: at,
-              data: { node: { id, kind: 'trigger', trigger: item.trigger } },
-            }
-          : {
-              id,
-              type: 'agent',
-              position: at,
-              data: {
-                node: {
-                  id,
-                  kind: 'agent',
-                  agent: item.agent,
-                  approval: 'auto',
-                },
-              },
-            };
+      const node = flowNodeFor(paletteNode(item, id), at);
       setNodes((prev) => [...prev, node]);
       setSelectedNodeId(id);
       if (!position && rfInstance) {
@@ -653,7 +654,9 @@ export function Graphs({
   const patchSelected = useCallback(
     (
       patch: Partial<
-        Omit<WorkflowAgentNode, 'kind'> & Omit<WorkflowTriggerNode, 'kind'>
+        Omit<WorkflowAgentNode, 'kind'> &
+          Omit<WorkflowTriggerNode, 'kind'> &
+          Omit<WorkflowInstructionNode, 'kind'>
       >,
     ): void => {
       if (!selectedNodeId) {
@@ -1078,6 +1081,10 @@ export function Graphs({
                   <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
                     <Zap aria-hidden="true" className="size-3.5" />
                   </span>
+                ) : selected.kind === 'instruction' ? (
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                    <ScrollText aria-hidden="true" className="size-3.5" />
+                  </span>
                 ) : (
                   <AgentAvatar
                     label={selected.name ?? selected.id}
@@ -1091,7 +1098,9 @@ export function Graphs({
                   <p className="text-xs text-muted-foreground">
                     {selected.kind === 'trigger'
                       ? `${selected.trigger} trigger`
-                      : selected.agent}
+                      : selected.kind === 'instruction'
+                        ? 'Instruction block'
+                        : selected.agent}
                   </p>
                 </div>
               </div>
@@ -1113,6 +1122,29 @@ export function Graphs({
                     Runs start here: firing this {selected.trigger} trigger
                     seeds every connected agent with the prompt you submit.
                   </NoteBox>
+                ) : selected.kind === 'instruction' ? (
+                  <>
+                    <Field
+                      label="Instructions"
+                      htmlFor="node-instructions"
+                      hint="Appended to the turn of every agent you wire this block to — after your global custom instructions, before that node's own role.">
+                      <ExpandableTextarea
+                        id="node-instructions"
+                        title="Instructions"
+                        value={selected.instructions}
+                        rows={8}
+                        placeholder="Prefer short sentences. Cite the files you changed."
+                        onChange={(next) =>
+                          patchSelected({ instructions: next })
+                        }
+                      />
+                    </Field>
+                    <NoteBox>
+                      This block never runs and has no status of its own — it
+                      only adds its text to the agents you connect it to. Wire
+                      one block to several agents, or several blocks to one.
+                    </NoteBox>
+                  </>
                 ) : (
                   <>
                     {/* Every per-run setting in ONE band, as the composer's

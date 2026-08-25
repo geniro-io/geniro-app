@@ -90,18 +90,22 @@ function PortsSide({
   const anchor = side === 'input' ? 'left' : 'right';
   const tone: Tone = missing ? 'missing' : side;
   // Call rules keep their amber identity even while a required DATA input is
-  // missing — only data rules can be required, so the destructive tint never
-  // belongs on a call row.
+  // missing — a call row is never what a missing input is about, so the
+  // destructive tint would point at the wrong wire. Every other kind takes
+  // the side tone, which `missing` already overrides per SIDE: an instruction
+  // block flagged for wiring nothing IS flagged on its output side, and the
+  // pill, the handle and the expanded row have to agree about that.
   const toneOf = (rule: ConnectionRule): Tone =>
     rule.edge === 'call' ? 'call' : tone;
 
   if (!expanded) {
     // Geniro's collapsed slot: a uniform two-line summary pill on each side
     // — plural label + the rule-type count — so input and output always
-    // mirror each other visually. ALL rule handles (call ones included) stay
-    // mounted in the stack so existing edges never detach; only the top is
-    // painted, and a collapsed drag always lands on that data handle — call
-    // wires are drawn from the expanded rows.
+    // mirror each other visually. ALL rule handles (the annotation ones
+    // included) stay mounted in the stack so existing edges never detach; only
+    // the top is painted, so a collapsed drag lands on the kind's FIRST rule —
+    // data for an agent or a trigger, `instruction` for a block, which has no
+    // other. Call wires are drawn from the expanded rows.
     return (
       <div className="relative flex w-full items-center">
         {rules.map((rule, index) => (
@@ -145,10 +149,12 @@ function PortsSide({
             <div className="text-[10px] font-semibold leading-tight">
               {rule.kind}
             </div>
-            {rule.edge === 'call' || rule.required || rule.multiple ? (
+            {rule.edge !== 'data' || rule.required || rule.multiple ? (
               <div className="text-[10px] leading-tight opacity-60">
                 {[
-                  rule.edge === 'call' && 'call',
+                  // Data flow is the unmarked case; every other wire names
+                  // itself, or an annotation row reads as an ordinary input.
+                  rule.edge !== 'data' && rule.edge,
                   rule.required && 'required',
                   rule.multiple && 'multiple',
                 ]

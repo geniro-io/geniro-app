@@ -141,8 +141,8 @@ owning module map it — see `handoffTarget` → `HandoffResult`.
   registered.** Build the turn's instruction text with the base's
   `composeSystemPrompt(input, granted)`, passing whether YOUR delivery
   mechanism succeeded — never join the instruction parts yourself. There are
-  four now (the host preamble, `customInstructions`, `systemPrompt`,
-  `callSurfacePrompt`), and their ORDER is precedence, so a hand-join is both a
+  five now (the host preamble, `customInstructions`, `instructionBlocks`,
+  `systemPrompt`, `callSurfacePrompt`), and their ORDER is precedence, so a hand-join is both a
   duplicate and a place for the ranking to drift. An agent told
   to route work through `call_agent` with no such tool registered never runs its
   callees and the node still reports success, which is silent by construction.

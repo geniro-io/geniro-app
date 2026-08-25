@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
-import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import { TRAFFIC_LIGHT_INSET, WINDOW_BACKGROUND } from '../shared/contracts';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
@@ -32,6 +32,35 @@ app.setAboutPanelOptions({
   applicationName: 'Geniro',
   applicationVersion: app.getVersion(),
 });
+
+/**
+ * Run this build against a userData directory of its OWN.
+ *
+ * `app.setName` above is what makes every build — dev and installed alike —
+ * resolve the SAME `…/Application Support/Geniro`, which is normally right:
+ * a developer wants their real chats. It is exactly wrong when both are meant
+ * to run at once. The daemon allows one instance per userData directory, so
+ * the second launch cannot start its own; and `DaemonSupervisor` deliberately
+ * leaves a daemon started from a different entry path alone, so the dev shell
+ * ADOPTS the installed app's daemon and every daemon-side change under test
+ * silently is not the code being exercised.
+ *
+ * Naming a directory here separates the two completely — settings, database,
+ * pidfile, instance lock, attachments and logs — so a dev build can be driven
+ * beside an installed one without either noticing. Unset, nothing changes.
+ *
+ * It must be applied BEFORE anything reads a path, which is why it sits here
+ * rather than in `main()`: `readSettings` and the supervisor both resolve
+ * `userData` at their first call.
+ */
+const userDataOverride = process.env.GENIRO_UI_USER_DATA?.trim();
+if (userDataOverride) {
+  app.setPath('userData', userDataOverride);
+  // Session storage (cookies, cache, DevTools state) follows userData, so a
+  // second shell would otherwise still share the installed app's — and Chromium
+  // takes a lock on it, which is a launch failure rather than a subtle one.
+  app.setPath('sessionData', userDataOverride);
+}
 
 /** Absolute path to the app icon (the lightbulb-robot mascot). */
 const ICON_PATH = join(app.getAppPath(), 'resources', 'icon.png');
@@ -111,6 +140,9 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     show: false,
+    // The ground the window paints where the page has not (yet). Unset it is
+    // WHITE — see {@link WINDOW_BACKGROUND} for the band that produced.
+    backgroundColor: WINDOW_BACKGROUND,
     title: 'Geniro',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     /**

@@ -143,7 +143,13 @@ import {
 import { lastTerminalItemAt, TERMINAL_KINDS } from './settled-status';
 import { runningShellsByAgent, type ShellRun } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
-import { applySkill, filterSkills, slashQuery } from './skill-autocomplete';
+import {
+  applySkill,
+  filterSkills,
+  geniroCommandName,
+  slashQuery,
+  unknownSlashCommand,
+} from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
@@ -291,7 +297,7 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
  * they have not.
  *
  * Read from settings at the moment a run is created rather than cached in
- * component state, because the value is SNAPSHOTTED onto that run: a cached
+ * component state, because the values are SNAPSHOTTED onto that run: a cached
  * copy would start a chat on text the Settings screen had already replaced,
  * and this screen stays mounted across nav switches, so the stale window is
  * the whole session rather than a moment.
@@ -300,15 +306,24 @@ function runAwaiting(run: ChatRun): RunAwaiting | null {
  * daemon identically — it normalizes to null either way, and omitting keeps
  * the two indistinguishable on the wire as well.
  */
-async function currentCustomInstructions(): Promise<{
+async function currentRunSettings(): Promise<{
   customInstructions?: string;
+  cursorMaxMode?: boolean;
 }> {
-  // Defensive default, not a contract gap: `readSettings` merges over
-  // DEFAULT_SETTINGS on every branch, so production always carries the key.
+  // Defensive defaults, not a contract gap: `readSettings` merges over
+  // DEFAULT_SETTINGS on every branch, so production always carries both keys.
   // What does not is a test stub of `getSettings`, and a chat must not fail to
   // open over a missing field either way.
-  const { customInstructions = '' } = await window.geniro.getSettings();
-  return customInstructions.trim() ? { customInstructions } : {};
+  const { customInstructions = '', cursorMaxMode } =
+    await window.geniro.getSettings();
+  return {
+    ...(customInstructions.trim() ? { customInstructions } : {}),
+    // Sent whenever the settings HAVE a value, including `false` — the daemon
+    // reads an omitted field as the adapter's own default, so a user who
+    // switched Max Mode off must not be indistinguishable from one who never
+    // touched it.
+    ...(cursorMaxMode === undefined ? {} : { cursorMaxMode }),
+  };
 }
 
 /** Draft key for the landing composer, which has no run id of its own. */
@@ -1784,7 +1799,7 @@ export function Chats({
           // edited it in Settings since this screen mounted. Caching it would
           // start the chat on instructions the settings screen no longer
           // shows. Omitted when empty so the daemon stores null.
-          ...(await currentCustomInstructions()),
+          ...(await currentRunSettings()),
           // Omitted entirely when the composer is on the CLI default — the
           // daemon only passes `--model` when a run names one.
           ...(models[agentKind] ? { model: models[agentKind] } : {}),
@@ -2058,7 +2073,7 @@ export function Chats({
             resumeSessionId: session.id,
             // An imported conversation is a new run like any other, so it gets
             // the same snapshot — read now, for the same freshness reason.
-            ...(await currentCustomInstructions()),
+            ...(await currentRunSettings()),
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
@@ -2223,6 +2238,62 @@ export function Chats({
     [chatApi, addItem],
   );
 
+  /**
+   * The `/` popup's rows, mirrored for the two send paths.
+   *
+   * Both are declared above the `useAgentSkills` call that produces them — a
+   * ref is how the rest of this component already reaches state that is
+   * resolved later (`runsRef`), and the alternative is moving a 200-line
+   * callback for one lookup.
+   */
+  const skillsRef = useRef<readonly AgentSkill[]>([]);
+
+  /**
+   * Refuse a slash command this agent does not have, rather than letting it
+   * reach the model as prose — see `unknownSlashCommand` for why neither
+   * transport catches it. True means the send was stopped and the composer is
+   * showing why, with the text still in the box to be corrected.
+   */
+  const refuseUnknownCommand = useCallback((text: string): boolean => {
+    const unknown = unknownSlashCommand(text, skillsRef.current);
+    if (unknown === null) {
+      return false;
+    }
+    setError(
+      `No /${unknown} command for this agent — press / to see what it has.`,
+    );
+    return true;
+  }, []);
+
+  /**
+   * Refuse a geniro command aimed at an agent that is still working, rather
+   * than queueing it.
+   *
+   * The daemon refuses one too (it needs the run idle to rewrite the turn and,
+   * on a CLI with no compaction of its own, to replace the session), and its
+   * refusal is the RUN_BUSY the queue exists for — so without this the command
+   * lands in the queue, whose drain retries a busy run for about four seconds
+   * and then stops on the reading that the running turn's own ending will fire
+   * it again. That ending is what fired it, so nothing ever does: the command
+   * sits queued and the composer keeps saying the agent is working.
+   *
+   * Said HERE and not left to the daemon, because "wait for this turn to
+   * finish" is something the user can act on before spending the round trip.
+   */
+  const refuseBusyGeniroCommand = useCallback(
+    (text: string, busy: boolean): boolean => {
+      const name = busy ? geniroCommandName(text, skillsRef.current) : null;
+      if (name === null) {
+        return false;
+      }
+      setError(
+        `/${name} needs the agent to be idle — wait for this turn to finish.`,
+      );
+      return true;
+    },
+    [],
+  );
+
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
   const send = useCallback(async (): Promise<void> => {
@@ -2238,6 +2309,9 @@ export function Chats({
       return;
     }
     setError(null);
+    if (refuseUnknownCommand(text)) {
+      return;
+    }
     try {
       // A workflow target ALWAYS seeds a fresh run — never routes the task
       // into whatever run happens to be open (activateRun leaves the old room).
@@ -2263,7 +2337,7 @@ export function Chats({
           runWorkflowDto: {
             cwd,
             prompt: text,
-            ...(await currentCustomInstructions()),
+            ...(await currentRunSettings()),
           },
         });
         setRuns((prev) => [run, ...prev]);
@@ -2328,6 +2402,7 @@ export function Chats({
     ensureRun,
     startTurn,
     attachments,
+    refuseUnknownCommand,
   ]);
 
   /** Send this run's next queued message after a settled turn (called via
@@ -2480,6 +2555,17 @@ export function Chats({
     if ((!text && images.length === 0) || !runId) {
       return;
     }
+    // BEFORE the queue branch below, not after: a command the agent does not
+    // have is no better for having waited — queueing it would defer the same
+    // prose-to-the-model send by however long the turn takes, and put the
+    // refusal in front of the user long after they typed it. A geniro command
+    // is refused there for its own reason; see `refuseBusyGeniroCommand`.
+    if (
+      refuseUnknownCommand(text) ||
+      refuseBusyGeniroCommand(text, streaming)
+    ) {
+      return;
+    }
     // Sending RE-ARMS the follow, wherever the reader had scrolled to. The
     // suppression rule is about not dragging somebody away from what they are
     // reading — and typing into the composer is them saying they are done
@@ -2555,7 +2641,15 @@ export function Chats({
       // Mirror drainQueue's restoreHead: a failed follow-up keeps the text.
       setInput((current) => (current.length === 0 ? text : current));
     }
-  }, [input, streaming, startTurn, enqueueMessage, attachments]);
+  }, [
+    input,
+    streaming,
+    startTurn,
+    enqueueMessage,
+    attachments,
+    refuseUnknownCommand,
+    refuseBusyGeniroCommand,
+  ]);
 
   /** Rewrite a queued message before it goes out. Text only — an attachment
    *  cannot be re-pasted into a one-line field, and losing one silently is
@@ -2881,31 +2975,6 @@ export function Chats({
     [verdicts, unanswerableIds, deadRequestKeys, respondApproval],
   );
 
-  /**
-   * When the turn currently in flight started — the header's running clock.
-   *
-   * Derived from the TRANSCRIPT rather than remembered when the send fires, so
-   * it survives a reload, a tab switch and a reconnect mid-turn: all three
-   * would otherwise restart the clock at zero and report a long turn as brand
-   * new. A run-level terminal item clears it; the next user message opens the
-   * next one.
-   */
-  const turnStartedAt = useMemo(() => {
-    let startedAt: string | null = null;
-    for (const item of items) {
-      if (TERMINAL_KINDS.has(item.kind) && item.nodeId === null) {
-        startedAt = null;
-      } else if (
-        startedAt === null &&
-        item.kind === 'message' &&
-        item.role === 'user'
-      ) {
-        startedAt = item.createdAt;
-      }
-    }
-    return startedAt;
-  }, [items]);
-
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
   // Push the open thread's name up to the shell's title bar. An effect rather
@@ -2986,6 +3055,10 @@ export function Chats({
   }, [activeRunId, activeRun, workflowSlug, triggers, triggerId, agentKind]);
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
   const skills = useAgentSkills(agentsApi, skillKinds, skillCwd);
+  // Assigned during render rather than from an effect: the two send paths read
+  // it in a click handler, which cannot run before the render that produced
+  // this list has committed.
+  skillsRef.current = skills;
   // The model rows come from the CLI itself — never a list baked into the app.
   // Which CLI to ask follows whichever composer is on screen: an open chat's
   // own agent, or the agent the next run would start (none for a workflow,
@@ -5015,7 +5088,6 @@ export function Chats({
                         configDir={activeRun.configDir}
                         status={activeRunStatus}
                         lastActivityAt={activeRun.updatedAt}
-                        turnStartedAt={turnStartedAt}
                         workedMs={threadTotalsShown.ms}
                         turnCount={threadTotalsShown.turns}
                         costUsd={threadTotals.costUsd}

@@ -547,8 +547,9 @@ export type ItemWire = z.infer<typeof ItemWireSchema>;
  * was discovered — the project folder, the user's home dir, or `cli`: the
  * claude session's own `system/init` report harvested on a prior turn in this
  * cwd (built-ins + plugin skills the disk scan can't see; always
- * `kind: 'command'`, no description). The UI mirrors this in
- * `shared/contracts.ts`.
+ * `kind: 'command'`, no description), or `geniro`: a command this APPLICATION
+ * adds to that CLI, which exists nowhere outside it — see
+ * `AgentGeniroCommand`. The UI mirrors this in `shared/contracts.ts`.
  */
 export const AgentSkillWireSchema = z.object({
   name: z.string(),
@@ -556,9 +557,14 @@ export const AgentSkillWireSchema = z.object({
   kind: z
     .enum(['skill', 'command'])
     .describe('A skill directory (SKILL.md) vs a plain command file'),
+  // `geniro` leads the list deliberately: these names are RESERVED — the chat
+  // service dispatches them by name whatever else is on disk — so the popup
+  // has to show the row that will actually run.
   source: z
-    .enum(['project', 'user', 'cli'])
-    .describe('Where it was discovered — disk scan, or the CLI session itself'),
+    .enum(['geniro', 'project', 'user', 'cli'])
+    .describe(
+      'Where it came from — this app itself, a disk scan, or the CLI session',
+    ),
 });
 export type AgentSkillWire = z.infer<typeof AgentSkillWireSchema>;
 

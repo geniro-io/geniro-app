@@ -16,6 +16,7 @@ import type {
 } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
+import type { AgentSkillWire } from '../chat.types';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ProcessRegistry } from './process-registry';
@@ -51,6 +52,17 @@ function writeCommand(
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
 }
+
+/**
+ * The rows that were DISCOVERED — the disk scan, the harvest, the CLI's own
+ * report — with geniro's own commands dropped.
+ *
+ * Those lead every list unconditionally and are asserted on their own below;
+ * folding them into each scan expectation would restate one fact in eight
+ * places and make every one of them fail when a command is added.
+ */
+const discovered = (skills: AgentSkillWire[]): AgentSkillWire[] =>
+  skills.filter((skill) => skill.source !== 'geniro');
 
 /** A reported command with no sentence — claude's whole report shape. */
 const named = (name: string): AgentReportedCommand => ({
@@ -138,7 +150,7 @@ describe('SkillsService', () => {
     writeCommand(home, '.claude', 'auth.md', 'Check auth flows.');
 
     const skills = await service.list('claude', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       {
         name: 'deploy',
         description: 'Ship it',
@@ -172,13 +184,13 @@ describe('SkillsService', () => {
     // The harvest is keyed by the CANONICAL cwd — exactly what the executor
     // records (its cwd went through resolveValidCwd).
     harvest.record('claude', realpathSync(cwd), [
-      named('compact'),
+      named('condense'),
       named('deploy'),
       named('review'),
     ]);
 
     const skills = await service.list('claude', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       // The scanned entry wins its collision and keeps its description…
       {
         name: 'deploy',
@@ -187,7 +199,7 @@ describe('SkillsService', () => {
         source: 'project',
       },
       // …and the CLI-only names (built-ins/plugins) trail as bare entries.
-      { name: 'compact', description: null, kind: 'command', source: 'cli' },
+      { name: 'condense', description: null, kind: 'command', source: 'cli' },
       { name: 'review', description: null, kind: 'command', source: 'cli' },
     ]);
   });
@@ -198,14 +210,14 @@ describe('SkillsService', () => {
     // folder used to autocomplete to NOTHING.
     const { service, cwd } = build([
       named('clear'),
-      named('compact'),
+      named('condense'),
       named('geniro:review'),
     ]);
 
     const skills = await service.list('claude', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       { name: 'clear', description: null, kind: 'command', source: 'cli' },
-      { name: 'compact', description: null, kind: 'command', source: 'cli' },
+      { name: 'condense', description: null, kind: 'command', source: 'cli' },
       {
         name: 'geniro:review',
         description: null,
@@ -220,7 +232,7 @@ describe('SkillsService', () => {
     writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Ship it');
 
     const skills = await service.list('claude', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       {
         name: 'deploy',
         description: 'Ship it',
@@ -241,7 +253,7 @@ describe('SkillsService', () => {
     ]);
 
     const skills = await service.list('cursor-agent', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       {
         name: 'shell',
         description: 'Runs the rest as a shell command',
@@ -263,7 +275,7 @@ describe('SkillsService', () => {
     ]);
 
     const skills = await service.list('cursor-agent', cwd);
-    expect(skills).toEqual([
+    expect(discovered(skills)).toEqual([
       {
         name: 'fix',
         description: 'Repair the failing build',
@@ -276,12 +288,12 @@ describe('SkillsService', () => {
   it('asks each CLI only about itself', async () => {
     const { service, cwd, harvest, claude, cursor } = build([named('clear')]);
     writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
-    harvest.record('claude', realpathSync(cwd), [named('compact')]);
+    harvest.record('claude', realpathSync(cwd), [named('condense')]);
 
     // The claude harvest and the claude catalog are claude's alone: neither
     // may leak into what a cursor chat is told it can run.
     const skills = await service.list('cursor-agent', cwd);
-    expect(skills.map((entry) => entry.name)).toEqual(['fix']);
+    expect(discovered(skills).map((entry) => entry.name)).toEqual(['fix']);
     expect(cursor.asked).toBe(1);
     expect(claude.asked).toBe(0);
   });
@@ -340,7 +352,46 @@ describe('SkillsService', () => {
     claude.listReportedCommands = () => Promise.reject(new Error('boom'));
 
     const skills = await service.list('claude', cwd);
-    expect(skills.map((entry) => entry.name)).toEqual(['deploy']);
+    expect(discovered(skills).map((entry) => entry.name)).toEqual(['deploy']);
+  });
+
+  it("leads with geniro's own commands, ahead of everything discovered", async () => {
+    const { service, cwd } = build();
+    writeSkill(cwd, 'aaa-first-alphabetically', 'description: Scanned');
+
+    const skills = await service.list('claude', cwd);
+    const first = skills[0];
+    expect(first?.source).toBe('geniro');
+    expect(first?.name).toBe('compact');
+    // Its own sentence, not a bare name: these rows are authored here, so a
+    // description is the one thing they can never be missing.
+    expect(first?.description).toBeTruthy();
+  });
+
+  it('reserves a geniro name against a scanned skill that would shadow it', async () => {
+    // ChatService dispatches `/compact` by name whatever the folder holds, so
+    // a project skill winning the ROW would be offered by the popup and never
+    // be the thing that ran.
+    const { service, cwd } = build();
+    writeSkill(cwd, 'compact', 'name: compact\ndescription: My own compact');
+
+    const rows = (await service.list('claude', cwd)).filter(
+      (skill) => skill.name === 'compact',
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.source).toBe('geniro');
+  });
+
+  it('offers no geniro command for a CLI whose adapter declares none', async () => {
+    // Per-CLI availability is the adapter's fact. Pinned through the REAL
+    // cursor adapter so this fails if that declaration is dropped.
+    const { service, cwd, cursor } = build();
+    expect(cursor.listGeniroCommands().map((c) => c.name)).toEqual(['compact']);
+
+    const names = (await service.list('cursor-agent', cwd))
+      .filter((skill) => skill.source === 'geniro')
+      .map((skill) => skill.name);
+    expect(names).toEqual(['compact']);
   });
 
   it('rejects an invalid cwd with INVALID_CWD instead of scanning', async () => {

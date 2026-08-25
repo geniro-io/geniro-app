@@ -102,6 +102,11 @@ export interface StartWorkflowRunInput {
    * chat's. Every agent node composes it BEHIND its own `role`.
    */
   customInstructions?: string;
+  /**
+   * Whether this run's cursor nodes ask for Max Mode — the user's own setting,
+   * snapshotted onto the run like the instructions above.
+   */
+  cursorMaxMode?: boolean;
 }
 
 /**
@@ -155,6 +160,8 @@ interface RunContext {
   seedPrompt: string;
   /** The run's snapshotted global instructions; every node composes it. */
   customInstructions: string | null;
+  /** The run's snapshotted Max Mode choice; every cursor node carries it. */
+  cursorMaxMode: boolean | null;
 }
 
 interface DroppedNodeSetting {
@@ -344,7 +351,10 @@ export class GraphExecutorService {
    */
   async startRunBySlug(
     slug: string,
-    input: Pick<StartWorkflowRunInput, 'cwd' | 'prompt' | 'customInstructions'>,
+    input: Pick<
+      StartWorkflowRunInput,
+      'cwd' | 'prompt' | 'customInstructions' | 'cursorMaxMode'
+    >,
   ): Promise<RunWire> {
     const { workflow } = await this.store.get(slug);
     return this.startRun({
@@ -353,6 +363,7 @@ export class GraphExecutorService {
       cwd: input.cwd,
       prompt: input.prompt,
       customInstructions: input.customInstructions,
+      cursorMaxMode: input.cursorMaxMode,
     });
   }
 
@@ -390,6 +401,7 @@ export class GraphExecutorService {
         // normalizes to null so a cleared box and an untouched one are one
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
+        cursorMaxMode: input.cursorMaxMode ?? null,
         title: workflow.name,
       },
       em,
@@ -431,6 +443,7 @@ export class GraphExecutorService {
         cwd,
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
+        cursorMaxMode: run.cursorMaxMode,
       },
       dropped,
     );
@@ -644,7 +657,7 @@ export class GraphExecutorService {
     claudeModes: ClaudeModesCapability,
     dropped: DroppedNodeSetting[],
   ): void {
-    const { cwd, seedPrompt, customInstructions } = run;
+    const { cwd, seedPrompt, customInstructions, cursorMaxMode } = run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -1088,6 +1101,9 @@ export class GraphExecutorService {
         // a standing preference. Joining them here would put that ordering in
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
+        // Null means the run predates the setting — the adapter's own default
+        // is the right reading of that, never OFF.
+        cursorMaxMode: cursorMaxMode ?? undefined,
         callSurfacePrompt: callSurfaceFor(node),
         // A questionCapable AUTO node spawns in ask mode when its CLI's
         // question channel COSTS that posture (the daemon auto-approves plain
@@ -1155,6 +1171,7 @@ export class GraphExecutorService {
                 node.id,
                 event.contextWindowTokens,
                 event.contextModel ?? null,
+                node.contextWindow ?? null,
               );
             }
             // EPHEMERAL, like a text delta: the durable copy is the
@@ -1173,6 +1190,7 @@ export class GraphExecutorService {
               node.id,
               adapter.getConfig().kind,
               event.model,
+              node.contextWindow ?? null,
             );
             return;
           }
@@ -1189,6 +1207,7 @@ export class GraphExecutorService {
               node.id,
               event.usage?.contextWindowTokens ?? null,
               event.usage?.contextModel ?? null,
+              node.contextWindow ?? null,
             );
           }
           const terminal = terminalStatus(event);

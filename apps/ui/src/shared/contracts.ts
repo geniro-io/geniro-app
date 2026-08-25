@@ -179,6 +179,27 @@ export interface Settings {
    */
   notificationsEnabled: boolean;
   /**
+   * Ask cursor for **Max Mode** — the largest context window a model can run
+   * at, for the models that carry no window choice of their own.
+   *
+   * Defaults ON, because the defect that produced it was a window too SMALL:
+   * `kimi-k3` ran at 200k in geniro against cursor's own 1M, since the flag it
+   * takes its window from is a key in that CLI's config file rather than
+   * anything on the protocol. A user who has not been asked is better served
+   * by their model's full window.
+   *
+   * The switch exists because it is not free on every plan: Cursor bills Max
+   * Mode at the model's API rate **plus 20% on legacy request-based plans**
+   * (on current token-based plans it is the billing mode several models are
+   * already on). Which of those a user is on is not something this app can
+   * read, so it is not a call it gets to make for them.
+   *
+   * SNAPSHOTTED per run, so flipping it changes the next chat rather than the
+   * one already open — a conversation runs at the window it was started at,
+   * which is the one thing a context meter must not have moving under it.
+   */
+  cursorMaxMode: boolean;
+  /**
    * Keep the transcript's intermediate steps FOLDED — a turn's tool calls stay
    * closed however interesting the app judges them.
    *
@@ -309,6 +330,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkForUpdates: true,
   sidebarCollapsed: false,
   notificationsEnabled: true,
+  cursorMaxMode: true,
   collapseToolSteps: false,
   daemonInspect: null,
   claudeBrowserTools: false,
@@ -488,6 +510,25 @@ export const TITLEBAR_CONTENT_INSET =
 export const RAIL_COLLAPSED_WIDTH = 64;
 export const RAIL_EXPANDED_WIDTH = 220;
 export const CHAT_LIST_WIDTH = 260;
+
+/**
+ * What the WINDOW is painted with underneath the page.
+ *
+ * A `BrowserWindow` with no `backgroundColor` is WHITE, and the window is not
+ * always fully covered by painted web contents: macOS clips the bottom corners
+ * out of the frame, and a resize exposes the newly revealed strip until the
+ * renderer repaints it — which on a busy renderer is long enough to look
+ * permanent. REPORTED as a white line across the bottom of the window, and
+ * measured from inside the page at the same moment: the document filled
+ * `window.innerHeight` exactly and `body` was already this colour, so the band
+ * was never the page. It was the window showing through.
+ *
+ * TWIN PARSER: `renderer/styles/global.css`'s `--background`. CSS cannot read
+ * a TypeScript constant and main cannot read a custom property, so the value is
+ * spelled once on each side and the two MUST be changed together — the failure
+ * is silent and only visible for the moment a resize is in flight.
+ */
+export const WINDOW_BACKGROUND = '#f5f1eb';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // System notifications (a banner outside the app, for a thread nobody is

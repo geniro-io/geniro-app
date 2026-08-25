@@ -22,6 +22,7 @@ import {
   isWarningNotice,
   noticeCaption,
 } from './system-payload';
+import { ThinkingDisclosure } from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
 import { toolInputBody, toolResultBody } from './tool-render';
 import {
@@ -139,6 +140,10 @@ export const TranscriptItem = memo(function TranscriptItem({
           />
         );
       }
+      // FOLDED once the stretch is finished — the words stop being something
+      // to watch and become something to be able to check. See
+      // `ThinkingDisclosure`; a short stretch is left alone.
+      const reasoning = payloadString(item.payload, 'text') ?? '';
       return (
         <MessageBubble
           variant="reasoning"
@@ -147,9 +152,11 @@ export const TranscriptItem = memo(function TranscriptItem({
               ? 'thinking'
               : tag('sub-agent thinking')
           }>
-          <div className="whitespace-pre-wrap italic break-words">
-            {payloadString(item.payload, 'text') ?? ''}
-          </div>
+          <ThinkingDisclosure text={reasoning}>
+            <div className="whitespace-pre-wrap italic break-words">
+              {reasoning}
+            </div>
+          </ThinkingDisclosure>
         </MessageBubble>
       );
     }

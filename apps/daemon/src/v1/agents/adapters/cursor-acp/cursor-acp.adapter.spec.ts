@@ -669,6 +669,59 @@ describe('CursorAcpAdapter turn shaping', () => {
     expect(config.model?.modelId).toBe('grok-4.6');
   });
 
+  it('writes the turn’s OWN Max Mode choice, ON or OFF', () => {
+    // The setting reaches the turn as `cursorMaxMode`, and OFF has to be
+    // written as explicitly as ON: the profile is a copy of the user's own
+    // config, so leaving the key alone does not mean off — it means however
+    // their terminal was last left. Cursor bills Max Mode at the API rate plus
+    // 20% on legacy plans, which is the whole reason a user can decline it.
+    for (const choice of [true, false]) {
+      const { spawn, captured } = fakeSpawn();
+      const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+      dirs.push(profileDir);
+
+      new CursorAcpAdapter({ spawn, profileDir }).start(
+        { ...BASE, model: 'kimi-k3', cursorMaxMode: choice },
+        () => {},
+      );
+
+      const config = JSON.parse(
+        readFileSync(
+          join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
+          'utf8',
+        ),
+      ) as { maxMode?: unknown };
+      expect(config.maxMode).toBe(choice);
+    }
+  });
+
+  it('turns Max Mode ON for a turn that says nothing about it', () => {
+    // The default, and what every run created before the setting existed gets:
+    // an absent choice is the adapter's own answer, never OFF. The window of
+    // every cursor model that has no `context` parameter of its own — measured on 2026.08.11-e8db854 with this flag as the only
+    // difference: kimi-k3 reports 200,000 off and 1,048,576 on, while a model
+    // that HAS the parameter obeys the parameter and ignores this. So it is
+    // unconditional, and it is written EXPLICITLY rather than inherited: the
+    // profile is a copy of the user's own config, so an untouched key means
+    // "however their terminal was last left".
+    const { spawn, captured } = fakeSpawn();
+    const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
+    dirs.push(profileDir);
+
+    new CursorAcpAdapter({ spawn, profileDir }).start(
+      { ...BASE, model: 'kimi-k3' },
+      () => {},
+    );
+
+    const config = JSON.parse(
+      readFileSync(
+        join(captured.env!.CURSOR_CONFIG_DIR!, 'cli-config.json'),
+        'utf8',
+      ),
+    ) as { maxMode?: unknown };
+    expect(config.maxMode).toBe(true);
+  });
+
   it('seeds the BARE name out of a legacy composed id', () => {
     // Existing chats store `claude-opus-5[thinking=true,…]`, and
     // `cli-config.json` names a model rather than a variant — writing the

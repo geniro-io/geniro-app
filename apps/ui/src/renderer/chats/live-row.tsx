@@ -5,6 +5,7 @@ import { formatTokens } from './agent-activity';
 import { MessageBubble } from './message-bubble';
 import { STANDING_ACTIVITY } from './run-status';
 import { NestedThreadContext } from './subagent-context';
+import { ThinkingScroller } from './thinking-block';
 import type { RunSettleAt } from './transcript-groups';
 
 /**
@@ -177,7 +178,11 @@ export function ThinkingRow({
   }
   return (
     <MessageBubble variant="reasoning" role="thinking">
-      <div className="whitespace-pre-wrap italic break-words">{text}</div>
+      {/* BOUNDED and following its own tail — see `ThinkingScroller`. A cursor
+          stretch runs to thousands of words, and unbounded it pushed the
+          answer, the tool rows and the composer off the screen while it was
+          still being written. */}
+      <ThinkingScroller text={text} />
       {/* The state line the durable row does not need: this text is still
           being written, and without the spinner and the clock a stretch that
           goes quiet is indistinguishable from one that finished. */}

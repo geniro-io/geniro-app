@@ -578,6 +578,70 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   /** Reload the sidebar's run list from the daemon (statuses included) —
    *  live items only reach the ACTIVE run's room, so other runs' settles are
    *  picked up by refetching at natural moments (mount, pressing +). */
+  /**
+   * Keep the run ROW's context reading current from the live plane.
+   *
+   * `chatContext` ranks the row ABOVE the transcript because the row is the
+   * daemon's running total and the transcript can only carry a figure per
+   * SETTLED turn. That ranking was only ever true of the daemon's row — the
+   * copy HERE is whatever `GET /v1/chats` returned when the list was last
+   * fetched, and nothing refreshed it: `run_status` carries status, activity,
+   * `updatedAt`, the preview and the title, and no reading. So the copy froze
+   * at the moment the window opened while the daemon's row went on moving.
+   *
+   * REPORTED as "у меня только что прыгнул кружочек с контекстом. Он показывал
+   * 50%. Как только я на него навёл, он начал показывать правильную цифру:
+   * 70%" — the ring on a frozen copy, the readout asking the live CLI. Measured
+   * on the reporter's own `geniro.db` at that moment: the daemon's row held
+   * 740,515 of 1,000,000 (74%) for that chat.
+   *
+   * The live plane is dropped when a turn settles (a context figure alone
+   * keeps the entry, but a settle clears the figure too), which is what made
+   * this show up BETWEEN turns rather than during one. Mirroring here means
+   * the copy holds the newest reading this client has actually seen, so the
+   * fallback the settle drops into is that reading rather than an old one.
+   *
+   * Guarded on the value CHANGING: this fires many times a second during a
+   * turn, and an unconditional `setRuns` would re-render the whole sidebar on
+   * every delta to store a number that had not moved.
+   */
+  const rememberRunContext = useCallback(
+    (runId: string, tokens: number | null, window: number | null): void => {
+      // A non-positive count is not a measurement — the same rule the live
+      // plane and the transcript fold already apply, so a turn that reports
+      // nothing cannot erase a real figure.
+      if (tokens === null || tokens <= 0) {
+        return;
+      }
+      const nextWindow = window !== null && window > 0 ? window : null;
+      setRuns((prev) => {
+        const run = prev.find((candidate) => candidate.id === runId);
+        if (
+          run === undefined ||
+          (run.contextTokens === tokens &&
+            (nextWindow === null || run.contextWindowTokens === nextWindow))
+        ) {
+          return prev;
+        }
+        return prev.map((candidate) =>
+          candidate.id === runId
+            ? {
+                ...candidate,
+                contextTokens: tokens,
+                // A turn that reports no window has said nothing about one;
+                // overwriting with its silence is what leaves a bare count
+                // where the ring was.
+                ...(nextWindow === null
+                  ? {}
+                  : { contextWindowTokens: nextWindow }),
+              }
+            : candidate,
+        );
+      });
+    },
+    [],
+  );
+
   const refreshRuns = useCallback((): void => {
     void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
       .then(([chats, workflowRuns]) => {
@@ -740,6 +804,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         return;
       }
       setLiveText((prev) => applyLiveText(prev, event));
+      rememberRunContext(
+        event.runId,
+        event.contextTokens,
+        event.contextWindowTokens,
+      );
     });
     const unsubscribeDisconnect = client.onDisconnect(() => {
       reconnectAfterSeqRef.current = lastSeqRef.current;

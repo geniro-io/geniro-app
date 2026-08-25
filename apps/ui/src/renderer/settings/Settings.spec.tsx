@@ -249,6 +249,26 @@ describe('Settings notifications section', () => {
   });
 });
 
+/**
+ * Expand one agent's card — every agent-specific setting now lives inside one,
+ * so a test that does not open it finds nothing.
+ *
+ * By the header's own TEXT rather than by position: the list is ordered by
+ * `CLI_KINDS`, and an index would silently retarget onto the other agent the
+ * day a third is added.
+ */
+async function openAgentCard(kind: string): Promise<void> {
+  const header = [
+    ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+  ].find((button) => button.textContent?.includes(kind));
+  if (!header) {
+    throw new Error(`no card header for ${kind}`);
+  }
+  await act(async () => {
+    header.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
 describe('Settings updates section', () => {
   it('seeds the update toggle from persisted settings', async () => {
     await mount();
@@ -328,6 +348,59 @@ describe('Settings updates section', () => {
     );
     // The switch reflects the new state immediately.
     expect(toggle.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('keeps an agent-specific setting INSIDE that agent’s card', async () => {
+    // REPORTED as "все специфические, именно к агентам специфичные настройки
+    // должны быть там": Max Mode and claude's browser tools each had a page
+    // section of their own, so what a reader could change about cursor was
+    // half in the card named cursor and half two screens below under a heading
+    // that named a topic. Neither is reachable now without opening the card
+    // it belongs to — which is the fix, and is why every case below has to
+    // open one first.
+    await mount();
+
+    expect(container.querySelector('#settings-cursor-max-mode')).toBeNull();
+    expect(
+      container.querySelector('#settings-claude-browser-tools'),
+    ).toBeNull();
+
+    await openAgentCard('cursor-agent');
+    const maxMode = container.querySelector('#settings-cursor-max-mode');
+    expect(maxMode).not.toBeNull();
+    // In the CARD, not merely on the page: a section would satisfy a bare
+    // presence check just as well, which is what was there before.
+    expect(maxMode?.closest('[data-slot="card"]')).not.toBeNull();
+    // And it is the cursor card — the claude one is still shut.
+    expect(
+      container.querySelector('#settings-claude-browser-tools'),
+    ).toBeNull();
+  });
+
+  it('turns Max Mode OFF and persists the decline as such', async () => {
+    // The switch exists because Max Mode is not free on every plan: Cursor
+    // bills it at the model's API rate plus 20% on legacy request-based ones,
+    // and which plan a user is on is not something this app can read. It
+    // defaults ON — the defect that produced it was a window too SMALL — so
+    // the case worth pinning is turning it OFF, which has to persist as an
+    // explicit `false` rather than as an absent key.
+    await mount();
+    await openAgentCard('cursor-agent');
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '#settings-cursor-max-mode',
+    )!;
+    expect(toggle).not.toBeNull();
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+
+    await act(async () => {
+      toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ cursorMaxMode: false }),
+    );
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
   });
 
   it('ignores an older toggle write failure after the latest write succeeds', async () => {

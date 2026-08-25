@@ -44,6 +44,28 @@ const namedReply = (
   isError = false,
 ) => item('tool_result', { id, name, result, isError });
 
+/**
+ * The launch reply as the CLI actually writes it, transcribed from the shipped
+ * 2.1.237 binary — one ternary with three arms, every one of them ending
+ * `Output is being written to: <path>.`
+ *
+ * The fixtures here used to stop at `ID: bash_3.`, a shape the CLI never
+ * sends, which is exactly the trap `testing.md` warns about: a spec asserting
+ * against a string it invented itself passes whatever the reader does. The
+ * reader now requires the whole announcement, and it has to be given the whole
+ * announcement to be tested at all.
+ */
+const LAUNCHED = (id: string): string =>
+  `Command running in background with ID: ${id}. Output is being written to: /tmp/${id}.log.`;
+
+/** The second arm: a command that outran its own timeout. Note the PARENS. */
+const TIMED_OUT_INTO_BACKGROUND = (id: string): string =>
+  `Command did not complete within its 120s timeout and was moved to the background (ID: ${id}). Output is being written to: /tmp/${id}.log.`;
+
+/** The third: the user pushed it there by hand. */
+const BACKGROUNDED_BY_USER = (id: string): string =>
+  `Command was manually backgrounded by user with ID: ${id}. Output is being written to: /tmp/${id}.log.`;
+
 describe('shellRuns', () => {
   it('reads a foreground command as running until its reply lands', () => {
     expect(shellRuns([bash('c1', 'pnpm build')])).toEqual([
@@ -72,7 +94,7 @@ describe('shellRuns', () => {
     // retired the moment it started.
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3. Output…'),
+      reply('c1', LAUNCHED('bash_3')),
     ]);
     expect(shells[0]).toEqual(
       expect.objectContaining({
@@ -83,10 +105,96 @@ describe('shellRuns', () => {
     );
   });
 
+  it('does not read `ID:` in a command OUTPUT as a background launch', () => {
+    // THE reported defect, and the exact output that caused it. A foreground
+    // command's reply is its own output, so any command printing the
+    // characters `ID:` — Go source with a struct field, a JSON blob, a doc —
+    // was promoted to a detached shell and then never settled, because a
+    // detached shell only ends on a probe, a kill or the daemon's `shell_info`
+    // and none is ever coming for a command that already exited. Measured on
+    // the reporter's own `geniro.db`, run `d64593d0`: 11 phantoms out of 690
+    // shells, with handles like `row`, `spec` and `"foryou",`, the oldest
+    // listed as running for a day and a half — the "три терминала" under a
+    // thread that had finished, and the "эти шелл команды вообще стейлд".
+    const shells = shellRuns([
+      bash('c1', 'git show origin/main:feed.go'),
+      reply(
+        'c1',
+        'type Row struct {\n\tID: row\n\tBucketForYou, spec string\n}\n',
+      ),
+    ]);
+    expect(shells[0]).toEqual(
+      expect.objectContaining({
+        background: false,
+        handle: null,
+        status: 'completed',
+      }),
+    );
+  });
+
+  it('does not read an announcement BURIED in output as a launch either', () => {
+    // The anchor, which earned itself within a day of the fix above: a
+    // `sqlite3` query printing past launch replies, and a `grep` over the CLI
+    // binary, each produced a phantom shell in this very conversation — one of
+    // them carrying the literal handle `${e}`. The announcement is the whole
+    // of what the CLI answers a detached launch with, never something quoted
+    // in the middle of output.
+    const shells = shellRuns([
+      bash('c1', 'sqlite3 geniro.db "select result from items"'),
+      reply('c1', `some earlier output\n${LAUNCHED('bash_9')}\nmore output\n`),
+    ]);
+    expect(shells[0]).toEqual(
+      expect.objectContaining({ background: false, status: 'completed' }),
+    );
+  });
+
+  it('recognises all three of the CLI’s own launch wordings', () => {
+    // One ternary in the shipped binary, three arms — a plain launch, one the
+    // user backgrounded by hand, and one that outran its timeout. The middle
+    // one wraps its id in PARENTHESES, which the old reader captured into the
+    // handle (`bash_7)`), so no later probe could ever match it.
+    for (const [announcement, id] of [
+      [LAUNCHED('bash_1'), 'bash_1'],
+      [BACKGROUNDED_BY_USER('bash_2'), 'bash_2'],
+      [TIMED_OUT_INTO_BACKGROUND('bash_3'), 'bash_3'],
+    ] as const) {
+      const shells = shellRuns([
+        bash('c1', 'pnpm dev'),
+        reply('c1', announcement),
+      ]);
+      expect(shells[0]).toEqual(
+        expect.objectContaining({
+          background: true,
+          handle: id,
+          status: 'running',
+        }),
+      );
+    }
+  });
+
+  it('closes a command that ASKED for the background and came back with output', () => {
+    // The reply decides BOTH ways, which is what was missing: a call carrying
+    // `run_in_background` whose reply is plain output was never detached, so
+    // leaving it `running` stranded a row no probe could ever match — it has
+    // no handle to be matched BY. Two such rows on the reporter's own ledger,
+    // from the day this was written.
+    const shells = shellRuns([
+      bash('c1', 'echo hi', { run_in_background: true }),
+      reply('c1', 'hi\n'),
+    ]);
+    expect(shells[0]).toEqual(
+      expect.objectContaining({
+        background: false,
+        handle: null,
+        status: 'completed',
+      }),
+    );
+  });
+
   it('settles a background command from the probe that reports it done', () => {
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3.'),
+      reply('c1', LAUNCHED('bash_3')),
       namedCall('c2', 'BashOutput', { bash_id: 'bash_3' }),
       namedReply(
         'c2',
@@ -102,7 +210,7 @@ describe('shellRuns', () => {
   it('leaves a background command running while its probe says so', () => {
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3.'),
+      reply('c1', LAUNCHED('bash_3')),
       namedCall('c2', 'BashOutput', { bash_id: 'bash_3' }),
       namedReply('c2', 'BashOutput', '<status>running</status>\nReady in 1s'),
     ]);
@@ -113,7 +221,7 @@ describe('shellRuns', () => {
     const kill = (resultIsError: boolean) =>
       shellRuns([
         bash('c1', 'pnpm dev', { run_in_background: true }),
-        reply('c1', 'Command running in background with ID: bash_3.'),
+        reply('c1', LAUNCHED('bash_3')),
         namedCall('c2', 'KillShell', { shell_id: 'bash_3' }),
         namedReply('c2', 'KillShell', 'x', resultIsError),
       ])[0]?.status;
@@ -130,10 +238,7 @@ describe('shellRuns', () => {
     // retired the instant it is detached, which is the opposite of the truth.
     const shells = shellRuns([
       bash('c1', 'pnpm dev'),
-      reply(
-        'c1',
-        'Command timed out after 2m. Command running in background with ID: bash_7.',
-      ),
+      reply('c1', TIMED_OUT_INTO_BACKGROUND('bash_7')),
     ]);
     expect(shells[0]).toEqual(
       expect.objectContaining({
@@ -146,7 +251,7 @@ describe('shellRuns', () => {
     expect(
       shellRuns([
         bash('c1', 'pnpm dev'),
-        reply('c1', 'Command running in background with ID: bash_7.'),
+        reply('c1', LAUNCHED('bash_7')),
         item('shell_info', { id: null, workId: 'bash_7' }),
       ])[0]?.status,
     ).toBe('completed');
@@ -158,7 +263,7 @@ describe('shellRuns', () => {
     // one it ever launched.
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3.'),
+      reply('c1', LAUNCHED('bash_3')),
       item('shell_info', { id: 'c1', workId: 'bash_3' }),
     ]);
     expect(shells[0]?.status).toBe('completed');
@@ -170,7 +275,7 @@ describe('shellRuns', () => {
     // them — so the handle parsed out of the launch reply is the match.
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3.'),
+      reply('c1', LAUNCHED('bash_3')),
       item('shell_info', { id: null, workId: 'bash_3' }),
     ]);
     expect(shells[0]?.status).toBe('completed');
@@ -181,7 +286,7 @@ describe('shellRuns', () => {
     // ended, with an exit code, and that is the better answer.
     const shells = shellRuns([
       bash('c1', 'pnpm dev', { run_in_background: true }),
-      reply('c1', 'Command running in background with ID: bash_3.'),
+      reply('c1', LAUNCHED('bash_3')),
       namedCall('c2', 'BashOutput', { bash_id: 'bash_3' }),
       namedReply(
         'c2',

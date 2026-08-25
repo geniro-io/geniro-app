@@ -28,22 +28,37 @@ const MAX_ENTRIES = 500;
 const MAX_STORE_BYTES = 256 * 1024;
 
 /**
- * The (agent, model) key — THE one, exported so the live plane's in-memory
- * half and this durable half cannot spell it differently.
+ * The (agent, model, window choice) key — THE one, exported so the live plane's
+ * in-memory half and this durable half cannot spell it differently.
  *
  * Keyed by AGENT as well as model because two CLIs can name the same model and
  * a window measured through one says nothing about the other —
  * `.claude/rules/agent-adapters.md` states it flatly: per-agent state is keyed
  * by agent, never by the thing it is about.
  *
+ * **And by the WINDOW CHOICE**, which is the third component rather than a
+ * second store. One model genuinely has more than one window — cursor's
+ * `kimi-k3` measures 200,000 on its standard setting and 1,048,576 on Max Mode
+ * — so a two-part key files both under one entry and each turn overwrites the
+ * other's figure. The meter would then scale a 1M conversation against 200k
+ * (or the reverse) for as long as the wrong reading stood, which is the exact
+ * "1M shown as 200k" class of defect `rememberWindow` already guards against
+ * from the other direction. `''` is the third state and a real one: a run that
+ * named no window runs at whatever the model's own default is, which is not
+ * the same fact as either named choice.
+ *
  * NUL-joined, the same key shape `McpSettingsStore` and `SkillHarvestStore`
- * use, because no model id a CLI reports contains that byte — so the pair
- * cannot be re-partitioned into a different one. Note the premise is weaker
+ * use, because no model id a CLI reports contains that byte — so the parts
+ * cannot be re-partitioned into different ones. Note the premise is weaker
  * than the sibling stores': a path CANNOT contain a NUL, whereas a model id is
  * an arbitrary CLI-reported string that merely never does.
  */
-export function contextWindowKey(agent: string, model: string): string {
-  return `${agent}\u0000${model}`;
+export function contextWindowKey(
+  agent: string,
+  model: string,
+  contextWindow: string | null = null,
+): string {
+  return `${agent}\u0000${model}\u0000${(contextWindow ?? '').trim()}`;
 }
 
 /** Constructor options — a test seam, not user config. */
@@ -88,8 +103,14 @@ export class ContextWindowStore {
   }
 
   /** The window this model reported last, or null when never observed. */
-  get(agent: string, model: string): number | null {
-    return this.load().get(contextWindowKey(agent, model)) ?? null;
+  get(
+    agent: string,
+    model: string,
+    contextWindow: string | null = null,
+  ): number | null {
+    return (
+      this.load().get(contextWindowKey(agent, model, contextWindow)) ?? null
+    );
   }
 
   /**
@@ -98,12 +119,17 @@ export class ContextWindowStore {
    * be divided by. Unchanged values do not rewrite the file — a turn completing
    * every few seconds must not mean a disk write every few seconds.
    */
-  remember(agent: string, model: string, window: number): void {
+  remember(
+    agent: string,
+    model: string,
+    window: number,
+    contextWindow: string | null = null,
+  ): void {
     if (!Number.isFinite(window) || window <= 0) {
       return;
     }
     const records = this.load();
-    const key = contextWindowKey(agent, model);
+    const key = contextWindowKey(agent, model, contextWindow);
     if (records.get(key) === window) {
       return;
     }
@@ -141,7 +167,12 @@ export class ContextWindowStore {
           if (
             typeof value === 'number' &&
             Number.isFinite(value) &&
-            value > 0
+            value > 0 &&
+            // Exactly three parts, so an entry written before the window
+            // choice joined the key is DROPPED rather than kept as a row no
+            // lookup can ever match. Left in, such a row would hold one of the
+            // {@link MAX_ENTRIES} slots for the life of the install.
+            key.split('\u0000').length === 3
           ) {
             records.set(key, value);
           }

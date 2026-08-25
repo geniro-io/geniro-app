@@ -99,6 +99,21 @@ class FakeRunDao {
   async listChats(): Promise<Run[]> {
     return [...this.runs.values()];
   }
+  async setPendingContext(id: string, context: string | null): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.pendingContext = context;
+    }
+  }
+  /** Mirrors the real read-and-clear: the column is consumed exactly once. */
+  async takePendingContext(id: string): Promise<string | null> {
+    const run = this.runs.get(id);
+    const pending = run?.pendingContext ?? null;
+    if (run) {
+      run.pendingContext = null;
+    }
+    return pending;
+  }
   async listRunningChats(): Promise<Run[]> {
     // Mirrors the real query's chat-only scoping (workflowId null).
     return [...this.runs.values()].filter(
@@ -243,6 +258,11 @@ class FakeNodeStateDao {
     this.savedFor.push({ runId, nodeId, sessionId });
     this.saved.push(sessionId);
     this.state = { agentSessionId: sessionId } as unknown as NodeState;
+  }
+  readonly cleared: { runId: string; nodeId: string }[] = [];
+  async clearSessionId(runId: string, nodeId: string): Promise<void> {
+    this.cleared.push({ runId, nodeId });
+    this.state = null;
   }
 }
 
@@ -434,6 +454,12 @@ function fakeAdapter(kind: AgentKind): {
           ? Promise.resolve(kind === 'claude')
           : streamGate.then(() => kind === 'claude'),
       listEfforts: () => real.listEfforts(),
+      // The REAL lookup over the REAL adapter's own command list: what
+      // `/compact` does — and whether the CLI has it at all — is the fact
+      // under test wherever this double is asked, and a stub answering null
+      // would let the dispatch rot while every spec stayed green.
+      listGeniroCommands: () => real.listGeniroCommands(),
+      geniroCommandFor: (text: string) => real.geniroCommandFor(text),
       // The real one opens a handshake, which is the spawn this double exists
       // to avoid — so it answers as the base does when it cannot ask: the
       // CLI-wide union, marked INEXACT so it can never ground a refusal. A test
@@ -840,6 +866,164 @@ describe('ChatService', () => {
     expect((await service.setGroup(run.id, null)).groupId).toBeNull();
     // Null names no group, so there is nothing to check — one assertion still.
     expect(assertedGroups).toEqual(['g-work']);
+  });
+
+  describe('geniro commands', () => {
+    /** Run one turn to completion, with the agent saying `said`. */
+    async function turn(
+      agent: { emit: (e: AgentEvent) => void; finish: () => void },
+      said: string | null,
+      ending: AgentEvent = {
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      },
+    ): Promise<void> {
+      if (said !== null) {
+        agent.emit({ type: 'text', text: said });
+      }
+      agent.emit(ending);
+      agent.finish();
+      // Twice: the finalizer's own chain runs several awaits deep, and the
+      // compaction commit is the LAST of them.
+      await drain();
+      await drain();
+    }
+
+    it('sends the CLI its OWN compaction command, and touches no session', async () => {
+      // claude rewrites its history in place and keeps the session; dropping it
+      // here would discard the conversation the summary was distilled from.
+      const { service, claude, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, '/compact');
+
+      const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.prompt).toBe('/compact');
+      await turn(claude, 'compacted.');
+      expect(nodeDao.cleared).toEqual([]);
+    });
+
+    it('rewrites the prompt for a CLI that has no compaction of its own', async () => {
+      // cursor's `/summarize` is a TUI command its ACP server never advertises,
+      // so the literal text would reach the model as prose — which is the
+      // reported defect. The TRANSCRIPT still records what the user typed.
+      const { service, cursor, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      const userWire = await service.sendMessage(run.id, '/compact');
+
+      const startArg = cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.prompt).not.toBe('/compact');
+      expect(startArg.prompt).toMatch(/summar/i);
+      expect((userWire.payload as { text: string }).text).toBe('/compact');
+      expect(
+        itemDao.items.some(
+          (item) => item.role === 'user' && item.payload.includes('/compact'),
+        ),
+      ).toBe(true);
+      await turn(cursor, 'the summary');
+    });
+
+    it('drops the session and carries the summary into the next turn', async () => {
+      const { service, cursor, nodeDao, runDao, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, '/compact');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      await turn(cursor, 'we agreed on plan B');
+
+      expect(nodeDao.cleared).toEqual([
+        { runId: run.id, nodeId: SINGLE_AGENT_NODE },
+      ]);
+      expect((await runDao.getById(run.id))?.pendingContext).toBe(
+        'we agreed on plan B',
+      );
+      // `severity: 'info'` with it: this row reports the thing the user ASKED
+      // for having worked, and the renderer reads an absent severity as the
+      // loud failure chrome every other daemon notice wears — which drew a
+      // successful compaction as a red warning.
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'system' &&
+            item.payload.includes('Conversation compacted') &&
+            item.payload.includes('"severity":"info"'),
+        ),
+      ).toBe(true);
+
+      // The NEXT turn opens on a fresh session carrying the summary — once.
+      await service.sendMessage(run.id, 'now do it');
+      const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+      expect(next.resumeSessionId).toBeNull();
+      expect(next.prompt).toContain('we agreed on plan B');
+      expect(next.prompt.endsWith('now do it')).toBe(true);
+      expect((await runDao.getById(run.id))?.pendingContext).toBeNull();
+      await turn(cursor, 'done');
+
+      await service.sendMessage(run.id, 'and again');
+      const third = cursor.start.mock.calls[2]?.[0] as AgentTurnInput;
+      expect(third.prompt).toBe('and again');
+      await turn(cursor, 'ok');
+    });
+
+    it('abandons the compaction — and SAYS so — when the turn did not finish', async () => {
+      // Destroying the conversation on the strength of a turn the user stopped
+      // partway through the summary costs everything and buys nothing.
+      const { service, cursor, nodeDao, runDao, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, '/compact');
+      await turn(cursor, 'half a par', { type: 'turn_cancelled' });
+
+      expect(nodeDao.cleared).toEqual([]);
+      expect((await runDao.getById(run.id))?.pendingContext).toBeFalsy();
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'system' && item.payload.includes('did not finish'),
+        ),
+      ).toBe(true);
+    });
+
+    it('abandons it when the turn finished saying nothing', async () => {
+      const { service, cursor, nodeDao, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, '/compact');
+      await turn(cursor, null);
+
+      expect(nodeDao.cleared).toEqual([]);
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'system' &&
+            item.payload.includes('produced no summary'),
+        ),
+      ).toBe(true);
+    });
+
+    it('refuses a geniro command while a turn is running, rather than queueing it', async () => {
+      // Handing `/compact` to the running turn would write it into the CLI's
+      // own conversation, where the rewrite never happens — and what the user
+      // asked to compact is what is being said right now.
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      await expect(service.sendMessage(run.id, '/compact')).rejects.toThrow(
+        /RUN_BUSY|idle/,
+      );
+      await turn(claude, 'hi');
+    });
   });
 
   it('setGroup 404s for a run that does not exist', async () => {
@@ -1412,6 +1596,38 @@ describe('ChatService', () => {
     expect(claude.start.mock.calls[0]?.[0].customInstructions).toBe(
       'Always answer in British English.',
     );
+  });
+
+  it('snapshots the Max Mode choice onto the run, including OFF', async () => {
+    // The producer half again, and `false` is the case worth pinning: the
+    // adapter reads an ABSENT choice as its own default (ON), so a user who
+    // switched Max Mode off must reach the turn as an explicit `false` rather
+    // than as silence. Cursor bills it at the API rate plus 20% on legacy
+    // plans, so the difference between "declined" and "did not say" is money.
+    const { service, cursor } = setup();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+      cursorMaxMode: false,
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(cursor.start.mock.calls[0]?.[0].cursorMaxMode).toBe(false);
+  });
+
+  it('says NOTHING about Max Mode for a run created before the setting', async () => {
+    // A row whose column is null predates the choice. It must not reach the
+    // turn as `false` — every such run has always used Max Mode, and reading
+    // absence as a decline would quietly shrink every existing cursor
+    // conversation's window.
+    const { service, cursor } = setup();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+
+    await service.sendMessage(run.id, 'go');
+    expect(cursor.start.mock.calls[0]?.[0].cursorMaxMode).toBeUndefined();
   });
 
   it('normalizes blank custom instructions to nothing at all', async () => {
@@ -3832,6 +4048,86 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     const announce = statuses.at(-1);
     expect(announce?.status).toBe('completed');
     expect(announce?.restored).toBe(true);
+  });
+
+  it('says in the TRANSCRIPT when the close cut the agent off mid-work', async () => {
+    // The badge restore above is right and, on its own, a lie by omission: the
+    // status it hands back is the one the off-turn stretch took over — usually
+    // `completed`, from a turn that ended before the agent carried on — so a
+    // cut-off agent left a thread reading `completed` with its work unfinished
+    // and nothing anywhere naming what had happened. REPORTED as "Тред сам по
+    // себе остановился … я должен писать ему какое-то сообщение, чтобы он
+    // продолжил", against a run whose CLI had been closed one second after its
+    // last row.
+    const { service, claude, runDao, itemDao, sessions } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'tool_call',
+      id: 'call-9',
+      name: 'Bash',
+      input: {},
+    });
+    await drain();
+    expect((await runDao.getById(run.id))?.status).toBe('running');
+
+    sessions.close(run.id);
+    await drain();
+
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'system' &&
+          item.payload.includes('geniro closed its process') &&
+          item.payload.includes('"severity":"warning"'),
+      ),
+    ).toBe(true);
+  });
+
+  it('says nothing when the close merely reaped a session that had gone quiet', async () => {
+    // The other half, and what keeps the row from becoming noise: every chat's
+    // session is closed eventually — by the idle window, by a daemon that is
+    // shutting down — and a warning on each of those would put a red row in
+    // every conversation the user owns, about nothing.
+    const { service, claude, itemDao, sessions } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    sessions.close(run.id);
+    await drain();
+
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'system' &&
+          item.payload.includes('geniro closed its process'),
+      ),
+    ).toBe(false);
   });
 
   it('settles a delegate-leased run on the continuation’s own result', async () => {

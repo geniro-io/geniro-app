@@ -60,6 +60,7 @@ import {
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_HOME_DIR_NAME,
+  CURSOR_MAX_MODE,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_ENABLE_ARGS,
@@ -413,6 +414,47 @@ export class CursorAcpAdapter extends AgentAdapter {
          */
         internalPrefix: null,
       },
+      geniroCommands: [
+        {
+          name: 'compact',
+          description:
+            'Summarise the conversation so far and continue from the summary',
+          /**
+           * geniro's OWN instruction, because this CLI exposes no compaction
+           * over the transport geniro drives. Read out of the shipped
+           * 2026.08.11-e8db854 bundle: `/summarize` is a TUI command
+           * (`{id:"summarize", … run: … onSummarize()}` in `6260.index.js`)
+           * whose handler sends that vendor's private
+           * `ConversationAction{summarizeAction}`, while the ACP server
+           * (`2996.index.js`) advertises `copy-request-id` plus the commands on
+           * disk and its `handleSlashCommand` runs exactly that one locally —
+           * everything else is forwarded to the model as prose, which is what
+           * the reported `/summarize` turn shows happening. The protocol has no
+           * compaction method to reach for either (agentclientprotocol
+           * discussion #871 is open on precisely this).
+           *
+           * `-p --output-format stream-json` was checked as the alternative and
+           * is not one: a resumed print-mode turn answers `/summarize` with
+           * prose exactly as ACP does, and that mode has no stream-json INPUT,
+           * no per-tool permission channel and no image blocks — so it would
+           * trade this app's approval cards and attachments for nothing.
+           */
+          prompt:
+            'Summarise this entire conversation so far. Write the summary as ' +
+            'the handover notes a fresh agent would need to carry the work on ' +
+            'with nothing else to go on: what was asked, what was decided and ' +
+            'why, what has been done, which files and commands matter, and ' +
+            'what is still open. Prefer specifics — names, paths, versions, ' +
+            'measurements — over description. Reply with the summary alone.',
+          /**
+           * True: the summary is only worth writing because the session it
+           * summarises is dropped once it lands. This CLI holds no process
+           * between turns and resumes each one with `session/load`, so the
+           * conversation shrinks exactly when the recorded session id does.
+           */
+          replacesSession: true,
+        },
+      ],
       mcp: {
         /**
          * No trust probe: the endpoint travels in `session/new` as a
@@ -1129,11 +1171,24 @@ export class CursorAcpAdapter extends AgentAdapter {
   /**
    * What one model's handshake said about its window sizes.
    *
-   * Three answers, the same split {@link readEffortProbe} draws — and the third
-   * differs from the effort one only in having no union to fall back to, so an
-   * unreadable probe and a model with no axis both end with an empty list and
-   * a sentence. They are told apart by WHICH sentence: one names the model, the
-   * other says the CLI could not be asked.
+   * Three answers, and every one of them is the CLI's own:
+   *
+   * - the handshake enumerated a `context` option → its values, in that CLI's
+   *   words (`300k`, `1m`), which is the whole picker. Nothing is cached and no
+   *   size is stated here — the vocabulary comes from the agent, per model, on
+   *   every listing, so it cannot go stale;
+   * - it enumerated options and NOT that one → this model has no choice to
+   *   offer, and geniro can now say what it DOES run at, because Max Mode is on
+   *   for every turn ({@link CURSOR_MAX_MODE}): the model's largest window;
+   * - anything else → the probe could not be taken. Unreadable is not the same
+   *   as absent, so the sentence says the CLI could not be asked rather than
+   *   naming the model.
+   *
+   * The middle answer briefly became two rows of geniro's own invention
+   * (`standard` / `max mode`) whose sizes were LEARNED from turns that had run.
+   * That is gone, on the two objections that killed it: Max Mode is a mode
+   * rather than a context window, and a learned size is a cache that is wrong
+   * from the moment the vendor changes a number until the user next runs a turn.
    */
   private readContextWindowProbe(
     stdout: string | null,
@@ -1158,7 +1213,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       if (acpProbeEnumeratedConfigOptions(stdout)) {
         return {
           windows: [],
-          unavailableReason: `${model} runs at one fixed context window — pick a model that offers a choice.`,
+          unavailableReason: `${model} offers no context setting — it runs at the full window Max Mode gives it.`,
           unavailableKind: 'fixed-window',
           exact: true,
         };
@@ -1636,6 +1691,14 @@ export class CursorAcpAdapter extends AgentAdapter {
       ...(splitCursorModelId(input.model).model
         ? { model: splitCursorModelId(input.model).model! }
         : {}),
+      // Max Mode — the user's own setting, snapshotted onto the run and
+      // carried here; {@link CURSOR_MAX_MODE} is what a turn that says nothing
+      // gets, and {@link CURSOR_MAX_MODE_CONFIG_KEY} holds the measurements.
+      // `??` and not `||`: `false` is a real choice, and the default is only
+      // for a caller that did not speak. Written EXPLICITLY either way, never
+      // left to the copied config — an untouched key means "however the user's
+      // own terminal was last left", so OFF has to be written as much as ON.
+      maxMode: input.cursorMaxMode ?? CURSOR_MAX_MODE,
     });
     this.turnProfiles.set(input, dir);
     return () => {

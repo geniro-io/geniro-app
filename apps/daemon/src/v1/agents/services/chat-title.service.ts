@@ -70,12 +70,24 @@ export class ChatTitleService implements OnModuleInit {
   private readonly upgradesTried = new Map<string, number>();
 
   /**
-   * Runs whose CLI has already been ASKED for a title — see {@link askForTitle}.
+   * How many times each run's CLI has been ASKED for a title — see
+   * {@link askForTitle}.
    *
    * Separate from {@link upgradesTried} because the two bound different costs,
    * and torn down beside it on the same delete announcement.
+   *
+   * A COUNT rather than a set, which is a correction. Asking was one-shot, on
+   * the reading that "a title is as good as it will get on the first try" —
+   * measured false: an opening that is a bare link or a slash command has
+   * nothing nameable in it, so the first ask can only be declined, and the
+   * chat then wore its opening line for good. That is the reported "we fixed
+   * it twice and the new title still is not set". A later ask is a different
+   * question because it carries what the conversation has SINCE said
+   * ({@link AgentTitleInput.latest}), and it is bounded by the same turn
+   * budget the read path uses, so a chat nobody can name still stops costing
+   * a spawn.
    */
-  private readonly generationTried = new Set<string>();
+  private readonly generationTried = new Map<string, number>();
 
   constructor(
     private readonly em: EntityManager,
@@ -276,16 +288,34 @@ export class ChatTitleService implements OnModuleInit {
     em: EntityManager,
     opening: string,
   ): Promise<string | null> {
-    if (this.generationTried.has(run.id)) {
+    const asked = this.generationTried.get(run.id) ?? 0;
+    if (asked >= CHAT_TITLE_UPGRADE_TURNS) {
       return null;
     }
-    this.generationTried.add(run.id);
+    this.generationTried.set(run.id, asked + 1);
     try {
-      return await this.adapters.for(run.agentKind).generateTitle({
+      // The newest exchange only from the SECOND ask on: on the first there is
+      // nothing later than the opening, and repeating it would spend prompt on
+      // the same two messages under a second heading.
+      const latest = asked === 0 ? null : await this.latestExchange(run.id, em);
+      const title = await this.adapters.for(run.agentKind).generateTitle({
         opening,
         reply: await this.itemDao.firstAssistantMessageText(run.id, em),
+        latest,
         configDir: run.configDir,
       });
+      if (title === null) {
+        // SAID OUT LOUD, because until now it was not. An adapter answering
+        // null — the CLI could not be run, its reply would not parse, or the
+        // model declined to name the conversation — left no trace anywhere,
+        // so a chat stuck on its opening line was indistinguishable from one
+        // this service had never looked at. That silence is why the defect
+        // survived two fixes.
+        this.logger.debug(
+          `run ${run.id}: ${run.agentKind} produced no title on ask ${asked + 1}`,
+        );
+      }
+      return title;
     } catch (err) {
       this.logger.warn(
         `title generation for run ${run.id} failed: ${
@@ -294,6 +324,28 @@ export class ChatTitleService implements OnModuleInit {
       );
       return null;
     }
+  }
+
+  /**
+   * What this conversation has been about lately, as one block — or null when
+   * it has said nothing beyond its opening exchange.
+   *
+   * Both ends of the newest exchange, because either alone is routinely
+   * unnameable: the user's last message can be "yes, do that" and the agent's
+   * can be a paragraph of results with no statement of the task.
+   */
+  private async latestExchange(
+    runId: string,
+    em: EntityManager,
+  ): Promise<string | null> {
+    const [user, agent] = await Promise.all([
+      this.itemDao.lastUserMessageText(runId, em),
+      this.itemDao.lastAssistantMessageText(runId, em),
+    ]);
+    const block = [user, agent]
+      .filter((text): text is string => text !== null && text.trim() !== '')
+      .join('\n\n');
+    return block === '' ? null : block;
   }
 
   /** The CLI's own title, else one derived from the opening message. */

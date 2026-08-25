@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     checkForUpdates: true,
     sidebarCollapsed: false,
     notificationsEnabled: true,
+    cursorMaxMode: true,
     collapseToolSteps: false,
     daemonInspect: false,
     claudeBrowserTools: false,

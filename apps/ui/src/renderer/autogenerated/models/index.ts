@@ -469,7 +469,7 @@ export interface AgentSkillDto {
      */
     kind: AgentSkillDtoKindEnum;
     /**
-     * Where it was discovered — disk scan, or the CLI session itself
+     * Where it came from — this app itself, a disk scan, or the CLI session
      * @type {string}
      * @memberof AgentSkillDto
      */
@@ -490,6 +490,7 @@ export type AgentSkillDtoKindEnum = typeof AgentSkillDtoKindEnum[keyof typeof Ag
  * @export
  */
 export const AgentSkillDtoSourceEnum = {
+    Geniro: 'geniro',
     Project: 'project',
     User: 'user',
     Cli: 'cli'
@@ -1044,6 +1045,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof CreateChatDto
+     */
+    cursorMaxMode?: boolean;
     /**
      * 
      * @type {string}
@@ -2168,6 +2175,12 @@ export interface RunWorkflowDto {
      * @memberof RunWorkflowDto
      */
     customInstructions?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunWorkflowDto
+     */
+    cursorMaxMode?: boolean;
 }
 /**
  * 

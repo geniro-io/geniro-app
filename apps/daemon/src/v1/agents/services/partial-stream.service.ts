@@ -314,6 +314,7 @@ export class PartialStreamService {
     ownerKey: string,
     contextWindowTokens: number | null,
     model: string | null = null,
+    contextWindow: string | null = null,
   ): void {
     try {
       if (contextWindowTokens === null || contextWindowTokens <= 0) {
@@ -336,6 +337,7 @@ export class PartialStreamService {
           announced.agent,
           announced.model,
           contextWindowTokens,
+          contextWindow,
         );
       }
     } catch (err) {
@@ -359,10 +361,11 @@ export class PartialStreamService {
     ownerKey: string,
     agent: string,
     model: string,
+    contextWindow: string | null = null,
   ): void {
     try {
       const owner = this.ownerId(runId, ownerKey);
-      const key = this.modelKey(agent, model);
+      const key = this.modelKey(agent, model, contextWindow);
       if (this.runModels.get(owner)?.key !== key) {
         this.runModels.set(owner, { key, agent, model });
         this.windows.delete(owner);
@@ -372,7 +375,7 @@ export class PartialStreamService {
       // complete in this process.
       let known = this.windowsByModel.get(key);
       if (known === undefined) {
-        const stored = this.windowStore.get(agent, model);
+        const stored = this.windowStore.get(agent, model, contextWindow);
         if (stored !== null) {
           this.windowsByModel.set(key, stored);
           known = stored;
@@ -387,16 +390,19 @@ export class PartialStreamService {
   }
 
   /**
-   * The per-model cache key, keyed by AGENT as well.
-   *
-   * Two CLIs can name the same model, and a window measured through one says
-   * nothing about the other — `.claude/rules/agent-adapters.md` states the rule
-   * flatly: per-agent state is keyed by agent, never by the thing it is about.
-   * Only claude reports a window today, so nothing collides yet; that is an
-   * accident of which adapter emits the event, not a property of the key.
+   * The per-model cache key, keyed by AGENT and by the turn's WINDOW CHOICE as
+   * well — the exported one, so this in-memory half and the durable store
+   * cannot spell it differently. See {@link contextWindowKey} for why all three
+   * parts are load-bearing; the short version is that cursor's `kimi-k3` has
+   * two real windows (200,000 and 1,048,576) and a key without the choice files
+   * both under one entry.
    */
-  private modelKey(agent: string, model: string): string {
-    return contextWindowKey(agent, model);
+  private modelKey(
+    agent: string,
+    model: string,
+    contextWindow: string | null,
+  ): string {
+    return contextWindowKey(agent, model, contextWindow);
   }
 
   /**

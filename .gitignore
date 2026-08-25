@@ -67,3 +67,5 @@ Thumbs.db
 # browser tool writes while driving a page. Local debugging output, never a
 # build input.
 .playwright-mcp/
+!.geniro/actions/
+!.geniro/actions/**

@@ -1182,11 +1182,18 @@ export interface AgentContextWindow {
  * Which kind of "no sizes to choose from" a listing is reporting.
  *
  * `no-model` is the one that behaves differently downstream: nothing has been
- * asked yet, so a control claiming the model runs at one fixed window would be
+ * asked yet, so a control claiming anything about the model's window would be
  * stating a fact about a model nobody has picked. The other three all mean the
  * turn really does run at exactly one window — this CLI has no such axis, this
- * model offers only one size, or the CLI could not be asked and its own answer
- * is unknown.
+ * MODEL offers no choice of its own, or the CLI could not be asked and its own
+ * answer is unknown.
+ *
+ * `fixed-window` was briefly deleted, on the reading that cursor's models
+ * without a `context` parameter had a second window after all. They do, and it
+ * is not a CHOICE: geniro turns Max Mode on for every cursor turn
+ * (`CURSOR_MAX_MODE`), so such a model runs at its largest window with nothing
+ * to pick between. The kind is back, and its sentence now names which window
+ * that is instead of leaving it unstated.
  *
  * An ENUM rather than the sentence: the reason prose is what a user reads, and
  * a consumer that has to recognise a specific case by matching those words
@@ -1208,14 +1215,15 @@ export interface AgentContextWindowListing {
  * One skill / slash command a CLI can be invoked with (`/name …`).
  *
  * `kind` separates a skill directory from a plain command file; `source` says
- * where it was found — the project folder, the user's home dir, or `cli` when
- * the CLI itself reported it rather than the disk scan finding it.
+ * where it was found — the project folder, the user's home dir, `cli` when the
+ * CLI itself reported it rather than the disk scan finding it, or `geniro` for
+ * one this application adds (see {@link AgentGeniroCommand}).
  */
 export interface AgentSkillEntry {
   name: string;
   description: string | null;
   kind: 'skill' | 'command';
-  source: 'project' | 'user' | 'cli';
+  source: 'geniro' | 'project' | 'user' | 'cli';
 }
 
 /**
@@ -1238,6 +1246,57 @@ export interface AgentSkillEntry {
 export interface AgentReportedCommand {
   name: string;
   description: string | null;
+}
+
+/**
+ * One slash command **geniro itself** provides for a CLI — a command that
+ * exists only inside this application, offered beside that CLI's own.
+ *
+ * It exists because a capability can be real in a CLI's interactive shell and
+ * absent from the transport geniro drives. Compaction is the case that forced
+ * it: cursor-agent's `/summarize` is a command of its TUI, which sends its own
+ * `summarizeAction` over that vendor's private stream — its ACP server
+ * advertises only `copy-request-id` plus the commands on disk, and
+ * `handleSlashCommand` runs exactly one of them locally. So `/summarize` typed
+ * into a geniro chat reached the model as prose and was answered as prose,
+ * which is what got reported. The Agent Client Protocol has no compaction
+ * method at all (agentclientprotocol discussion #871 is open on exactly this),
+ * so there is nothing to wait for on the wire.
+ *
+ * Declared HERE, per CLI, rather than as a list somewhere central: whether a
+ * geniro command is offered at all — and what it costs when it runs — is a fact
+ * about that CLI, which is the one rule of `.claude/rules/agent-adapters.md`.
+ * The same `/compact` therefore means "the CLI compacts its own history" on
+ * claude and "geniro compacts it for you" on cursor, with neither consumer
+ * branching on which.
+ *
+ * The name is RESERVED: `SkillsService` lists these first and the chat service
+ * dispatches by name, so a scanned skill of the same name cannot shadow one
+ * here — the popup and the behaviour would otherwise disagree.
+ */
+export interface AgentGeniroCommand {
+  /** What the user types after `/`. */
+  readonly name: string;
+  /** The sentence beside the name in the composer's popup. */
+  readonly description: string;
+  /**
+   * The text this CLI actually receives for the turn — its own slash command
+   * verbatim where it has one, geniro's own instruction where it does not.
+   *
+   * The transcript still records what the USER typed: the rewrite is what the
+   * agent is asked, not what the conversation says was asked.
+   */
+  readonly prompt: string;
+  /**
+   * Whether the turn's answer REPLACES the CLI's own conversation: its session
+   * is dropped once the turn settles and the answer is carried into the next
+   * one as context.
+   *
+   * False for a CLI that compacts its own history and keeps its session, where
+   * geniro must change nothing — dropping claude's session after its `/compact`
+   * would throw away the very history the CLI had just summarised for itself.
+   */
+  readonly replacesSession: boolean;
 }
 
 /**
@@ -1474,6 +1533,18 @@ export interface AgentTitleInput {
   opening: string;
   /** What the agent answered, when it has answered. */
   reply: string | null;
+  /**
+   * The conversation as it stands NOW — the newest exchange — or null on the
+   * first ask, when it would only repeat {@link opening} and {@link reply}.
+   *
+   * The opening is not always nameable: measured on 2.1.237, a chat opened
+   * with a bare Slack link is answered "I need to see the Slack thread to
+   * understand what work you're asking about…", because there genuinely is
+   * nothing in it to name. Re-asking with the same two messages reproduces the
+   * same refusal, so a retry is worth making only if it carries what the
+   * conversation has said since.
+   */
+  latest: string | null;
   /** The profile the run belongs to; null = the CLI's default. */
   configDir: string | null;
 }
@@ -1855,6 +1926,21 @@ export interface AgentTurnInput {
    * user has typed nothing.
    */
   customInstructions?: string | null;
+  /**
+   * Run every turn at the largest window the agent can give it, where the
+   * agent HAS such a switch.
+   *
+   * Named for cursor's own product feature because that is what a user reads
+   * on the setting, and because the capability wire already names a CLI where
+   * one owns the concept (`claudeModes`). It stays a fact about the TURN and
+   * not about a CLI: an adapter with no such switch ignores it, and nothing
+   * outside `adapters/cursor-acp/` reads it.
+   *
+   * `undefined` means the caller did not say — an adapter reads its own
+   * default, never `false`. That distinction is what keeps runs created before
+   * the setting existed at the window they have always run at.
+   */
+  cursorMaxMode?: boolean;
   /**
    * This turn is geniro's OWN bookkeeping — its output is parsed by the daemon
    * and never rendered in a transcript anybody reads.
@@ -2544,6 +2630,14 @@ export interface AdapterConfig {
     /** Names starting with this are the CLI's INTERNALS, not things a user invokes. */
     readonly internalPrefix: string | null;
   } | null;
+
+  // ── Commands geniro provides for this CLI ───────────────────────────────
+  /**
+   * The slash commands this application adds to that CLI, which exist nowhere
+   * outside it — see {@link AgentGeniroCommand}. Empty for a CLI that needs
+   * nothing added.
+   */
+  readonly geniroCommands: readonly AgentGeniroCommand[];
 
   // ── Agent-to-agent calls (MCP) ──────────────────────────────────────────
   readonly mcp: {

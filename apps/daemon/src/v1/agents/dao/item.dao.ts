@@ -243,9 +243,44 @@ export class ItemDao extends BaseDao<Item> {
     return this.firstMessageText(runId, 'assistant', txEm);
   }
 
-  private async firstMessageText(
+  /**
+   * The NEWEST message of one role in a run, or null when it has none.
+   *
+   * The mirror of {@link firstMessageText}, and it exists for the title ask: a
+   * conversation opened with a bare URL has nothing nameable in its first
+   * exchange (measured — the naming model answers "I need to see the Slack
+   * thread…" rather than a title), while its third turn is about real work.
+   * Re-asking with the same two messages would only reproduce the same
+   * refusal, so a retry has to be given what the conversation has SINCE said.
+   */
+  lastUserMessageText(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    return this.edgeMessageText(runId, 'user', 'desc', txEm);
+  }
+
+  /** The newest thing the agent said, for the same reason. */
+  lastAssistantMessageText(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    return this.edgeMessageText(runId, 'assistant', 'desc', txEm);
+  }
+
+  private firstMessageText(
     runId: string,
     role: 'user' | 'assistant',
+    txEm?: EntityManager,
+  ): Promise<string | null> {
+    return this.edgeMessageText(runId, role, 'asc', txEm);
+  }
+
+  /** One end of a run's messages of one role — the oldest or the newest. */
+  private async edgeMessageText(
+    runId: string,
+    role: 'user' | 'assistant',
+    direction: 'asc' | 'desc',
     txEm?: EntityManager,
   ): Promise<string | null> {
     const [row] = await this.getRepo(txEm).find(
@@ -253,8 +288,9 @@ export class ItemDao extends BaseDao<Item> {
       {
         // The same total ordering `latestMessageTextPerRun` needs, for the same
         // reason: a transcript written before `ItemSeqAllocator` can hold two
-        // rows on one seq, so seq alone does not decide which is first.
-        orderBy: { seq: 'asc', createdAt: 'asc', id: 'asc' },
+        // rows on one seq, so seq alone does not decide which is first — or,
+        // read the other way, which is last.
+        orderBy: { seq: direction, createdAt: direction, id: direction },
         fields: ['payload'],
         limit: 1,
         disableIdentityMap: true,

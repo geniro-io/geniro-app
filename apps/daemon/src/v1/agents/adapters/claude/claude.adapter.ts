@@ -321,6 +321,33 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         internalPrefix: '_',
       },
+      geniroCommands: [
+        {
+          name: 'compact',
+          description:
+            'Summarise the conversation so far and continue from the summary',
+          /**
+           * This CLI's OWN command, sent verbatim. It is a local command rather
+           * than a prompt, and it runs on the stream-json stdin geniro already
+           * drives — measured on 2.1.237 through this daemon's own transport:
+           * the turn answers `system/compact_boundary` followed by the injected
+           * summary, which `mapClaudeMessage` already maps to
+           * `context_compacted` and the transcript already collapses behind one
+           * housekeeping line.
+           *
+           * Declared here anyway, rather than left to the CLI's own reported
+           * list, so that `/compact` is ONE command across every agent geniro
+           * drives instead of a name that happens to exist on this one.
+           */
+          prompt: '/compact',
+          /**
+           * False: the CLI rewrites its own history in place and keeps the
+           * session. Dropping it here would discard the very conversation the
+           * summary was just distilled from.
+           */
+          replacesSession: false,
+        },
+      ],
       mcp: {
         /**
          * The endpoint is handed to claude per turn, so nothing about the

@@ -57,6 +57,16 @@ export const runWorkflowSchema = z.object({
    * outranks a standing preference.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /**
+   * Ask cursor for **Max Mode** on this run's turns — the user's own setting,
+   * snapshotted onto the run ({@link Run.cursorMaxMode}).
+   *
+   * Sent by the client for the reason `customInstructions` is: the setting
+   * lives in the ELECTRON process's `settings.json`, which the daemon never
+   * opens. OMITTED means "the client did not say", which the adapter reads as
+   * its own default — not as OFF.
+   */
+  cursorMaxMode: z.boolean().optional(),
 });
 export class RunWorkflowDto extends createZodDto(runWorkflowSchema) {}
 

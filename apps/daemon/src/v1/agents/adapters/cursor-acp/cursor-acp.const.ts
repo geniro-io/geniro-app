@@ -102,8 +102,12 @@ export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
  * RE-CHECKED 2026-08-24 on the same build, prompted by "it didnt load contexts
  * for cursor": still `context`, still `model_config`, and the listing was
  * right. `claude-opus-5` enumerates `context = 300k {300k|1m}`; `kimi-k3` — the
- * model in the report — enumerates `reasoning` and NO `context` at all, so it
- * genuinely runs at one fixed window and the empty listing is the true answer.
+ * model in the report — enumerates `reasoning` and NO `context` at all. That
+ * last clause used to end "so it genuinely runs at one fixed window", which was
+ * REFUTED on 2026-08-25 — see {@link CURSOR_MAX_MODE_CONFIG_KEY}: a model with no
+ * `context` parameter takes its window from the config file's Max Mode flag
+ * instead, and `kimi-k3` runs at 1,048,576 tokens under it. Which geniro always
+ * sets, so such a model does now run at one fixed window — its largest.
  * Worth knowing for the next reader: without the
  * {@link CURSOR_ACP_CLIENT_META} flag the same probe returns `mode` and `model`
  * ALONE, with every parameter folded into the composed model id
@@ -115,6 +119,92 @@ export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
  * the turn's selection builder, and the driver that sends it.
  */
 export const CURSOR_CONTEXT_WINDOW_PARAMETER_ID = 'context';
+
+/**
+ * The key **Max Mode** rides in `cli-config.json` — a top-level boolean, not a
+ * model parameter and not on the protocol at all.
+ *
+ * REPORTED as "в курсоре там 1 000 000", with a screenshot of Cursor's own agent
+ * panel reading `~48.5K / 1.048576M Tokens` on Kimi K3 — against geniro showing
+ * 200k for the same model with no way to change it. The answer here used to be
+ * that the CLI genuinely had one window for that model and there was nothing to
+ * fix. That was wrong, and this is the mechanism it missed.
+ *
+ * MEASURED 2026-08-25 on 2026.08.11-e8db854, over ACP — the transport geniro
+ * drives — with the flag as the ONLY difference between two runs, each under its
+ * own throwaway config directory, each figure read back out of that CLI's own
+ * session store:
+ *
+ *     kimi-k3, cli-config.json {"maxMode": false}  →  maxTokens   200,000
+ *     kimi-k3, cli-config.json {"maxMode": true}   →  maxTokens 1,048,576
+ *
+ * geniro sets it to {@link CURSOR_MAX_MODE} on every turn; that constant carries
+ * why it is always on and what it costs.
+ *
+ * TWO NEARBY THINGS IT IS NOT. It is not the `context` parameter — a model that
+ * has one obeys the parameter and ignores this, measured both ways on
+ * `gpt-5.6-sol`. And it is not `maxModeAutoEnabled`, the neighbouring key in the
+ * same file, which reads like a global "use Max Mode where you can" and is not:
+ * the CLI writes it ITSELF as bookkeeping when it auto-enabled the flag for a
+ * model whose catalog entry says `requiresMaxMode`. Setting it by hand changes
+ * nothing — measured, `kimi-k3` reports 200,000 with
+ * `{"maxMode": false, "maxModeAutoEnabled": true}`.
+ *
+ * Read from the config file's TOP LEVEL. A `model.maxMode` beside it is NOT the
+ * switch — set alone, the same kimi-k3 turn came back at 200,000.
+ */
+export const CURSOR_MAX_MODE_CONFIG_KEY = 'maxMode';
+
+/**
+ * What a cursor turn runs at when nobody has said — Max Mode ON.
+ *
+ * It is the DEFAULT behind a user setting now (`Settings.cursorMaxMode`,
+ * snapshotted onto `Run.cursorMaxMode` and carried as
+ * `AgentTurnInput.cursorMaxMode`), and it is still a plain boolean rather than
+ * a picker row or a remembered measurement.
+ *
+ * It began as two rows in the context-window picker (`standard` / `max mode`)
+ * whose sizes geniro learned from turns that had run. That was rejected on the
+ * two grounds that matter: **Max Mode is not a context window** — it is a mode,
+ * and the two are different things — and a learned size is a cache that is
+ * wrong for as long as it takes the vendor to change a number and the user to
+ * run another turn. Neither objection is answerable by a better cache.
+ *
+ * On rather than off, because the flag can only ever WIDEN, and that is
+ * measured rather than assumed:
+ *
+ * - a model that HAS the `context` parameter obeys the parameter and ignores
+ *   this flag — `gpt-5.6-sol` at `context=272k` reports 272,000 with the flag
+ *   on and 272,000 with it off, and `context=1m` reports 1,000,000 either way.
+ *   So the per-model picker keeps deciding, exactly as it did;
+ * - a model that has NO such parameter obeys the flag — `kimi-k3` reports
+ *   200,000 off and 1,048,576 on;
+ * - a model that honours neither is unchanged — `composer-2.5` reports 200,000
+ *   both ways.
+ *
+ * So every model runs at the largest window it has, the choice where there IS
+ * one stays the CLI's own answer read from its own handshake, and geniro holds
+ * no table and no measurement of anybody's context sizes.
+ *
+ * WHAT IT COSTS, and why there is a switch at all. Cursor bills Max Mode at the
+ * model's API rate plus 20% on LEGACY request-based plans; on current
+ * token-based plans it is the billing mode several models are already on. A
+ * user on a legacy plan is paying a surcharge for a window they may not want,
+ * which is not a call this app gets to make for them — hence the setting. The
+ * default stays ON because the reported defect was a window that was too SMALL
+ * (`kimi-k3` at 200k against cursor's own 1M), and because a user who has not
+ * been asked is better served by their model's full window.
+ *
+ * OFF is written as explicitly as ON. A turn that asks for `false` must not
+ * simply leave the key alone: the profile is a copy of the user's own config,
+ * so an untouched key means "however their terminal was last left".
+ *
+ * Written EXPLICITLY, never left to the copied config. The per-turn profile is
+ * a copy of the user's own `cli-config.json`, so an untouched key means "however
+ * their terminal was last left" — before this, the window of a geniro cursor
+ * chat silently followed a switch flipped in another app.
+ */
+export const CURSOR_MAX_MODE = true;
 
 // ── The per-turn config directory ─────────────────────────────────────────
 //

@@ -124,15 +124,57 @@ function readHandle(input: unknown): string | null {
 }
 
 /**
- * The id claude hands back when it detaches a command.
+ * The id claude hands back when it detaches a command — matched on the whole
+ * ANNOUNCEMENT, never on `ID:` alone.
  *
- * Matched on `ID: <token>` rather than on the whole sentence, which has three
- * wordings (a plain launch, one the user backgrounded, one that outran its
- * timeout) and is one release away from a fourth. A miss is survivable — see
- * {@link ShellRun.handle}.
+ * There are three wordings and they are one ternary in the shipped binary
+ * (read out of 2.1.237): a plain launch, one the user backgrounded by hand,
+ * and one that outran its own timeout —
+ *
+ * ```
+ * Command running in background with ID: <id>. Output is being written to: <path>.
+ * Command was manually backgrounded by user with ID: <id>. Output is being written to: <path>.
+ * Command did not complete within its <N>s timeout and was moved to the background (ID: <id>). Output is being written to: <path>.
+ * ```
+ *
+ * — so all three put the id directly before `Output is being written to:`,
+ * with either a `.` or a `).` between. Matching that whole shape is what makes
+ * this a recogniser rather than a guess.
+ *
+ * **It used to match `\bID:\s*([^\s.]+)` anywhere in the reply, and that is the
+ * defect this rewrite exists to remove.** A foreground command's reply is its
+ * OUTPUT, so any command whose output happened to contain the characters `ID:`
+ * — a `git show` of Go source with a struct field, a JSON blob, a doc listing
+ * — was read as having been detached: promoted to a background shell, never
+ * settled (a detached shell only ends on a probe, a kill or the daemon's
+ * `shell_info`, and none is ever coming for a command that already exited),
+ * and therefore listed as running for ever. Measured on the reporter's own
+ * `geniro.db`, run `d64593d0`: 690 shells, **11 of them phantoms**, with
+ * handles like `row`, `spec`, `resp` and `"foryou",` — the oldest running for
+ * a day and a half. That is the reported "три терминала" under a thread that
+ * had finished, and the "эти шелл команды вообще стейлд" beside it.
+ *
+ * The old doc justified the loose match by saying a MISS is survivable. It is
+ * — a genuinely detached command that this fails to recognise is marked
+ * finished when its immediate reply lands, so it simply drops out of the
+ * running list — and that is precisely the argument for tightening rather than
+ * loosening: the two failures are not comparable. A miss costs one row that
+ * should have been listed; a false positive costs a row that can never be
+ * unlisted, and poisons the header count for the life of the conversation.
+ *
+ * It is anchored at the START of the reply for the same reason, and that guard
+ * earned itself within a day: the announcement is the whole of what the CLI
+ * answers a detached launch with, never something buried in output — so a
+ * command whose OUTPUT quotes the sentence is not a launch. Measured on this
+ * very conversation, where a `sqlite3` query printing past launch replies and
+ * a `grep` over the CLI binary each produced a phantom shell, one of them
+ * carrying the literal handle `${e}`.
  */
 function readLaunchHandle(text: string): string | null {
-  const match = /\bID:\s*([^\s.]+)/.exec(text);
+  const match =
+    /^\s*\S[^\n]*?\bID:\s*([^\s).]+)\)?\.\s*Output is being written to:/.exec(
+      text,
+    );
   return match?.[1] ?? null;
 }
 
@@ -310,35 +352,33 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
     }
     const failed = payloadBoolean(payload, 'isError') === true;
     const replyText = failed ? '' : toolResultText(asRecord(payload)?.result);
-    if (!shell.background) {
-      // The REPLY is the authority on whether the command was detached, not the
-      // argument the agent wrote. claude backgrounds a command it never asked
-      // to background in two measured cases — one the user pushed to the
-      // background, and one that outran its own timeout ("Command timed out …
-      // and was moved to the background") — and both answer with the same
-      // handle sentence. Read off the input alone, such a command is retired
-      // the instant it is detached, which is the opposite of the truth.
-      const promoted = readLaunchHandle(replyText);
-      if (promoted !== null) {
-        shell.background = true;
-        shell.handle = promoted;
-        byHandle.set(promoted, shell);
-        continue;
-      }
-      // A foreground command IS its tool call: the reply is the shell exiting.
-      shell.status = failed ? 'failed' : 'completed';
-      continue;
-    }
     if (failed) {
       shell.status = 'failed';
       continue;
     }
+    // The REPLY is the authority on whether the command was detached, not the
+    // argument the agent wrote — and it decides BOTH ways, which is the part
+    // that was missing. claude backgrounds a command nobody asked to
+    // background in two measured cases (the user pushed it there; it outran
+    // its own timeout), so an input-only reading retires a command the instant
+    // it is detached. And the reverse is just as real: a call that ASKED for
+    // the background and came back with plain output was never detached at
+    // all, so an input-only reading leaves it listed for ever with no handle
+    // any probe could match. Measured on the reporter's own `geniro.db` — two
+    // such rows, from today.
+    const handle = readLaunchHandle(replyText);
+    if (handle === null) {
+      // No announcement means the reply IS the command's output, whichever
+      // way the call was written: the shell has exited.
+      shell.background = false;
+      shell.status = 'completed';
+      continue;
+    }
     // A detached launch replies immediately and the command runs on, so this
     // reply settles nothing — it only names the handle a later probe will use.
-    shell.handle = readLaunchHandle(replyText);
-    if (shell.handle !== null) {
-      byHandle.set(shell.handle, shell);
-    }
+    shell.background = true;
+    shell.handle = handle;
+    byHandle.set(handle, shell);
   }
   return shells;
 }

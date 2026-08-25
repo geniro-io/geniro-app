@@ -15,6 +15,11 @@
   --font-size: 15px;
 
   /* Warm cream / caramel palette (light-only today) */
+  /* TWIN PARSER: `shared/contracts.ts`'s `WINDOW_BACKGROUND` is this same
+     value, used as the Electron window's own `backgroundColor` so the frame
+     shows this rather than white wherever the page has not painted (a resize
+     in flight, the clipped bottom corners). CSS cannot read a TS constant, so
+     the two are spelled separately and MUST move together. */
   --background: #f5f1eb;
   --foreground: #3d2e1f;
   --card: #fdfcfa;
@@ -319,7 +324,10 @@
    * collapsed tool row reflows with them. The rule is doing real work for the
    * bare buttons that have no wrapper. A component that sets a type size and
    * expects its children to take it says so itself — see `SectionLabel` in
-   * `chats/block-shell.tsx`.
+   * `chats/block-shell.tsx`, and `COUNT_TRIGGER_CLASS` in
+   * `chats/chat-header.tsx`, whose counters were reported for exactly this:
+   * the row asked for `text-xs`, the glyphs took it and the numbers beside
+   * them rendered at 15px medium.
    */
   button {
     font-size: var(--text-base);

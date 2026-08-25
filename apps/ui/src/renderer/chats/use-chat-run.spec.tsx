@@ -14,6 +14,7 @@ import type {
   RunStatusEvent,
   VerdictAck,
 } from '../daemon-client';
+import type { LiveTextEvent } from './live-text';
 import { type ChatRunState, useChatRun } from './use-chat-run';
 
 (
@@ -86,6 +87,7 @@ function makeClient(): {
   leaveRun: ReturnType<typeof vi.fn>;
   emitItem: (item: ChatItem) => void;
   emitRunStatus: (event: RunStatusEvent) => void;
+  emitLiveText: (event: LiveTextEvent) => void;
   fireDisconnect: () => void;
   fireReconnect: (error?: Error) => void;
   fireVerdictAck: (ack: VerdictAck) => void;
@@ -97,6 +99,7 @@ function makeClient(): {
   let reconnectListener: ((error?: Error) => void) | null = null;
   let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
   let liveTextSubscribed = false;
+  let liveTextListener: ((event: LiveTextEvent) => void) | null = null;
   const joinRun = vi.fn(async () => {});
   const leaveRun = vi.fn();
   const client = {
@@ -130,10 +133,12 @@ function makeClient(): {
         verdictAckListener = null;
       };
     },
-    onLiveText: () => {
+    onLiveText: (l: (event: LiveTextEvent) => void) => {
       liveTextSubscribed = true;
+      liveTextListener = l;
       return () => {
         liveTextSubscribed = false;
+        liveTextListener = null;
       };
     },
     joinRun,
@@ -145,6 +150,7 @@ function makeClient(): {
     leaveRun,
     emitItem: (item) => itemListener?.(item),
     emitRunStatus: (event) => runStatusListener?.(event),
+    emitLiveText: (event) => liveTextListener?.(event),
     fireDisconnect: () => disconnectListener?.(),
     fireReconnect: (error) => reconnectListener?.(error),
     fireVerdictAck: (ack) => verdictAckListener?.(ack),
@@ -518,6 +524,78 @@ describe('useChatRun', () => {
 
     expect(leaveRun).toHaveBeenCalledWith('r1');
     expect(listenerCount()).toBe(0);
+  });
+
+  it('keeps the run row’s context reading current from the live plane', async () => {
+    // REPORTED as "у меня только что прыгнул кружочек с контекстом. Он
+    // показывал 50%. Как только я на него навёл, он начал показывать
+    // правильную цифру: 70%". `chatContext` ranks the run ROW above the
+    // transcript because the daemon's row moves with every reading while the
+    // transcript can only carry a figure per SETTLED turn — but the copy here
+    // was whatever `GET /v1/chats` returned at mount, and NOTHING refreshed
+    // it: `run_status` carries status, activity, `updatedAt`, the preview and
+    // the title, and no reading. So the ring sat on a frozen number while the
+    // daemon's row went on moving. Measured on the reporter's `geniro.db` at
+    // that moment: 740,515 of 1,000,000 for the chat on screen.
+    const { client, emitLiveText } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: 'working',
+        thinkingTokens: null,
+        thinkingText: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 740_515,
+        contextWindowTokens: 1_000_000,
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.contextTokens).toBe(740_515);
+    expect(row?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('does not let a turn that measured NOTHING erase the reading', async () => {
+    // The rule the live plane and the transcript fold already apply, restated
+    // here because this is a third writer of the same field: a reported 0 is
+    // not a measurement, and a settle that clears the live figure must leave
+    // the last real one standing — that fallback is the whole point.
+    const { client, emitLiveText } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    const reading = {
+      runId: 'r1',
+      nodeId: null,
+      text: 'working',
+      thinkingTokens: null,
+      thinkingText: null,
+      thinkingSince: null,
+      thinkingStretch: null,
+    };
+    await act(async () => {
+      emitLiveText({
+        ...reading,
+        contextTokens: 740_515,
+        contextWindowTokens: 1_000_000,
+      });
+      // …and then the settle, which clears the live figure entirely.
+      emitLiveText({
+        ...reading,
+        text: '',
+        contextTokens: null,
+        contextWindowTokens: null,
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r1');
+    expect(row?.contextTokens).toBe(740_515);
+    expect(row?.contextWindowTokens).toBe(1_000_000);
   });
 
   it('records an EXPIRED verdict for the open run, and only that', async () => {

@@ -62,36 +62,6 @@ export function unknownSlashCommand(
   return skills.some((skill) => skill.name === name) ? null : name;
 }
 
-/**
- * The geniro command a message invokes, or null.
- *
- * `source: 'geniro'` is the daemon's own word for "this app performs this, the
- * CLI does not" — and what a geniro command needs is an IDLE agent, since it
- * rewrites what the turn is asked and may replace the CLI's session. Handing
- * one to a running turn would deliver it as prose, which is the whole defect;
- * QUEUEING one is no better, because the queue's drain retries a busy run for
- * a few seconds and then stops, on the reading that the turn's own ending will
- * fire it again — which is exactly the ending that just fired it.
- *
- * Matching the whole bare command mirrors the daemon's own lookup
- * (`AgentAdapter.geniroCommandFor`): these take no arguments, so a sentence
- * after one is the user talking.
- */
-export function geniroCommandName(
-  input: string,
-  skills: readonly AgentSkill[],
-): string | null {
-  const name = input.trim().startsWith('/') ? input.trim().slice(1) : null;
-  if (name === null) {
-    return null;
-  }
-  return skills.some(
-    (skill) => skill.name === name && skill.source === 'geniro',
-  )
-    ? name
-    : null;
-}
-
 /** Prefix matches first (the common case), then substring matches; stable. */
 export function filterSkills(
   skills: readonly AgentSkill[],

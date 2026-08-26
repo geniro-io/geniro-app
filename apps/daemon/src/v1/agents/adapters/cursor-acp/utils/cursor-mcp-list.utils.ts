@@ -2,6 +2,7 @@ import type { AgentMcpServer, AgentMcpServerStatus } from '../../adapter.types';
 import {
   CURSOR_MCP_DISABLED_MARKER,
   CURSOR_MCP_FAILED_MARKER,
+  CURSOR_MCP_LOADING_MARKER,
   CURSOR_MCP_NEEDS_AUTH_MARKER,
   CURSOR_MCP_PENDING_MARKER,
   CURSOR_MCP_READY_MARKER,
@@ -17,6 +18,7 @@ const STATUS_MARKERS: readonly {
   { marker: CURSOR_MCP_READY_MARKER, status: 'connected' },
   { marker: CURSOR_MCP_FAILED_MARKER, status: 'failed' },
   { marker: CURSOR_MCP_PENDING_MARKER, status: 'pending' },
+  { marker: CURSOR_MCP_LOADING_MARKER, status: 'loading' },
   { marker: CURSOR_MCP_DISABLED_MARKER, status: 'disabled' },
   { marker: CURSOR_MCP_NEEDS_AUTH_MARKER, status: 'needs_auth' },
 ];

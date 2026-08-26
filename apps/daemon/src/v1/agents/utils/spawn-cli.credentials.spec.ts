@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fakeSpawn } from '../__tests__/fake-child';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 
@@ -55,10 +56,10 @@ describe('inherited Anthropic credential scoping', () => {
     exportAll();
     const { spawn, child, captured } = fakeSpawn();
 
-    const handle = new CursorAcpAdapter({ spawn }).start(
-      { prompt: 'go', cwd: '/proj' },
-      () => {},
-    );
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ prompt: 'go', cwd: '/proj' }, () => {});
     child.emit('close', 0, null);
     await handle.done;
 

@@ -58,6 +58,22 @@ export const createChatSchema = z.object({
    */
   contextWindow: z.string().min(1).optional(),
   /**
+   * Every OTHER model setting this chat's turns ask for, keyed by the CLI's
+   * own parameter id (`{optimize_for: 'intelligence'}`).
+   *
+   * Plain strings on both sides, and checked NOWHERE up front, for the reason
+   * the window above is not — only more so: geniro holds no vocabulary for
+   * these at all (see `AgentModelParameter`), so there is nothing here that
+   * could be checked against. The model is asked what it accepts
+   * (`GET /v1/agents/model-parameters`) and the live agent refuses a value it
+   * does not, on the turn, with a sentence.
+   *
+   * Bounded because the values ride a config option on every turn for the life
+   * of the chat — the caps live with the column's own reader
+   * (`utils/model-parameters.ts`), which is also what sanitizes this map.
+   */
+  modelParameters: z.record(z.string(), z.string()).optional(),
+  /**
    * The agent config directory this chat's turns run under — the folder
    * holding that CLI's credentials, settings and plugins, so one chat can run
    * on a different ACCOUNT (a different subscription) than the next. Omitted =
@@ -121,14 +137,22 @@ export const updateChatSettingsSchema = z
     /** Same again — and cleared to null whenever the MODEL changes, since a
      * window size belongs to the model that offered it. */
     contextWindow: z.string().min(1).nullable().optional(),
+    /**
+     * Same again, and cleared by a model change for a sharper version of the
+     * same reason: `optimize_for` exists on ONE model of thirty-four, so
+     * carrying a pick across a switch sends an option the new model has never
+     * heard of. An explicit `{}` clears them; null does the same.
+     */
+    modelParameters: z.record(z.string(), z.string()).nullable().optional(),
   })
   .refine(
     (dto) =>
       dto.approval !== undefined ||
       dto.model !== undefined ||
       dto.effort !== undefined ||
-      dto.contextWindow !== undefined,
-    'a settings patch must change the approval mode, the model, the effort or the context window',
+      dto.contextWindow !== undefined ||
+      dto.modelParameters !== undefined,
+    'a settings patch must change the approval mode, the model, the effort, the context window or a model parameter',
   );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,

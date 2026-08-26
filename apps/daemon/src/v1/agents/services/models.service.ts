@@ -8,6 +8,7 @@ import type { AgentModelWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentVersionService } from './agent-version.service';
+import { ModelVocabularyStore } from './model-vocabulary.store';
 import { ProcessRegistry } from './process-registry';
 
 /** Constructor options — test seams, not user config. */
@@ -37,6 +38,15 @@ const DEFAULT_TTL_MS = 10 * 60_000;
  * service only decides WHEN to ask and remembers the answer. It is keyed by
  * `<binary> --version` on top of a TTL, the same key the probe services use,
  * so upgrading a CLI surfaces its new models without a daemon restart.
+ *
+ * The memory cache above is joined by a DURABLE one
+ * ({@link ModelVocabularyStore}), because the two answer different questions:
+ * a TTL stops this process asking twice, and cursor's listing is a real ACP
+ * handshake — so switching the composer to that CLI on a cold daemon sat on it,
+ * every launch, for a list that had not changed in weeks. The store's own doc
+ * block carries the three invalidation mechanisms; what this service adds is
+ * the refresh BEHIND the answer, joined through the same `inFlight` map that
+ * already stops two panes spawning two process groups.
  */
 @Injectable()
 export class ModelsService {
@@ -58,6 +68,7 @@ export class ModelsService {
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
+    private readonly store: ModelVocabularyStore,
     options: ModelsServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
@@ -80,6 +91,21 @@ export class ModelsService {
     ) {
       return cached.models;
     }
+    // The DURABLE cache, consulted before anything is spawned. Its answer also
+    // seeds the memory entry above, so the reads inside the next TTL cost
+    // neither a disk map lookup nor a version compare.
+    const stored = this.store.read(kind, null, version, isModelList);
+    if (stored !== null) {
+      this.cache.set(kind, {
+        version,
+        fetchedAt: stored.fetchedAt,
+        models: stored.value,
+      });
+      if (stored.stale) {
+        this.revalidate(kind, version, cached);
+      }
+      return stored.value;
+    }
     // Joined AFTER the cache check, so a fresh answer still costs nothing.
     const running = this.inFlight.get(kind);
     if (running) {
@@ -92,6 +118,39 @@ export class ModelsService {
     } finally {
       this.inFlight.delete(kind);
     }
+  }
+
+  /**
+   * Forget every cached listing, and say how many went — see
+   * `CacheResetService`. The DURABLE half is cleared by that service too, and
+   * separately: this map is one process's memory of the same answers.
+   */
+  clearCache(): number {
+    const dropped = this.cache.size;
+    this.cache.clear();
+    return dropped;
+  }
+
+  /**
+   * Re-ask behind an answer already given.
+   *
+   * Through the SAME `inFlight` map a cold read uses, which is the whole
+   * concurrency argument: a refresh cannot race a cold ask, and a second read
+   * arriving while one is running joins it instead of spawning a second CLI.
+   * `fetch` never rejects, so nothing here can surface as an unhandled
+   * rejection from a promise nobody awaits.
+   */
+  private revalidate(
+    kind: AgentKind,
+    version: string | null,
+    cached: CacheEntry | undefined,
+  ): void {
+    if (this.inFlight.has(kind)) {
+      return;
+    }
+    const pending = this.fetch(kind, version, cached);
+    this.inFlight.set(kind, pending);
+    void pending.finally(() => this.inFlight.delete(kind));
   }
 
   private async fetch(
@@ -121,6 +180,34 @@ export class ModelsService {
       return cached?.models ?? [];
     }
     this.cache.set(kind, { version, fetchedAt: this.now(), models });
+    // An EMPTY list is deliberately not filed: every adapter answers one when
+    // it could not ask, so storing it would re-serve "this CLI has no models"
+    // for as long as the entry stood — the same rule the cursor adapter applies
+    // to a reply that enumerated nothing.
+    if (models.length > 0) {
+      this.store.remember(kind, null, version, models);
+    }
     return models;
   }
+}
+
+/**
+ * What a stored listing has to look like to be served back.
+ *
+ * The store holds JSON, and this file outlives the build that wrote it — so a
+ * row whose shape has since changed is exactly what a durable cache hands back,
+ * and this is the difference between re-asking and giving the picker rows it
+ * cannot render.
+ */
+function isModelList(value: unknown): value is AgentModelWire[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        typeof (entry as AgentModelWire).id === 'string' &&
+        typeof (entry as AgentModelWire).label === 'string',
+    )
+  );
 }

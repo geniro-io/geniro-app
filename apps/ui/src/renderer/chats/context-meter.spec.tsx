@@ -20,6 +20,11 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  // The panel's folds are REMEMBERED (`usePersistedFlag` → localStorage), which
+  // jsdom keeps for the whole file: a case that opens the MCP block would
+  // otherwise leave every case after it running against an expanded panel, and
+  // the fold assertions would pass or fail by test order.
+  localStorage.clear();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -195,52 +200,34 @@ describe('ContextMeter', () => {
     expect(tone(90)).toContain('text-destructive');
   });
 
-  it('renders nothing when there is nothing to say AND no reason for it', () => {
+  it('renders nothing until a turn has reported something', () => {
     // A turn that has yet to report anything: a moment, not a fact, so there is
     // nothing to explain and no spot to hold.
+    //
+    // This used to have a sibling that held the spot with a sentence for "a CLI
+    // that never reports usage", fed from the daemon's usage capability. Both
+    // shipped CLIs do report a context reading — claude over its control
+    // channel, cursor-agent out of its own session store — so the sentence only
+    // ever appeared on a chat whose first turn had not landed yet, where it
+    // said "no cost can be shown" about a reading that was on its way. See
+    // `context-meter.tsx` for the full note.
     render(<ContextMeter contextTokens={null} contextWindowTokens={null} />);
     expect(container.textContent).toBe('');
   });
 
-  it('holds the spot and SAYS WHY when the CLI never reports usage', () => {
-    // This is the reported defect. cursor-agent sends no `usage_update` and its
-    // prompt reply carries no usage (measured 2026-08-12 on 2026.08.11-e8db854
-    // from a raw frame capture), so its meter is permanently empty — and it
-    // rendered as a blank gap beside a claude card with a ring, which is exactly
-    // the question the user asked: "why don't I see context here?"
-    const reason = 'cursor-agent reports no token or cost usage over ACP';
+  it('shows the reading once it lands, for a CLI that reports no cost', () => {
+    // The cursor case end to end: no spend to show, and a real context reading
+    // all the same. Pinned because the removed branch would have replaced this
+    // with a sentence about cost.
     render(
       <ContextMeter
-        contextTokens={null}
-        contextWindowTokens={null}
-        unavailableReason={reason}
+        contextTokens={47_900}
+        contextWindowTokens={272_000}
+        spentUsd={null}
       />,
     );
-
-    // Present, and the reason IS the control's accessible name — so it is
-    // reachable by keyboard and by screen reader, not by hover alone.
-    expect(meterLabel()).toBe(reason);
-    expect(ring()).not.toBeNull();
-    // An EMPTY ring: a fraction here would be a reading nobody reported.
-    expect(ring()?.getAttribute('aria-hidden')).toBe('true');
-
-    openMeter();
-    expect(container.textContent).toContain(reason);
-  });
-
-  it('shows the FIGURES, not the reason, once a CLI has reported any', () => {
-    // The reason is about a permanent absence. A CLI that reports usage can
-    // still be between turns, and printing "never reports usage" over a real
-    // reading would be false — so the figures win whenever they exist.
-    render(
-      <ContextMeter
-        contextTokens={50_000}
-        contextWindowTokens={200_000}
-        unavailableReason="this should not be reachable"
-      />,
-    );
-    expect(meterLabel()).toBe('Context 25% full — 50k of 200k');
-    expect(container.textContent).not.toContain('should not be reachable');
+    expect(meterLabel()).toBe('Context 18% full — 47.9k of 272k');
+    expect(container.textContent).not.toContain('cost');
   });
 
   it('leaves the ring itself unlabelled, so the figure announces once', () => {
@@ -378,6 +365,7 @@ describe('the expanded readout the meter opens onto', () => {
     // carry the shape a claude chat with no plan reading answers with.
     plan: null,
     planReason: 'plan limits are read from the running agent',
+    takenAt: null,
     totals: TOTALS,
   };
 
@@ -652,12 +640,52 @@ describe('the expanded readout the meter opens onto', () => {
     expect(text).toContain('273.9k');
   });
 
-  it('names the instructions and the MCP servers that are filling the window', async () => {
+  it('FOLDS the drill-downs, keeping each block’s total on its header', async () => {
+    // Reported as "у нас слишком много информации… по дефолту оно должно быть
+    // свернуто": these three blocks are open-ended — one row per deferred
+    // category, per instruction file, per MCP server — and on a real machine
+    // they ran for screens above the readings the panel is opened for. The
+    // total stays visible, because that is what a reader takes from a list of
+    // nine servers anyway.
     renderWithLoader(() => Promise.resolve(METRICS));
     openMeter();
     await act(async () => {});
 
     const text = container.textContent ?? '';
+    expect(text).toContain('MCP servers');
+    expect(text).toContain('1 server · 109.3k');
+    // The plural comes from the caller, not from an appended `s` — the first
+    // block counts CATEGORIES, and deriving it printed "2 categorys" in the
+    // running app.
+    expect(text).toContain('1 category · 273.9k');
+    expect(text).toContain('1 file · 45.9k');
+    // ...and the rows themselves are not on screen until they are asked for.
+    expect(text).not.toContain('amplitude');
+    expect(text).not.toContain('proj/CLAUDE.md');
+  });
+
+  it('names the instructions and the MCP servers once the block is opened', async () => {
+    renderWithLoader(() => Promise.resolve(METRICS));
+    openMeter();
+    await act(async () => {});
+
+    const headers = [
+      ...container.querySelectorAll<HTMLButtonElement>('button[aria-expanded]'),
+    ];
+    const servers = headers.find((b) =>
+      b.textContent?.includes('MCP servers'),
+    )!;
+    const instructions = headers.find((b) =>
+      b.textContent?.includes('Instructions'),
+    )!;
+    expect(servers.getAttribute('aria-expanded')).toBe('false');
+    await act(async () => {
+      servers.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      instructions.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const text = container.textContent ?? '';
+    expect(servers.getAttribute('aria-expanded')).toBe('true');
     expect(text).toContain('proj/CLAUDE.md');
     expect(text).toContain('45.9k');
     expect(text).toContain('amplitude');
@@ -682,6 +710,7 @@ describe('the expanded readout the meter opens onto', () => {
         breakdownReason: 'cursor-agent has no channel for one',
         plan: null,
         planReason: 'cursor-agent does not report its plan limits',
+        takenAt: null,
         totals: TOTALS,
       }),
     );
@@ -916,6 +945,7 @@ describe('the expanded readout the meter opens onto', () => {
           ],
         },
         planReason: null,
+        takenAt: null,
       }),
     );
     openMeter();
@@ -931,6 +961,32 @@ describe('the expanded readout the meter opens onto', () => {
     expect(text).toContain('Current week');
     expect(text).toContain('30% · resets in 5d 3h');
     expect(container.querySelectorAll('[data-plan-window]')).toHaveLength(2);
+  });
+
+  it('DATES a reading whose agent has since been closed, and drops the re-read claim', async () => {
+    // The figures are real and the moment is not now: they were taken on the
+    // way out of a process that has since been closed, and the standing caption
+    // ("re-read each time this opens") describes a live reading only. Saying it
+    // over a stored one is the same lie as the sentence this whole fix started
+    // from — a panel promising a reading nobody was going to take.
+    renderWithLoader(() =>
+      Promise.resolve({
+        ...METRICS,
+        takenAt: new Date(Date.now() - 3 * 60 * 60_000).toISOString(),
+      }),
+    );
+    openMeter();
+    await act(async () => {});
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('before its process was closed');
+    expect(text).toContain('(3h)');
+    expect(text).toContain('Send a message to take a fresh one');
+    expect(text).not.toContain('re-read each time this opens');
+    // ...and the figures themselves are still drawn, which is the whole point.
+    // A category from the BREAKDOWN, which stays open — the drill-downs below
+    // it are folded by default.
+    expect(text).toContain('System prompt');
   });
 
   it('puts the plan limits ABOVE the per-server drill-down', async () => {
@@ -956,6 +1012,7 @@ describe('the expanded readout the meter opens onto', () => {
           ],
         },
         planReason: null,
+        takenAt: null,
       }),
     );
     openMeter();
@@ -974,13 +1031,14 @@ describe('the expanded readout the meter opens onto', () => {
 
   it('says WHY there are no plan limits instead of leaving the section out', async () => {
     // The same rule the breakdown follows: an absent reading with no sentence
-    // is the blank space the whole `unavailableReason` family exists to
+    // is the blank space a stated reason exists to
     // replace — and here it would read as "this account has no limits".
     renderWithLoader(() =>
       Promise.resolve({
         ...METRICS,
         plan: null,
         planReason: 'cursor-agent does not report its plan limits',
+        takenAt: null,
       }),
     );
     openMeter();

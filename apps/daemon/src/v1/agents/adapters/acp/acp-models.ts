@@ -11,7 +11,7 @@ import { classifyMessage, encodeRequest } from './acp-jsonrpc';
  * The protocol's own name for the config option that selects a model.
  * `category`, not `id` — see {@link AcpConfigOption}.
  */
-const MODEL_CONFIG_CATEGORY = 'model';
+export const ACP_MODEL_CONFIG_CATEGORY = 'model';
 
 /**
  * The `configOptions[]` entry of category `model`, or null when the reply
@@ -25,7 +25,7 @@ function readModelConfigOption(sessionResult: unknown): AcpConfigOption | null {
     if (record === null || id === null || id === '') {
       continue;
     }
-    if (asString(record.category) !== MODEL_CONFIG_CATEGORY) {
+    if (asString(record.category) !== ACP_MODEL_CONFIG_CATEGORY) {
       continue;
     }
     const options: AcpConfigOption['options'] = [];
@@ -39,7 +39,8 @@ function readModelConfigOption(sessionResult: unknown): AcpConfigOption | null {
     }
     return {
       id,
-      category: MODEL_CONFIG_CATEGORY,
+      name: asString(record.name),
+      category: ACP_MODEL_CONFIG_CATEGORY,
       currentValue: asString(record.currentValue),
       options,
     };
@@ -62,9 +63,37 @@ export function readAcpConfigOption(
   sessionResult: unknown,
   configId: string,
 ): AcpConfigOption | null {
+  return (
+    readAcpConfigOptions(sessionResult).find(
+      (option) => option.id === configId,
+    ) ?? null
+  );
+}
+
+/**
+ * EVERY `configOptions[]` entry the reply carries, in the agent's own order.
+ *
+ * The plural of {@link readAcpConfigOption}, and the reader for a consumer that
+ * does not know in advance which options exist — a model's parameters are the
+ * agent's vocabulary, so the only way to surface a setting nobody here has
+ * heard of is to enumerate and subtract (see `AgentModelParameter`). Written as
+ * the primitive with the singular reader built on it, so the two cannot come to
+ * disagree about how one entry is read.
+ *
+ * An entry with no usable `id` is dropped: it can never be set, so offering it
+ * would be a control with nothing behind it. An entry with no `options` is
+ * KEPT — that is the agent naming an axis whose vocabulary it did not send, and
+ * the callers each decide what to do about it (both of them, today, treat an
+ * empty list as "no choice here").
+ */
+export function readAcpConfigOptions(
+  sessionResult: unknown,
+): AcpConfigOption[] {
+  const found: AcpConfigOption[] = [];
   for (const entry of asArray(asRecord(sessionResult)?.configOptions)) {
     const record = asRecord(entry);
-    if (record === null || asString(record.id) !== configId) {
+    const id = record ? asString(record.id) : null;
+    if (record === null || id === null || id === '') {
       continue;
     }
     const options: AcpConfigOption['options'] = [];
@@ -76,14 +105,15 @@ export function readAcpConfigOption(
       }
       options.push({ value, name: asString(optionRecord?.name) || value });
     }
-    return {
-      id: configId,
+    found.push({
+      id,
+      name: asString(record.name),
       category: asString(record.category),
       currentValue: asString(record.currentValue),
       options,
-    };
+    });
   }
-  return null;
+  return found;
 }
 
 /**
@@ -299,6 +329,16 @@ export function readAcpConfigOptionProbe(
 ): AcpConfigOption | null {
   const { settled, result } = probeSessionReply(stdout);
   return settled ? readAcpConfigOption(result, configId) : null;
+}
+
+/**
+ * {@link readAcpConfigOptions} over a raw probe's stdout — the plural twin of
+ * {@link readAcpConfigOptionProbe}. An unsettled probe yields nothing, which
+ * the caller must read as "not asked" rather than as "no options".
+ */
+export function readAcpConfigOptionsProbe(stdout: string): AcpConfigOption[] {
+  const { settled, result } = probeSessionReply(stdout);
+  return settled ? readAcpConfigOptions(result) : [];
 }
 
 /** Whether a completed probe enumerated ANY config options at all. */

@@ -198,4 +198,11 @@ export class EffortsService {
   private adapterFor(kind: AgentKind): AgentAdapter {
     return this.adapters.for(kind);
   }
+  /**
+   * Forget every cached effort levels, and say how many went — see
+   * `CacheResetService`.
+   */
+  clearCache(): number {
+    return this.cache.clear();
+  }
 }

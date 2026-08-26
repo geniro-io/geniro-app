@@ -1,9 +1,6 @@
-import { Terminal } from 'lucide-react';
-
 import { TITLEBAR_CONTENT_INSET } from '../../shared/contracts';
 import type { FooterUpdate } from '../updates/update-status';
 import { StatusDot } from './status-dot';
-import { cn } from './ui/utils';
 import { UpdateControl } from './update-control';
 
 /**
@@ -34,6 +31,12 @@ import { UpdateControl } from './update-control';
  * itself, right where it was"): it acts on the column beside it, not on the
  * window, so it belongs to that column. What is here is what is about the
  * WINDOW or the app as a whole.
+ *
+ * The debug-log trigger is gone from here too, and asked for by name. It was
+ * the one control in the band a user never wants — an unlabelled `>_` beside
+ * the version, opening a developer panel — while the two beside it report the
+ * app's health and offer its update. ⌥⌘L still opens the drawer (`App.tsx`),
+ * which is the whole of what the button did.
  */
 export function TitleBar({
   title,
@@ -42,8 +45,6 @@ export function TitleBar({
   update,
   onInstallUpdate,
   onRelaunchUpdate,
-  debugOpen,
-  onToggleDebug,
 }: {
   /** What this window is showing right now — the open chat, or the view. */
   title: string;
@@ -62,9 +63,6 @@ export function TitleBar({
   update: FooterUpdate;
   onInstallUpdate?: () => void;
   onRelaunchUpdate?: () => void;
-  /** Whether the debug drawer is showing — the trigger's pressed state. */
-  debugOpen: boolean;
-  onToggleDebug: () => void;
 }): React.JSX.Element {
   return (
     <header
@@ -130,25 +128,6 @@ export function TitleBar({
           onInstall={onInstallUpdate}
           onRelaunch={onRelaunchUpdate}
         />
-        {/* The debug trigger. It sat in the rail's footer beside the status
-            dot, on the reasoning that the footer is where the eye goes when
-            something is wrong. The title bar is now where every global control
-            lives, and "show me why" is one — the footer keeps the status
-            itself, which is the part that is a READOUT rather than an action. */}
-        <button
-          type="button"
-          aria-label="Debug log"
-          aria-pressed={debugOpen}
-          title="Debug log (⌥⌘L)"
-          onClick={onToggleDebug}
-          className={cn(
-            'app-no-drag flex size-6 shrink-0 items-center justify-center rounded-md outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring/50',
-            debugOpen
-              ? 'text-sidebar-primary-strong'
-              : 'text-sidebar-foreground/70',
-          )}>
-          <Terminal aria-hidden="true" className="size-3.5 shrink-0" />
-        </button>
       </div>
     </header>
   );

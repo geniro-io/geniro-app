@@ -16,6 +16,27 @@ import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 
 /**
+ * The item kinds that END a turn. All three are a naming opportunity — see the
+ * subscriber for why the clean one is not privileged, and what it does decide.
+ */
+const TERMINAL_ITEM_KINDS = new Set([
+  'turn_complete',
+  'turn_cancelled',
+  'error',
+]);
+
+/** Which naming a caller is asking for — see {@link ChatTitleService.name}. */
+interface NameOptions {
+  /** Stop at deriving a name; never spend a run's upgrade budget. */
+  unnamedOnly?: boolean;
+  /**
+   * Whether this ending justifies a model call when the CLI writes no title of
+   * its own. Reading one is always allowed.
+   */
+  mayAsk?: boolean;
+}
+
+/**
  * Names a chat from its first message, then improves the name once the CLI has
  * one of its own.
  *
@@ -120,7 +141,7 @@ export class ChatTitleService implements OnModuleInit {
       // one can only trim the opening line, while `upgrade` replaces it with
       // the name the AGENT gave the conversation once there is one.
       if (event.item.kind === 'message' && event.item.role === 'user') {
-        void this.name(event.runId, true).catch((err) => {
+        void this.name(event.runId, { unnamedOnly: true }).catch((err) => {
           this.logger.warn(
             `failed to name run ${event.runId}: ${
               err instanceof Error ? err.message : String(err)
@@ -129,15 +150,24 @@ export class ChatTitleService implements OnModuleInit {
         });
         return;
       }
-      if (event.item.kind !== 'turn_complete') {
+      // EVERY ending, not only the clean one. A turn that failed or was stopped
+      // has still had a conversation, and the CLI that writes a name of its own
+      // has already written it — so gating on `turn_complete` left a chat the
+      // user pressed Stop on wearing its opening line for good, which is the
+      // reported "the title is still my first message". What the ending DOES
+      // decide is whether the CLI may be ASKED: a read is a file open, an ask is
+      // a model call, and a turn that died before producing anything has nothing
+      // to name that the derived title does not already say.
+      if (!TERMINAL_ITEM_KINDS.has(event.item.kind)) {
         return;
       }
+      const mayAsk = event.item.kind === 'turn_complete';
       // Fire-and-forget with the failure OWNED here, exactly as the usage
       // recorder does: this is an RxJS subscriber, so a rejection escaping it
       // would surface as an unhandled rejection and reach the process-level
       // crash guard. An unnamed chat must not be able to take the daemon's turn
       // plumbing with it.
-      void this.name(event.runId).catch((err) => {
+      void this.name(event.runId, { mayAsk }).catch((err) => {
         this.logger.warn(
           `failed to name run ${event.runId}: ${
             err instanceof Error ? err.message : String(err)
@@ -162,7 +192,10 @@ export class ChatTitleService implements OnModuleInit {
    * requires that title to be exactly what this service would derive today. A
    * rename stops matching on both counts, so nothing can overwrite it.
    */
-  private async name(runId: string, unnamedOnly = false): Promise<void> {
+  private async name(
+    runId: string,
+    { unnamedOnly = false, mayAsk = true }: NameOptions = {},
+  ): Promise<void> {
     if (this.naming.has(runId)) {
       return;
     }
@@ -192,7 +225,7 @@ export class ChatTitleService implements OnModuleInit {
       const title =
         run.title === null
           ? await this.resolve(named, em)
-          : await this.upgrade(named, em);
+          : await this.upgrade(named, em, mayAsk);
       if (title === null) {
         return;
       }
@@ -241,6 +274,7 @@ export class ChatTitleService implements OnModuleInit {
   private async upgrade(
     run: Run & { agentKind: AgentKind },
     em: EntityManager,
+    mayAsk: boolean,
   ): Promise<string | null> {
     const tried = this.upgradesTried.get(run.id) ?? 0;
     if (tried >= CHAT_TITLE_UPGRADE_TURNS) {
@@ -259,7 +293,7 @@ export class ChatTitleService implements OnModuleInit {
     }
     const better =
       (await this.readNativeTitle(run, em)) ??
-      (await this.askForTitle(run, em, opening));
+      (mayAsk ? await this.askForTitle(run, em, opening) : null);
     if (better === null) {
       return null;
     }

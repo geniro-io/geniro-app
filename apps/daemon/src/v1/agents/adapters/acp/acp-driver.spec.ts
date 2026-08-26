@@ -1,12 +1,22 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
 import type { AcpDriverOptions } from './acp-driver';
-import { AcpTurnDriver, selectPermissionOption } from './acp-driver';
+import {
+  AcpTurnDriver,
+  HOST_CONTEXT_NOTE,
+  HOST_CONTEXT_TAG,
+  selectPermissionOption,
+} from './acp-driver';
+
+/** The turn's instructions as the prompt actually carries them. */
+function hostBlock(instructions: string): string {
+  return `<${HOST_CONTEXT_TAG}>\n\n${HOST_CONTEXT_NOTE}\n\n${instructions}\n\n</${HOST_CONTEXT_TAG}>`;
+}
 
 interface Harness {
   driver: AcpTurnDriver;
@@ -223,7 +233,9 @@ describe('AcpTurnDriver MCP delivery', () => {
     h.feed(initializeReply(1, { http: true }));
     h.feed({ id: 2, result: { sessionId: 's' } });
     expect(promptText(h)).toBe(
-      'You orchestrate.\n\nMay call (via the call_agent tool): - Helper\n\ndo the thing',
+      `do the thing\n\n${hostBlock(
+        'You orchestrate.\n\nMay call (via the call_agent tool): - Helper',
+      )}`,
     );
   });
 
@@ -234,15 +246,69 @@ describe('AcpTurnDriver MCP delivery', () => {
     // Telling an agent to route work through `call_agent` when no such tool is
     // registered makes its callees silently never run while the node still
     // reports success. The role survives; only the false affordance goes.
-    expect(promptText(h)).toBe('You orchestrate.\n\ndo the thing');
+    expect(promptText(h)).toBe(
+      `do the thing\n\n${hostBlock('You orchestrate.')}`,
+    );
     expect(promptText(h)).not.toContain('call_agent');
   });
 
-  it('prepends a graph node role to the prompt, ACP having no system-prompt field', () => {
+  it('carries a graph node role in the prompt, ACP having no system-prompt field', () => {
     const h = harness({ input: { ...BASE_INPUT, systemPrompt: 'Be terse.' } });
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: { sessionId: 's' } });
-    expect(promptText(h)).toBe('Be terse.\n\ndo the thing');
+    expect(promptText(h)).toBe(`do the thing\n\n${hostBlock('Be terse.')}`);
+  });
+
+  it('opens the prompt with the USER’s words, never with the instructions', () => {
+    // THE REPORTED DEFECT, and the reason the order is asserted rather than
+    // merely the contents. ACP has no system-prompt field, so the instructions
+    // ride the prompt TEXT — and the CLI names the conversation from that first
+    // prompt. Led by geniro's own preamble, cursor-agent named a chat asking
+    // about bloom filters "Markdown Not Terminal"; with the user's sentence
+    // first the same prompt produced "Bloom Filter Explained".
+    const h = harness({ input: { ...BASE_INPUT, systemPrompt: 'Be terse.' } });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    expect(promptText(h)?.startsWith('do the thing')).toBe(true);
+  });
+
+  it('marks the instructions as HOST CONTEXT, not as something to answer', () => {
+    // REPORTED, then reproduced end to end: a cursor chat opened with `Hello!`
+    // was answered "Got it — I'll treat this as a **rich markdown chat
+    // transcript**, not terminal output", listing the formats geniro had just
+    // described — because on ACP these instructions arrive inside the USER's
+    // turn, and an agent answers what the user says. claude never had this;
+    // `--append-system-prompt` is out of band. With the wrapper the same
+    // opening is answered "Hello! How can I help you today?".
+    const h = harness({ input: { ...BASE_INPUT, systemPrompt: 'Be terse.' } });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    const text = promptText(h) ?? '';
+
+    // The boundary and the sentence saying what it is: a bare tag is just more
+    // text, and the sentence without the tag has nothing to scope.
+    expect(text).toContain(`<${HOST_CONTEXT_TAG}>`);
+    expect(text).toContain(`</${HOST_CONTEXT_TAG}>`);
+    expect(text).toContain(HOST_CONTEXT_NOTE);
+    // Inside it, and after the user's own words.
+    expect(text.indexOf('do the thing')).toBeLessThan(
+      text.indexOf(`<${HOST_CONTEXT_TAG}>`),
+    );
+    expect(text.indexOf('Be terse.')).toBeGreaterThan(
+      text.indexOf(HOST_CONTEXT_NOTE),
+    );
+    expect(text.indexOf('Be terse.')).toBeLessThan(
+      text.indexOf(`</${HOST_CONTEXT_TAG}>`),
+    );
+  });
+
+  it('sends the prompt ALONE when the turn has no instructions at all', () => {
+    // An empty wrapper would be a boundary around nothing plus a sentence about
+    // it — noise in every resumed turn, which is most of them.
+    const h = harness({ composeSystemPrompt: () => '' });
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 's' } });
+    expect(promptText(h)).toBe('do the thing');
   });
 
   it('sends no server list when the turn has no endpoint', () => {
@@ -621,7 +687,7 @@ describe('AcpTurnDriver session resume', () => {
     expect(events).toContainEqual({
       type: 'notice',
       message:
-        'agent does not support session/load — this turn starts a fresh session instead of resuming',
+        'this agent cannot resume a conversation — the turn starts fresh, without the earlier messages',
     });
     expect(h.sentMethod('session/new')).toBeDefined();
   });
@@ -1911,6 +1977,80 @@ describe('AcpTurnDriver off-protocol context reading', () => {
 
     expect(complete?.usage?.contextWindowTokens).toBeNull();
     expect(complete?.usage?.contextModel).toBeNull();
+  });
+
+  /** One ordinary `session/update` — the carrier of the mid-turn re-read. */
+  function chunk(text: string): Record<string, unknown> {
+    return {
+      method: 'session/update',
+      params: {
+        sessionId: 's',
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text },
+        },
+      },
+    };
+  }
+
+  describe('while the turn is still running', () => {
+    // The interval is wall-clock, so these drive the clock rather than wait on
+    // it. Every one of them starts from a session reply that has already taken
+    // its own reading — which arms the interval, as any read does.
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('fills the ring MID-turn, not only once the first turn has ended', () => {
+      // THE REPORTED DEFECT: a newly-started chat "still hadn't loaded any
+      // context, and loaded it only later". The two readings this driver used
+      // to take are both BOUNDARIES — the session reply, where a conversation
+      // the agent has never held has written nothing to read, and the settle —
+      // so a first turn ran to completion with an empty ring above it. Measured
+      // on a fresh cursor chat: the store held a complete reading 18.2s in.
+      let written = false;
+      const { h, onSession } = opened({
+        readContext: () => (written ? READING : null),
+      });
+      expect(onSession.some((e) => e.type === 'context_progress')).toBe(false);
+
+      written = true;
+      vi.advanceTimersByTime(5_000);
+      expect(h.feed(chunk('working on it'))).toContainEqual(PROGRESS);
+    });
+
+    it('re-reads at most once per interval, however chatty the agent is', () => {
+      // A turn streams its answer a word at a time, and each reading published
+      // is a socket emission to every client watching the run.
+      const readContext = vi.fn(() => READING);
+      const { h } = opened({ readContext });
+      expect(readContext).toHaveBeenCalledTimes(1); // the session reply
+
+      h.feed(chunk('one'));
+      h.feed(chunk('two'));
+      expect(readContext).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(5_000);
+      h.feed(chunk('three'));
+      h.feed(chunk('four'));
+      expect(readContext).toHaveBeenCalledTimes(2);
+    });
+
+    it('publishes a mid-turn reading only once the figure has MOVED', () => {
+      let reading = READING;
+      const { h } = opened({ readContext: () => reading });
+
+      vi.advanceTimersByTime(5_000);
+      expect(
+        h.feed(chunk('same window')).some((e) => e.type === 'context_progress'),
+      ).toBe(false);
+
+      reading = { ...READING, usedTokens: 133_700 };
+      vi.advanceTimersByTime(5_000);
+      expect(h.feed(chunk('grown'))).toContainEqual({
+        ...PROGRESS,
+        contextTokens: 133_700,
+      });
+    });
   });
 
   it('survives a source that throws — a meter is not worth a failed turn', () => {

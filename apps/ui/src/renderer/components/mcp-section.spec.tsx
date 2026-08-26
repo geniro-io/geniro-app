@@ -30,6 +30,9 @@ function listing(
     name: string;
     toggleUnavailableReason?: string | null;
     signInUnavailableReason?: string | null;
+    approveUnavailableReason?: string | null;
+    scope?: AgentMcpServer['scope'];
+    shadowsUser?: boolean;
     target?: string | null;
     detail?: string | null;
     status?: AgentMcpServer['status'];
@@ -43,10 +46,12 @@ function listing(
       transport: 'stdio',
       status: s.status ?? 'connected',
       detail: s.detail ?? null,
-      scope: 'project',
+      scope: s.scope ?? 'unknown',
+      shadowsUser: s.shadowsUser ?? false,
       disabled: s.disabled ?? false,
       toggleUnavailableReason: s.toggleUnavailableReason ?? null,
       signInUnavailableReason: s.signInUnavailableReason ?? null,
+      approveUnavailableReason: s.approveUnavailableReason ?? null,
     })),
     unavailableReason: null,
   } as unknown as AgentMcpListing;
@@ -616,5 +621,303 @@ describe('McpSection — servers that need signing in', () => {
     expect(
       el.querySelector('[title="cursor-agent cannot sign in from here"]'),
     ).not.toBeNull();
+  });
+});
+
+describe('McpSection — servers waiting to be approved', () => {
+  const NOTE = 'will not load them until you approve them here';
+
+  /** The disclosure headed for approval, told apart from the sign-in one. */
+  function approvalGroup(el: Element): HTMLButtonElement | null {
+    return (
+      [...el.querySelectorAll('button')].find((b) =>
+        b.textContent?.includes('Needs approval'),
+      ) ?? null
+    );
+  }
+
+  it('folds an unapproved server out of the rows that are working', () => {
+    // THE REPORTED DEFECT, from the outside: `wispr` and `codegraph` sat among
+    // the healthy rows carrying the words `pending approval` and a switch
+    // already in the ON position. They are one press from loading, which is
+    // what makes them a group rather than a badge.
+    const el = render({
+      listing: listing(
+        { name: 'working' },
+        { name: 'wispr', status: 'pending', detail: '(needs approval)' },
+      ),
+      loading: false,
+    });
+
+    expect(approvalGroup(el)?.textContent).toContain('1');
+    expect(el.textContent).toContain('working');
+    // Folded: counted, not listed, until asked for.
+    expect(el.textContent).not.toContain('wispr');
+  });
+
+  it('says what approval IS, where the badge only said “pending”', () => {
+    // The question asked verbatim was what the words meant and why they were
+    // there. The two facts owed are that the agent will not load the server
+    // until it is approved HERE, and that nothing is broken.
+    const el = render({
+      listing: listing({ name: 'wispr', status: 'pending' }),
+      loading: false,
+    });
+    act(() => {
+      approvalGroup(el)!.click();
+    });
+
+    expect(el.textContent).toContain(NOTE);
+    expect(el.textContent).toContain('nothing is broken');
+    // And the row itself no longer restates a status the heading, the note and
+    // the button beside it all carry — the rule `needs_auth` already follows.
+    expect(el.querySelector('li')?.textContent).not.toContain('pending');
+  });
+
+  it('approves from the row, through the same write that switches one on', () => {
+    // `cursor-agent mcp enable <name>` answers "Enabled and approved", so the
+    // approve IS the enable and rides the one callback a surface already has
+    // to wire — never a second one it could forget.
+    const onSetEnabled = vi.fn();
+    const el = render({
+      listing: listing({ name: 'wispr', status: 'pending' }),
+      loading: false,
+      onSetEnabled,
+    });
+    act(() => {
+      approvalGroup(el)!.click();
+    });
+
+    const button = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Approve'),
+    );
+    act(() => {
+      button!.click();
+    });
+
+    expect(onSetEnabled).toHaveBeenCalledWith('wispr', true);
+  });
+
+  it('states the CLI’s reason instead of an Approve that would do nothing', () => {
+    // claude's case: its switch works and approves nothing — approval is its
+    // own `/mcp` screen — so the button would move a control and leave the row
+    // exactly as it was.
+    const onSetEnabled = vi.fn();
+    const el = render({
+      listing: listing({
+        name: 'wispr',
+        status: 'pending',
+        approveUnavailableReason: 'claude approves in its own /mcp screen',
+      }),
+      loading: false,
+      onSetEnabled,
+    });
+    act(() => {
+      approvalGroup(el)!.click();
+    });
+
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Approve'),
+      ),
+    ).toBe(false);
+    expect(
+      el.querySelector('[title="claude approves in its own /mcp screen"]'),
+    ).not.toBeNull();
+  });
+
+  it('offers no Approve on a surface with no write path', () => {
+    // The graph inspector's case — the same rule the toggle and the sign-in
+    // control follow.
+    const el = render({
+      listing: listing({ name: 'wispr', status: 'pending' }),
+      loading: false,
+    });
+    act(() => {
+      approvalGroup(el)!.click();
+    });
+
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Approve'),
+      ),
+    ).toBe(false);
+  });
+
+  it('draws no approval group at all when nothing is waiting', () => {
+    // The one place this panel departs from its neighbour, which renders at
+    // zero on purpose. Only a project-scoped server can ever need approving,
+    // so on most folders the state cannot occur and a standing "Needs approval
+    // · 0" would be a permanent line about nothing.
+    const el = render({
+      listing: listing(
+        { name: 'working' },
+        { name: 'linear', status: 'needs_auth' },
+      ),
+      loading: false,
+    });
+
+    expect(approvalGroup(el)).toBeNull();
+    // The sign-in group's own zero-state rule is untouched by that.
+    expect(
+      [...el.querySelectorAll('button')].some((b) =>
+        b.textContent?.includes('Needs sign-in'),
+      ),
+    ).toBe(true);
+  });
+
+  it('reads a server the CLI is still dialling as connecting, not as unknown', () => {
+    // `loading` is a MOMENT — the next read settles it — so calling it
+    // `unknown` makes a claim about this app's parser instead of reporting
+    // what the CLI plainly said.
+    const el = render({
+      listing: listing({ name: 'slow', status: 'loading' }),
+      loading: false,
+    });
+
+    expect(el.textContent).toContain('connecting');
+    expect(el.textContent).not.toContain('unknown');
+  });
+});
+
+describe('McpSection — where a server came from', () => {
+  it('states the scope in the CLI’s own words', () => {
+    // The reader is comparing this panel against cursor's own picker, which
+    // labels its rows User and Workspace. Matching that vocabulary is the
+    // point — a synonym would make them translate.
+    const el = render({
+      listing: listing(
+        { name: 'linear', scope: 'user' },
+        { name: 'codegraph', scope: 'workspace' },
+      ),
+      loading: false,
+    });
+
+    expect(el.textContent).toContain('user');
+    expect(el.textContent).toContain('workspace');
+  });
+
+  it('says nothing at all for a scope it could not place', () => {
+    // The ordinary case for a CLI whose config files geniro does not read yet
+    // (claude's four scopes today), so a badge here would appear on every row
+    // and report on geniro rather than on the server.
+    const el = render({
+      listing: listing({ name: 'srv', scope: 'unknown' }),
+      loading: false,
+    });
+
+    expect(el.textContent).toContain('srv');
+    expect(el.textContent).not.toContain('unknown');
+  });
+
+  it('explains a folder definition that displaces the user’s own server', () => {
+    // THE REPORTED CONFUSION. A CLI merges its scopes BY NAME, so a folder
+    // redefining `codegraph` produces ONE row — and when the folder's copy is
+    // the unapproved one, the panel says a server is not working that the
+    // reader knows works everywhere else. Nothing on the row said they were
+    // two different servers.
+    const el = render({
+      listing: listing({
+        name: 'codegraph',
+        status: 'pending',
+        scope: 'workspace',
+        shadowsUser: true,
+      }),
+      loading: false,
+    });
+    act(() => {
+      [...el.querySelectorAll('button')]
+        .find((b) => b.textContent?.includes('Needs approval'))!
+        .click();
+    });
+
+    expect(el.textContent).toContain('This folder defines its own codegraph');
+    expect(el.textContent).toContain('not what runs here');
+  });
+
+  it('says it only where a user server is actually being displaced', () => {
+    // A workspace-only server displaces nothing, and the sentence would then
+    // claim a user-level one exists.
+    const el = render({
+      listing: listing({
+        name: 'only-here',
+        scope: 'workspace',
+        shadowsUser: false,
+      }),
+      loading: false,
+    });
+
+    expect(el.textContent).not.toContain('not what runs here');
+  });
+});
+
+describe('McpSection — a sign-in that has been asked for', () => {
+  function signInGroup(el: Element): HTMLButtonElement {
+    return [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Needs sign-in'),
+    ) as HTMLButtonElement;
+  }
+
+  it('answers the PRESS, before the daemon has said anything', () => {
+    // THE REPORTED DEFECT, on the other surface: the progress panel appears
+    // only once `POST /v1/auth/mcp-login` returns, and the daemon holds that
+    // reply until the CLI prints its URL — measured at 4001ms in the running
+    // app. For those four seconds a browser tab opens behind the window and
+    // this button says exactly what it said before the press.
+    const el = render({
+      listing: listing({ name: 'vercel', status: 'needs_auth' }),
+      loading: false,
+      onSignIn: vi.fn(),
+      signingIn: 'vercel',
+    });
+    act(() => {
+      signInGroup(el).click();
+    });
+
+    const button = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Signing in'),
+    ) as HTMLButtonElement | undefined;
+    expect(button).toBeDefined();
+    // Disabled too: a second press opens a second browser challenge, which
+    // invalidates the first.
+    expect(button!.disabled).toBe(true);
+  });
+
+  it('marks only the row whose sign-in is running', () => {
+    const el = render({
+      listing: listing(
+        { name: 'vercel', status: 'needs_auth' },
+        { name: 'linear', status: 'needs_auth' },
+      ),
+      loading: false,
+      onSignIn: vi.fn(),
+      signingIn: 'linear',
+    });
+    act(() => {
+      signInGroup(el).click();
+    });
+
+    const labels = [...el.querySelectorAll('li')].map((li) =>
+      li.textContent?.includes('Signing in') === true
+        ? 'Signing in…'
+        : 'Sign in',
+    );
+    expect(labels).toEqual(['Sign in', 'Signing in…']);
+  });
+
+  it('leaves every row pressable when nothing is starting', () => {
+    const el = render({
+      listing: listing({ name: 'vercel', status: 'needs_auth' }),
+      loading: false,
+      onSignIn: vi.fn(),
+    });
+    act(() => {
+      signInGroup(el).click();
+    });
+
+    const button = [...el.querySelectorAll('button')].find((b) =>
+      b.textContent?.includes('Sign in'),
+    ) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
   });
 });

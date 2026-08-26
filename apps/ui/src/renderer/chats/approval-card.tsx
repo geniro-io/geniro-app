@@ -11,6 +11,7 @@ import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf } from './diff-view';
+import { insertPastedFilePaths } from './paste-file-paths';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 
@@ -712,15 +713,20 @@ function QuestionCard({
             // is the qualifier beside them.
             className="h-8"
             onPaste={(event) => {
-              // Only a paste carrying IMAGES is intercepted; plain text keeps
-              // the field's own behaviour, which is what typing an answer is.
+              // A paste carrying FILES is intercepted — images stage as
+              // attachments, anything else becomes its absolute path, exactly
+              // as in the composer. Plain text keeps the field's own
+              // behaviour, which is what typing an answer is.
               //
-              // Tagged with the tab it landed in — see `imagesAt`. Read HERE
-              // rather than inside the hook's async read, which the user is
-              // free to change tabs during.
-              if (
-                attachments.addFromClipboard(event.clipboardData, activeIndex)
-              ) {
+              // The images are tagged with the tab they landed in — see
+              // `imagesAt`. Read HERE rather than inside the hook's async
+              // read, which the user is free to change tabs during.
+              const staged = attachments.addFromClipboard(
+                event.clipboardData,
+                activeIndex,
+              );
+              const pathed = insertPastedFilePaths(event.clipboardData);
+              if (staged || pathed) {
                 event.preventDefault();
               }
             }}

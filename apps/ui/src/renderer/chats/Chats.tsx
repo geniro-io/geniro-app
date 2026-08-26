@@ -45,6 +45,7 @@ import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
 import { Dialog } from '../components/ui/dialog';
+import { MenuAnchorContext } from '../components/ui/menu';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { Textarea } from '../components/ui/textarea';
@@ -80,7 +81,10 @@ import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
 import { CliLoginContext } from './cli-login-context';
-import { compactionOnlyTurnEnds } from './compaction-payload';
+import {
+  compactionOnlyTurnEnds,
+  endsContextHistory,
+} from './compaction-payload';
 import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
@@ -98,8 +102,11 @@ import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
 import { MarkdownImageLoaderContext } from './markdown-image';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
+import { withModelParameter } from './model-parameter-select';
 import { ModelSelect } from './model-select';
+import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
+import { insertPastedFilePaths } from './paste-file-paths';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -146,7 +153,6 @@ import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
   filterSkills,
-  geniroCommandName,
   slashQuery,
   unknownSlashCommand,
 } from './skill-autocomplete';
@@ -192,6 +198,7 @@ import {
 import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
+import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -441,6 +448,12 @@ export function Chats({
   const [efforts, setEfforts] = useState<Partial<Record<CliKind, string>>>({});
   const [contextWindows, setContextWindows] = useState<
     Partial<Record<CliKind, string>>
+  >({});
+  // The OTHER model settings, per CLI, as `{parameterId: value}`. Per CLI on
+  // the same terms as the two above, and opaque: which ids exist is the MODEL's
+  // answer, re-asked whenever it changes.
+  const [modelParameters, setModelParameters] = useState<
+    Partial<Record<CliKind, Record<string, string>>>
   >({});
   // Machine capabilities — gates the plan option; reading pre-warms the probe.
   // Working directory for the NEXT new chat. Seeded from the last-used folder
@@ -821,6 +834,36 @@ export function Chats({
           next[kind] = contextWindow;
         }
         void window.geniro.updateSettings({ lastContextWindows: next });
+        return next;
+      });
+    },
+    [],
+  );
+
+  /**
+   * New-run value for ONE of a model's other settings, remembered per CLI.
+   *
+   * One parameter at a time rather than the whole map, because that is what a
+   * chip press is — the row holds several, each its own control, and replacing
+   * the map from one of them would drop the others.
+   */
+  const changeModelParameter = useCallback(
+    (kind: CliKind, parameterId: string, value: string | null): void => {
+      setModelParameters((current) => {
+        const forKind = { ...(current[kind] ?? {}) };
+        if (value === null) {
+          // Absent, not empty — "no entry" IS whatever the model is already on.
+          delete forKind[parameterId];
+        } else {
+          forKind[parameterId] = value;
+        }
+        const next = { ...current };
+        if (Object.keys(forKind).length === 0) {
+          delete next[kind];
+        } else {
+          next[kind] = forKind;
+        }
+        void window.geniro.updateSettings({ lastModelParameters: next });
         return next;
       });
     },
@@ -1288,25 +1331,6 @@ export function Chats({
    * nothing on screen or on hover to say why. An agent missing from the map is
    * UNKNOWN (the report has not landed), which is not the same as refused.
    */
-  /**
-   * Per CLI: `null` if it reports what a turn cost, else the daemon's own
-   * sentence for why the context meter will always be empty.
-   *
-   * Derived like {@link terminalReasons} below and for the same reason —
-   * `AdapterConfig.usage` is the fact. It is what lets an empty meter answer
-   * "why don't I see context here?" instead of looking identical to a turn that
-   * has simply not reported anything yet.
-   */
-  const usageReasons = useMemo(
-    () =>
-      new Map<string, string | null>(
-        (capabilities?.usage ?? []).map((row) => [
-          row.agent,
-          row.unavailableReason,
-        ]),
-      ),
-    [capabilities],
-  );
   const terminalReasons = useMemo(
     () =>
       new Map<string, string | null>(
@@ -1478,6 +1502,7 @@ export function Chats({
       setModels(s.lastModels ?? {});
       setEfforts(s.lastEfforts ?? {});
       setContextWindows(s.lastContextWindows ?? {});
+      setModelParameters(s.lastModelParameters ?? {});
     });
     // Which CLIs are actually on this machine. The picker used to offer every
     // known kind unconditionally, so an agent that is not installed — or whose
@@ -1811,6 +1836,9 @@ export function Chats({
           // rendering does not, since it draws the default sentinel for a size
           // the new model does not list while the stored word is still what
           // would be sent.
+          ...(modelParameters[agentKind]
+            ? { modelParameters: modelParameters[agentKind] }
+            : {}),
           ...(contextWindows[agentKind]
             ? { contextWindow: contextWindows[agentKind] }
             : {}),
@@ -1843,6 +1871,14 @@ export function Chats({
       composerConfigDirUnavailableReason,
       models,
       efforts,
+      // `contextWindows` and `modelParameters` were BOTH missing here, and the
+      // second is how the first was found: a pick made after this screen
+      // mounted changed the state and not the captured closure, so the chip
+      // showed `1m` and the run was created with nothing. Measured on the
+      // model-parameter chip (`optimize_for` chosen, `model_parameters` null on
+      // the row); the window has the identical shape and the identical fix.
+      contextWindows,
+      modelParameters,
       configDir,
       chatApi,
     ],
@@ -1859,6 +1895,7 @@ export function Chats({
       model?: string | null;
       effort?: string | null;
       contextWindow?: string | null;
+      modelParameters?: Record<string, string>;
     }): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -2077,6 +2114,9 @@ export function Chats({
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
+            ...(modelParameters[sessionAgent]
+              ? { modelParameters: modelParameters[sessionAgent] }
+              : {}),
             ...(contextWindows[sessionAgent]
               ? { contextWindow: contextWindows[sessionAgent] }
               : {}),
@@ -2264,35 +2304,6 @@ export function Chats({
     );
     return true;
   }, []);
-
-  /**
-   * Refuse a geniro command aimed at an agent that is still working, rather
-   * than queueing it.
-   *
-   * The daemon refuses one too (it needs the run idle to rewrite the turn and,
-   * on a CLI with no compaction of its own, to replace the session), and its
-   * refusal is the RUN_BUSY the queue exists for — so without this the command
-   * lands in the queue, whose drain retries a busy run for about four seconds
-   * and then stops on the reading that the running turn's own ending will fire
-   * it again. That ending is what fired it, so nothing ever does: the command
-   * sits queued and the composer keeps saying the agent is working.
-   *
-   * Said HERE and not left to the daemon, because "wait for this turn to
-   * finish" is something the user can act on before spending the round trip.
-   */
-  const refuseBusyGeniroCommand = useCallback(
-    (text: string, busy: boolean): boolean => {
-      const name = busy ? geniroCommandName(text, skillsRef.current) : null;
-      if (name === null) {
-        return false;
-      }
-      setError(
-        `/${name} needs the agent to be idle — wait for this turn to finish.`,
-      );
-      return true;
-    },
-    [],
-  );
 
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
@@ -2558,12 +2569,17 @@ export function Chats({
     // BEFORE the queue branch below, not after: a command the agent does not
     // have is no better for having waited — queueing it would defer the same
     // prose-to-the-model send by however long the turn takes, and put the
-    // refusal in front of the user long after they typed it. A geniro command
-    // is refused there for its own reason; see `refuseBusyGeniroCommand`.
-    if (
-      refuseUnknownCommand(text) ||
-      refuseBusyGeniroCommand(text, streaming)
-    ) {
+    // refusal in front of the user long after they typed it.
+    //
+    // A geniro command (`/compact`) is NOT refused here, and used to be. It
+    // needs an idle run — the daemon says so with a RUN_BUSY, which is the
+    // answer the queue is built on — so the composer answered "wait for this
+    // turn to finish" up front and the command never went anywhere. Reported
+    // against exactly that line: "Компакт должно вставаться в очередь, как и до
+    // этого. Это должно работать." It queues like anything else now, and the
+    // drain hands it over when the turn ends, which is also the moment it can
+    // compact what that turn just said.
+    if (refuseUnknownCommand(text)) {
       return;
     }
     // Sending RE-ARMS the follow, wherever the reader had scrolled to. The
@@ -2590,13 +2606,35 @@ export function Chats({
     // agents in background it's like it stopped to work until it gets a
     // notification from them… we should not send the message to the queue while
     // it's just waiting for listeners".
-    if (streaming && !holdingRef.current.has(runId)) {
+    const working = streaming && !holdingRef.current.has(runId);
+    // Is something the user wrote EARLIER still waiting? Then this goes behind
+    // it, whatever the run is doing — a queue the composer can jump is not a
+    // queue.
+    //
+    // `working` alone decided that, and it is false in every window where the
+    // queue outlives the turn behind it: after Stop (which deliberately leaves
+    // the queue standing), while a drain sits out its RUN_BUSY backoff or its
+    // POST is in flight, on a run reopened before its drain ran, on a held run
+    // whose queue is deeper than the one message the hold released. Typing in
+    // any of them handed the NEWEST message straight to the CLI past the older
+    // ones, which is the reported "первым будет доставлено то, которое я написал
+    // последним, но должно быть фифа".
+    const queued = (queuesRef.current[runId]?.length ?? 0) > 0;
+    if (working || (queueable && queued)) {
       if (!queueable) {
         return;
       }
       setInput('');
       enqueueMessage(runId, { text, images });
       attachments.clear();
+      // A queue nothing is driving needs the kick — there is no turn in flight
+      // whose terminal item would fire the drain, so without this the backlog
+      // waits for the user to leave the chat and come back. Not while the agent
+      // is working: that drain would spend its whole RUN_BUSY backoff refusing,
+      // and hold `drainingRef` against the drain the turn's own ending fires.
+      if (!working) {
+        drainQueueRef.current(runId);
+      }
       return;
     }
     try {
@@ -2648,7 +2686,6 @@ export function Chats({
     enqueueMessage,
     attachments,
     refuseUnknownCommand,
-    refuseBusyGeniroCommand,
   ]);
 
   /** Rewrite a queued message before it goes out. Text only — an attachment
@@ -3106,6 +3143,23 @@ export function Chats({
     modelKind,
     effortModel,
   );
+  // And everything those two do not cover, scoped identically — the set of
+  // chips itself is the model's answer here, not just their contents.
+  const agentModelParameters = useAgentModelParameters(
+    agentsApi,
+    modelKind,
+    effortModel,
+  );
+  /**
+   * Whether the three listings above are still on their way, as ONE flag: they
+   * are one question to the user — what can this model be run with — and the
+   * daemon answers all three from a single `cursor-agent acp` handshake, so
+   * they arrive together anyway.
+   */
+  const modelSettingsLoading =
+    agentEfforts.loading ||
+    agentContextWindows.loading ||
+    agentModelParameters.loading;
   // ONE git read: the landing composer's, following the folder picked for the
   // NEXT run — the only place a branch is chosen. The transcript composer used
   // to run a second read for a read-only branch chip beside its own cwd; that
@@ -3129,6 +3183,7 @@ export function Chats({
             models,
             efforts,
             contextWindows,
+            modelParameters,
             approval: approvalMode,
           }),
     [
@@ -3189,6 +3244,20 @@ export function Chats({
         changeModel(applied.agentKind, applied.model);
         changeEffort(applied.agentKind, applied.effort);
         changeContextWindow(applied.agentKind, applied.contextWindow);
+        // Written WHOLE rather than per parameter: the configuration is the
+        // answer for this CLI, so a setting it does not name is one the user
+        // deliberately left at the model's default — and merging would leave
+        // whatever the composer happened to be carrying from the last chat.
+        setModelParameters((current) => {
+          const next = { ...current };
+          if (Object.keys(applied.modelParameters).length === 0) {
+            delete next[applied.agentKind];
+          } else {
+            next[applied.agentKind] = applied.modelParameters;
+          }
+          void window.geniro.updateSettings({ lastModelParameters: next });
+          return next;
+        });
       }
 
       if (applied.branch === null) {
@@ -3639,7 +3708,7 @@ export function Chats({
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
           })
-        : 'idle',
+        : 'pending',
     [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
   );
   /**
@@ -3935,33 +4004,76 @@ export function Chats({
       activeRun.contextTokens ??
       agents[0]?.contextTokens ??
       null;
+    // Read whether or not there is a count: a compaction clears every COUNT and
+    // no window (that belongs to the model), and the empty ring the meter draws
+    // afterwards needs the denominator to be a gauge at all.
+    const window =
+      live?.contextWindowTokens ??
+      activeRun.contextWindowTokens ??
+      agents[0]?.contextWindowTokens ??
+      null;
     if (tokens !== null) {
-      return {
-        tokens,
-        window:
-          live?.contextWindowTokens ??
-          activeRun.contextWindowTokens ??
-          agents[0]?.contextWindowTokens ??
-          null,
-      };
+      return { tokens, window };
     }
-    const recalled = recallContextReading(activeRun.id);
+    // A LOADED transcript that yields no reading is an answer, not the gap the
+    // recall exists for: a compaction has just discarded every figure above it,
+    // and the recall would hand the old one straight back as the last source —
+    // which is what kept the ring full after a `/compact` even once the other
+    // three had been cleared. An EMPTY transcript is the refetch mid-switch,
+    // which is the case this fallback was written for.
+    const recalled =
+      items.length > 0 ? null : recallContextReading(activeRun.id);
     return recalled === null
-      ? { tokens: null, window: null }
+      ? { tokens: null, window }
       : { tokens: recalled.tokens, window: recalled.window };
-  }, [activeRun, agents, liveText, recallContextReading]);
+  }, [activeRun, agents, items.length, liveText, recallContextReading]);
+  /**
+   * Why the ring has no figure, when the reason is worth drawing — see
+   * `ContextMeter`'s `awaitingReading`.
+   *
+   * ONE case: a compaction has discarded the conversation the last reading
+   * described, and nothing measures the replacement until the next message
+   * goes out. The transcript is where that is knowable — the row saying so is
+   * in it — and the walk only runs when there is no count to draw, which is
+   * rare.
+   */
+  const awaitingReading = useMemo(
+    () =>
+      chatContext.tokens === null && items.some(endsContextHistory)
+        ? 'Conversation compacted — its new size is measured on the next message'
+        : null,
+    [chatContext.tokens, items],
+  );
   useEffect(() => {
     // Filed only for the run it was measured on, and only once there IS a
     // measurement — `remember` ignores a null rather than erasing what it
     // holds, which is what makes the recall above survive the very fetch it
     // exists to cover.
-    if (activeRunId !== null && chatContext.tokens !== null) {
+    if (activeRunId === null) {
+      return;
+    }
+    if (chatContext.tokens !== null) {
       rememberContextReading(activeRunId, {
         tokens: chatContext.tokens,
         window: chatContext.window,
       });
+      return;
     }
-  }, [activeRunId, chatContext, rememberContextReading]);
+    // No reading over a transcript that IS loaded is a real answer, not the
+    // gap the recall exists for — a compaction has just discarded every figure
+    // above it, and a remembered one would put the old ring straight back as
+    // the last fallback. An EMPTY transcript is the refetch mid-switch, where
+    // forgetting is exactly the flicker this hook was written to stop.
+    if (items.length > 0) {
+      forgetContextReading(activeRunId);
+    }
+  }, [
+    activeRunId,
+    chatContext,
+    forgetContextReading,
+    items.length,
+    rememberContextReading,
+  ]);
   /**
    * The shells each agent has running right now — read by the panel's section
    * and by the header's counter, which is why the LIVENESS RULE lives here
@@ -4268,6 +4380,33 @@ export function Chats({
     // own credential store, and this screen shows no account state to refresh.
     // The panel's own last line is the report, and the next turn is the test.
   });
+  /**
+   * Re-read the listing when the window comes back, while a SERVER sign-in is
+   * still running.
+   *
+   * The settle above is the primary mechanism and stays so. This is its
+   * backstop, for the half of the report the settle cannot answer: the daemon
+   * calls a sign-in settled when the CLI PROCESS EXITS, and a CLI that lingers
+   * after the browser round-trip leaves the row stale for as long as it lingers
+   * — reported as the status updating "only after 30 seconds, probably".
+   *
+   * Focus-return is exactly the moment the answer may have changed, because
+   * leaving for a browser tab and coming back IS the shape of this flow. It is
+   * the same backstop Settings already runs for the ACCOUNT probe, and it is
+   * bounded to a sign-in actually being in flight rather than armed on every
+   * focus: re-dialling a folder's servers is measured in seconds and launches
+   * each one, which is not something to do because a window was clicked.
+   */
+  useEffect(() => {
+    const server = login.starting?.server ?? login.login?.server ?? null;
+    if (server === null) {
+      return;
+    }
+    const onFocus = (): void => mcpRefreshRef.current();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [login.starting?.server, login.login?.server]);
+
   // A sign-in the daemon REFUSED never becomes a session, so the controller's
   // own panel — which only exists once there is one — has nowhere to show it.
   // Without this the press is silent: the button appears to do nothing, which
@@ -4794,283 +4933,297 @@ export function Chats({
                   // task text on top and, inside the same card, the graph/agent it
                   // targets, the folder it runs in, and the trigger the run starts from
                   // (a run only starts by firing one), with a round send control.
-                  <section className="flex min-h-0 flex-col overflow-y-auto">
-                    <div
-                      className="flex min-h-0 flex-1 flex-col items-center justify-center"
-                      style={{ padding: START_COLUMN_PAD }}>
-                      {/* Centred in the PANE it lives in — equal air either
+                  // Every picker in this card is positioned against the
+                  // WINDOW rather than against its own trigger's wrapper. The
+                  // section scrolls, and a box that scrolls vertically cannot
+                  // keep `overflow-x: visible` — CSS forces both axes
+                  // non-visible together — so it clips a panel on BOTH edges.
+                  // Reported as "окошко заходит за края аппликэйшена, оно
+                  // срезается" against the branch picker, and measured at
+                  // 1000×640: the panel sat at `left: 447, top: 8` inside a
+                  // section whose own box starts at `left: 480, top: 41`, so
+                  // every branch name lost its first characters and the search
+                  // field was cut off the top. Declared HERE, on the container
+                  // that does the clipping, rather than passed through each
+                  // chip — the rule `Dialog` already follows for its scrolling
+                  // body.
+                  <MenuAnchorContext.Provider value="viewport">
+                    <section className="flex min-h-0 flex-col overflow-y-auto">
+                      <div
+                        className="flex min-h-0 flex-1 flex-col items-center justify-center"
+                        style={{ padding: START_COLUMN_PAD }}>
+                        {/* Centred in the PANE it lives in — equal air either
                           side of the card. It briefly carried a margin that
                           re-centred it on the whole WINDOW instead, derived
                           from `100vw - 100%`; that reads as shifted left,
                           because the chrome it compensates for is a column the
                           eye has already stopped counting as part of the page. */}
-                      <div
-                        className="flex w-full flex-col gap-5"
-                        style={{ maxWidth: START_COLUMN_WIDTH }}>
-                        <h2 className="text-center text-xl font-semibold tracking-tight">
-                          What are we building?
-                        </h2>
-                        <div className="relative">
-                          {skillMenuOpen ? (
-                            <SkillMenu
-                              skills={skillMatches}
-                              highlightIndex={highlightedIndex}
-                              onSelect={pickSkill}
-                              onHighlight={setSkillHighlight}
-                            />
-                          ) : null}
-                          <ComposerTopRow>
-                            <TargetSelect
-                              value={target}
-                              workflows={workflows}
-                              cliDetections={cliDetections}
-                              onChange={changeTarget}
-                            />
-                            <FolderSelect
-                              folder={folder}
-                              recentFolders={recentFolders}
-                              onChoose={chooseFolder}
-                              onBrowse={() => void pickFolder()}
-                            />
-                            <BranchSelect
-                              info={git.info}
-                              switching={git.switching}
-                              onSwitch={(branch) => void git.switchTo(branch)}
-                            />
-                            {!workflowSlug ? (
-                              // The optional config directory (account / profile)
-                              // this chat's CLI runs as.
-                              // Beside the folder because it is the same kind of
-                              // fact — WHERE the run reads from — and above the text
-                              // because, like the folder, it is fixed the moment the
-                              // chat is created. A workflow's nodes each name their
-                              // own in its YAML, so the chip is a chat's alone.
-                              <ConfigDirSelect
-                                configDir={configDir}
-                                recentConfigDirs={recentConfigDirs}
-                                unavailableReason={
-                                  composerConfigDirUnavailableReason
-                                }
-                                onChange={chooseConfigDir}
-                                onBrowse={() => void pickConfigDir()}
+                        <div
+                          className="flex w-full flex-col gap-5"
+                          style={{ maxWidth: START_COLUMN_WIDTH }}>
+                          <h2 className="text-center text-xl font-semibold tracking-tight">
+                            What are we building?
+                          </h2>
+                          <div className="relative">
+                            {skillMenuOpen ? (
+                              <SkillMenu
+                                skills={skillMatches}
+                                highlightIndex={highlightedIndex}
+                                onSelect={pickSkill}
+                                onHighlight={setSkillHighlight}
                               />
                             ) : null}
-                            {workflowSlug && triggers.length > 0 ? (
-                              <Select
-                                variant="ghost"
-                                value={triggerId}
-                                aria-label="Trigger the run starts from"
-                                groups={[
-                                  {
-                                    items: triggers.map((entry) => ({
-                                      value: entry.id,
-                                      label: `${entry.name} · ${entry.trigger} trigger`,
-                                      icon: <Zap />,
-                                    })),
-                                  },
-                                ]}
-                                onValueChange={setTriggerId}
+                            <ComposerTopRow>
+                              <TargetSelect
+                                value={target}
+                                workflows={workflows}
+                                cliDetections={cliDetections}
+                                onChange={changeTarget}
                               />
-                            ) : null}
-                            {!workflowSlug ? (
-                              // Approval mode of the next chat — graph runs keep their
-                              // per-node modes from the workflow YAML instead.
-                              <ApprovalModeSelect
-                                supportedModes={composerApprovalModes}
-                                // A mode this CLI does not honour shows as the "cli
-                                // default" placeholder rather than a lie — the user
-                                // may have picked it while another agent was selected.
-                                value={
-                                  composerApprovalModes?.includes(approvalMode)
-                                    ? approvalMode
-                                    : null
-                                }
-                                planSupported={
-                                  capabilities?.claudeModes.plan === 'pass'
-                                }
-                                onChange={changeApprovalMode}
+                              <FolderSelect
+                                folder={folder}
+                                recentFolders={recentFolders}
+                                onChoose={chooseFolder}
+                                onBrowse={() => void pickFolder()}
                               />
-                            ) : null}
-                          </ComposerTopRow>
-                          <ComposerCard>
-                            <AttachmentStrip
-                              attachments={attachments.attachments}
-                              onRemove={attachments.remove}
-                            />
-                            <Textarea
-                              value={input}
-                              rows={4}
-                              aria-label="Task for the new run"
-                              className={cn(
-                                COMPOSER_TEXTAREA_GROWTH,
-                                'min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
-                              )}
-                              placeholder={
-                                workflowSlug
-                                  ? 'Describe the task for the workflow team…'
-                                  : 'Message the agent…'
-                              }
-                              onChange={(event) => setInput(event.target.value)}
-                              onPaste={(event) => {
-                                // Only swallow the paste when it actually carried images —
-                                // a normal text paste must keep its default behaviour.
-                                if (
-                                  attachments.addFromClipboard(
-                                    event.clipboardData,
-                                  )
-                                ) {
-                                  event.preventDefault();
-                                }
-                              }}
-                              onKeyDown={(event) => {
-                                if (handleSkillMenuKeys(event)) {
-                                  return;
-                                }
-                                if (isComposerSendKey(event)) {
-                                  event.preventDefault();
-                                  void send();
-                                }
-                              }}
-                            />
-                            <ComposerBottomRow
-                              actions={
-                                <Button
-                                  type="button"
-                                  size="icon"
-                                  className="size-8 shrink-0 rounded-full"
-                                  disabled={!hasContent || streaming}
-                                  aria-label={
-                                    workflowSlug ? 'Start run' : 'Send'
-                                  }
-                                  title={workflowSlug ? 'Start run' : 'Send'}
-                                  onClick={() => void send()}>
-                                  {workflowSlug ? (
-                                    <Zap className="size-4 shrink-0" />
-                                  ) : (
-                                    <ArrowUp className="size-4 shrink-0" />
-                                  )}
-                                </Button>
-                              }>
+                              <BranchSelect
+                                info={git.info}
+                                switching={git.switching}
+                                onSwitch={(branch) => void git.switchTo(branch)}
+                              />
                               {!workflowSlug ? (
-                                // Only a single-agent run picks a model here — a
-                                // workflow's nodes each name their own in its YAML.
-                                <ModelSelect
-                                  agentKind={agentKind}
-                                  models={agentModels}
-                                  loading={agentModelsLoading}
-                                  value={models[agentKind] ?? null}
-                                  onChange={(model) =>
-                                    changeModel(agentKind, model)
+                                // The optional config directory (account / profile)
+                                // this chat's CLI runs as.
+                                // Beside the folder because it is the same kind of
+                                // fact — WHERE the run reads from — and above the text
+                                // because, like the folder, it is fixed the moment the
+                                // chat is created. A workflow's nodes each name their
+                                // own in its YAML, so the chip is a chat's alone.
+                                <ConfigDirSelect
+                                  configDir={configDir}
+                                  recentConfigDirs={recentConfigDirs}
+                                  unavailableReason={
+                                    composerConfigDirUnavailableReason
                                   }
+                                  onChange={chooseConfigDir}
+                                  onBrowse={() => void pickConfigDir()}
+                                />
+                              ) : null}
+                              {workflowSlug && triggers.length > 0 ? (
+                                <Select
+                                  variant="ghost"
+                                  value={triggerId}
+                                  aria-label="Trigger the run starts from"
+                                  groups={[
+                                    {
+                                      items: triggers.map((entry) => ({
+                                        value: entry.id,
+                                        label: `${entry.name} · ${entry.trigger} trigger`,
+                                        icon: <Zap />,
+                                      })),
+                                    },
+                                  ]}
+                                  onValueChange={setTriggerId}
                                 />
                               ) : null}
                               {!workflowSlug ? (
-                                <>
-                                  <EffortSelect
+                                // Approval mode of the next chat — graph runs keep their
+                                // per-node modes from the workflow YAML instead.
+                                <ApprovalModeSelect
+                                  supportedModes={composerApprovalModes}
+                                  // A mode this CLI does not honour shows as the "cli
+                                  // default" placeholder rather than a lie — the user
+                                  // may have picked it while another agent was selected.
+                                  value={
+                                    composerApprovalModes?.includes(
+                                      approvalMode,
+                                    )
+                                      ? approvalMode
+                                      : null
+                                  }
+                                  planSupported={
+                                    capabilities?.claudeModes.plan === 'pass'
+                                  }
+                                  onChange={changeApprovalMode}
+                                />
+                              ) : null}
+                            </ComposerTopRow>
+                            <ComposerCard>
+                              <AttachmentStrip
+                                attachments={attachments.attachments}
+                                onRemove={attachments.remove}
+                              />
+                              <Textarea
+                                value={input}
+                                rows={4}
+                                aria-label="Task for the new run"
+                                className={cn(
+                                  COMPOSER_TEXTAREA_GROWTH,
+                                  'min-h-24 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
+                                )}
+                                placeholder={
+                                  workflowSlug
+                                    ? 'Describe the task for the workflow team…'
+                                    : 'Message the agent…'
+                                }
+                                onChange={(event) =>
+                                  setInput(event.target.value)
+                                }
+                                onPaste={(event) => {
+                                  // Images stage as attachments, any OTHER file
+                                  // becomes its absolute path in the text, and a
+                                  // paste that carried neither keeps its default
+                                  // behaviour. Both are asked, never one or the
+                                  // other: a clipboard can hold both kinds.
+                                  const staged = attachments.addFromClipboard(
+                                    event.clipboardData,
+                                  );
+                                  const pathed = insertPastedFilePaths(
+                                    event.clipboardData,
+                                  );
+                                  if (staged || pathed) {
+                                    event.preventDefault();
+                                  }
+                                }}
+                                onKeyDown={(event) => {
+                                  if (handleSkillMenuKeys(event)) {
+                                    return;
+                                  }
+                                  if (isComposerSendKey(event)) {
+                                    event.preventDefault();
+                                    void send();
+                                  }
+                                }}
+                              />
+                              <ComposerBottomRow
+                                actions={
+                                  <Button
+                                    type="button"
+                                    size="icon"
+                                    className="size-8 shrink-0 rounded-full"
+                                    disabled={!hasContent || streaming}
+                                    aria-label={
+                                      workflowSlug ? 'Start run' : 'Send'
+                                    }
+                                    title={workflowSlug ? 'Start run' : 'Send'}
+                                    onClick={() => void send()}>
+                                    {workflowSlug ? (
+                                      <Zap className="size-4 shrink-0" />
+                                    ) : (
+                                      <ArrowUp className="size-4 shrink-0" />
+                                    )}
+                                  </Button>
+                                }>
+                                {/* ONE control for the model and everything it
+                                  can be run with — see `ModelSettingsSelect`.
+                                  Only a single-agent run picks any of it here;
+                                  a workflow's nodes each name their own in its
+                                  YAML. */}
+                                {!workflowSlug ? (
+                                  <ModelSettingsSelect
+                                    agentKind={agentKind}
+                                    models={agentModels}
+                                    loading={agentModelsLoading}
+                                    settingsLoading={modelSettingsLoading}
+                                    model={models[agentKind] ?? null}
+                                    onModelChange={(model) =>
+                                      changeModel(agentKind, model)
+                                    }
                                     efforts={agentEfforts.efforts}
-                                    value={efforts[agentKind] ?? null}
-                                    // The listing's own reason wins where it has
-                                    // one — it can name THIS model, which the
-                                    // per-CLI capability sentence never could.
-                                    unavailableReason={
-                                      agentEfforts.unavailableReason ??
-                                      effortReasons.get(agentKind)
-                                    }
-                                    levelsAreModelSpecific={
-                                      effortModel !== null
-                                    }
-                                    onChange={(effort) =>
+                                    effort={efforts[agentKind] ?? null}
+                                    onEffortChange={(effort) =>
                                       changeEffort(agentKind, effort)
                                     }
-                                  />
-                                  <ContextWindowSelect
                                     windows={agentContextWindows.windows}
-                                    value={contextWindows[agentKind] ?? null}
-                                    unavailableReason={
-                                      agentContextWindows.unavailableReason
+                                    contextWindow={
+                                      contextWindows[agentKind] ?? null
                                     }
-                                    unavailableKind={
-                                      agentContextWindows.unavailableKind
-                                    }
-                                    onChange={(size) =>
+                                    onContextWindowChange={(size) =>
                                       changeContextWindow(agentKind, size)
                                     }
+                                    parameters={agentModelParameters.parameters}
+                                    parameterValues={
+                                      modelParameters[agentKind] ?? {}
+                                    }
+                                    onParameterChange={(id, next) =>
+                                      changeModelParameter(agentKind, id, next)
+                                    }
                                   />
-                                </>
-                              ) : null}
-                            </ComposerBottomRow>
-                          </ComposerCard>
-                        </div>
-                        {/* The suggestion-chip row that sat here is gone. Both halves of it
+                                ) : null}
+                              </ComposerBottomRow>
+                            </ComposerCard>
+                          </div>
+                          {/* The suggestion-chip row that sat here is gone. Both halves of it
                 are now rows in the composer's own menus — folders in the folder
                 chip, workflows in the target chip, each searchable — so the
                 chips only restated, below the card, choices the card already
                 offered, and were capped at three besides. */}
-                        {workflowSlug && triggers.length > 1 ? (
-                          <p className="text-center text-xs text-muted-foreground">
-                            This graph has {triggers.length} triggers — v1 fires
-                            them all on start.
-                          </p>
-                        ) : null}
-                        {/* A refused branch switch reports here — the guard says WHY
+                          {workflowSlug && triggers.length > 1 ? (
+                            <p className="text-center text-xs text-muted-foreground">
+                              This graph has {triggers.length} triggers — v1
+                              fires them all on start.
+                            </p>
+                          ) : null}
+                          {/* A refused branch switch reports here — the guard says WHY
                 ("uncommitted changes…"), which is the whole point of it, and
                 offers the one thing the app can do about it. */}
-                        {composerNotice ? (
-                          <ErrorBanner
-                            message={composerNotice.message}
-                            tone={composerNotice.tone}
-                            action={
-                              noticeUseFolder !== null ? (
-                                // The way out of a branch another worktree
-                                // holds: git will never check it out twice, so
-                                // the only route to that branch is the folder
-                                // that already has it. Same clickable-string
-                                // shape as Pull below, and the same reasoning —
-                                // it is the rest of the sentence, not a second
-                                // control.
-                                <Button
-                                  type="button"
-                                  variant="link"
-                                  size="sm"
-                                  className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
-                                  title={`Run this chat in ${noticeUseFolder}`}
-                                  onClick={() => {
-                                    // Only the folder: the branch is already
-                                    // checked out there, so there is nothing
-                                    // left to switch, and `useGitInfo` re-reads
-                                    // on its own when the directory changes.
-                                    chooseFolder(noticeUseFolder);
-                                    git.clearError();
-                                  }}>
-                                  Use that folder
-                                </Button>
-                              ) : composerNotice.offerPull ? (
-                                // A clickable STRING, not a bordered button. The
-                                // strip is one sentence the app is saying; a
-                                // button beside it reads as a second control
-                                // competing with the composer's own, where what
-                                // this is is the rest of the sentence — "the
-                                // branch stays put · pull latest". `link` is the
-                                // app's one such look, re-toned to the strip it
-                                // sits in so it cannot read as unrelated caramel.
-                                <Button
-                                  type="button"
-                                  variant="link"
-                                  size="sm"
-                                  className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
-                                  disabled={git.pulling}
-                                  title="Stash your changes, fast-forward this branch, then put the changes back"
-                                  onClick={() => void git.pull()}>
-                                  {git.pulling ? 'Pulling…' : 'Pull latest'}
-                                </Button>
-                              ) : null
-                            }
-                            onDismiss={dismissError}
-                          />
-                        ) : null}
+                          {composerNotice ? (
+                            <ErrorBanner
+                              message={composerNotice.message}
+                              tone={composerNotice.tone}
+                              action={
+                                noticeUseFolder !== null ? (
+                                  // The way out of a branch another worktree
+                                  // holds: git will never check it out twice, so
+                                  // the only route to that branch is the folder
+                                  // that already has it. Same clickable-string
+                                  // shape as Pull below, and the same reasoning —
+                                  // it is the rest of the sentence, not a second
+                                  // control.
+                                  <Button
+                                    type="button"
+                                    variant="link"
+                                    size="sm"
+                                    className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                    title={`Run this chat in ${noticeUseFolder}`}
+                                    onClick={() => {
+                                      // Only the folder: the branch is already
+                                      // checked out there, so there is nothing
+                                      // left to switch, and `useGitInfo` re-reads
+                                      // on its own when the directory changes.
+                                      chooseFolder(noticeUseFolder);
+                                      git.clearError();
+                                    }}>
+                                    Use that folder
+                                  </Button>
+                                ) : composerNotice.offerPull ? (
+                                  // A clickable STRING, not a bordered button. The
+                                  // strip is one sentence the app is saying; a
+                                  // button beside it reads as a second control
+                                  // competing with the composer's own, where what
+                                  // this is is the rest of the sentence — "the
+                                  // branch stays put · pull latest". `link` is the
+                                  // app's one such look, re-toned to the strip it
+                                  // sits in so it cannot read as unrelated caramel.
+                                  <Button
+                                    type="button"
+                                    variant="link"
+                                    size="sm"
+                                    className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
+                                    disabled={git.pulling}
+                                    title="Stash your changes, fast-forward this branch, then put the changes back"
+                                    onClick={() => void git.pull()}>
+                                    {git.pulling ? 'Pulling…' : 'Pull latest'}
+                                  </Button>
+                                ) : null
+                              }
+                              onDismiss={dismissError}
+                            />
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
-                  </section>
+                    </section>
+                  </MenuAnchorContext.Provider>
                 ) : (
                   <section className="flex min-h-0 flex-col">
                     {activeRun ? (
@@ -5436,11 +5589,13 @@ export function Chats({
                             }
                             onChange={(event) => setInput(event.target.value)}
                             onPaste={(event) => {
-                              if (
-                                attachments.addFromClipboard(
-                                  event.clipboardData,
-                                )
-                              ) {
+                              const staged = attachments.addFromClipboard(
+                                event.clipboardData,
+                              );
+                              const pathed = insertPastedFilePaths(
+                                event.clipboardData,
+                              );
+                              if (staged || pathed) {
                                 event.preventDefault();
                               }
                             }}
@@ -5500,7 +5655,7 @@ export function Chats({
                                         }
                                         title={
                                           activeRunHeld
-                                            ? 'Send — the agent is idle, waiting on its background tasks'
+                                            ? 'Send — the agent is idle, waiting on its sub-agents'
                                             : 'Queue — goes out when the turn ends, or send it now from the queue above'
                                         }
                                         onClick={() => void sendFollowUp()}>
@@ -5565,46 +5720,41 @@ export function Chats({
                         nothing for the thing you are watching would be worse
                         than one that announces the delay. */
                               <>
-                                <ModelSelect
+                                <ModelSettingsSelect
                                   agentKind={activeRun.agentKind}
                                   models={agentModels}
                                   loading={agentModelsLoading}
-                                  value={activeRun.model}
+                                  settingsLoading={modelSettingsLoading}
+                                  model={activeRun.model}
                                   nextTurnOnly={streaming}
-                                  onChange={(model) =>
+                                  onModelChange={(model) =>
                                     void changeRunSettings({ model })
                                   }
-                                />
-                                <EffortSelect
                                   efforts={agentEfforts.efforts}
-                                  value={activeRun.effort}
-                                  nextTurnOnly={streaming}
-                                  unavailableReason={
-                                    agentEfforts.unavailableReason ??
-                                    effortReasons.get(activeRun.agentKind)
-                                  }
-                                  levelsAreModelSpecific={effortModel !== null}
-                                  onChange={(effort) =>
+                                  effort={activeRun.effort}
+                                  onEffortChange={(effort) =>
                                     void changeRunSettings({ effort })
                                   }
-                                />
-                                <ContextWindowSelect
                                   windows={agentContextWindows.windows}
-                                  value={activeRun.contextWindow}
+                                  contextWindow={activeRun.contextWindow}
                                   // The window the AGENT reported for this
                                   // thread — the ring's own denominator, so the
-                                  // chip and the meter beside it cannot state
+                                  // panel and the meter beside it cannot state
                                   // two different windows for one model.
                                   windowTokens={chatContext.window}
-                                  nextTurnOnly={streaming}
-                                  unavailableReason={
-                                    agentContextWindows.unavailableReason
-                                  }
-                                  unavailableKind={
-                                    agentContextWindows.unavailableKind
-                                  }
-                                  onChange={(contextWindow) =>
+                                  onContextWindowChange={(contextWindow) =>
                                     void changeRunSettings({ contextWindow })
+                                  }
+                                  parameters={agentModelParameters.parameters}
+                                  parameterValues={activeRun.modelParameters}
+                                  onParameterChange={(id, next) =>
+                                    void changeRunSettings({
+                                      modelParameters: withModelParameter(
+                                        activeRun.modelParameters,
+                                        id,
+                                        next,
+                                      ),
+                                    })
                                   }
                                 />
                                 {/* Between effort and the context readout, not up in
@@ -5653,17 +5803,7 @@ export function Chats({
                                   }
                                   contextTokens={chatContext.tokens}
                                   contextWindowTokens={chatContext.window}
-                                  // Why there will never be a figure, when that is the
-                                  // case — so the empty spot answers for itself. Only
-                                  // for a single-agent chat: a workflow run's agents
-                                  // are per node and may not share one CLI.
-                                  unavailableReason={
-                                    activeRun.workflowId
-                                      ? null
-                                      : (usageReasons.get(
-                                          activeRun.agentKind ?? '',
-                                        ) ?? null)
-                                  }
+                                  awaitingReading={awaitingReading}
                                   // Whether the readout has to keep itself
                                   // current. The BADGE reading, not the run
                                   // row — the same authority the header and
@@ -5704,7 +5844,6 @@ export function Chats({
                     shellsByAgent={shellsByAgent}
                     onOpenShell={setOpenShell}
                     terminalReasons={terminalReasons}
-                    usageReasons={usageReasons}
                     // A chat only: a workflow run's nodes each hold their own
                     // process, and this readout is about the one a chat holds.
                     metricsRunId={
@@ -5732,6 +5871,12 @@ export function Chats({
                     onRefreshMcp={mcp.refresh}
                     onSetMcpEnabled={mcp.setEnabled}
                     onSignInMcp={signInToMcpServer}
+                    // The window BEFORE the panel below can exist: the daemon
+                    // holds its first reply until the CLI prints a URL —
+                    // measured at 4001ms in the running app — and until then
+                    // there is no session to render, which is the reported
+                    // "I press Sign In and there is no loader, nothing".
+                    mcpSigningIn={login.starting?.server ?? null}
                     mcpLoginPanel={
                       // The SERVER half of the one controller. An account
                       // sign-in shares its lifecycle but not its home: it is

@@ -111,6 +111,49 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Drop the run's context COUNT, because a compaction has just made it
+   * describe a conversation that is gone.
+   *
+   * The one write that clears what {@link rememberContext} refuses to clear,
+   * and it is a separate method for exactly that reason: there, an absent
+   * figure means the reading said nothing about it; here, geniro knows the
+   * figure is wrong. Only the count — the WINDOW is a property of the model
+   * and a compaction does not change it, so clearing it would leave a later
+   * numerator with nothing to divide by.
+   *
+   * Nulling rather than replacing, because there is no replacement to write: a
+   * compaction geniro performed itself has not run yet (its summary reaches the
+   * CLI on the NEXT turn), and one the CLI performed did not always say what it
+   * left behind. Inventing the figure is the single thing a context meter must
+   * never do.
+   */
+  async forgetContext(runId: string, txEm?: EntityManager): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { contextTokens: null },
+    );
+  }
+
+  /**
+   * File the last reading taken from this run's agent before its process was
+   * closed — see {@link Run.lastMetricsReading}.
+   *
+   * A bare `nativeUpdate` for `rememberContext`'s reason: nothing here needs
+   * the row's other columns, and the caller holds a fork whose entity may
+   * predate the session it just said goodbye to.
+   */
+  async rememberMetricsReading(
+    runId: string,
+    reading: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { id: runId },
+      { lastMetricsReading: reading },
+    );
+  }
+
+  /**
    * Write (or clear) the summary a geniro compaction owes this run's next turn
    * — see {@link Run.pendingContext}.
    *

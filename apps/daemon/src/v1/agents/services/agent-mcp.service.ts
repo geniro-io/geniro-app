@@ -8,7 +8,9 @@ import { BadRequestException } from '@packages/common';
 import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
+  AgentMcpFolderFacts,
   AgentMcpListingResult,
+  AgentMcpOrigin,
   AgentMcpServer,
   AgentMcpServerHealth,
 } from '../adapters/adapter.types';
@@ -18,6 +20,7 @@ import { childProcessHandle } from '../utils/child-handle';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { ProcessRegistry } from './process-registry';
@@ -251,6 +254,7 @@ export class AgentMcpService {
     private readonly processes: ProcessRegistry,
     private readonly versions: AgentVersionService,
     private readonly harvest: McpHarvestStore,
+    private readonly sessions: AgentSessionRegistry,
     options: AgentMcpServiceOptions = {},
   ) {
     this.ttlMs = options.ttlMs ?? DEFAULT_MCP_TTL_MS;
@@ -643,6 +647,21 @@ export class AgentMcpService {
         `could not switch ${server} for ${agent}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    // The CLI reads its MCP configuration once, when it starts, and geniro
+    // keeps that process alive across a chat's turns — so without this the
+    // switch lands in the config and the agent goes on using the servers it
+    // was spawned with. See `AgentSessionRegistry.markStale` for the report
+    // this answers and for why the session is marked rather than closed.
+    const retired = this.sessions.markStale(
+      agent,
+      projectDir,
+      'its MCP servers changed',
+    );
+    if (retired > 0) {
+      this.logger.log(
+        `${retired} ${agent} session(s) in ${projectDir} will restart on their next turn — MCP servers changed`,
+      );
+    }
     // The cached READING is now about the previous configuration, and for a CLI
     // whose disabled state is only visible IN that reading it is the whole
     // answer: cursor reports a switched-off server as `disabled` in `mcp list`
@@ -793,18 +812,20 @@ export class AgentMcpService {
     // arguably more, since a panel showing no rows at all is exactly where the
     // user starts wondering what happened to the servers they can see in their
     // terminal.
-    const interactiveOnlyNote = adapter.getConfig().mcp.interactiveOnlyNote;
+    const staticNote = adapter.getConfig().mcp.interactiveOnlyNote;
     if (!result.ok) {
       return {
         servers: [],
         unavailableReason: result.reason,
-        interactiveOnlyNote,
+        // The STATIC one: this arm never reads the folder, so a note that can
+        // only be composed from the machine has nothing behind it here.
+        interactiveOnlyNote: staticNote,
       };
     }
     let factsUnavailable = false;
-    const facts = await adapter
+    const facts: AgentMcpFolderFacts = await adapter
       .readMcpFolderFacts(cwd)
-      .catch((err: unknown) => {
+      .catch((err: unknown): AgentMcpFolderFacts => {
         // Reading the CLI's own config is best-effort, but the failure is not
         // silent: every row renders read-only, which is the safe direction. A
         // switch offered over a state nobody could read would be showing a
@@ -813,10 +834,21 @@ export class AgentMcpService {
           `reading ${agent} MCP folder facts failed: ${err instanceof Error ? err.message : String(err)}`,
         );
         factsUnavailable = true;
-        return { disabled: [], lockedOff: [] };
+        return {
+          disabled: [],
+          lockedOff: [],
+          origins: {},
+          interactiveOnlyNote: null,
+        };
       });
     const disabled = new Set(facts.disabled);
     const lockedOff = new Set(facts.lockedOff);
+    // Where each row was DEFINED, and whether the folder's copy displaced a
+    // user one. A name the adapter could not place is absent, which is what
+    // `unknown` means — never a guess, since the label exists to explain a
+    // surprise and a wrong one would manufacture another.
+    const origin = (name: string): AgentMcpOrigin =>
+      facts.origins[name] ?? { scope: 'unknown', shadowsUser: false };
     const toggle = adapter.getConfig().mcp;
     // Answered on EVERY row, including the two early arms below: sign-in is a
     // capability of the CLI, not of the toggle, and a CLI that cannot be
@@ -826,13 +858,20 @@ export class AgentMcpService {
     // would otherwise get a button that does nothing.
     const signInUnavailableReason =
       adapter.getConfig().mcp.loginUnavailableReason;
+    // On every row for the reason above it, and NOT derived from the toggle
+    // beside it: approving and switching are one subcommand on cursor and two
+    // different things on claude, whose toggle works and whose approval is an
+    // interactive screen.
+    const approveUnavailableReason =
+      adapter.getConfig().mcp.approveUnavailableReason;
     return {
       servers: result.servers.map((server) => {
         if (toggle.toggleUnavailableReason !== null) {
           return {
             ...server,
             signInUnavailableReason,
-            scope: 'unknown' as const,
+            approveUnavailableReason,
+            ...origin(server.name),
             // Not blanket-false: a CLI geniro cannot switch may still REPORT a
             // server as switched off in its own config (cursor's `mcp
             // disable`), and the wire flag asks whether the next turn will
@@ -846,7 +885,8 @@ export class AgentMcpService {
           return {
             ...server,
             signInUnavailableReason,
-            scope: 'unknown' as const,
+            approveUnavailableReason,
+            ...origin(server.name),
             disabled: server.status === 'disabled',
             toggleUnavailableReason: MCP_STATE_UNREADABLE_REASON,
           };
@@ -855,11 +895,11 @@ export class AgentMcpService {
         return {
           ...server,
           signInUnavailableReason,
-          // Every scope is switchable now that the toggle writes the CLI's own
-          // per-folder list, so the distinction the field used to draw (a
-          // project server vs anything else) no longer decides anything. What
-          // still does is whether the row is locked OFF.
-          scope: isLockedOff ? ('other' as const) : ('project' as const),
+          approveUnavailableReason,
+          // The scope is REPORTED, never used to decide anything: the toggle
+          // writes the CLI's own per-folder list and reaches every scope, so
+          // what still decides is whether the row is locked OFF, one line down.
+          ...origin(server.name),
           // The listing cannot see the toggle — `claude mcp list` reports a
           // disabled server as though it were live (probe-verified) — so the
           // config's own list is what says whether the next turn loads it.
@@ -873,7 +913,23 @@ export class AgentMcpService {
         };
       }),
       unavailableReason: null,
-      interactiveOnlyNote,
+      // The FOLDER's answer wins where it has one: cursor's own-app-only
+      // servers are its installed plugins, a set no string in `getConfig()`
+      // could name, so the adapter composes that sentence from the machine and
+      // a CLI whose gap is fixed keeps its static one.
+      interactiveOnlyNote: facts.interactiveOnlyNote ?? staticNote,
     };
+  }
+  /**
+   * Forget every folder's listing, and say how many went — see
+   * `CacheResetService`. {@link deferredFailure} goes with it: it is a held
+   * REFUSAL, and serving it after a reset would answer the user's "start
+   * over" with the failure they were trying to clear.
+   */
+  clearCache(): number {
+    const dropped = this.cache.size + this.deferredFailure.size;
+    this.cache.clear();
+    this.deferredFailure.clear();
+    return dropped;
   }
 }

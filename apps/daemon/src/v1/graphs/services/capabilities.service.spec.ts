@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../../agents/adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.adapter';
@@ -16,7 +17,12 @@ const CLAUDE_MODES = {
 };
 
 function registry(): AgentAdapterRegistry {
-  return new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAcpAdapter());
+  return new AgentAdapterRegistry(
+    new ClaudeAdapter(),
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }),
+  );
 }
 
 function service(claudeWire = vi.fn(() => CLAUDE_MODES)): {
@@ -88,7 +94,9 @@ describe('CapabilitiesService', () => {
       new ClaudeAdapter().getConfig().configDir.unavailableReason,
     );
     expect(byAgent.get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().configDir.unavailableReason,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().configDir.unavailableReason,
     );
   });
 
@@ -129,7 +137,9 @@ describe('CapabilitiesService — a message into a running turn', () => {
       new ClaudeAdapter().getConfig().followUp.unavailableReason,
     );
     expect(followUps().get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().followUp.unavailableReason,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().followUp.unavailableReason,
     );
   });
 
@@ -176,7 +186,9 @@ describe('CapabilitiesService — background sub-agents', () => {
       new ClaudeAdapter().getConfig().subagents.unavailableReason,
     );
     expect(subagents().get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().subagents.unavailableReason,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().subagents.unavailableReason,
     );
   });
 
@@ -209,7 +221,9 @@ describe('CapabilitiesService — token and cost usage', () => {
       new ClaudeAdapter().getConfig().usage.unavailableReason,
     );
     expect(usage().get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().usage.unavailableReason,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().usage.unavailableReason,
     );
   });
 
@@ -221,10 +235,10 @@ describe('CapabilitiesService — token and cost usage', () => {
     expect(usage().get('claude')).toBeNull();
     expect(usage().get('cursor-agent')).toEqual(expect.any(String));
     expect(usage().get('cursor-agent')).not.toBe('');
-    // Measured, not asserted from the protocol: the capture showed no
-    // `usage_update` on the wire at all, which is the mechanism the sentence
-    // names so the next reader knows what to re-check.
-    expect(usage().get('cursor-agent')).toContain('usage_update');
+    // What the sentence has to name is what the user came looking for — the
+    // COST. The wire-level measurement behind it belongs in the adapter's own
+    // doc block, not in a string the user reads.
+    expect(usage().get('cursor-agent')).toContain('cost');
   });
 });
 
@@ -245,7 +259,9 @@ describe('CapabilitiesService — the reasoning-effort picker', () => {
       new ClaudeAdapter().getConfig().effortsUnavailableReason,
     );
     expect(efforts().get('cursor-agent')).toBe(
-      new CursorAcpAdapter().getConfig().effortsUnavailableReason,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().effortsUnavailableReason,
     );
   });
 
@@ -290,8 +306,8 @@ describe('CapabilitiesService — the interactive terminal', () => {
     // reason — two different answers to one question, and the invented one was
     // the only one the panel ever showed. The renderer now renders this string
     // on an inert control, so it has to be the CLI's own words: "no interactive
-    // terminal session" tells a user nothing they can act on, where "sessions
-    // started over ACP are not in its chat store" does.
+    // terminal session" tells a user nothing they can act on, where "it keeps
+    // those separately from its own chats" does.
     //
     // Compared against the adapter, not against a literal — a reworded config
     // must not need this file edited, but a service that stops reading the
@@ -301,7 +317,9 @@ describe('CapabilitiesService — the interactive terminal', () => {
         .service.capabilitiesWire()
         .interactiveTerminals.map((t) => [t.agent, t.unavailableReason]),
     ).get('cursor-agent');
-    const config = new CursorAcpAdapter().getConfig().handoff;
+    const config = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig().handoff;
 
     expect(config.kind).toBe('unavailable');
     expect(reason).toBe(
@@ -309,7 +327,7 @@ describe('CapabilitiesService — the interactive terminal', () => {
     );
     // And it is genuinely a sentence about THIS CLI's mechanism, not the old
     // template. Kept as a substring so a rewording stays free.
-    expect(reason).toContain('chat store');
+    expect(reason).toContain('separately');
   });
 
   it('does not mistake "no session yet" for "no terminal support"', () => {
@@ -352,7 +370,9 @@ describe('CapabilitiesService — the interactive terminal', () => {
           .approvals.map((a) => [a.agent, a.modes]),
       );
       expect(byAgent.get('cursor-agent')).toEqual(
-        new CursorAcpAdapter().getConfig().approval.modes,
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+        }).getConfig().approval.modes,
       );
       expect(byAgent.get('cursor-agent')).toContain('ask');
       expect(byAgent.get('claude')).toEqual(

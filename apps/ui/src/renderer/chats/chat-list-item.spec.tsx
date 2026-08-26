@@ -427,20 +427,20 @@ describe('ChatListItem — the running row never goes phrase-less', () => {
 describe('ChatListItem — a HELD row reads as live, not as history', () => {
   it('keeps the daemon’s phrase and drops the relative time', async () => {
     // The reported row: `⟳ idle · 24m`, on a thread that turned out to be
-    // waiting on six background tasks. Both halves said "finished a while
+    // waiting on six sub-agents. Both halves said "finished a while
     // ago" — the badge in a word, the `24m` in a number — so both are pinned
     // here. The elapsed clock belongs to a run that has STOPPED, and this one
     // has not: its turn is open and its process is up.
     const container = await mount(
       <ChatListItem
         {...props({
-          status: 'waiting',
-          activity: 'waiting on 6 background tasks',
+          status: 'held',
+          activity: 'waiting on 6 sub-agents',
         })}
       />,
     );
 
-    expect(container.textContent).toContain('waiting on 6 background tasks');
+    expect(container.textContent).toContain('waiting on 6 sub-agents');
     // `formatRelativeTime` renders the row's 5-minute-old `lastActivityAt` as
     // the bare `5m` — spelled the way the component actually produces it, not
     // as a plausible-looking `5m ago` that no branch of this row can emit and
@@ -454,7 +454,7 @@ describe('ChatListItem — a HELD row reads as live, not as history', () => {
     // badge already reading `working` — and would describe an agent that is
     // thinking, which a held one is not.
     const container = await mount(
-      <ChatListItem {...props({ status: 'waiting', activity: null })} />,
+      <ChatListItem {...props({ status: 'held', activity: null })} />,
     );
 
     expect(container.textContent).toContain(HELD_ACTIVITY);

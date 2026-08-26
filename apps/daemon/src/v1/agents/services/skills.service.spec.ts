@@ -10,6 +10,7 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentCommandOptions,
   AgentReportedCommand,
@@ -90,6 +91,13 @@ class ScriptedClaude extends ClaudeAdapter {
 }
 
 class ScriptedCursor extends CursorAcpAdapter {
+  // The store is a REQUIRED dependency of the real adapter, and a spec
+  // subclass has to satisfy it like any other caller — see
+  // `freshVocabularyStore`.
+  constructor() {
+    super({ vocabularyStore: freshVocabularyStore() });
+  }
+
   asked = 0;
 
   override listReportedCommands(): Promise<AgentReportedCommand[]> {

@@ -13,6 +13,7 @@ import type { BadRequestException } from '@packages/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { freshVocabularyStore } from '../../agents/adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
   AdapterQuestion,
@@ -89,6 +90,8 @@ class FakeRunDao {
       cwd: null,
       agentKind: null,
       model: null,
+      // The column's own default — see the twin fixture in chat.service.spec.
+      modelParameters: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -289,7 +292,11 @@ class FakeAdapter {
   projectsNoQuestion = false;
   constructor(readonly kind: 'claude' | 'cursor-agent') {
     this.real =
-      kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
+      kind === 'claude'
+        ? new ClaudeAdapter()
+        : new CursorAcpAdapter({
+            vocabularyStore: freshVocabularyStore(),
+          });
   }
   getConfig(): AdapterConfig {
     return this.real.getConfig();

@@ -36,6 +36,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     model: null,
     effort: null,
     contextWindow: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
     ...over,

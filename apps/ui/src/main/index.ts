@@ -4,9 +4,12 @@ import { join } from 'node:path';
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
 import { TRAFFIC_LIGHT_INSET, WINDOW_BACKGROUND } from '../shared/contracts';
+import { installApplicationMenu } from './app-menu';
+import { installContextMenu } from './context-menu';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
+import { applyNativeAppearance } from './native-appearance';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
@@ -176,6 +179,9 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  // Electron ships no right-click menu of its own, so without this every
+  // right-click in the app does nothing — see `context-menu.ts`.
+  installContextMenu(win.webContents);
   win.on('closed', () => {
     if (mainWindow === win) {
       mainWindow = null;
@@ -334,6 +340,10 @@ function main(): void {
   app.on('second-instance', focusMainWindow);
 
   void app.whenReady().then(async () => {
+    // Before the window, and before the menu: it decides how macOS draws every
+    // surface this app does not paint itself, the window buttons included.
+    applyNativeAppearance();
+
     // In dev the Dock shows Electron's default icon; override it with the Geniro
     // mascot. A packaged build gets its icon from the bundled .icns (M4), so this
     // only runs under `electron-vite dev`.
@@ -346,6 +356,9 @@ function main(): void {
       app.dock.setIcon(nativeImage.createFromPath(ICON_PATH));
     }
 
+    // Before the window, because the menu bar is drawn the moment the app
+    // activates and replacing it afterwards shows the default one first.
+    installApplicationMenu();
     registerIpc(supervisor, updates);
     // Armed here, but the first check is deliberately delayed inside the
     // service — launch is busy enough, and an update banner is worth nothing

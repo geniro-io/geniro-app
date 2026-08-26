@@ -670,6 +670,14 @@ export function Settings({
             // because it has no transport to fail on.
             onSignIn={apis ? (kind) => void signInToCli(kind) : undefined}
             onSignOut={apis ? (kind) => void signOutFromCli(kind) : undefined}
+            // The press is answered before the daemon replies. That reply is
+            // held until the CLI prints its URL — measured at 4001ms — and the
+            // panel below only appears once it lands, so without this the
+            // button sits unchanged while a browser tab opens behind the
+            // window.
+            signingIn={
+              login.starting?.server === null ? login.starting.kind : null
+            }
             profileScopedKinds={profileScopedKinds}
             // Whatever is true of ONE CLI lives on that CLI's card. Both of
             // these used to be sections of their own further down the page,
@@ -968,6 +976,14 @@ export function Settings({
             — this window’s own DevTools (⌥⌘I) cannot. Restarts the daemon, and
             while the port is open any process on this machine can run code
             inside it.
+          </p>
+          {/* The debug drawer lost its title-bar button on request, so this is
+              the only place the chord is written down. A line rather than a
+              control: putting the drawer back on screen from here would be the
+              button again, one nav click further away. */}
+          <p className="text-xs text-muted-foreground">
+            ⌥⌘L opens this app’s own debug log — the daemon, agent and UI lines
+            you can copy into a bug report.
           </p>
         </section>
       </div>

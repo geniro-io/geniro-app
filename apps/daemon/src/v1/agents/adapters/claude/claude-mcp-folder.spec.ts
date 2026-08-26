@@ -212,6 +212,14 @@ describe('AgentAdapter.readMcpFolderFacts default', () => {
 
     await expect(
       new Unverified().readMcpFolderFacts('/anywhere'),
-    ).resolves.toEqual({ disabled: [], lockedOff: [] });
+    ).resolves.toEqual({
+      disabled: [],
+      lockedOff: [],
+      // Unstated rather than guessed, on the same rule as the two lists above:
+      // an adapter that cannot read its CLI's config files cannot place a row's
+      // scope, and the panel draws no origin at all rather than a wrong one.
+      origins: {},
+      interactiveOnlyNote: null,
+    });
   });
 });

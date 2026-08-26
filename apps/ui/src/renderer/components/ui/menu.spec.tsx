@@ -524,6 +524,58 @@ describe('Menu — escaping a clipping container', () => {
     expect(panel(el).className).not.toContain('top-full');
   });
 
+  it('pulls a floating panel back inside the window AFTER it has been placed', () => {
+    // The placement takes two commits — one effect measures the trigger and
+    // sets the offset, and only the render after that moves the panel — so a
+    // correction that measured in the first commit was reading the panel where
+    // it had not been placed yet. Reported as "окошко заходит за края
+    // аппликэйшена, оно срезается": the landing card's branch picker, newly
+    // anchored to the viewport, sat at `right: 1036` in a 1000px window.
+    //
+    // The stub tracks the panel's OWN offset rather than returning a fixed
+    // rect, which is the whole point: a static rect overflows in both commits
+    // and would pass with the defect in place.
+    const { ref } = triggerAt({ top: 300, bottom: 340, left: 700, right: 840 });
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.getAttribute('role') !== 'listbox') {
+          return { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
+        }
+        const left = Number.parseFloat((this as HTMLElement).style.left || '0');
+        return {
+          top: 346,
+          bottom: 646,
+          height: 300,
+          left,
+          right: left + 400,
+          width: 400,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = render(
+        <Menu
+          open
+          anchor="viewport"
+          triggerRef={ref}
+          side="bottom"
+          groups={BRANCHES}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      // 700 + 400 runs 76px past a 1024px window, so it comes back by that
+      // much plus the margin — and stops there rather than oscillating.
+      expect(panel(el).style.left).toBe(
+        `${700 - (1100 - window.innerWidth) - 8}px`,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('opens UPWARD from the trigger when the side says so', () => {
     const { ref } = triggerAt({ top: 300, bottom: 340, left: 120, right: 260 });
     const el = render(

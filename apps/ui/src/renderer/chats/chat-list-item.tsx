@@ -343,7 +343,7 @@ export const ChatListItem = memo(function ChatListItem({
           <span className="min-w-0 truncate text-muted-foreground">
             ·{' '}
             {activity ??
-              (status === 'waiting' ? HELD_ACTIVITY : STANDING_ACTIVITY)}
+              (status === 'held' ? HELD_ACTIVITY : STANDING_ACTIVITY)}
           </span>
         ) : null}
         {/* The time is for runs that have STOPPED — "when did this last do

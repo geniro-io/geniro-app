@@ -145,7 +145,7 @@ describe('displayRunStatus', () => {
     // The answer was `idle` for one release, and that word came straight back
     // reported: `i still see it seems like it finished but not`. `waiting` is
     // the same non-spinning, non-settled state under a badge that no longer
-    // contradicts the `waiting on 1 background task` line beneath it.
+    // contradicts the `waiting on 1 sub-agent` line beneath it.
     expect(
       displayRunStatus({
         status: 'running',
@@ -153,7 +153,7 @@ describe('displayRunStatus', () => {
         awaitingAnswer: false,
         heldForBackgroundWork: true,
       }),
-    ).toBe('waiting');
+    ).toBe('held');
   });
 
   it('reads a held run the SAME whether or not a delegate is producing rows', () => {
@@ -175,9 +175,7 @@ describe('displayRunStatus', () => {
     expect(displayRunStatus({ ...held, subagentRunning: true })).toBe(
       displayRunStatus({ ...held, subagentRunning: false }),
     );
-    expect(displayRunStatus({ ...held, subagentRunning: true })).toBe(
-      'waiting',
-    );
+    expect(displayRunStatus({ ...held, subagentRunning: true })).toBe('held');
   });
 
   it('still calls a delegate running when the turn is NOT held', () => {
@@ -254,13 +252,12 @@ describe('RUN_STATUS_META', () => {
     const kinds: RunStatusKind[] = [
       'pending',
       'running',
-      'waiting',
+      'held',
       'needs-input',
       'completed',
       'failed',
       'cancelled',
       'skipped',
-      'idle',
     ];
     for (const kind of kinds) {
       expect(RUN_STATUS_META[kind].label, kind).toBeTruthy();
@@ -283,9 +280,8 @@ describe('isSettledRunStatus', () => {
   const unsettled: RunStatusKind[] = [
     'pending',
     'running',
-    'waiting',
+    'held',
     'needs-input',
-    'idle',
   ];
 
   it('reports the four end states as settled', () => {

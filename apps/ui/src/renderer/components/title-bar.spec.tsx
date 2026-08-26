@@ -34,8 +34,6 @@ function bar(
     title?: string;
     connected?: boolean;
     daemonVersion?: string | null;
-    debugOpen?: boolean;
-    onToggleDebug?: () => void;
     update?: {
       state: UpdateState | null;
       engaged?: boolean;
@@ -63,8 +61,6 @@ function bar(
         )}
         onInstallUpdate={options.update?.onInstall}
         onRelaunchUpdate={options.update?.onRelaunch}
-        debugOpen={options.debugOpen ?? false}
-        onToggleDebug={options.onToggleDebug ?? (() => undefined)}
       />,
     );
   });
@@ -95,19 +91,22 @@ describe('TitleBar', () => {
     // control inside a drag region never receives the click, because the
     // compositor takes the press for the window.
     const pressed: string[] = [];
-    const el = bar({ onToggleDebug: () => pressed.push('debug') });
+    const el = bar({
+      update: {
+        state: updateState({ phase: 'available', version: '1.47.0' }),
+        onInstall: () => pressed.push('install'),
+      },
+    });
     const titlebar = el.querySelector('[data-slot="titlebar"]');
 
     expect(titlebar?.classList.contains('app-drag')).toBe(true);
-    const control = el.querySelector<HTMLButtonElement>(
-      '[aria-label="Debug log"]',
-    );
+    const control = updateControl(el);
     expect(control?.classList.contains('app-no-drag')).toBe(true);
     act(() => {
       control?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(pressed).toEqual(['debug']);
+    expect(pressed).toEqual(['install']);
   });
 
   it('clears the window buttons, by their measured footprint rather than a guess', () => {
@@ -303,11 +302,17 @@ describe('TitleBar', () => {
     ).toContain('disconnected');
   });
 
-  it('marks the debug trigger pressed while the drawer is open', () => {
+  it('carries no debug trigger', () => {
+    // Removed on request: an unlabelled `>_` opening a developer panel, in the
+    // one band every user sees. Pinned as an ABSENCE because that is what was
+    // asked for — ⌥⌘L still opens the drawer, and that binding lives in
+    // `App.tsx`, outside this component entirely.
     expect(
-      bar({ debugOpen: true })
-        .querySelector('[aria-label="Debug log"]')
-        ?.getAttribute('aria-pressed'),
-    ).toBe('true');
+      bar({
+        update: {
+          state: updateState({ phase: 'available', version: '1.5.0' }),
+        },
+      }).querySelector('[aria-label="Debug log"]'),
+    ).toBeNull();
   });
 });

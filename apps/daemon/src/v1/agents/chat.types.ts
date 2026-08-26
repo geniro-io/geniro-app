@@ -405,6 +405,24 @@ export const PlanLimitsWireSchema = z
 export type PlanLimitsWire = z.infer<typeof PlanLimitsWireSchema>;
 
 /**
+ * The last reading taken from a run's own agent, as it is stored on the run row
+ * (`Run.lastMetricsReading`) — never on the wire.
+ *
+ * Parsed back through the SAME schemas the route answers with, so a reading
+ * whose shape has since moved is discarded rather than served as figures the
+ * renderer cannot draw. `atSeq` is the transcript position it describes: a run
+ * whose items have grown since has had turns this reading knows nothing about,
+ * and stale figures under a timestamp are still stale figures.
+ */
+export const StoredMetricsReadingSchema = z.object({
+  takenAt: z.string(),
+  atSeq: z.number(),
+  context: ContextBreakdownWireSchema.nullable(),
+  plan: PlanLimitsWireSchema.nullable(),
+});
+export type StoredMetricsReading = z.infer<typeof StoredMetricsReadingSchema>;
+
+/**
  * What the whole thread has spent, summed over its finished turns.
  *
  * Summed on the DAEMON rather than in the renderer, though the renderer holds
@@ -481,6 +499,12 @@ export const ChatMetricsWireSchema = z.object({
     .nullable()
     .describe(
       'why there are no plan limits — its own field beside breakdownReason because the two are separate channels and a CLI can answer one without the other',
+    ),
+  takenAt: z
+    .string()
+    .nullable()
+    .describe(
+      'when the two readings above were taken, when they are the LAST reading of an agent whose process has since been closed — null when they are live, or absent',
     ),
   totals: ChatTotalsWireSchema,
 });
@@ -627,21 +651,27 @@ export const AgentMcpServerWireSchema = z
         'connected',
         'failed',
         'pending',
+        'loading',
         'disabled',
         'needs_auth',
         'unknown',
       ])
       .describe(
-        'Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet',
+        'Health as the CLI reported it; `pending` is a configured but unapproved server, `loading` one the CLI was still dialling when it answered, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet',
       ),
     detail: z
       .string()
       .nullable()
       .describe('The failure reason, or what the server is waiting for'),
     scope: z
-      .enum(['project', 'other', 'unknown'])
+      .enum(['user', 'workspace', 'unknown'])
       .describe(
-        'Where the server is defined; only `project` has any verified disable mechanism',
+        'Which of the CLI’s configuration scopes defined this server; `unknown` when the CLI’s files could not place it',
+      ),
+    shadowsUser: z
+      .boolean()
+      .describe(
+        'True when this WORKSPACE definition overrides a same-named user one, so the user’s own server is not what this folder loads under that name',
       ),
     disabled: z
       .boolean()
@@ -659,6 +689,12 @@ export const AgentMcpServerWireSchema = z
       .nullable()
       .describe(
         'Why this row offers no sign-in, or null when it does. Answered for EVERY row, not just `needs_auth` ones, so the UI never infers a capability from a status',
+      ),
+    approveUnavailableReason: z
+      .string()
+      .nullable()
+      .describe(
+        'Why this row offers no approve, or null when it does. Answered for EVERY row on the same rule as `signInUnavailableReason`, so a `pending` row never gets a control the CLI has nothing behind',
       ),
   })
   .meta({ id: 'AgentMcpServer' });
@@ -853,6 +889,79 @@ export type AgentContextWindowListingWire = z.infer<
 export type AgentEffortListingWire = z.infer<
   typeof AgentEffortListingWireSchema
 >;
+
+/** One accepted value of an {@link AgentModelParameterWireSchema}. */
+export const AgentModelParameterValueWireSchema = z
+  .object({
+    id: z
+      .string()
+      .describe('Passed verbatim to the CLI as this parameter’s value'),
+    label: z.string(),
+  })
+  .meta({ id: 'AgentModelParameterValue' });
+
+/**
+ * One setting of a model that geniro has no dedicated control for, exactly as
+ * the CLI enumerated it — see `AgentModelParameter` in `adapter.types.ts` for
+ * the measurements behind it and why it is a pass-through rather than a
+ * vocabulary this app knows.
+ *
+ * `label` is the CLI's own display name, never a prettified id: `Optimize For`
+ * is what cursor calls `optimize_for`, and inventing that string on either side
+ * of the wire would be geniro naming another product's setting.
+ */
+export const AgentModelParameterWireSchema = z
+  .object({
+    id: z.string().describe('The CLI’s own parameter id, sent back verbatim'),
+    label: z.string(),
+    values: z.array(AgentModelParameterValueWireSchema),
+    current: z
+      .string()
+      .nullable()
+      .describe(
+        'The value the CLI reports the model is on; null when it named none.',
+      ),
+  })
+  .meta({ id: 'AgentModelParameter' });
+export type AgentModelParameterWire = z.infer<
+  typeof AgentModelParameterWireSchema
+>;
+
+/**
+ * Every such parameter of ONE model.
+ *
+ * Per model like the context listing and for the same reason, only more so:
+ * measured 2026-08-26, `optimize_for` exists on exactly one of a cursor
+ * account's thirty-four models. There is no union worth serving.
+ */
+export const AgentModelParameterListingWireSchema = z.object({
+  parameters: z.array(AgentModelParameterWireSchema),
+  unavailableReason: z
+    .string()
+    .nullable()
+    .describe('Why there are none; null when there are some.'),
+});
+// No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
+export type AgentModelParameterListingWire = z.infer<
+  typeof AgentModelParameterListingWireSchema
+>;
+
+/**
+ * What a manual cache reset threw away.
+ *
+ * A COUNT rather than an ok/failed, because the reset cannot fail — every clear
+ * behind it is a `Map.clear()` and a file write nobody waits on — while "how
+ * much was there" is the one thing the presser cannot know and the only honest
+ * confirmation the row can give.
+ */
+export const AgentCacheResetWireSchema = z.object({
+  cleared: z
+    .number()
+    .int()
+    .describe('How many cached CLI answers were dropped.'),
+});
+// No `.meta({ id })` — a RESPONSE DTO ROOT, see the sibling above.
+export type AgentCacheResetWire = z.infer<typeof AgentCacheResetWireSchema>;
 
 /**
  * Payload of an `unanswerable` item: one approval request whose turn settled
@@ -1274,6 +1383,11 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       "Which of the model's context-window sizes the next turn runs at, in the CLI's own vocabulary; null = the model's own default",
+    ),
+  modelParameters: z
+    .record(z.string(), z.string())
+    .describe(
+      "Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these",
     ),
   contextTokens: z
     .number()

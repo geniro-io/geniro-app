@@ -144,7 +144,7 @@ describe('CallBlock', () => {
     // of the flow), the status chip flips to done.
     expect(container.textContent).toContain('Result from Poet');
     expect(container.textContent).toContain('Waves rise and retreat');
-    expect(container.textContent).toContain('done');
+    expect(container.textContent).toContain('completed');
     expect(container.textContent).not.toContain('is thinking');
   });
 });

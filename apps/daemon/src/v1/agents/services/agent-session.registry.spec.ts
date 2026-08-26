@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild } from '../__tests__/fake-child';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
   AgentEvent,
@@ -159,6 +160,9 @@ function fakeAdapter(): {
       sessions.push(session);
       return session;
     },
+    // The registry records which agent a session belongs to, so `markStale`
+    // can find the sessions an MCP change is about. Doubles owe it too.
+    getConfig: () => ({ kind: 'claude' }),
   } as unknown as AgentAdapter;
   return { adapter, sessions, next: () => at(sessions, sessions.length - 1) };
 }
@@ -182,7 +186,9 @@ class SessionfulAdapter extends AgentAdapter {
   }
 
   getConfig(): AdapterConfig {
-    return new CursorAcpAdapter().getConfig();
+    return new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig();
   }
 
   protected buildArgs(): string[] {
@@ -339,6 +345,9 @@ describe('AgentSessionRegistry — reusing a run’s process', () => {
     session.refuse = true;
     const adapter = {
       startSession: () => session,
+      // The registry records which agent a session belongs to, so `markStale`
+      // can find the sessions an MCP change is about. Doubles owe it too.
+      getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
 
     expect(() => registry.startTurn('run-1', adapter, INPUT, noop)).toThrow(
@@ -362,6 +371,65 @@ describe('AgentSessionRegistry — ending a process', () => {
 
     expect(at(sessions, 0).closes).toBe(1);
     expect(registry.liveCount).toBe(0);
+  });
+
+  it('lets the idle farewell ask the process something before closing it', async () => {
+    // The reading claude can only give while it is RUNNING — the context
+    // breakdown and the plan limits — is wanted long after it stops running,
+    // and this close is the last moment anything can ask for it. The session
+    // must still be reachable while the question is in flight, which is what
+    // the `peek` here pins.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    let release = (): void => {};
+    const asked: (unknown | null)[] = [];
+    registry.onIdleFarewell(async (runId) => {
+      asked.push(registry.peek(runId));
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(SESSION_IDLE_MS);
+
+    // Still alive while the question is outstanding — closing first would
+    // leave nothing to ask.
+    expect(asked).toEqual([at(sessions, 0)]);
+    expect(at(sessions, 0).closes).toBe(0);
+
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('abandons that close when a turn arrives while the farewell is in flight', async () => {
+    // The window measures a chat going unused, and one the user has just
+    // written to is not that — closing it here would take down the process the
+    // turn is running on, for a question asked about the idle state it left.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    let release = (): void => {};
+    registry.onIdleFarewell(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    vi.advanceTimersByTime(SESSION_IDLE_MS);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    release();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(1);
   });
 
   it('does not close a session parked on a card the user has not answered', async () => {
@@ -495,7 +563,10 @@ describe('AgentSessionRegistry — ending a process', () => {
     // window still runs — it just does not get kept.
     const registry = new AgentSessionRegistry();
     const startSession = vi.fn(() => new FakeSession());
-    const adapter = { startSession } as unknown as AgentAdapter;
+    const adapter = {
+      startSession,
+      getConfig: () => ({ kind: 'claude' }),
+    } as unknown as AgentAdapter;
 
     registry.onApplicationShutdown();
     registry.startTurn('run-1', adapter, INPUT, noop);
@@ -525,6 +596,9 @@ describe('AgentSessionRegistry — ending a process', () => {
         installed = opts.betweenTurnApproval;
         return session;
       },
+      // The registry records which agent a session belongs to, so `markStale`
+      // can find the sessions an MCP change is about. Doubles owe it too.
+      getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
 
     // Turn 1 — the run is unattended, so a between-turn permission is answered.
@@ -555,6 +629,9 @@ describe('AgentSessionRegistry — ending a process', () => {
         seen = opts;
         return new FakeSession();
       },
+      // The registry records which agent a session belongs to, so `markStale`
+      // can find the sessions an MCP change is about. Doubles owe it too.
+      getConfig: () => ({ kind: 'claude' }),
     } as unknown as AgentAdapter;
 
     registry.startTurn('run-1', adapter, INPUT, noop);
@@ -872,5 +949,90 @@ describe('AgentSessionRegistry — the ceiling', () => {
 
     expect(sessions.every((s) => s.closes === 0)).toBe(true);
     expect(registry.liveCount).toBe(CEILING + 1);
+  });
+});
+
+describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
+  it('runs the next turn on a NEW process, not the one that read the old config', async () => {
+    // THE REPORTED DEFECT: "usually when I update MCP they are available from
+    // the very next turn; here it did not see they were updated". A CLI reads
+    // its MCP configuration once, at spawn, and this registry keeps that
+    // process across a chat's turns — so a server switched on or signed in to
+    // reached the config and never reached the running agent. The agent said so
+    // itself in the transcript: "the connector may need the session restarted".
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    const first = at(sessions, 0);
+    await first.endTurn();
+
+    expect(
+      registry.markStale('claude', '/proj', 'its MCP servers changed'),
+    ).toBe(1);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(2);
+    expect(first.closes).toBe(1);
+  });
+
+  it('marks rather than closes, so a running turn is never killed for it', async () => {
+    // The whole reason this is a flag and not a `close`. A change can land
+    // while a turn is in flight, and closing there destroys work the user
+    // asked for — while a folder holding a dozen idle chats would cost a dozen
+    // respawns, each re-launching the user's own MCP servers, for turns nobody
+    // sent. The next turn is both the correct moment and the only one that
+    // costs anything.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    registry.markStale('claude', '/proj', 'its MCP servers changed');
+
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(registry.liveCount).toBe(1);
+  });
+
+  it('leaves another folder’s sessions alone', async () => {
+    // A change is about ONE folder: a CLI resolves project servers relative to
+    // the directory it runs in, so retiring every session would respawn chats
+    // whose configuration did not move.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    expect(registry.markStale('claude', '/somewhere-else', 'changed')).toBe(0);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(1);
+  });
+
+  it('leaves another AGENT’s sessions alone in the same folder', async () => {
+    // One folder is routinely used by both CLIs, and they read different
+    // configuration files — the same rule `SkillHarvestStore` keys by.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    expect(registry.markStale('cursor-agent', '/proj', 'changed')).toBe(0);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(1);
+  });
+
+  it('retires a session ONCE, however many changes land before its next turn', async () => {
+    // Toggling three servers before typing is one respawn, not three — and the
+    // count each caller logs must not claim sessions it did not newly retire.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+
+    expect(registry.markStale('claude', '/proj', 'first')).toBe(1);
+    expect(registry.markStale('claude', '/proj', 'second')).toBe(0);
+    registry.startTurn('run-1', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(2);
   });
 });

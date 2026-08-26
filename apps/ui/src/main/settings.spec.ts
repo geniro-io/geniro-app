@@ -100,6 +100,7 @@ describe('readSettings', () => {
       model: 'claude-opus-5',
       effort: 'high',
       contextWindow: '1m',
+      modelParameters: { optimize_for: 'intelligence' },
       approval: 'acceptEdits',
       configDir: '/Users/dev/.config/work',
     };
@@ -108,7 +109,7 @@ describe('readSettings', () => {
     expect(readSettings().runConfigs).toEqual([config]);
   });
 
-  it('reads a configuration written BEFORE the context-window field existed', () => {
+  it('reads a configuration written BEFORE the context-window and parameter fields existed', () => {
     // The file on disk predates the field and `runConfigSchema` is strict, so
     // required it would fail to parse — and the entry-by-entry salvage this
     // suite exists for would then drop every configuration the user had. It
@@ -127,7 +128,7 @@ describe('readSettings', () => {
     writeRaw({ runConfigs: [legacy] });
 
     expect(readSettings().runConfigs).toEqual([
-      { ...legacy, contextWindow: null },
+      { ...legacy, contextWindow: null, modelParameters: {} },
     ]);
   });
 

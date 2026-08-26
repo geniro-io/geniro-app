@@ -26,6 +26,7 @@ import { AgentSessionRegistry } from './services/agent-session.registry';
 import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
+import { CacheResetService } from './services/cache-reset.service';
 import { ChatService } from './services/chat.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
@@ -36,6 +37,8 @@ import { EffortsService } from './services/efforts.service';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { ModelParametersService } from './services/model-parameters.service';
+import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
@@ -71,6 +74,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     ChatService,
+    CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
     ChatMetricsService,
@@ -106,12 +110,15 @@ import { defaultSpawn } from './utils/spawn-cli';
         processes: ProcessRegistry,
         versions: AgentVersionService,
         harvest: McpHarvestStore,
-      ) => new AgentMcpService(adapters, processes, versions, harvest),
+        sessions: AgentSessionRegistry,
+      ) =>
+        new AgentMcpService(adapters, processes, versions, harvest, sessions),
       inject: [
         AgentAdapterRegistry,
         ProcessRegistry,
         AgentVersionService,
         McpHarvestStore,
+        AgentSessionRegistry,
       ],
     },
     {
@@ -121,8 +128,14 @@ import { defaultSpawn } from './utils/spawn-cli';
         adapters: AgentAdapterRegistry,
         processes: ProcessRegistry,
         versions: AgentVersionService,
-      ) => new ModelsService(adapters, processes, versions),
-      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
+        store: ModelVocabularyStore,
+      ) => new ModelsService(adapters, processes, versions, store),
+      inject: [
+        AgentAdapterRegistry,
+        ProcessRegistry,
+        AgentVersionService,
+        ModelVocabularyStore,
+      ],
     },
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
@@ -152,11 +165,29 @@ import { defaultSpawn } from './utils/spawn-cli';
       ) => new ContextWindowsService(adapters, processes, versions),
       inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
     },
+    {
+      // The THIRD reader of that one handshake, and a factory for the same
+      // reason again. It differs from its two siblings only in what it takes
+      // out of the reply: everything they did not.
+      provide: ModelParametersService,
+      useFactory: (
+        adapters: AgentAdapterRegistry,
+        processes: ProcessRegistry,
+        versions: AgentVersionService,
+      ) => new ModelParametersService(adapters, processes, versions),
+      inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
+    },
     AgentEventBus,
     ApprovalRegistry,
     {
       provide: ContextWindowStore,
       useFactory: () => new ContextWindowStore(),
+    },
+    {
+      // Factory for the same reason its neighbour is one: the options bag is a
+      // test seam, not a DI token.
+      provide: ModelVocabularyStore,
+      useFactory: () => new ModelVocabularyStore(),
     },
     PartialStreamService,
     ProcessRegistry,
@@ -202,8 +233,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     {
       provide: CursorAcpAdapter,
-      useFactory: () =>
+      inject: [ModelVocabularyStore],
+      useFactory: (vocabularyStore: ModelVocabularyStore) =>
         new CursorAcpAdapter({
+          // The handshake replies that survive a restart — the difference
+          // between a model's settings appearing in 6s and in the frame the
+          // panel opens.
+          vocabularyStore,
           spawn: createTeeingSpawn(defaultSpawn),
           logger: new Logger(CursorAcpAdapter.name),
           // Per-turn config directories, so applying a model or an effort over
@@ -248,6 +284,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,
+    // Exported so `CliAuthService` can drop an agent's cached vocabularies the
+    // moment it signs that agent in or out: a different account is a different
+    // set of models, and nothing about that moves the CLI's `--version`.
+    ModelVocabularyStore,
     // Exported for the graph executor's own run delete: one teardown serves
     // both run kinds, so neither can drift out of clearing a store.
     RunTeardownService,

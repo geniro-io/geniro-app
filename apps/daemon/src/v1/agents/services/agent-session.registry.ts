@@ -141,6 +141,27 @@ export const OFF_TURN_ACTIVE_MS = 5 * 60_000;
 
 interface SessionEntry {
   session: AgentSession;
+  /**
+   * The agent and folder this process was spawned for.
+   *
+   * Recorded solely so {@link AgentSessionRegistry.markStale} can find the
+   * sessions an MCP change is ABOUT. The registry is keyed by run, and a
+   * change to a folder's servers is about every run working in that folder —
+   * a fact neither the run id nor the session itself carries.
+   */
+  agent: string;
+  cwd: string;
+  /**
+   * Why this process can no longer serve a turn, or null.
+   *
+   * Set when something outside the run changed what a fresh process would
+   * load — today, that folder's MCP servers. The session is NOT closed on the
+   * spot, which is the whole design: closing it would either kill a turn that
+   * is running or reap a dozen idle chats nobody is about to use. The flag is
+   * read at the start of the next turn, which is exactly the moment the change
+   * has to have landed.
+   */
+  stale: string | null;
   /** When this run's last turn ended; drives both eviction and expiry. */
   lastUsedAt: number;
   /**
@@ -199,6 +220,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   private readonly closeListeners = new Set<
     (runId: string, interrupted: boolean) => void
   >();
+  /** See {@link onIdleFarewell} — one listener, not a set: it is a question put
+   *  to the process, and the close waits for it. */
+  private farewell: ((runId: string) => Promise<void>) | null = null;
 
   /**
    * This registry's ceiling, defaulting to what the machine affords.
@@ -235,6 +259,32 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
    */
   onClosed(listener: (runId: string, interrupted: boolean) => void): void {
     this.closeListeners.add(listener);
+  }
+
+  /**
+   * The LAST moment this run's process can be asked anything — awaited before
+   * an unused session is closed.
+   *
+   * It exists because some readings only a RUNNING agent can give are wanted
+   * long after it stops running: claude answers the context breakdown and the
+   * plan limits on its live stdin dialogue alone, so a chat whose process has
+   * been reaped has nothing to show until the user spends a turn reviving it.
+   * Asking on the way out costs one round trip on a process that is about to be
+   * thrown away, and it is asked at the one close that leaves a conversation
+   * the user will come back to.
+   *
+   * ONLY the idle close. An eviction wants the memory back now, a staleness
+   * replacement has a turn waiting behind it, a delete is discarding the run,
+   * and shutdown is seconds from ending the process anyway — none of them can
+   * afford a second of politeness, and all four leave the reading absent, which
+   * the readout already has a sentence for.
+   *
+   * The listener is handed the run id and nothing else: the session is still in
+   * the map while it runs, so {@link peek} is how it reaches the process, and
+   * this hook stays free of the session type.
+   */
+  onIdleFarewell(listener: (runId: string) => Promise<void>): void {
+    this.farewell = listener;
   }
 
   /**
@@ -276,7 +326,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     onHeldApproval?: CliSessionOptions['onHeldApproval'],
   ): AgentTurnHandle {
     const existing = this.entries.get(runId);
-    if (existing) {
+    if (existing?.stale !== null && existing !== undefined) {
+      // Replaced rather than reused, and replaced HERE rather than when the
+      // change landed: the process holds MCP servers it read at spawn, so a
+      // turn served by it would run against the configuration the user just
+      // left. The conversation survives — cursor re-`session/load`s it off
+      // disk and claude resumes by id — so the cost is one respawn.
+      this.closeEntry(runId, existing, existing.stale);
+    } else if (existing) {
       this.disarm(existing);
       // Before the turn opens, not after: this turn's posture is what a
       // request arriving after it settles must be judged by, and the reuse
@@ -337,6 +394,9 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     }
     const entry: SessionEntry = {
       session,
+      agent: adapter.getConfig().kind,
+      cwd: input.cwd,
+      stale: null,
       lastUsedAt: Date.now(),
       offTurnActiveAt: 0,
       timer: null,
@@ -356,6 +416,41 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     if (entry) {
       this.closeEntry(runId, entry, 'its run was torn down');
     }
+  }
+
+  /**
+   * Retire every session of one agent in one folder, from the next turn on.
+   *
+   * REPORTED against cursor as "usually when I update MCP they are available
+   * from the very next turn; here it did not see they were updated" — with the
+   * agent itself writing, in the transcript, "MCP tools in this session — still
+   * only GitHub, Playwright and codegraph; no Linear connector appeared… the
+   * connector may need the session restarted". It had diagnosed its own
+   * process: a CLI reads its MCP configuration once, when it starts, and geniro
+   * keeps that process alive across turns, so a server switched on or signed in
+   * to reached the config and never reached the running agent.
+   *
+   * A MARK rather than a close, for two reasons that both matter. A session may
+   * be mid-turn, and closing it there kills work the user asked for. And a
+   * folder may hold a dozen idle chats, none of which is about to be used —
+   * closing them all would re-spawn a dozen CLIs, each re-launching the user's
+   * own MCP servers, to serve turns nobody sent. The next turn on each session
+   * is both the correct moment and the only one that costs anything.
+   *
+   * Answers how many it marked, which is what makes the caller's log worth
+   * reading: zero is the ordinary case (a change made with no chat open in that
+   * folder) and is not a failure.
+   */
+  markStale(agent: string, cwd: string, reason: string): number {
+    let marked = 0;
+    for (const entry of this.entries.values()) {
+      if (entry.agent !== agent || entry.cwd !== cwd || entry.stale !== null) {
+        continue;
+      }
+      entry.stale = reason;
+      marked += 1;
+    }
+    return marked;
   }
 
   /** Runs currently holding a process — for diagnostics and the specs. */
@@ -505,7 +600,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         this.arm(runId, entry);
         return;
       }
-      this.closeEntry(runId, entry, 'it went unused');
+      void this.closeAfterFarewell(runId, entry);
     }, SESSION_IDLE_MS);
     entry.timer.unref?.();
   }
@@ -577,6 +672,37 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       }
       this.closeEntry(oldest[0], oldest[1], 'the session ceiling was reached');
     }
+  }
+
+  /**
+   * Let {@link onIdleFarewell} have its last word, then close.
+   *
+   * The entry stays in the map for the duration, which is what lets the
+   * listener reach the process through {@link peek} — and is also why the state
+   * is RE-CHECKED afterwards: a turn can arrive while the question is in
+   * flight, and that turn's session must not be closed under it. Nothing is
+   * re-armed in that case because `startTurn` disarmed this timer and the
+   * turn's own settle arms the next window.
+   */
+  private async closeAfterFarewell(
+    runId: string,
+    entry: SessionEntry,
+  ): Promise<void> {
+    if (this.farewell) {
+      try {
+        await this.farewell(runId);
+      } catch (err) {
+        // A last reading is worth nothing next to the close it precedes: a
+        // listener that throws must not leave the process running for ever.
+        this.logger.warn(
+          `the idle farewell for run ${runId} threw: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    if (this.entries.get(runId) !== entry || !entry.session.idle) {
+      return;
+    }
+    this.closeEntry(runId, entry, 'it went unused');
   }
 
   private closeEntry(runId: string, entry: SessionEntry, reason: string): void {

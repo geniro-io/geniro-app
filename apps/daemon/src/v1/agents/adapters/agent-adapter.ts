@@ -35,6 +35,7 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelParameterListing,
   AgentPlanLimits,
   AgentReportedCommand,
   AgentSession,
@@ -57,7 +58,11 @@ import type {
   InstalledCapabilities,
   TurnDriver,
 } from './adapter.types';
-import { scanCommandFiles, scanSkillDirs } from './utils/skill-scan.utils';
+import {
+  discoverPluginDirs,
+  scanCommandFiles,
+  scanSkillDirs,
+} from './utils/skill-scan.utils';
 
 /** Utility commands (`models`, `--version`) answer fast or not at all. */
 const UTILITY_COMMAND_TIMEOUT_MS = 10_000;
@@ -599,7 +604,16 @@ export abstract class AgentAdapter {
    * feature ever writes them.
    */
   readMcpFolderFacts(_cwd: string): Promise<AgentMcpFolderFacts> {
-    return Promise.resolve({ disabled: [], lockedOff: [] });
+    return Promise.resolve({
+      disabled: [],
+      lockedOff: [],
+      // Empty, not a guess: an adapter that cannot read its CLI's config files
+      // cannot know which scope a row came from, and every row then renders
+      // with its origin unstated — the same honest degradation the two lists
+      // above already take.
+      origins: {},
+      interactiveOnlyNote: null,
+    });
   }
 
   /**
@@ -835,6 +849,50 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Every OTHER setting the CLI enumerates for one model — see
+   * {@link AgentModelParameterListing}.
+   *
+   * The base answers "none", which is claude's answer: its models take a model
+   * name and nothing else. A CLI that enumerates more overrides this, and what
+   * it must return is the SUBTRACTION — everything it enumerated, minus the
+   * axes geniro already drives (the model itself, its effort, its context
+   * window, and any mode this app owns through another control). Returning the
+   * whole list instead would put a second control on screen beside every one of
+   * those, each able to disagree with it.
+   *
+   * MUST NOT throw, like every listing on this base.
+   */
+  async listModelParameters(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentModelParameterListing> {
+    void model;
+    void options;
+    return {
+      parameters: [],
+      unavailableReason: `${this.getConfig().kind} offers no further model settings`,
+      exact: false,
+    };
+  }
+
+  /**
+   * Forget whatever THIS adapter caches about its own CLI, and say how many
+   * answers went.
+   *
+   * The base answers zero, which is the truth for an adapter holding no cache
+   * of its own: every listing on this class is computed from `getConfig()` or
+   * read fresh. An adapter that memoizes a real ask overrides it — a mechanism,
+   * so a method rather than a config field. Reached only from
+   * `CacheResetService`, which the user drives from the menu bar.
+   *
+   * MUST NOT throw and MUST NOT ask the CLI anything: this runs on a request
+   * that is trying to make the app forget, not to make it work.
+   */
+  clearCaches(): number {
+    return 0;
+  }
+
+  /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
    * found on disk — each CLI keeps them under its own roots
    * (`config.skillRoots`: `.claude/skills`, `.claude/commands`,
@@ -862,6 +920,31 @@ export abstract class AgentAdapter {
       }
       for (const segments of this.getConfig().skillRoots.commands) {
         found.push(...(await scanCommandFiles(join(dir, ...segments), source)));
+      }
+    }
+    // Installed PLUGINS, last: a plugin's skill is the widest-scoped thing a
+    // CLI loads, so the folder's own and the user's own both shadow it under
+    // the caller's first-occurrence-wins de-dup. `user` source because that is
+    // the scope a plugin is installed at — `geniro` is reserved for geniro's
+    // OWN commands, which are a different thing wearing a similar name.
+    for (const host of this.getConfig().skillRoots.plugins) {
+      const pluginDirs = await discoverPluginDirs(
+        join(homeDir, ...host.cacheDir),
+        host.manifests,
+      );
+      for (const pluginDir of pluginDirs) {
+        for (const segments of host.skillDirs) {
+          const rows = await scanSkillDirs(
+            join(pluginDir, ...segments),
+            'user',
+          );
+          // First build that yields anything wins for THIS plugin — see
+          // `skillDirs`. An empty directory is not a build.
+          if (rows.length > 0) {
+            found.push(...rows);
+            break;
+          }
+        }
       }
     }
     return found;

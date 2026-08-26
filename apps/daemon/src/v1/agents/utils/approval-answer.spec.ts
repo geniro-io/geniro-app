@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import {
@@ -13,7 +14,9 @@ import {
 // that restated either would keep passing after the adapter changed the tool
 // name or the answer field.
 const claude = new ClaudeAdapter();
-const cursor = new CursorAcpAdapter();
+const cursor = new CursorAcpAdapter({
+  vocabularyStore: freshVocabularyStore(),
+});
 
 const { questionToolName } = claude.getConfig();
 if (questionToolName === null) {

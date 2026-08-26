@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentKind } from '../../runs/runs.types';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 
 function registry(): AgentAdapterRegistry {
-  return new AgentAdapterRegistry(new ClaudeAdapter(), new CursorAcpAdapter());
+  return new AgentAdapterRegistry(
+    new ClaudeAdapter(),
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }),
+  );
 }
 
 describe('AgentAdapterRegistry', () => {

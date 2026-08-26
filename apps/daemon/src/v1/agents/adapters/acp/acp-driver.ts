@@ -535,6 +535,58 @@ export function selectPermissionOption(
 }
 
 /**
+ * The element the turn's instructions are wrapped in, and the sentence inside
+ * it saying what they are.
+ *
+ * ACP has no system-prompt field, so these instructions arrive as part of the
+ * USER's turn — and an agent answers what the user says. REPORTED, and then
+ * reproduced end to end: a chat opened with `Hello!` got back a paragraph
+ * beginning "Got it — I'll treat this as a **rich markdown chat transcript**,
+ * not terminal output", listing the formats geniro had just described. The
+ * conversation was then genuinely ABOUT geniro's preamble — its own title,
+ * however derived, said so — because the preamble was the only substantial
+ * thing in the turn. claude never had this: `--append-system-prompt` is out of
+ * band, so there is nothing there for the model to reply to.
+ *
+ * A named element with a stated role is what puts it back out of band as far
+ * as anything here can. Both halves matter: the tag is a boundary a model
+ * recognises as structure rather than speech, and the sentence is what says
+ * which kind of structure, since an unexplained tag is just more text.
+ */
+export const HOST_CONTEXT_TAG = 'host-context';
+export const HOST_CONTEXT_NOTE =
+  'The block below is not a message from the user and not a request. It describes the app you are running inside. Follow it, and do not reply to it, summarise it, or mention it.';
+
+/**
+ * How often a running turn re-reads its agent's off-protocol context source.
+ *
+ * A measurement rather than a round number: on a fresh cursor chat the store's
+ * root blob was rewritten at 17.2s, 18.7s, 21.2s, 21.7s and 24.2s into the
+ * opening turn — gaps of 0.5s to 2.5s — so a two-second floor lands close to
+ * one reading per rewrite without asking a turn's every chunk for one. The read
+ * itself is cheap (0.14ms, a 4KB SQLite open and a protobuf walk); what this
+ * bounds is the socket emission each new figure costs every watching client.
+ */
+const CONTEXT_REREAD_MS = 2_000;
+
+/**
+ * Whether two readings say the same thing — the model included, since a turn
+ * that switched models is reporting a different window even at an identical
+ * count.
+ */
+function sameContextReading(
+  a: AcpContextReading | null,
+  b: AcpContextReading,
+): boolean {
+  return (
+    a !== null &&
+    a.usedTokens === b.usedTokens &&
+    a.windowTokens === b.windowTokens &&
+    a.model === b.model
+  );
+}
+
+/**
  * Drives ONE ACP turn over the child's stdin/stdout: the client-initiated
  * handshake (`initialize` → `session/new` | `session/load` → optional
  * `session/set_mode` → `session/prompt`), then the agent's `session/update`
@@ -633,6 +685,11 @@ export class AcpTurnDriver implements TurnDriver {
    * is drawn from between turns.
    */
   private contextReading: AcpContextReading | null = null;
+  /**
+   * When the last reading was taken, so the mid-turn re-read is bounded by the
+   * clock rather than by how chatty the agent happens to be.
+   */
+  private lastContextReadAt = 0;
   private readonly textChunks: string[] = [];
   /**
    * The failure this agent reported about ITSELF, kept until the stop reason
@@ -1074,7 +1131,7 @@ export class AcpTurnDriver implements TurnDriver {
       events.push({
         type: 'notice',
         message:
-          'agent does not support session/load — this turn starts a fresh session instead of resuming',
+          'this agent cannot resume a conversation — the turn starts fresh, without the earlier messages',
       });
     }
     this.request(
@@ -1656,11 +1713,29 @@ export class AcpTurnDriver implements TurnDriver {
   }
 
   /**
-   * ACP carries no system-prompt parameter, so the turn's instructions are
-   * prepended to the prompt text. WHICH instructions is the base adapter's
-   * rule, not this driver's — see `AgentAdapter.composeSystemPrompt`; this
-   * only supplies the two facts the protocol knows: whether the call tools
-   * ended up registered, and whether the host preamble still needs saying.
+   * ACP carries no system-prompt parameter, so the turn's instructions ride the
+   * prompt text. WHICH instructions is the base adapter's rule, not this
+   * driver's — see `AgentAdapter.composeSystemPrompt`; this only supplies the
+   * two facts the protocol knows: whether the call tools ended up registered,
+   * and whether the host preamble still needs saying.
+   *
+   * **The user's own words come FIRST, and the instructions follow inside a
+   * named block — both halves are fixes, and neither works alone.** See
+   * {@link HOST_CONTEXT_TAG} for what the block is for. The ORDER is about the
+   * name: a CLI names the conversation from its first prompt, and this text is
+   * that prompt, so with the instructions leading cursor-agent named every
+   * geniro chat after geniro's own preamble. Measured on 2026-08-25 against
+   * "Explain in three sentences how a bloom filter works" — instructions first
+   * gave `Markdown Not Terminal`, the user's sentence first gave `Bloom Filter
+   * Explained` — with `Markdown Renderer Instructions` and `Markdown Display
+   * Info` across the rest of the sidebar, and nothing on screen to suggest a
+   * name the user never wrote came from a block they cannot see. Order alone
+   * was not enough: a SHORT opening is still swamped, and `Hello!` came back
+   * `Geniro Markdown Display`. Neither costs the instructions anything —
+   * probed on the same build, an agent asked where its replies are displayed
+   * still answered from the preamble ("Geniro's rich GFM chat transcript, and
+   * no, remote HTTPS images cannot render"), which is the claim the preamble
+   * exists to make.
    *
    * **The preamble is withheld on a RESUMED session, and that is a cost fix
    * with a real number behind it.** Prompt text is part of the conversation
@@ -1683,7 +1758,16 @@ export class AcpTurnDriver implements TurnDriver {
       this.grantedMcpServers.length > 0,
       !this.resumed,
     );
-    return [instructions, this.options.input.prompt]
+    if (instructions.length === 0) {
+      return this.options.input.prompt;
+    }
+    return [
+      this.options.input.prompt,
+      `<${HOST_CONTEXT_TAG}>`,
+      HOST_CONTEXT_NOTE,
+      instructions,
+      `</${HOST_CONTEXT_TAG}>`,
+    ]
       .filter((part) => part.length > 0)
       .join('\n\n');
   }
@@ -1805,12 +1889,22 @@ export class AcpTurnDriver implements TurnDriver {
    * Total by construction — a source that throws, has nothing yet, or cannot
    * name a used figure is simply no reading. This is a meter, and no meter is
    * worth failing a turn over.
+   *
+   * `everyMs` is what separates the turn's two BOUNDARY readings from the ones
+   * taken WHILE it runs. A boundary reading passes 0 and is unconditional; a
+   * mid-turn one names the interval below which the source is not re-read and
+   * an unmoved figure is not re-published. See {@link CONTEXT_REREAD_MS}.
    */
-  private emitContextReading(events: AgentEvent[]): void {
+  private emitContextReading(events: AgentEvent[], everyMs = 0): void {
     const read = this.options.readContext;
     if (read === undefined || this.sessionId === null) {
       return;
     }
+    const now = Date.now();
+    if (everyMs > 0 && now - this.lastContextReadAt < everyMs) {
+      return;
+    }
+    this.lastContextReadAt = now;
     let reading: AcpContextReading | null;
     try {
       reading = read(this.sessionId);
@@ -1823,6 +1917,16 @@ export class AcpTurnDriver implements TurnDriver {
       return;
     }
     if (reading === null || reading.usedTokens === null) {
+      return;
+    }
+    // The store is rewritten several times a turn and the figure does not move
+    // with every rewrite, so a mid-turn reading equal to the one already on
+    // screen is traffic rather than news — each one is a socket emission to
+    // every client watching the run. The BOUNDARY readings are exempt: the one
+    // before `turn_complete` is what the settle path is built around, and
+    // suppressing it would make the durable half depend on whether the last
+    // mid-turn read happened to catch the same number.
+    if (everyMs > 0 && sameContextReading(this.contextReading, reading)) {
       return;
     }
     // Remembered before it is published, so the turn's own `turn_complete`
@@ -2199,7 +2303,21 @@ export class AcpTurnDriver implements TurnDriver {
     if (!update) {
       return [];
     }
-    return this.onSessionUpdate(asString(update.sessionUpdate), update);
+    const events = this.onSessionUpdate(asString(update.sessionUpdate), update);
+    // The turn's THIRD reading moment, and the one a first turn depends on.
+    // The other two are boundaries: the session reply, where a conversation
+    // the agent has never held has written nothing to read, and the settle.
+    // So a brand-new chat's ring stayed empty for the whole of its opening
+    // turn and filled only as that turn ended — reported as a chat that "still
+    // hadn't loaded any context, and loaded it only later". Measured on a
+    // fresh cursor chat (2026-08-25): the store held a complete reading of
+    // 47,221 of 272,000 at 18.2s and went on moving, while the turn ran for
+    // considerably longer. Notifications are the carrier because a turn that
+    // is working always has them and one that is not has nothing worth
+    // re-reading for; during a `session/load` replay `sessionId` is not yet
+    // set, so the reading cannot fire against the previous turn's figures.
+    this.emitContextReading(events, CONTEXT_REREAD_MS);
+    return events;
   }
 
   private onSessionUpdate(

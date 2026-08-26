@@ -208,16 +208,23 @@ describe('AgentConfigList — the account control matches the reported state', (
   function accountButtons(
     el: HTMLElement,
   ): { label: string; button: HTMLButtonElement }[] {
+    // `Signing in…` is matched explicitly rather than by prefix: it does NOT
+    // contain the substring `Sign in`, so a filter on that alone drops the very
+    // state these tests are about and reports an empty list instead of a wrong
+    // one.
     return [...el.querySelectorAll('button')]
       .filter(
         (b) =>
           b.textContent?.includes('Sign in') === true ||
+          b.textContent?.includes('Signing in') === true ||
           b.textContent?.includes('Sign out') === true,
       )
       .map((button) => ({
         label: button.textContent?.includes('Sign out')
           ? 'Sign out'
-          : 'Sign in',
+          : button.textContent?.includes('Signing in')
+            ? 'Signing in…'
+            : 'Sign in',
         button: button as HTMLButtonElement,
       }));
   }
@@ -283,6 +290,51 @@ describe('AgentConfigList — the account control matches the reported state', (
     });
     expect(onSignIn).toHaveBeenCalledWith('claude');
     expect(onSignOut).not.toHaveBeenCalled();
+  });
+
+  it('answers the PRESS, before the daemon has said anything', () => {
+    // THE REPORTED DEFECT: "I press Sign In and there is no loader, nothing."
+    // The panel below this button only exists once the daemon replies, and
+    // that reply is held until the CLI prints its URL — measured at 4001ms in
+    // the running app — so for four seconds a browser tab opens behind the
+    // window while this button sits unchanged.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude', { loggedIn: false })]}
+        onSignIn={vi.fn()}
+        onSignOut={vi.fn()}
+        signingIn="claude"
+      />,
+    );
+
+    const button = accountButtons(el)[0]!;
+    expect(button.label).toContain('Signing in…');
+    // Disabled as well as spinning, and that is not cosmetic: a second press
+    // starts a second browser challenge that invalidates the first.
+    expect(button.button.disabled).toBe(true);
+  });
+
+  it('marks only the card whose sign-in is running', () => {
+    // Two cards, one flag. A component that keyed the pending state off
+    // anything but the kind would spin both.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', { loggedIn: false }),
+          det('cursor-agent', { loggedIn: false }),
+        ]}
+        onSignIn={vi.fn()}
+        onSignOut={vi.fn()}
+        signingIn="cursor-agent"
+      />,
+    );
+
+    expect(accountButtons(el).map((f) => f.label)).toEqual([
+      'Sign in',
+      'Signing in…',
+    ]);
   });
 
   it('offers SIGN IN when the state is unknown — never sign out on a guess', () => {

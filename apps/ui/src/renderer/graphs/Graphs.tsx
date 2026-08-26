@@ -38,9 +38,14 @@ import { ApprovalModeSelect } from '../chats/approval-mode-select';
 import { ConfigDirSelect } from '../chats/config-dir-select';
 import { ContextWindowSelect } from '../chats/context-window-select';
 import { EffortSelect } from '../chats/effort-select';
+import {
+  ModelParameterSelect,
+  withModelParameter,
+} from '../chats/model-parameter-select';
 import { ModelSelect } from '../chats/model-select';
 import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
+import { useAgentModelParameters } from '../chats/use-agent-model-parameters';
 import { useAgentModels } from '../chats/use-agent-models';
 import { ConfirmButton } from '../components/confirm-button';
 import { ConfirmDialog } from '../components/confirm-dialog';
@@ -702,6 +707,13 @@ export function Graphs({
     selected?.kind === 'agent' ? selected.agent : null,
     selected?.kind === 'agent' ? (selected.model ?? null) : null,
   );
+  // And whatever those two do not cover — here the SET of chips is the model's
+  // answer, so a node that changes model changes which controls it has.
+  const agentModelParameters = useAgentModelParameters(
+    apis?.agents ?? null,
+    selected?.kind === 'agent' ? selected.agent : null,
+    selected?.kind === 'agent' ? (selected.model ?? null) : null,
+  );
 
   // What this node would load regardless of where the run lands: the user's
   // global servers plus whatever its own config directory brings. The folder's
@@ -1166,7 +1178,6 @@ export function Graphs({
                             gets and what a labelled row around it could not. */}
                         <EffortSelect
                           efforts={agentEfforts.efforts}
-                          unavailableReason={agentEfforts.unavailableReason}
                           levelsAreModelSpecific={selected.model !== undefined}
                           value={selected.effort ?? null}
                           onChange={(effort) =>
@@ -1175,10 +1186,6 @@ export function Graphs({
                         />
                         <ContextWindowSelect
                           windows={agentContextWindows.windows}
-                          unavailableReason={
-                            agentContextWindows.unavailableReason
-                          }
-                          unavailableKind={agentContextWindows.unavailableKind}
                           value={selected.contextWindow ?? null}
                           onChange={(contextWindow) =>
                             patchSelected({
@@ -1186,6 +1193,33 @@ export function Graphs({
                             })
                           }
                         />
+                        {/* One chip per OTHER setting this node's model
+                            enumerates — the same set the composer draws, over
+                            the node's own stored map. `undefined` rather than
+                            an empty object when the last one is cleared, so the
+                            YAML loses the key instead of carrying `{}`. */}
+                        {agentModelParameters.parameters.map((parameter) => (
+                          <ModelParameterSelect
+                            key={parameter.id}
+                            parameter={parameter}
+                            value={
+                              selected.modelParameters?.[parameter.id] ?? null
+                            }
+                            onChange={(next) => {
+                              const merged = withModelParameter(
+                                selected.modelParameters ?? {},
+                                parameter.id,
+                                next,
+                              );
+                              patchSelected({
+                                modelParameters:
+                                  Object.keys(merged).length === 0
+                                    ? undefined
+                                    : merged,
+                              });
+                            }}
+                          />
+                        ))}
                         <ApprovalModeSelect
                           supportedModes={nodeApprovalModes}
                           // Never on a workflow node — see `nodeApprovalModes`.

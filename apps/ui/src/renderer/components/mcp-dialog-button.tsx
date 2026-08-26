@@ -38,6 +38,7 @@ export function McpDialogButton({
   onRefresh,
   onSetEnabled,
   onSignIn,
+  signingIn,
   loginPanel,
   className,
 }: {
@@ -60,6 +61,14 @@ export function McpDialogButton({
   onSetEnabled?: (server: string, enabled: boolean) => void;
   /** Sign one server in. Absent hides the action, on the same rule. */
   onSignIn?: (server: string) => void;
+  /**
+   * The server whose sign-in has been asked for and not yet answered.
+   *
+   * Threaded rather than derived from {@link loginPanel}: that panel only
+   * exists once the daemon has ANSWERED, and the four seconds before it does
+   * are exactly the window this covers.
+   */
+  signingIn?: string | null;
   /**
    * A sign-in in flight, rendered inside the dialog that started it. The CLI's
    * own browser tab opens behind the app, so without this the Sign in control
@@ -121,6 +130,7 @@ export function McpDialogButton({
           onRefresh={onRefresh}
           onSetEnabled={onSetEnabled}
           onSignIn={onSignIn}
+          signingIn={signingIn}
           // The dialog IS the section's chrome here, so the card-band edges (a
           // top rule, the card's own padding) would draw a stray line across a
           // panel that is already bounded.

@@ -1,15 +1,17 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
 import type { AgentKind } from '../../runs/runs.types';
+import type { UsageReadChannel } from '../adapters/adapter.types';
 import type {
   ChatMetricsWire,
   ChatTotalsWire,
   ContextBreakdownWire,
   PlanLimitsWire,
 } from '../chat.types';
-import { SINGLE_AGENT_NODE } from '../chat.types';
+import type { StoredMetricsReading } from '../chat.types';
+import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -33,7 +35,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
  * it is talking to, or how one accounts for its window.
  */
 @Injectable()
-export class ChatMetricsService {
+export class ChatMetricsService implements OnModuleInit {
   private readonly logger = new Logger(ChatMetricsService.name);
 
   constructor(
@@ -44,6 +46,17 @@ export class ChatMetricsService {
     private readonly sessions: AgentSessionRegistry,
     private readonly adapters: AgentAdapterRegistry,
   ) {}
+
+  /**
+   * Ask this run's agent both questions one last time, on its way out.
+   *
+   * Registered rather than called: the registry owns the processes and is the
+   * only party that knows a session is about to be closed for want of use —
+   * see `AgentSessionRegistry.onIdleFarewell` for why that close and no other.
+   */
+  onModuleInit(): void {
+    this.sessions.onIdleFarewell((runId) => this.captureFarewell(runId));
+  }
 
   /**
    * One reading of a chat's metrics.
@@ -63,15 +76,23 @@ export class ChatMetricsService {
       this.readFromAgent(runId, run.agentKind, em),
       this.itemDao.turnCompletePayloads(runId, em),
     ]);
-    const { context, plan } = agent;
+    // The stored last reading is consulted ONLY where the live one is missing
+    // and could not have been taken — a CLI that answers is always preferred,
+    // and a reading nobody could take is what this exists for.
+    const stored =
+      agent.context === null || agent.plan === null
+        ? await this.storedReading(run.lastMetricsReading, runId, em)
+        : null;
+    const context = agent.context ?? stored?.context ?? null;
+    const plan = agent.plan ?? stored?.plan ?? null;
     return {
       context,
       breakdownReason:
         context === null
           ? this.absenceReason(
               run.agentKind,
-              agent.asked,
-              'breakdownUnavailableReason',
+              agent.askedContext,
+              'breakdown',
               CONTEXT_ABSENCE,
             )
           : null,
@@ -80,10 +101,18 @@ export class ChatMetricsService {
         plan === null
           ? this.absenceReason(
               run.agentKind,
-              agent.asked,
-              'planLimitsUnavailableReason',
+              agent.askedPlan,
+              'planLimits',
               PLAN_ABSENCE,
             )
+          : null,
+      // Only where a figure above actually CAME from the stored reading: a live
+      // answer is now, and stamping it with the moment an older one was taken
+      // would date the very reading that is current.
+      takenAt:
+        (agent.context === null && context !== null) ||
+        (agent.plan === null && plan !== null)
+          ? (stored?.takenAt ?? null)
           : null,
       // The rule every figure obeys — null until SOME turn reported it, so a
       // chat on a CLI that reports no usage reads as "not measured" and never
@@ -142,17 +171,26 @@ export class ChatMetricsService {
   ): Promise<{
     context: ContextBreakdownWire | null;
     plan: PlanLimitsWire | null;
-    asked: boolean;
+    askedContext: boolean;
+    askedPlan: boolean;
   }> {
-    const nothing = { context: null, plan: null, asked: false };
+    const nothing = {
+      context: null,
+      plan: null,
+      askedContext: false,
+      askedPlan: false,
+    };
     // A run naming no agent has nobody to ask; a CLI declaring a reason for
     // BOTH questions has nothing to be asked for. A CLI declaring only one is
     // still asked — the other half is a real feature, and short-circuiting on
     // either reason would switch it off with a plausible sentence in its place.
+    if (agentKind === null) {
+      return nothing;
+    }
+    const usage = this.adapters.for(agentKind).getConfig().usage;
     if (
-      agentKind === null ||
-      (this.declaredReason(agentKind, 'breakdownUnavailableReason') !== null &&
-        this.declaredReason(agentKind, 'planLimitsUnavailableReason') !== null)
+      usage.breakdown.kind === 'unavailable' &&
+      usage.planLimits.kind === 'unavailable'
     ) {
       return nothing;
     }
@@ -177,20 +215,117 @@ export class ChatMetricsService {
     }
     // Whether a channel EXISTED is decided here, before the ask — the reading
     // failing is precisely the case the two sentences have to tell apart, so it
-    // cannot be inferred from the reading.
-    const asked = live !== null || sessionId !== null;
-    if (!asked) {
+    // cannot be inferred from the reading. PER READING, and the adapter says
+    // which channel each of its answers comes from: asking "does EITHER channel
+    // exist" made the noLiveProcess sentence unreachable for claude, whose
+    // readings need the live process while a chat that has ever run keeps a
+    // session id for good. Every reaped claude chat was therefore told its agent
+    // "did not answer in time — the reading is taken again while this stays
+    // open" over a question nobody had asked and nothing would ask again.
+    // Reproduced from the author's own daemon log: session for run 2262b385
+    // closed as unused at 13:18:49, the readout opened at 13:37:07, and not one
+    // warning in between because nothing was attempted.
+    const available = (channel: UsageReadChannel): boolean =>
+      channel === 'live-process' ? live !== null : sessionId !== null;
+    const askedContext =
+      usage.breakdown.kind === 'reads' && available(usage.breakdown.channel);
+    const askedPlan =
+      usage.planLimits.kind === 'reads' && available(usage.planLimits.channel);
+    if (!askedContext && !askedPlan) {
       return nothing;
     }
     const adapter = this.adapters.for(agentKind);
     const input = { live, sessionId };
     const [context, plan] = await Promise.all([
-      this.attempt(runId, 'context breakdown', () =>
-        adapter.readContextUsage(input),
-      ),
-      this.attempt(runId, 'plan limits', () => adapter.readPlanLimits(input)),
+      askedContext
+        ? this.attempt(runId, 'context breakdown', () =>
+            adapter.readContextUsage(input),
+          )
+        : null,
+      askedPlan
+        ? this.attempt(runId, 'plan limits', () =>
+            adapter.readPlanLimits(input),
+          )
+        : null,
     ]);
-    return { context, plan, asked };
+    return { context, plan, askedContext, askedPlan };
+  }
+
+  /**
+   * The last reading this run's agent gave before its process was closed, or
+   * null when there is none worth showing.
+   *
+   * Two ways it is refused, and both matter more than the reading itself. A
+   * shape the current schemas cannot parse is DISCARDED rather than served,
+   * because the renderer draws these figures and half a breakdown is worse than
+   * the sentence saying there is none. And a transcript that has MOVED since —
+   * turns taken under a session that was closed some other way, or a daemon
+   * restarted between the two — makes the figures describe a conversation that
+   * no longer exists; a timestamp on screen does not make that honest, so they
+   * are dropped.
+   */
+  private async storedReading(
+    raw: string | null,
+    runId: string,
+    em: EntityManager,
+  ): Promise<StoredMetricsReading | null> {
+    if (raw === null) {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = StoredMetricsReadingSchema.safeParse(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+    if (!parsed.success) {
+      return null;
+    }
+    const seq = await this.itemDao.maxSeq(runId, em);
+    return parsed.data.atSeq === seq ? parsed.data : null;
+  }
+
+  /**
+   * Take both readings from a process that is about to be closed, and file them
+   * on the run.
+   *
+   * The transcript position is read FIRST and deliberately: a turn arriving
+   * while the questions are in flight leaves the figures describing the older
+   * conversation, and a position taken afterwards would claim they describe the
+   * newer one. Read first, the stored reading simply stops being served.
+   *
+   * Never throws: this runs on the way to closing a process, and a failed
+   * reading must not keep that process alive.
+   */
+  private async captureFarewell(runId: string): Promise<void> {
+    const em = this.em.fork();
+    try {
+      const run = await this.runDao.getById(runId, em);
+      if (!run?.agentKind) {
+        return;
+      }
+      const atSeq = await this.itemDao.maxSeq(runId, em);
+      const agent = await this.readFromAgent(runId, run.agentKind, em);
+      if (agent.context === null && agent.plan === null) {
+        return;
+      }
+      await this.runDao.rememberMetricsReading(
+        runId,
+        JSON.stringify({
+          takenAt: new Date().toISOString(),
+          atSeq,
+          context: agent.context,
+          plan: agent.plan,
+        } satisfies StoredMetricsReading),
+        em,
+      );
+    } catch (err) {
+      this.logger.warn(
+        `the last reading for run ${runId} could not be taken: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   /** One adapter question, whose failure is a null reading and a log line. */
@@ -255,13 +390,13 @@ export class ChatMetricsService {
     agentKind: AgentKind,
     field: DeclaredReasonField,
   ): string | null {
-    return this.adapters.for(agentKind).getConfig().usage[field];
+    const reading = this.adapters.for(agentKind).getConfig().usage[field];
+    return reading.kind === 'unavailable' ? reading.reason : null;
   }
 }
 
-/** Which of the adapter's declared "no such channel" sentences to consult. */
-type DeclaredReasonField =
-  'breakdownUnavailableReason' | 'planLimitsUnavailableReason';
+/** Which of the adapter's two declared readings to consult. */
+type DeclaredReasonField = 'breakdown' | 'planLimits';
 
 /** The three sentences one absent reading can need. */
 interface AbsenceSentences {
@@ -292,7 +427,7 @@ const CONTEXT_ABSENCE: AbsenceSentences = {
   noLiveProcess:
     'the breakdown is read from the running agent — send a message in this chat to take a fresh reading',
   noAnswer:
-    'the agent did not answer the context request in time — the reading is taken again while this stays open',
+    'the agent did not answer in time — the reading is taken again while this stays open',
 };
 
 const PLAN_ABSENCE: AbsenceSentences = {

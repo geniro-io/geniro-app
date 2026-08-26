@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type { AgentEffortListing } from '../adapters/adapter.types';
 import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
@@ -14,7 +15,9 @@ function service(options: EffortsServiceOptions = {}): {
   cursor: CursorAcpAdapter;
 } {
   const claude = new ClaudeAdapter();
-  const cursor = new CursorAcpAdapter();
+  const cursor = new CursorAcpAdapter({
+    vocabularyStore: freshVocabularyStore(),
+  });
   return {
     claude,
     cursor,

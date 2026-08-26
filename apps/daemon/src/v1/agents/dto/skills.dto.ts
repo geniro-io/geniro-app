@@ -3,8 +3,10 @@ import { z } from 'zod';
 
 import { AgentKindSchema } from '../../runs/runs.types';
 import {
+  AgentCacheResetWireSchema,
   AgentContextWindowListingWireSchema,
   AgentEffortListingWireSchema,
+  AgentModelParameterListingWireSchema,
   AgentModelWireSchema,
   AgentSessionListingWireSchema,
   AgentSkillWireSchema,
@@ -70,6 +72,30 @@ export class ListContextWindowsQueryDto extends createZodDto(
 /** The window sizes one model offers, or the reason it offers none. */
 export class AgentContextWindowListingDto extends createZodDto(
   AgentContextWindowListingWireSchema,
+) {}
+
+/**
+ * Query for the model-parameter listing — the same shape again, and `model` is
+ * required in practice for the same reason the context one is: these axes exist
+ * per model, and one of them (`optimize_for`) exists on exactly one model of
+ * thirty-four. With none named the answer is the sentence saying so.
+ */
+export const listModelParametersQuerySchema = z.object({
+  agent: AgentKindSchema,
+  model: z.string().min(1).optional(),
+});
+export class ListModelParametersQueryDto extends createZodDto(
+  listModelParametersQuerySchema,
+) {}
+
+/** Every other setting one model offers, or the reason it offers none. */
+export class AgentModelParameterListingDto extends createZodDto(
+  AgentModelParameterListingWireSchema,
+) {}
+
+/** How much a manual cache reset threw away. */
+export class AgentCacheResetDto extends createZodDto(
+  AgentCacheResetWireSchema,
 ) {}
 
 /**

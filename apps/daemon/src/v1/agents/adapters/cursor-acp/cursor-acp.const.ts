@@ -121,6 +121,27 @@ export const CURSOR_EFFORT_PARAMETER_ID = CURSOR_EFFORT_PARAMETER_IDS[0];
 export const CURSOR_CONTEXT_WINDOW_PARAMETER_ID = 'context';
 
 /**
+ * The config-option ids geniro ALREADY drives through a control of its own —
+ * everything `listModelParameters` must subtract before offering the rest.
+ *
+ * `mode` is on the list and is the one that is easy to miss: it is not a model
+ * parameter this app ignores, it is the ACP session mode the driver sets from
+ * the run's approval mode (`preferredModeId` → `session/set_mode`). Offering it
+ * again as a chip would put two controls on screen for one setting, each able
+ * to overwrite the other's answer on the next turn.
+ *
+ * The model option itself is NOT here, and deliberately: it is excluded by its
+ * `category` instead, which is the PROTOCOL's own word for it, while an id is
+ * the agent's. cursor happens to spell it `model` today; an agent that spelled
+ * it anything else would still be caught.
+ */
+export const CURSOR_OWNED_PARAMETER_IDS: readonly string[] = [
+  'mode',
+  ...CURSOR_EFFORT_PARAMETER_IDS,
+  CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
+];
+
+/**
  * The key **Max Mode** rides in `cli-config.json` — a top-level boolean, not a
  * model parameter and not on the protocol at all.
  *
@@ -353,6 +374,23 @@ export const CURSOR_MCP_FAILED_MARKER = 'Error:';
 export const CURSOR_MCP_PENDING_MARKER = 'not loaded';
 
 /**
+ * What a server the CLI is still dialling reports.
+ *
+ * READ FROM THE BUNDLE rather than captured, which is the one marker here that
+ * was: `mcp list` renders its status through a chain whose arms are exactly
+ * `ready` / `requires_authentication` / `loading` / `disabled` / `unapproved` /
+ * `Error: <reason>` (2026.08.11-e8db854, `9917.index.js`), and this is the only
+ * one of the six with no marker of its own. Reproducing it on demand means
+ * winning a race against the CLI's own dial, so the source is the evidence.
+ *
+ * It is a MOMENT rather than a state, and that is why the row is worth getting
+ * right rather than leaving to `unknown`: the next read answers it, and
+ * `unknown` says the opposite — that the CLI's wording is one this parser
+ * cannot read.
+ */
+export const CURSOR_MCP_LOADING_MARKER = 'loading';
+
+/**
  * What a server switched off with `cursor-agent mcp disable <name>` reports.
  *
  * Captured from the same binary:
@@ -407,6 +445,48 @@ export const CURSOR_MCP_NEEDS_AUTH_MARKER = 'requires_authentication';
  * detail a release rewords.
  */
 export const CURSOR_MCP_EMPTY_MARKER = 'No MCP servers configured';
+
+/**
+ * The config file each scope keeps its servers in, under {@link
+ * CURSOR_HOME_DIR_NAME} — one in the user's home, one in the project root.
+ *
+ * Both spellings come from the same statement in the bundle that decides a
+ * row's status (2026.08.11-e8db854, `9917.index.js`): it joins
+ * `<projectRoot>/.cursor/mcp.json` and `<home>/.cursor/mcp.json`, merges the
+ * second OVER the first, and treats a name present in the PROJECT half as the
+ * one needing approval.
+ */
+export const CURSOR_MCP_CONFIG_NAME = 'mcp.json';
+
+/**
+ * What marks a directory as the project root — the same walk the CLI does.
+ *
+ * Read from the bundle rather than assumed: it climbs from `process.cwd()`
+ * testing `existsSync(join(dir, '.git'))` and returns the first hit, falling
+ * back to the original directory when it reaches the filesystem root. A `.git`
+ * FILE counts as much as a directory, which is what makes a linked worktree
+ * resolve to itself rather than to its main checkout.
+ */
+export const CURSOR_PROJECT_ROOT_MARKER = '.git';
+
+/**
+ * Where the CLI caches installed plugins, under {@link CURSOR_HOME_DIR_NAME}.
+ *
+ * A plugin's `plugin.json` may point at its own MCP config
+ * (`"mcpServers": "./.dd_cursor_mcp.json"`), and those servers reach cursor's
+ * APP and not a headless turn — see `pluginOnlyNote` for the three
+ * measurements behind that claim.
+ */
+export const CURSOR_PLUGINS_DIR_NAME = 'plugins';
+/** The manifest inside a cached plugin that names its MCP config. */
+export const CURSOR_PLUGIN_MANIFEST_PATH = ['.cursor-plugin', 'plugin.json'];
+/**
+ * How deep under `plugins/` a manifest sits — `cache/<publisher>/<name>/<sha>/`,
+ * observed on the installed datadog plugin. Bounded rather than walked to the
+ * bottom: that tree holds a whole checkout per plugin, and a `**` scan of it
+ * would cost seconds on every listing.
+ */
+export const CURSOR_PLUGIN_SCAN_DEPTH = 4;
 
 /**
  * Argv for the two halves of the switch.
@@ -761,6 +841,13 @@ export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
   'client, so there is nothing to show but what it was asked and what it took';
 
 /**
+ * The flat JSON header beside that database, carrying the conversation's `cwd`
+ * and the title the AGENT generated for it. Named here for the same reason its
+ * neighbour is — the adapter spells the path and its spec spells it back.
+ */
+export const CURSOR_SESSION_META_NAME = 'meta.json';
+
+/**
  * The SQLite file the CLI keeps one conversation's state in, inside that
  * session's directory under the store — see
  * `utils/cursor-context-store.utils.ts` for what is in it and how it was
@@ -768,13 +855,6 @@ export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
  * and its spec spells it back.
  */
 export const CURSOR_SESSION_STORE_DB_NAME = 'store.db';
-
-/**
- * The flat JSON header beside that database, carrying the conversation's `cwd`
- * and the title the AGENT generated for it. Named here for the same reason its
- * neighbour is — the adapter spells the path and its spec spells it back.
- */
-export const CURSOR_SESSION_META_NAME = 'meta.json';
 
 // ---------------------------------------------------------------------------
 // This CLI reporting its OWN failure — as an assistant message, under end_turn

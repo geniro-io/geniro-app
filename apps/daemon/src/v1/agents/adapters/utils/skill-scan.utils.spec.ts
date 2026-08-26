@@ -10,7 +10,11 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { scanCommandFiles, scanSkillDirs } from './skill-scan.utils';
+import {
+  discoverPluginDirs,
+  scanCommandFiles,
+  scanSkillDirs,
+} from './skill-scan.utils';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -84,5 +88,52 @@ describe('scanSkillDirs + scanCommandFiles', () => {
       [],
     );
     await expect(scanSkillDirs(skillsRoot, 'project')).resolves.toEqual([]);
+  });
+});
+
+describe('discoverPluginDirs', () => {
+  const MANIFESTS = [
+    ['.cursor-plugin', 'plugin.json'],
+    ['.claude-plugin', 'plugin.json'],
+  ];
+
+  it('finds an installed plugin without being told its marketplace, name or version', async () => {
+    const cache = tempDir('plugin-cache-');
+    writeAt(
+      cache,
+      join(
+        'some-marketplace',
+        'a-plugin',
+        '9.9.9',
+        '.claude-plugin',
+        'plugin.json',
+      ),
+      '{}',
+    );
+
+    // The whole point of discovery: none of the three middle segments is an
+    // input, so a plugin installed after this shipped is found with no release.
+    await expect(discoverPluginDirs(cache, MANIFESTS)).resolves.toEqual([
+      join(cache, 'some-marketplace', 'a-plugin', '9.9.9'),
+    ]);
+  });
+
+  it('skips a three-deep directory carrying none of the manifests', async () => {
+    const cache = tempDir('plugin-cache-');
+    // Same depth as a real plugin, and holding a skill — only the missing
+    // manifest tells them apart, so dropping the check would return this.
+    writeAt(
+      cache,
+      join('m', 'not-a-plugin', '1.0.0', 'skills', 's', 'SKILL.md'),
+      '# s',
+    );
+
+    await expect(discoverPluginDirs(cache, MANIFESTS)).resolves.toEqual([]);
+  });
+
+  it('reads a missing cache root as a machine with no plugins', async () => {
+    const cache = join(tempDir('plugin-cache-'), 'never-created');
+
+    await expect(discoverPluginDirs(cache, MANIFESTS)).resolves.toEqual([]);
   });
 });

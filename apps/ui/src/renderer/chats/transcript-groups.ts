@@ -618,6 +618,25 @@ export function subagentBlockStatus(
   if (block.backgroundOpen === true && !endedByRun) {
     return 'running';
   }
+  // The CLOSING half of that same channel, and reading only the opening half is
+  // what made a long conversation sprout delegates that run forever. A block is
+  // admitted by the delegate's OWN rows, while `returned` comes from the
+  // launching call — so once a thread grows past `HISTORY_PAGE` and that call
+  // falls out of the loaded window, the block arrives unnamed with `returned`
+  // false and nothing below can end it: no launch to answer it, and no turn-end
+  // after its last row while the agent is still working. Measured on the
+  // reporter's own `geniro.db`, run `d64593d0` at the moment of the report: the
+  // window held seq ~2570–3570, delegates `…27pzci` and `…L6pqka` were launched
+  // at 2537/2551 — just below it — and the daemon's own `backgroundOpen: false`
+  // for them sat at 3213 and 3364, INSIDE the window and discarded. The header
+  // read 4 running delegates over a run whose hold tally said 2, which was the
+  // report.
+  //
+  // A settled unit is a delegate that REPORTED, so it completes rather than
+  // stopping — the daemon writes this the moment the work comes back.
+  if (block.backgroundOpen === false) {
+    return 'completed';
+  }
   if (block.returned) {
     return 'completed';
   }

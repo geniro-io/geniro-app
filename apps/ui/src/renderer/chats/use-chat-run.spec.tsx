@@ -34,6 +34,7 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  modelParameters: {},
   contextTokens: null,
   contextWindowTokens: null,
   configDir: null,

@@ -81,6 +81,47 @@ export async function scanCommandFiles(
   return out;
 }
 
+/**
+ * Every INSTALLED PLUGIN under one plugin-cache root — discovered, never named.
+ *
+ * A plugin host keeps its cache as `<root>/<marketplace>/<plugin>/<version>/`,
+ * so the three middle segments are whatever the user happens to have installed
+ * and cannot be written down anywhere: a caller states the ROOT and the
+ * manifest that marks a directory as a plugin, and gets back the version
+ * directories that carry one. The manifest check is what keeps this from
+ * returning every three-deep directory under the root, and it is the caller's
+ * (a CLI reads its own manifest names), so nothing here learns a host's
+ * spelling any more than the scanners above learn a CLI's paths.
+ *
+ * Never throws — a missing cache root is simply a machine with no plugins.
+ */
+export async function discoverPluginDirs(
+  cacheRoot: string,
+  manifests: readonly (readonly string[])[],
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const marketplace of await readSubdirs(cacheRoot)) {
+    for (const plugin of await readSubdirs(marketplace)) {
+      for (const version of await readSubdirs(plugin)) {
+        for (const segments of manifests) {
+          if ((await readFileSafe(join(version, ...segments))) !== null) {
+            out.push(version);
+            break;
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Child directory PATHS of one dir; missing/unreadable reads as none. */
+async function readSubdirs(dir: string): Promise<string[]> {
+  return (await readDirSafe(dir))
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => join(dir, entry.name));
+}
+
 /** Directory listing that treats a missing/unreadable dir as empty. */
 async function readDirSafe(dir: string): Promise<Dirent[]> {
   try {

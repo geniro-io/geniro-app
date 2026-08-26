@@ -1,4 +1,12 @@
-import { ChevronRight, Lock, LogIn, Plug, RefreshCw } from 'lucide-react';
+import {
+  ChevronRight,
+  Loader2,
+  Lock,
+  LogIn,
+  Plug,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react';
 import { useState } from 'react';
 
 import type {
@@ -36,7 +44,18 @@ const MCP_STATUS: Record<
   // "Sign in". A third copy of the same three words on the row itself is what
   // the redesign is meant to remove, not add.
   needs_auth: { tone: 'warn', label: null },
-  pending: { tone: 'warn', label: 'pending approval' },
+  // Label-less for the reason `needs_auth` is, and it is the reported defect:
+  // `pending approval` was two words on a row whose switch already read ON,
+  // with nothing saying what was pending, who approves, or how — the question
+  // asked verbatim was "what is this and why is it written there". The row now
+  // sits under a "Needs approval" heading that states it, above a caption that
+  // explains it, beside a button that does it.
+  pending: { tone: 'warn', label: null },
+  // A MOMENT, not a state: the CLI was still dialling this server when it
+  // answered, and the next read settles it either way. Worth its own word
+  // because without one it arrived as `unknown`, which says the opposite —
+  // that the CLI's wording is something this app could not read.
+  loading: { tone: 'unknown', label: 'connecting…' },
   // Switched off in the CLI's own config — a stated choice, not a problem.
   disabled: { tone: 'unknown', label: 'off' },
   unknown: { tone: 'unknown', label: 'unknown' },
@@ -44,6 +63,21 @@ const MCP_STATUS: Record<
 
 /** The neutral reading for a status the wire widened past what this knows. */
 const UNKNOWN_STATUS = { tone: 'unknown' as StatusTone, label: 'unknown' };
+
+/**
+ * How each scope reads on a row, and `unknown` reads as nothing.
+ *
+ * The words are the CLI's own — cursor's picker says User and Workspace — so a
+ * reader comparing the two panels is matching the same vocabulary rather than
+ * translating. `unknown` is silence rather than a word, because it is a fact
+ * about what geniro could read and not about the server; a CLI whose scopes are
+ * not placed yet would otherwise carry a meaningless badge on every row.
+ */
+const MCP_SCOPE: Record<AgentMcpServer['scope'], string | null> = {
+  user: 'user',
+  workspace: 'workspace',
+  unknown: null,
+};
 
 /**
  * Beyond this many characters a failure reason is folded until asked for.
@@ -124,15 +158,19 @@ function FoldedReason({
 function McpRow({
   server,
   loading,
+  signingIn,
   onSetEnabled,
   onSignIn,
 }: {
   server: AgentMcpServer;
   loading: boolean;
+  /** True while this row's sign-in has been asked for and not yet answered. */
+  signingIn: boolean;
   onSetEnabled?: (server: string, enabled: boolean) => void;
   onSignIn?: (server: string) => void;
 }): React.JSX.Element {
   const { tone, label } = MCP_STATUS[server.status] ?? UNKNOWN_STATUS;
+  const scopeLabel = MCP_SCOPE[server.scope] ?? null;
   return (
     <li className="flex flex-col gap-0.5 rounded-md px-1.5 py-1 text-xs transition-colors hover:bg-accent/40">
       <span
@@ -154,6 +192,16 @@ function McpRow({
           )}>
           {server.name}
         </span>
+        {/* WHERE the server was defined, in the CLI's own vocabulary.
+            `unknown` draws nothing: a row whose origin could not be read is
+            the ordinary case for a CLI whose scopes geniro cannot place yet,
+            and a badge reading "unknown" beside every one of them would be
+            noise about geniro rather than a fact about the server. */}
+        {scopeLabel ? (
+          <span className="shrink-0 text-[11px] text-muted-foreground/80">
+            {scopeLabel}
+          </span>
+        ) : null}
         {label ? (
           <span className="shrink-0 text-muted-foreground">{label}</span>
         ) : null}
@@ -170,15 +218,61 @@ function McpRow({
             no sign-in
           </span>
         ) : (
+          // The press is answered HERE, not when the daemon replies. That
+          // request is held open until the CLI prints its URL — measured at
+          // 4001ms in the running app — and for all of it a browser tab opens
+          // behind the window while this button sits unchanged, which is the
+          // reported "no loader, nothing". The spinner and the word are the
+          // whole of the answer; `disabled` is the other half, since a second
+          // press starts a second browser challenge that invalidates the first.
           <Button
             type="button"
             variant="outline"
             size="sm"
             className="h-5 shrink-0 gap-1 px-1.5 text-[11px]"
-            title={`Open a terminal signed in to ${server.name}`}
+            title={`Sign in to ${server.name}`}
+            disabled={signingIn}
             onClick={() => onSignIn(server.name)}>
-            <LogIn aria-hidden="true" className="size-3 shrink-0" />
-            Sign in
+            {signingIn ? (
+              <Loader2
+                aria-hidden="true"
+                className="size-3 shrink-0 animate-spin"
+              />
+            ) : (
+              <LogIn aria-hidden="true" className="size-3 shrink-0" />
+            )}
+            {signingIn ? 'Signing in…' : 'Sign in'}
+          </Button>
+        )}
+        {/* Approving is the SAME write as switching on — `cursor-agent mcp
+            enable <name>` answers "Enabled and approved" — so it rides
+            `onSetEnabled` rather than a prop of its own. That is deliberate:
+            a second callback is one a surface with a write path could forget
+            to wire, and the button would then be missing on exactly the panel
+            that can act. What it does NOT ride is the toggle's own
+            availability: `approveUnavailableReason` is answered per row by the
+            adapter, because claude's switch works and approves nothing (its
+            `/mcp` screen does), and enabling an unapproved claude row would
+            move a control and change nothing. */}
+        {onSetEnabled === undefined ||
+        server.status !== 'pending' ? null : server.approveUnavailableReason !==
+          null ? (
+          <span
+            className="shrink-0 text-muted-foreground"
+            title={server.approveUnavailableReason}>
+            no approve
+          </span>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-5 shrink-0 gap-1 px-1.5 text-[11px]"
+            title={`Approve ${server.name} for this folder so ${server.name} is loaded`}
+            disabled={loading}
+            onClick={() => onSetEnabled(server.name, true)}>
+            <ShieldCheck aria-hidden="true" className="size-3 shrink-0" />
+            Approve
           </Button>
         )}
         {/* Both arms belong to a surface that HAS a write path. A read-only one
@@ -220,6 +314,20 @@ function McpRow({
       {server.status === 'failed' && server.detail ? (
         <FoldedReason className="text-destructive" detail={server.detail} />
       ) : null}
+      {/* The one line that explains a contradiction rather than reporting a
+          state, which is why it is here and not a badge. A CLI merges its
+          scopes BY NAME, so a folder that redefines `codegraph` gets ONE row —
+          and if the folder's copy is unapproved or broken, the panel says a
+          server is not working that the reader knows perfectly well IS working
+          everywhere else. Nothing on the row could have told them the two are
+          different servers. Muted rather than a warning: neither definition is
+          wrong, and only one of them can win. */}
+      {server.shadowsUser ? (
+        <span className="text-xs text-muted-foreground">
+          This folder defines its own {server.name}, so your user-level one is
+          not what runs here.
+        </span>
+      ) : null}
     </li>
   );
 }
@@ -236,10 +344,22 @@ function McpRow({
 function McpGroup({
   title,
   count,
+  note,
   children,
 }: {
   title: string;
   count: number;
+  /**
+   * One sentence saying what this group IS, shown above its rows when open.
+   *
+   * For a group whose heading is self-explanatory ("Needs sign-in", beside
+   * buttons reading "Sign in") there is nothing to add and none is passed.
+   * "Needs approval" is the opposite case — the heading names a state nobody
+   * outside the CLI's own documentation has met, which is what got it
+   * reported — so the group carries the explanation rather than repeating it
+   * on every row.
+   */
+  note?: string;
   /** Absent when {@link count} is 0 — there is nothing to disclose. */
   children?: React.ReactNode;
 }): React.JSX.Element {
@@ -278,7 +398,14 @@ function McpGroup({
         <span>· {count}</span>
       </button>
       {open && disclosable ? (
-        <ul className="m-0 flex list-none flex-col p-0">{children}</ul>
+        <>
+          {note ? (
+            <span className="px-1.5 pb-1 text-xs text-muted-foreground">
+              {note}
+            </span>
+          ) : null}
+          <ul className="m-0 flex list-none flex-col p-0">{children}</ul>
+        </>
       ) : null}
     </div>
   );
@@ -315,6 +442,11 @@ const FIRST_READ_LABEL = 'Starting each server to see which answer…';
  * standing statement of how many there are — INCLUDING none, which is why the
  * group renders at zero too. Hidden at zero it took a folder with no
  * signed-out server to make the whole feature look absent.
+ *
+ * Servers awaiting APPROVAL are the second such group, on the same rule and
+ * for a reported defect: they used to sit among the working rows carrying the
+ * words `pending approval` and a switch already in the ON position, which said
+ * neither what was pending nor how to grant it. See the group's own note.
  */
 export function McpSection({
   listing,
@@ -322,6 +454,7 @@ export function McpSection({
   hint,
   onSetEnabled,
   onSignIn,
+  signingIn = null,
   onRefresh,
   className,
 }: {
@@ -340,6 +473,14 @@ export function McpSection({
    * here knows that the answer is a terminal at all.
    */
   onSignIn?: (server: string) => void;
+  /**
+   * The server whose sign-in has been asked for and not yet answered, or null.
+   *
+   * Owned by the caller because the CONTROLLER is: one sign-in runs at a time
+   * across the whole screen, so a flag kept per section would let two panels
+   * each believe they own it.
+   */
+  signingIn?: string | null;
   /**
    * Re-dial this listing's servers. Rendered in the section's own header.
    *
@@ -365,13 +506,22 @@ export function McpSection({
   // they could sign in to.
   const signedOut =
     servers?.filter((server) => server.status === 'needs_auth') ?? [];
+  // The second group, and it exists for the same reason the first does: an
+  // unapproved server is not broken and not working either — it is one press
+  // from being loaded — and among the healthy rows it read as a badge nobody
+  // could act on. Split rather than filtered, as above.
+  const unapproved =
+    servers?.filter((server) => server.status === 'pending') ?? [];
   const rest =
-    servers?.filter((server) => server.status !== 'needs_auth') ?? [];
+    servers?.filter(
+      (server) => server.status !== 'needs_auth' && server.status !== 'pending',
+    ) ?? [];
   const row = (server: AgentMcpServer): React.JSX.Element => (
     <McpRow
       key={server.name}
       server={server}
       loading={loading}
+      signingIn={signingIn === server.name}
       onSetEnabled={onSetEnabled}
       onSignIn={onSignIn}
     />
@@ -441,6 +591,31 @@ export function McpSection({
         <>
           {rest.length > 0 ? (
             <ul className="m-0 flex list-none flex-col p-0">{rest.map(row)}</ul>
+          ) : null}
+          {/* Hidden at zero, which is the ONE place this panel departs from
+              the empty-group rule its neighbour states — so it is worth saying
+              why rather than leaving the asymmetry to read as an oversight.
+              The sign-in group renders at zero because a user LOOKS for it:
+              signed-out servers are the majority of a real listing, and the
+              section was reported missing on the one folder that happened to
+              have none. Nobody looks for an approval section, because only a
+              project-scoped server can ever need one — most folders have no
+              `.cursor/mcp.json` at all — so a permanent "Needs approval · 0"
+              would be a standing line about a state that will never occur
+              there, in a panel already criticised for saying too much. */}
+          {unapproved.length > 0 ? (
+            <McpGroup
+              title="Needs approval"
+              count={unapproved.length}
+              // Says the two things the badge did not: what is waiting, and
+              // that it is a choice rather than a fault. Deliberately about
+              // the STATUS and not about one CLI — every CLI that reports this
+              // reports the same fact, and a per-CLI sentence would be an
+              // adapter field carrying prose no adapter has anything unique to
+              // say in.
+              note="These are configured for this folder but the agent will not load them until you approve them here — nothing is broken.">
+              {unapproved.map(row)}
+            </McpGroup>
           ) : null}
           {/* Rendered UNCONDITIONALLY once a listing exists, empty included —
               see {@link McpGroup}. The condition here is that we have an

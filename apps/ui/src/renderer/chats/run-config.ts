@@ -73,6 +73,7 @@ export function captureRunConfig(input: {
   models: Partial<Record<CliKind, string>>;
   efforts: Partial<Record<CliKind, string>>;
   contextWindows: Partial<Record<CliKind, string>>;
+  modelParameters: Partial<Record<CliKind, Record<string, string>>>;
   approval: string | null;
 }): RunConfigDraft {
   const kind = targetAgentKind(input.target);
@@ -89,6 +90,7 @@ export function captureRunConfig(input: {
     model: workflow ? null : (input.models[kind] ?? null),
     effort: workflow ? null : (input.efforts[kind] ?? null),
     contextWindow: workflow ? null : (input.contextWindows[kind] ?? null),
+    modelParameters: workflow ? {} : (input.modelParameters[kind] ?? {}),
     approval: workflow ? null : input.approval,
   };
 }
@@ -121,6 +123,12 @@ export interface AppliedRunConfig {
    * which is the one place that can know.
    */
   contextWindow: string | null;
+  /**
+   * The other model settings, on the same terms again — a value the
+   * configuration's model no longer offers is drawn as unavailable by its own
+   * chip rather than filtered here.
+   */
+  modelParameters: Record<string, string>;
   /**
    * A mode this build recognises, or null when the stored one is not — in which
    * case the composer keeps the mode it already had rather than being set to a
@@ -159,6 +167,7 @@ export function applyRunConfig(config: RunConfig): AppliedRunConfig | null {
     model: workflow ? null : config.model,
     effort: workflow ? null : config.effort,
     contextWindow: workflow ? null : config.contextWindow,
+    modelParameters: workflow ? {} : config.modelParameters,
     approval:
       !workflow && isChatApprovalMode(config.approval) ? config.approval : null,
     branch: config.branch,

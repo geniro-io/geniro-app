@@ -95,6 +95,51 @@ describe('computeAgentActivity', () => {
     expect(activity.get('worker')?.contextTokens).toBe(37_600);
   });
 
+  it('FORGETS the context once a compaction has emptied the window', () => {
+    // Reported as "после компакта кружочек не обновляется. Он все еще так же
+    // заполнен с контекстом": on a CLI whose compaction geniro performs, the
+    // conversation the figure was measured on is DISCARDED and nothing
+    // measures the new one until the next turn — so a fold that carried the
+    // old reading left the ring full over an agent starting from a summary.
+    const replaced = computeAgentActivity([
+      item('turn_complete', null, {
+        usage: { contextTokens: 101_500, contextWindowTokens: 1_000_000 },
+        stopReason: 'end_turn',
+      }),
+      item('system', null, {
+        message: 'Conversation compacted.',
+        severity: 'info',
+        conversationReplaced: true,
+      }),
+    ]);
+    expect(replaced.get(CHAT_AGENT_KEY)?.contextTokens).toBeNull();
+    // The WINDOW survives: it belongs to the model, which a compaction does
+    // not change, and the next count would have nothing to divide by.
+    expect(replaced.get(CHAT_AGENT_KEY)?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('takes the figure a compaction reported about ITSELF', () => {
+    // The CLI's own compaction usually says what it left behind, and that
+    // reading lands BELOW the marker — which is why the rule above is a reset
+    // rather than a refusal to read anything after one.
+    const activity = computeAgentActivity([
+      item('turn_complete', null, {
+        usage: { contextTokens: 162_400, contextWindowTokens: 1_000_000 },
+        stopReason: 'end_turn',
+      }),
+      item('system', null, {
+        message: 'This session is being continued…',
+        cli: true,
+        compaction: { preTokens: 162_400, postTokens: 8_400 },
+      }),
+      item('turn_complete', null, {
+        usage: { contextTokens: 8_400, contextWindowTokens: 1_000_000 },
+        stopReason: 'end_turn',
+      }),
+    ]);
+    expect(activity.get(CHAT_AGENT_KEY)?.contextTokens).toBe(8_400);
+  });
+
   it('falls back to inputTokens when a CLI reports no contextTokens', () => {
     const activity = computeAgentActivity([
       item('turn_complete', 'worker', {

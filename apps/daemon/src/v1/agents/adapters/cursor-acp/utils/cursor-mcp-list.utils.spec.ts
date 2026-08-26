@@ -179,6 +179,34 @@ describe('parseCursorMcpList', () => {
     expect(server?.detail).toBeNull();
   });
 
+  it('reads a project server nobody has approved, so the row can offer one', () => {
+    // VERBATIM from the real CLI, reproduced on 2026.08.11-e8db854 in a git
+    // project whose `.cursor/mcp.json` defined the server: the status is
+    // cursor's `unapproved`, which only a PROJECT-file server can carry. It is
+    // the status the panel folds under "Needs approval" and draws the button
+    // for, and `cursor-agent mcp enable <name>` is what that button runs.
+    const [server] = parseCursorMcpList(
+      'probe-echo: not loaded (needs approval)',
+    );
+
+    expect(server?.name).toBe('probe-echo');
+    expect(server?.status).toBe('pending');
+  });
+
+  it('reads a server the CLI is still dialling as loading, not as unknown', () => {
+    // The sixth and last arm of the CLI's own status chain, and the only one
+    // with no capture behind it — reproducing it means winning a race with the
+    // dial, so the bundle is the evidence. Without the marker the row parsed
+    // as `unknown`, which says this parser could not read the wording; the
+    // truth is that the answer is simply not in yet and the next read settles
+    // it.
+    const [server] = parseCursorMcpList('slow-srv: loading');
+
+    expect(server?.name).toBe('slow-srv');
+    expect(server?.status).toBe('loading');
+    expect(server?.detail).toBeNull();
+  });
+
   it('KEEPS a row whose status wording it does not recognise, as unknown', () => {
     // The version-drift guard, and the same rule claude's parser follows. A
     // drop would be undetectable whenever SOME rows still parse: the caller

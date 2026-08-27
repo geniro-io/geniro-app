@@ -411,15 +411,20 @@ describe('ChatHeader — how long this turn has been running', () => {
     expect(el.textContent).toContain('The CLI’s default');
   });
 
-  it('reports the profile the chat asked for, and names no folder pin over it', async () => {
-    // This test asserted the OPPOSITE for a release, on an override that
-    // measurement refutes: on claude 2.1.247, from a folder carrying
-    // `env.CLAUDE_CONFIG_DIR` in `.claude/settings.local.json`, the variable
-    // geniro sets decided the profile every time (17 servers for one, 51 for
-    // the other) and setting none loaded the CLI's default's 12 rather than the
-    // folder's. So the row now states the chat's own profile, and the `Pinned
-    // by` row is gone rather than merely unreached — it named a real file
-    // beside a claim that was never true.
+  it('reports the PINNED profile and names the file that decided it', async () => {
+    // This test has now asserted both answers, which is the reason to state
+    // the measurement rather than the conclusion. On 2.1.247, with
+    // `CLAUDE_CONFIG_DIR` naming a personal `max` profile throughout and
+    // `get_usage` asked every 12s: from a folder whose
+    // `.claude/settings.local.json` pins the team profile the reply was `max`
+    // at +4s…+25s and `team` from +37s on; from an unpinned folder it never
+    // moved off `max`. The pin wins, about half a minute in — so a probe that
+    // asks once at spawn measures the window before it lands, which is how
+    // this row twice came to claim a profile the turn was not on.
+    //
+    // What the pin does NOT decide is the MCP set, loaded at startup ahead of
+    // it — that is `effectiveConfigDir`, and the two are deliberately separate
+    // functions.
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -443,10 +448,21 @@ describe('ChatHeader — how long this turn has been running', () => {
     const profile = [...el.querySelectorAll('li')].find((row) =>
       row.textContent?.startsWith('Profile'),
     )!;
-    expect(profile.textContent).toContain('/profiles/personal');
-    expect(profile.textContent).not.toContain('/profiles/team');
-    expect(el.textContent).not.toContain('Pinned by');
-    expect(el.textContent).not.toContain('settings.local.json');
+    expect(profile.textContent).toContain('/profiles/team');
+    // The pin outranks the pick on THIS row, or the header goes back to
+    // naming an account the turn is not billing to.
+    expect(profile.textContent).not.toContain('/profiles/personal');
+
+    // …and the pick is not simply dropped: the row below names the file doing
+    // the overriding, which is the only thing a reader can act on, and states
+    // what it overrode.
+    const pinned = [...el.querySelectorAll('li')].find((row) =>
+      row.textContent?.startsWith('Pinned by'),
+    )!;
+    expect(pinned.textContent).toContain(
+      '/Users/me/Desktop/Projects/Lab/.claude/settings.local.json',
+    );
+    expect(pinned.textContent).toContain('/profiles/personal');
   });
 
   it('bounds a long value at three rows and keeps the whole of it on hover', async () => {

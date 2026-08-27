@@ -13,13 +13,27 @@ import {
  *
  * This CLI reads its per-project settings files and applies their `env` block
  * to its OWN process, so an entry for `CLAUDE_CONFIG_DIR` there decides which
- * account the turn runs under — the variable geniro exported is simply
- * overwritten. Measured 2026-08-27 on 2.1.247 with a folder pinning a second
- * profile: the Bash tool printed the PINNED directory, and `get_usage` answered
- * for the pinned profile's account (`team`, session 100%) while the process's
- * own `CLAUDE_CONFIG_DIR` still named the one geniro chose (a `max` account,
- * session 2%). Both readings taken against the same binary in the same folder,
- * with only the cwd differing from a control that answered correctly.
+ * account the turn runs under — the variable geniro exported is overwritten.
+ *
+ * IT LANDS LATE, and that is the part worth carrying, because leaving it out
+ * is what got this reverted once and re-argued twice. Measured 2026-08-28 on
+ * 2.1.247, `CLAUDE_CONFIG_DIR` naming a personal `max` profile for the whole
+ * run, asking `get_usage` every 12s for two minutes:
+ *
+ * | cwd | +4s … +25s | +37s onward |
+ * | --- | --- | --- |
+ * | a folder pinning the team profile | `max`, weekly 1% | `team`, weekly 100% |
+ * | an unpinned folder | `max`, weekly 1% | `max`, weekly 1% (never moves) |
+ *
+ * Only the cwd differs. So a one-shot probe answers `max` and reads as proof
+ * that the pin does nothing — the trap this block exists to spring.
+ *
+ * What it does NOT decide is anything resolved at STARTUP, ahead of the
+ * settings file: the MCP set follows the environment geniro exports (from one
+ * pinned folder, `<A>` loaded A's 17 servers, `<B>` B's 51, and no variable
+ * the default's 12). Two questions, two answers — see `effectiveConfigDir` and
+ * `accountConfigDir` in the renderer's `chats/run-profile.ts`, which are two
+ * functions for exactly this reason.
  *
  * So this is not a preference geniro can win by trying harder — the CLI reads
  * the file after it reads the environment. What it can do is stop claiming the

@@ -135,7 +135,11 @@ export class ChatMetricsService implements OnModuleInit {
     // taken below. Read after the ask instead, a turn landing mid-question
     // would file figures under a transcript they do not describe.
     const atSeq = await this.itemDao.maxSeq(runId, em);
-    const current = this.parseStoredReading(run.lastMetricsReading, atSeq);
+    const current = this.parseStoredReading(
+      run.lastMetricsReading,
+      atSeq,
+      run.configDir,
+    );
     // Two conditions, and each rules out a different wrong answer.
     //
     // The BREAKDOWN must be present — not both halves. A stored reading is only
@@ -182,7 +186,7 @@ export class ChatMetricsService implements OnModuleInit {
     // so does every open after it, since nothing was written down. Not awaited:
     // the user is waiting on this reply and the write is for the next reader.
     if (usable === null && (agent.context !== null || agent.plan !== null)) {
-      void this.store(runId, atSeq, agent.context, agent.plan);
+      void this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
     }
     // The stored last reading is consulted ONLY where the live one is missing
     // and could not have been taken — a CLI that answers is always preferred,
@@ -373,6 +377,7 @@ export class ChatMetricsService implements OnModuleInit {
   private parseStoredReading(
     raw: string | null,
     atSeq: number,
+    configDir: string | null,
   ): StoredMetricsReading | null {
     if (raw === null) {
       return null;
@@ -386,7 +391,14 @@ export class ChatMetricsService implements OnModuleInit {
     if (!parsed.success) {
       return null;
     }
-    return parsed.data.atSeq === atSeq ? parsed.data : null;
+    // BOTH keys, and they answer different questions: `atSeq` that the reading
+    // still describes this conversation, `configDir` that it still describes
+    // this account. A profile switch carries the conversation across, so it
+    // moves the second without touching the first.
+    return parsed.data.atSeq === atSeq &&
+      parsed.data.configDir === (configDir ?? null)
+      ? parsed.data
+      : null;
   }
 
   /**
@@ -404,6 +416,7 @@ export class ChatMetricsService implements OnModuleInit {
   private async store(
     runId: string,
     atSeq: number,
+    configDir: string | null,
     context: ContextBreakdownWire | null,
     plan: PlanLimitsWire | null,
   ): Promise<void> {
@@ -413,6 +426,7 @@ export class ChatMetricsService implements OnModuleInit {
         JSON.stringify({
           takenAt: new Date().toISOString(),
           atSeq,
+          configDir,
           context,
           plan,
         } satisfies StoredMetricsReading),
@@ -456,14 +470,20 @@ export class ChatMetricsService implements OnModuleInit {
       // then went unused, or a second turn-end for a transcript nothing has
       // been added to. Asking again would spend two seconds of the user's own
       // agent to write down what is already written down.
-      if (this.parseStoredReading(run.lastMetricsReading, atSeq) !== null) {
+      if (
+        this.parseStoredReading(
+          run.lastMetricsReading,
+          atSeq,
+          run.configDir,
+        ) !== null
+      ) {
         return;
       }
       const agent = await this.readFromAgent(runId, run.agentKind, em);
       if (agent.context === null && agent.plan === null) {
         return;
       }
-      await this.store(runId, atSeq, agent.context, agent.plan);
+      await this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
     } catch (err) {
       this.logger.warn(
         `the last reading for run ${runId} could not be taken: ${

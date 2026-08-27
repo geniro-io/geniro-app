@@ -42,6 +42,7 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
   writeModelParameters,
@@ -59,6 +60,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { CliSessionsService } from './cli-sessions.service';
+import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
@@ -311,6 +313,7 @@ export class ChatService implements OnModuleInit {
     private readonly seqs: ItemSeqAllocator,
     private readonly groups: RunGroupsService,
     private readonly cliSessions: CliSessionsService,
+    private readonly configDirPins: ConfigDirPinService,
   ) {}
 
   /**
@@ -917,11 +920,22 @@ export class ChatService implements OnModuleInit {
           });
     this.sessions.close(runId);
     const profile = next === null ? 'the CLI’s default profile' : next;
+    const moved = carried.carried
+      ? `This chat now runs as ${profile}. Its conversation came with it.`
+      : `This chat now runs as ${profile}. The agent starts a fresh conversation from here — ${carried.reason}.`;
+    // The switch can be OVERRULED by the folder, and saying so here is the only
+    // honest ending: the run row really does change, the conversation really
+    // does move, and the turn still runs under whatever the folder pins. Left
+    // unsaid, the user reads the switch as having worked and every account-level
+    // reading afterwards as geniro getting the account wrong — which is exactly
+    // the report `ConfigDirPin` records.
+    const pin = this.configDirPins.forRun(run.agentKind, run.cwd);
     return {
       configDir: next,
-      notice: carried.carried
-        ? `This chat now runs as ${profile}. Its conversation came with it.`
-        : `This chat now runs as ${profile}. The agent starts a fresh conversation from here — ${carried.reason}.`,
+      notice:
+        pin === null
+          ? moved
+          : `${moved} Note that this folder pins ${pin.effective} in ${pin.source}, and this CLI applies that over the profile geniro passes it — so its turns run under that account until the pin is removed.`,
     };
   }
 
@@ -3315,13 +3329,57 @@ export class ChatService implements OnModuleInit {
     role: string | null,
     payload: unknown,
   ): Promise<ItemWire> {
-    return persistItemAndEmit({ itemDao: this.itemDao, bus: this.bus }, em, {
-      runId,
-      nodeId: null,
-      seq,
-      kind,
-      role,
-      payload,
+    const item = await persistItemAndEmit(
+      { itemDao: this.itemDao, bus: this.bus },
+      em,
+      {
+        runId,
+        nodeId: null,
+        seq,
+        kind,
+        role,
+        payload,
+      },
+    );
+    this.announcePreview(item);
+    return item;
+  }
+
+  /**
+   * Push what this run just SAID onto every client's sidebar row.
+   *
+   * Items reach ONE room and a client joins one at a time, so a thread working
+   * in the background delivers none of them to the window watching the list —
+   * which is why its preview line stood still until the user clicked it, and
+   * why the settle announce had to carry the closing words at all. This is the
+   * same push for the messages BEFORE the settle, on the client-wide status
+   * channel every badge already listens to.
+   *
+   * Announced from `persist` rather than from the turn loop deliberately: every
+   * chat row this service writes goes through there — the user's own message,
+   * the agent's in-turn reply, and the ones a CLI produces off-turn after its
+   * result line — so no path can be added later that quietly skips it.
+   *
+   * A row with no readable text says nothing rather than blanking the line: a
+   * preview is decoration, and `messageTextOf` already answers null for a payload
+   * it cannot read.
+   */
+  private announcePreview(item: ItemWire): void {
+    if (item.kind !== 'message') {
+      return;
+    }
+    const text = messageTextOf(item.payload);
+    if (text === null || text.trim() === '') {
+      return;
+    }
+    // `status: null` — this announce read no status and asserts none, the same
+    // contract `announceActivity` follows. No `activity` key either: absent
+    // asserts nothing, while a null would blank the phrase of a turn that is
+    // still working.
+    this.bus.publishRunStatus({
+      runId: item.runId,
+      status: null,
+      preview: text,
     });
   }
 
@@ -3340,6 +3398,7 @@ export class ChatService implements OnModuleInit {
       lastMessage,
       this.approvals.awaitingFor(run.id),
       this.heldRuns.get(run.id) ?? 0,
+      this.configDirPins.forRun(run.agentKind, run.cwd),
     );
   }
 

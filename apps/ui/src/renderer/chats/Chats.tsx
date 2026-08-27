@@ -72,7 +72,6 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
-import { ApprovalModeSelect } from './approval-mode-select';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
@@ -122,6 +121,7 @@ import {
   runGroupSummary,
 } from './run-group';
 import { sortRunsForSidebar } from './run-order';
+import { effectiveConfigDir } from './run-profile';
 import {
   displayRunStatus,
   isSettledRunStatus,
@@ -3993,12 +3993,19 @@ export function Chats({
           id: CHAT_AGENT_KEY,
           name: activeRun.agentKind ?? 'agent',
           agent: activeRun.agentKind,
-          // The chat's OWN config directory (null on the chats that run as
-          // the CLI's default). A workflow node reads its from the graph; a
-          // chat reads its from the run row, and the MCP panel needs it either
-          // way — a profile carries its own servers, so two chats in one folder
-          // under different profiles genuinely load different sets.
-          configDir: activeRun.configDir,
+          // The profile this chat's turns ACTUALLY run under — the folder's
+          // pin where there is one, the chat's own pick otherwise (null on the
+          // chats that run as the CLI's default). A workflow node reads its
+          // from the graph; a chat reads its from the run row, and the MCP
+          // panel needs it either way — a profile carries its own servers, so
+          // two chats in one folder under different profiles genuinely load
+          // different sets.
+          //
+          // The EFFECTIVE one, because this listing answers "what can this
+          // agent see": reading the requested profile showed the reporter 15
+          // servers while their agent had loaded the pinned profile's 50, one
+          // of which was the row they came looking for.
+          configDir: effectiveConfigDir(activeRun),
           // The SAME badge rule the header uses. This used to be a second one,
           // built from `streaming` and the row alone, so it could never report
           // `needs-input` — a chat parked on a question read "needs more info"
@@ -5175,27 +5182,6 @@ export function Chats({
                                   onValueChange={setTriggerId}
                                 />
                               ) : null}
-                              {!workflowSlug ? (
-                                // Approval mode of the next chat — graph runs keep their
-                                // per-node modes from the workflow YAML instead.
-                                <ApprovalModeSelect
-                                  supportedModes={composerApprovalModes}
-                                  // A mode this CLI does not honour shows as the "cli
-                                  // default" placeholder rather than a lie — the user
-                                  // may have picked it while another agent was selected.
-                                  value={
-                                    composerApprovalModes?.includes(
-                                      approvalMode,
-                                    )
-                                      ? approvalMode
-                                      : null
-                                  }
-                                  planSupported={
-                                    capabilities?.claudeModes.plan === 'pass'
-                                  }
-                                  onChange={changeApprovalMode}
-                                />
-                              ) : null}
                             </ComposerTopRow>
                             <ComposerCard>
                               <AttachmentStrip
@@ -5283,6 +5269,26 @@ export function Chats({
                                     onEffortChange={(effort) =>
                                       changeEffort(agentKind, effort)
                                     }
+                                    // The approval posture of the NEXT chat,
+                                    // moved in here from a chip of its own —
+                                    // ASKED FOR as "add auto-approve option to
+                                    // model settings popover instead". A mode
+                                    // this CLI does not honour shows as the
+                                    // "cli default" placeholder rather than a
+                                    // lie: the user may have picked it while
+                                    // another agent was selected.
+                                    approvalModes={composerApprovalModes}
+                                    approval={
+                                      composerApprovalModes?.includes(
+                                        approvalMode,
+                                      )
+                                        ? approvalMode
+                                        : null
+                                    }
+                                    planSupported={
+                                      capabilities?.claudeModes.plan === 'pass'
+                                    }
+                                    onApprovalChange={changeApprovalMode}
                                     windows={agentContextWindows.windows}
                                     contextWindow={
                                       contextWindows[agentKind] ?? null
@@ -5389,6 +5395,11 @@ export function Chats({
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.
                         configDir={activeRun.configDir}
+                        // And whichever profile the FOLDER pins over that one,
+                        // since the CLI applies its project settings over the
+                        // environment geniro hands it — so the row above is
+                        // what this chat asked for, not necessarily what it got.
+                        configDirPin={activeRun.configDirPin}
                         status={activeRunStatus}
                         lastActivityAt={activeRun.updatedAt}
                         workedMs={threadTotalsShown.ms}
@@ -5885,6 +5896,27 @@ export function Chats({
                                   onEffortChange={(effort) =>
                                     void changeRunSettings({ effort })
                                   }
+                                  // Approval rides the same popover as the rest
+                                  // now. Unlike model and effort it does NOT
+                                  // wait for the next turn — the CLI accepts a
+                                  // mode change on a turn already in flight —
+                                  // which is why the trigger's `nextTurnOnly`
+                                  // wording stays about the model settings and
+                                  // this row is simply always live.
+                                  approvalModes={
+                                    capabilities
+                                      ? (approvalModesByAgent.get(
+                                          activeRun.agentKind,
+                                        ) ?? [])
+                                      : null
+                                  }
+                                  approval={activeRun.approval}
+                                  planSupported={
+                                    capabilities?.claudeModes.plan === 'pass'
+                                  }
+                                  onApprovalChange={(approval) =>
+                                    void changeRunSettings({ approval })
+                                  }
                                   windows={agentContextWindows.windows}
                                   contextWindow={activeRun.contextWindow}
                                   // The window the AGENT reported for this
@@ -5905,30 +5937,6 @@ export function Chats({
                                         next,
                                       ),
                                     })
-                                  }
-                                />
-                                {/* Between effort and the context readout, not up in
-                          the identity row: the permission posture is editable
-                          at any time — mid-turn included, since the daemon
-                          hands the change to the turn already running — which
-                          makes it a live control of how this turn behaves, the
-                          same category as model and effort. Unlike those two it
-                          carries no `nextTurnOnly`, precisely because it does
-                          NOT wait for the next turn. */}
-                                <ApprovalModeSelect
-                                  supportedModes={
-                                    capabilities
-                                      ? (approvalModesByAgent.get(
-                                          activeRun.agentKind,
-                                        ) ?? [])
-                                      : null
-                                  }
-                                  value={activeRun.approval}
-                                  planSupported={
-                                    capabilities?.claudeModes.plan === 'pass'
-                                  }
-                                  onChange={(approval) =>
-                                    void changeRunSettings({ approval })
                                   }
                                 />
                                 {/* WHICH ACCOUNT the next turns run as, and it

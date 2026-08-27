@@ -2590,6 +2590,42 @@ export interface CarrySessionInput {
 export type CarrySessionResult =
   { carried: true } | { carried: false; reason: string };
 
+/**
+ * A config directory the FOLDER pins, overriding the one geniro hands the CLI.
+ *
+ * geniro passes the run's profile as an environment variable, and an env var is
+ * not the last word: a CLI that reads per-project settings can carry its own
+ * `env` block, apply it to ITSELF, and run under a different account than the
+ * one the chat says it is on. That is not hypothetical — measured 2026-08-27 on
+ * claude 2.1.247, a folder whose `.claude/settings.local.json` sets
+ * `env.CLAUDE_CONFIG_DIR` makes the CLI answer `get_usage` for the PINNED
+ * profile's account while `CLAUDE_CONFIG_DIR` in its own environment still
+ * names the one geniro chose.
+ *
+ * REPORTED as "I'm running my claude session in different config directory with
+ * different account - but now its showing my limits for another account". The
+ * limits were right and the PROFILE was wrong, which is the reading this type
+ * exists to let the app state: the panel reports whichever account the CLI is
+ * actually on, so the two must be able to disagree out loud rather than one of
+ * them quietly winning.
+ *
+ * A null from {@link AgentAdapter.readConfigDirPin} means "nothing pins this
+ * folder" — never "this CLI has no such mechanism", which the base's own
+ * default already answers by returning null for every folder.
+ */
+export interface ConfigDirPin {
+  /**
+   * The directory the CLI will actually use, as the settings file spells it.
+   *
+   * NOT canonicalized: it is quoted back to the user beside the path they
+   * picked, and resolving it would make the two look different for reasons
+   * that have nothing to do with the override.
+   */
+  readonly effective: string;
+  /** The file that pinned it — a path the user can open and edit. */
+  readonly source: string;
+}
+
 export type HandoffResult =
   | {
       ok: true;

@@ -35,6 +35,7 @@ import type {
   AgentTurnInput,
   CarrySessionInput,
   CarrySessionResult,
+  ConfigDirPin,
   FollowUpMessage,
   InstalledApprovalSupport,
   InstalledCapabilities,
@@ -103,6 +104,7 @@ import {
 import type { ClaudeAdapterOptions } from './claude.types';
 import { ClaudeTurnDriver } from './claude-turn.driver';
 import { reloadCommandsRequestLine } from './utils/claude-commands.utils';
+import { readClaudeConfigDirPin } from './utils/claude-config-dir.utils';
 import {
   contextUsageRequestLine,
   readContextUsageReply,
@@ -830,6 +832,15 @@ export class ClaudeAdapter extends AgentAdapter {
       fromProfileDir: this.profileDir(input.from),
       toProfileDir: this.profileDir(input.to),
     });
+  }
+
+  /**
+   * This CLI's per-project settings can name a config directory of their own,
+   * and the CLI applies it to itself — so geniro's env var is not the last
+   * word. The whole measurement is in `readClaudeConfigDirPin`'s doc block.
+   */
+  override readConfigDirPin(cwd: string): ConfigDirPin | null {
+    return readClaudeConfigDirPin(cwd);
   }
 
   /**

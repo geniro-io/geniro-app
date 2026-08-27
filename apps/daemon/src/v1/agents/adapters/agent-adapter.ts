@@ -53,6 +53,7 @@ import type {
   ApprovalResolution,
   CarrySessionInput,
   CarrySessionResult,
+  ConfigDirPin,
   FollowUpMessage,
   HandoffInput,
   HandoffResult,
@@ -1866,6 +1867,26 @@ export abstract class AgentAdapter {
     _input: AgentSessionReadInput,
   ): Promise<AgentPlanLimits | null> {
     return Promise.resolve(null);
+  }
+
+  /**
+   * Which config directory this FOLDER pins for this CLI, overriding the one
+   * geniro hands it — or null when nothing does.
+   *
+   * The default is null for every folder, which is also the honest answer for a
+   * CLI that reads no per-project settings: nothing pins anything, so the
+   * profile the run names is the profile the turn runs under. An adapter whose
+   * CLI CAN be overridden this way must say so, because the alternative is the
+   * app stating an account the agent is not on — see {@link ConfigDirPin} for
+   * the report and the measurement.
+   *
+   * SYNCHRONOUS and never throwing: it is a small file read on a path the
+   * caller already holds, consulted while projecting a run row, and an
+   * unreadable or malformed settings file means "nothing is pinned" rather than
+   * a failed request.
+   */
+  readConfigDirPin(_cwd: string): ConfigDirPin | null {
+    return null;
   }
 
   /**

@@ -1108,6 +1108,31 @@ export interface RunStatusEvent {
    */
   summary?: string | null;
   /**
+   * The text of a `message` item this run just persisted — the sidebar's
+   * preview line, pushed as it happens.
+   *
+   * A SEPARATE field from {@link summary}, which is deliberately terminal-only:
+   * that one is what a settle has to SAY, it feeds the system notification, and
+   * `writeRunStatus` is the one place allowed to decide it — sending it
+   * mid-turn would put a half-finished turn's words where a banner reads the
+   * closing ones. This asserts nothing about status and is never notified on.
+   *
+   * REPORTED as "still i see here outdated last llm message. As soon as i click
+   * on thread - it will be updated to actual one", against a RUNNING thread —
+   * which is the boundary the settle-time fix left standing: the preview moved
+   * when a turn ended, so a turn working for twenty minutes showed the sentence
+   * it started from, and opening the chat was the only thing that corrected it.
+   *
+   * Both ROLES ride it, because `lastMessage` is the run's latest `message` row
+   * whatever wrote it — announcing only the agent's would make the line
+   * disagree with the value the next list refetch puts back.
+   *
+   * Two states, not three: absent asserts nothing, and there is no clearing
+   * arm. A message cannot be unsaid, and the row's own `lastMessage` is only
+   * ever replaced by a later one.
+   */
+  preview?: string;
+  /**
    * True when the turn that reached this status produced NOTHING but the CLI's
    * own context compaction — absent on every other announce, settle or not.
    *
@@ -1349,6 +1374,27 @@ export const RunGroupWireSchema = z.object({
 });
 export type RunGroupWire = z.infer<typeof RunGroupWireSchema>;
 
+/**
+ * A config directory the run's FOLDER pins, overriding the profile the chat was
+ * pointed at.
+ *
+ * On the wire because the app must not go on naming a profile the agent is not
+ * on — see `adapters/adapter.types.ts`'s `ConfigDirPin` for the measurement and
+ * the report behind it. Named, because the header renders it and the generated
+ * client should carry a type rather than an inline object.
+ */
+export const ConfigDirPinSchema = z
+  .object({
+    effective: z
+      .string()
+      .describe('The config directory the CLI will actually use'),
+    source: z
+      .string()
+      .describe('The settings file that pinned it — a path the user can open'),
+  })
+  .meta({ id: 'ConfigDirPin' });
+export type ConfigDirPinWire = z.infer<typeof ConfigDirPinSchema>;
+
 /** A run projected to the wire (chat and workflow runs share the shape). */
 export const RunWireSchema = z.object({
   id: z.string(),
@@ -1425,8 +1471,11 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe(
-      "Canonical agent config directory this chat runs under — which account/profile its CLI uses; null = the CLI's default. Fixed at creation, like cwd — the settings PATCH does not carry it",
+      "Canonical agent config directory this chat ASKED to run under — which account/profile its CLI was pointed at; null = the CLI's default. Set at creation and changeable through the settings PATCH, which moves the conversation with it",
     ),
+  configDirPin: ConfigDirPinSchema.nullable().describe(
+    "The config directory this run's FOLDER pins for this CLI, overriding the one above; null = nothing pins it, so the chat runs under the profile it names",
+  ),
   groupId: z
     .string()
     .nullable()

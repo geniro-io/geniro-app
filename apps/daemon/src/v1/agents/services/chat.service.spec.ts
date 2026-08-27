@@ -59,6 +59,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
@@ -499,6 +500,10 @@ function fakeAdapter(kind: AgentKind): {
       // with a promise that it was called.
       carrySessionToConfigDir: (input: CarrySessionInput) =>
         real.carrySessionToConfigDir(input),
+      // Real for the same reason: it is a settings-file read against the cwd
+      // the spec supplies, with no process anywhere in it, so a stub would
+      // replace the mechanism with an assertion that it was called.
+      readConfigDirPin: (cwd: string) => real.readConfigDirPin(cwd),
       // The real one opens a handshake, which is the spawn this double exists
       // to avoid — so it answers as the base does when it cannot ask: the
       // CLI-wide union, marked INEXACT so it can never ground a refusal. A test
@@ -681,6 +686,11 @@ function setup(
       importHistory: async () => ({ events: [], notice: null }),
       ...opts.cliSessions,
     } as unknown as CliSessionsService,
+    // The REAL service over the real adapter registry: it reads the run's own
+    // cwd off disk, and every run these tests create sits in a temp directory
+    // that pins nothing — so the honest answer is the null the production path
+    // gives, and a double would pin the double instead.
+    new ConfigDirPinService(adapters),
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -2780,6 +2790,56 @@ describe('ChatService — approval modes (parity M1)', () => {
       id: 'q-off',
       allow: true,
       answer: 'Blue',
+    });
+  });
+
+  it('announces what the run just SAID, mid-turn, on the client-wide channel', async () => {
+    // Items reach ONE room and a client joins one at a time, so a thread
+    // working in the background delivers none of them to the window watching
+    // the sidebar. REPORTED as "still i see here outdated last llm message. As
+    // soon as i click on thread - it will be updated to actual one", against a
+    // thread that was still RUNNING — the settle-time fix moves the line when a
+    // turn ends, which is minutes too late on a long one.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    await drain();
+    statuses.length = 0;
+
+    claude.emit({ type: 'text', text: 'halfway there' });
+    await drain();
+
+    // No status and no activity key: this announce read neither, and a null
+    // activity would blank the phrase of a turn that is still working.
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      preview: 'halfway there',
+    });
+    // And NOT as `summary`, which is terminal-only and is what the system
+    // notification reads — a mid-turn sentence there would have a banner
+    // announce half a turn.
+    expect(statuses.some((event) => event.summary !== undefined)).toBe(false);
+
+    claude.finish();
+    await drain();
+  });
+
+  it('announces the USER’s own message too, because the row’s line is whatever spoke last', async () => {
+    // `lastMessage` is the run's latest `message` row whatever wrote it, and
+    // the list endpoints enrich it that way — announcing only the agent's would
+    // make the live line disagree with the value the next refetch puts back.
+    const { service, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    statuses.length = 0;
+
+    await service.sendMessage(run.id, 'my question');
+    await drain();
+
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      preview: 'my question',
     });
   });
 
@@ -5503,7 +5563,17 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     // way — and the badge is left exactly as the turn left it.
     expect(itemDao.items.length).toBeGreaterThan(before);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-    expect(statuses).toEqual([]);
+    // Nothing that could move the badge or the phrase. This was `toEqual([])`,
+    // which was stricter than the promise the test's own name makes: a
+    // preview-only announce carries no status and no activity key, so it cannot
+    // restate the run as working — and the delegate's line IS the run's latest
+    // message row, which is what the next list refetch would show anyway. What
+    // is pinned is the badge, which is what was reported.
+    expect(
+      statuses.filter(
+        (event) => event.status !== null || event.activity !== undefined,
+      ),
+    ).toEqual([]);
   });
 
   it('still goes back to RUNNING when the CLI itself carries on', async () => {

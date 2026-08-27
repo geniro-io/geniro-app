@@ -78,6 +78,10 @@ function render(
           efforts={NO_ITEMS}
           effort={null}
           onEffortChange={(e) => picked.push(['effort', e])}
+          approvalModes={null}
+          approval={null}
+          planSupported={false}
+          onApprovalChange={(a) => picked.push(['approval', a])}
           windows={NO_ITEMS}
           contextWindow={null}
           onContextWindowChange={(w) => picked.push(['context', w])}

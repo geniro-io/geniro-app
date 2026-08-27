@@ -1047,12 +1047,29 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         typeof event.summary === 'string' && event.summary.trim() !== ''
           ? event.summary
           : undefined;
+      /**
+       * The same line, pushed while the turn is still RUNNING.
+       *
+       * The fix above moves the preview when a turn ENDS, which left the
+       * reported "still i see here outdated last llm message. As soon as i
+       * click on thread - it will be updated to actual one" — that screenshot
+       * is a thread mid-turn, where the settle is minutes away and the line
+       * shows the sentence the turn opened from.
+       *
+       * `preview` outranks `summary` where an announce carries both, which
+       * nothing does today: they are produced by different call sites, and if
+       * one ever did, the message-level field is the later fact.
+       */
+      const previewLine =
+        typeof event.preview === 'string' && event.preview.trim() !== ''
+          ? event.preview
+          : spoke;
       if (
         status !== null ||
         parked !== undefined ||
         at !== undefined ||
         named !== undefined ||
-        spoke !== undefined
+        previewLine !== undefined
       ) {
         setRuns((prev) =>
           prev.map((run) =>
@@ -1062,7 +1079,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
                   ...(at === undefined ? {} : { updatedAt: at }),
-                  ...(spoke === undefined ? {} : { lastMessage: spoke }),
+                  ...(previewLine === undefined
+                    ? {}
+                    : { lastMessage: previewLine }),
                   // Applied whatever the row currently says, EXCEPT to a run
                   // this window renamed.
                   //

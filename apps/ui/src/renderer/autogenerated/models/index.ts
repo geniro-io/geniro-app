@@ -953,6 +953,25 @@ export interface ClaudeModesCapability {
 /**
  * 
  * @export
+ * @interface ConfigDirPin
+ */
+export interface ConfigDirPin {
+    /**
+     * The config directory the CLI will actually use
+     * @type {string}
+     * @memberof ConfigDirPin
+     */
+    effective: string;
+    /**
+     * The settings file that pinned it — a path the user can open
+     * @type {string}
+     * @memberof ConfigDirPin
+     */
+    source: string;
+}
+/**
+ * 
+ * @export
  * @interface ContextBreakdown
  */
 export interface ContextBreakdown {
@@ -2143,6 +2162,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     configDir: string | null;
+    /**
+     * 
+     * @type {ConfigDirPin}
+     * @memberof RunDto
+     */
+    configDirPin: ConfigDirPin | null;
     /**
      * 
      * @type {string}

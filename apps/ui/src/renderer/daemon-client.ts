@@ -123,6 +123,20 @@ export interface RunStatusEvent {
    */
   summary?: string | null;
   /**
+   * TWIN PARSER: `RunStatusEvent.preview` in
+   * `apps/daemon/src/v1/agents/chat.types.ts` — the WS envelope has no
+   * generated type, so a shape change there must be mirrored here.
+   *
+   * What the run just SAID, for the sidebar's preview line, pushed as each
+   * message is persisted rather than only when the turn ends. Separate from
+   * `summary` on both sides: that one is terminal-only and feeds the system
+   * notification, and this must never reach it.
+   *
+   * Two states only — absent asserts nothing, and there is no clearing arm: a
+   * message cannot be unsaid.
+   */
+  preview?: string;
+  /**
    * True when the turn that reached this status did nothing but the CLI's own
    * context compaction. Absent on every other announce.
    *
@@ -176,6 +190,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     awaiting,
     holdingFor,
     summary,
+    preview,
     housekeeping,
     restored,
     title,
@@ -240,6 +255,10 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
           summary:
             typeof summary === 'string' && summary !== '' ? summary : null,
         }),
+    // Only a non-empty string, and no clearing arm: an empty preview would be
+    // the daemon saying the thread's last message is blank, which no row ever
+    // is — a skewed value leaves the line where it was.
+    ...(typeof preview === 'string' && preview !== '' ? { preview } : {}),
     ...(housekeeping === true ? { housekeeping: true } : {}),
     ...(restored === true ? { restored: true } : {}),
     // An empty string is dropped rather than applied: a blank title would

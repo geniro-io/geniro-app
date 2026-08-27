@@ -52,14 +52,92 @@ export function unknownSlashCommand(
   if (skills.length === 0) {
     return null;
   }
-  // A name, then either end-of-message or the arguments. The name character
-  // class excludes `/`, which is what keeps a path out of this.
-  const match = /^\/([A-Za-z0-9][\w:.-]*)(?:\s[\s\S]*)?$/.exec(input.trim());
-  const name = match?.[1];
+  const name = slashCommandName(input);
   if (name === undefined) {
     return null;
   }
-  return skills.some((skill) => skill.name === name) ? null : name;
+  return resolveSkillName(name, skills) === null ? name : null;
+}
+
+/**
+ * The command name a message opens with, or undefined when it opens with none.
+ *
+ * A name, then either end-of-message or the arguments. The name character class
+ * excludes `/`, which is the whole of what keeps an absolute path out of this.
+ */
+function slashCommandName(input: string): string | undefined {
+  return /^\/([A-Za-z0-9][\w:.-]*)(?:\s[\s\S]*)?$/.exec(input.trim())?.[1];
+}
+
+/**
+ * One name with `:` and `-` made equivalent, for {@link resolveSkillName}.
+ *
+ * The two separators are the two CLIs' own conventions for the SAME plugin
+ * skill, and neither is anyone's choice to change: claude composes
+ * `<plugin>:<skill>` itself and reports the name it accepts, while cursor
+ * resolves a directory name, and a directory literally called `geniro:review`
+ * is not a thing to ship on macOS.
+ */
+function separatorInsensitive(name: string): string {
+  return name.replace(/:/g, '-');
+}
+
+/**
+ * The name THIS agent answers to for a typed command, or null when it has no
+ * such command.
+ *
+ * Exact match first, always — the alias below may only ever rescue a name that
+ * matches nothing, never overrule one that matches something.
+ *
+ * REPORTED as "я всё ещё вижу, что я не могу использовать Geniro команды в
+ * курсорах", against a composer refusing `/geniro:review` on cursor-agent. It
+ * was not missing: the CLI has it as `geniro-review`, and the refusal named the
+ * command without saying that. Since the spelling belongs to the CLI rather
+ * than to the user, both are accepted and the send is given the one the agent
+ * resolves.
+ *
+ * An ambiguous alias resolves to NOTHING rather than to a guess: two skills
+ * whose names differ only by that separator are two commands, and picking
+ * either would run something the user did not ask for. Exact matching is
+ * unaffected, so the only cost is that the refusal stands where it would have.
+ */
+export function resolveSkillName(
+  name: string,
+  skills: readonly AgentSkill[],
+): string | null {
+  if (skills.some((skill) => skill.name === name)) {
+    return name;
+  }
+  const wanted = separatorInsensitive(name);
+  const aliases = skills.filter(
+    (skill) => separatorInsensitive(skill.name) === wanted,
+  );
+  return aliases.length === 1 ? aliases[0]!.name : null;
+}
+
+/**
+ * The message to actually send: the same text, with a command the user spelled
+ * in the OTHER CLI's convention rewritten to the one this agent answers to.
+ *
+ * Everything else is returned untouched, including a name that already matches
+ * and one that matches nothing — the latter is `unknownSlashCommand`'s to
+ * refuse, and rewriting is not a way to smuggle a command past that check.
+ */
+export function withAgentSlashSpelling(
+  input: string,
+  skills: readonly AgentSkill[],
+): string {
+  const name = slashCommandName(input);
+  if (name === undefined) {
+    return input;
+  }
+  const resolved = resolveSkillName(name, skills);
+  if (resolved === null || resolved === name) {
+    return input;
+  }
+  // Only the NAME, and only its first occurrence: the arguments are the user's
+  // own words and routinely hold the same characters (a path, a URL, a branch).
+  return input.replace(`/${name}`, `/${resolved}`);
 }
 
 /** Prefix matches first (the common case), then substring matches; stable. */

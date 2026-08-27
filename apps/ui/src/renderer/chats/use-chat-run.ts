@@ -25,6 +25,9 @@ import { payloadString } from './transcript-item';
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
 const EMPTY_LIVE_TEXT: ReadonlyMap<string, LiveState> = new Map();
 
+/** Shared empty set, so "nothing is being named" is one stable identity. */
+const EMPTY_NAMING: ReadonlySet<string> = new Set();
+
 /**
  * How many transcript items one fetch brings back.
  *
@@ -142,6 +145,22 @@ export interface ChatRunState {
    * were prepended, so the caller can hold the reader's scroll position.
    */
   loadOlder: () => Promise<boolean>;
+  /**
+   * The runs whose NAME the daemon is working out right now.
+   *
+   * Not a field on the run row, because it is not a column of the run — it is a
+   * fact about an attempt in flight, true for a few seconds and true of no run
+   * after a reload. Held here so the sidebar row and the header can shimmer the
+   * title while the name is coming, which is what was asked for once the wait
+   * became visible ("while it's happening can we change thread title with some
+   * small animation").
+   */
+  namingRunIds: ReadonlySet<string>;
+  /**
+   * Record that the USER named this run, so the naming announce cannot
+   * overwrite it — see `renamedRuns`.
+   */
+  markRenamed: (runId: string) => void;
   liveText: ReadonlyMap<string, LiveState>;
   streaming: boolean;
   setStreaming: Dispatch<SetStateAction<boolean>>;
@@ -238,6 +257,20 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   // never replayed, and cleared whenever the durable transcript is refetched.
   const [liveText, setLiveText] =
     useState<ReadonlyMap<string, LiveState>>(EMPTY_LIVE_TEXT);
+  // Ephemeral like the plane above, and for the same reason: a naming in flight
+  // is a fact about the next few seconds, not a column of the run.
+  const [namingRunIds, setNamingRunIds] =
+    useState<ReadonlySet<string>>(EMPTY_NAMING);
+  /**
+   * Runs this window has renamed, so a naming announce still in flight cannot
+   * put the generated title back over the user's own.
+   *
+   * A ref rather than state: nothing re-renders when a run joins it, and the
+   * set is read inside the announce handler that is already running. It is
+   * never cleared — a name the user typed outranks the agent's for the life of
+   * the chat, which is the same rule the daemon enforces in SQL.
+   */
+  const renamedRuns = useRef(new Set<string>());
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -678,6 +711,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     [],
   );
 
+  const markRenamed = useCallback((runId: string): void => {
+    renamedRuns.current.add(runId);
+  }, []);
+
   const refreshRuns = useCallback((): void => {
     void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
       .then(([chats, workflowRuns]) => {
@@ -961,6 +998,25 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // while the user is typically looking somewhere else, which is why it is
       // a broadcast rather than a message to the run's room.
       const named = event.title;
+      // Absent asserts nothing, exactly like every other three-state field on
+      // this event: an ordinary activity announce must not lower a shimmer.
+      if (event.titlePending !== undefined) {
+        const naming = event.titlePending;
+        setNamingRunIds((prev) => {
+          if (prev.has(event.runId) === naming) {
+            // Same identity when nothing moved: this event fires many times a
+            // second, and a fresh Set would re-render the whole sidebar on each.
+            return prev;
+          }
+          const next = new Set(prev);
+          if (naming) {
+            next.add(event.runId);
+          } else {
+            next.delete(event.runId);
+          }
+          return next.size === 0 ? EMPTY_NAMING : next;
+        });
+      }
       /**
        * What the thread last SAID, onto the row's preview line.
        *
@@ -1007,12 +1063,31 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...(parked !== undefined ? { awaiting: parked } : {}),
                   ...(at === undefined ? {} : { updatedAt: at }),
                   ...(spoke === undefined ? {} : { lastMessage: spoke }),
-                  // Applied only to a run that has none: the daemon guards this
-                  // too, but the two decide from different snapshots — a rename
-                  // typed while the naming was in flight is on screen HERE
-                  // first, and it must not be replaced by the title that read
-                  // the row a moment before it.
-                  ...(named !== undefined && run.title === null
+                  // Applied whatever the row currently says, EXCEPT to a run
+                  // this window renamed.
+                  //
+                  // It used to require `run.title === null`, which silently
+                  // discarded the announcement this event exists for: naming
+                  // happens in two steps, and the second REPLACES the derived
+                  // opening line with the agent's own name — so the only title
+                  // that ever reached a row live was the first one, and the
+                  // upgrade appeared solely on the next full list refetch.
+                  // REPORTED as "still title wasn't generated. I saw some
+                  // animation, but after it finished title wasn't changed",
+                  // over a run whose row in the database already read
+                  // `Chat startup or greeting` while the sidebar still showed
+                  // `heyyy hiiii`.
+                  //
+                  // A rename is still safe without that test, and the daemon is
+                  // what makes it so: `RunDao.retitle` writes only when the
+                  // title it read is still there, so a rename that landed first
+                  // makes the naming lose and publish nothing at all. What the
+                  // old test was really protecting against is the ORDER — a
+                  // rename committed here while the announce was already in
+                  // flight — and that is what `renamedRuns` answers, precisely,
+                  // instead of blocking every upgrade to protect one race.
+                  ...(named !== undefined &&
+                  !renamedRuns.current.has(event.runId)
                     ? { title: named }
                     : {}),
                 }
@@ -1218,6 +1293,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     hasOlder,
     loadingOlder,
     loadOlder,
+    namingRunIds,
+    markRenamed,
     liveText,
     streaming,
     setStreaming,

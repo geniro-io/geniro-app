@@ -1,5 +1,10 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type { AgentKind } from '../../runs/runs.types';
@@ -24,6 +29,17 @@ const TERMINAL_ITEM_KINDS = new Set([
   'turn_cancelled',
   'error',
 ]);
+
+/**
+ * How long after one agent-triggered naming the next may be tried.
+ *
+ * Long enough that a chatty stretch cannot spend a run's whole ask budget in its
+ * first minute, short enough that a turn measured in hours gets its attempts
+ * while somebody is still looking for the chat in the sidebar. It bounds nothing
+ * by itself — `CHAT_TITLE_UPGRADE_TURNS` remains the ceiling on how many asks a
+ * run can ever make.
+ */
+const EARLY_NAMING_COOLDOWN_MS = 2 * 60_000;
 
 /** Which naming a caller is asking for — see {@link ChatTitleService.name}. */
 interface NameOptions {
@@ -54,6 +70,13 @@ interface NameOptions {
  * The title is asked of the CLI FIRST and derived only when it has none. That
  * order is the whole point — an agent that just read the exchange writes "Fix
  * conflicts worktree" where the host can only trim the user's opening line.
+ *
+ * There are THREE naming moments, and the middle one is the one a user
+ * actually watches: the opening message (derive), the agent's first words
+ * (upgrade), and every ending (upgrade). The middle one was missing and is why
+ * this was reported three times — see the subscriber's assistant-message
+ * branch. They share one per-run budget, so a name that lands early costs the
+ * later moments nothing and retires them.
  *
  * The two shipped CLIs reach an agent-written title by opposite routes, and
  * neither can serve the other's. cursor WRITES one into its own session store,
@@ -110,6 +133,26 @@ export class ChatTitleService implements OnModuleInit {
    */
   private readonly generationTried = new Map<string, number>();
 
+  /**
+   * When each run last had a naming triggered by the agent TALKING — see the
+   * subscriber's assistant-message branch.
+   *
+   * A timestamp rather than a "has fired" flag, because one attempt is not
+   * enough: the acceptance rules in `readTitleAnswer` decline anything that
+   * does not read as a title, and a model asked to name a conversation two
+   * sentences old declines often enough to matter. Measured in the running app
+   * — the agent's first words at 12:51:33, `produced no title on ask 1` at
+   * 12:51:54, and the same exchange put to the same model by hand answering
+   * `Main process modules review`. One shot would put the raw prompt back for
+   * the rest of an hours-long turn on nothing but that variance.
+   *
+   * The COOLDOWN is what keeps that from becoming a model call per paragraph;
+   * the per-run ask budget still caps the total, so this spends the existing
+   * five attempts across one long turn rather than across five short ones.
+   * Torn down on the delete announcement beside the two maps.
+   */
+  private readonly lastEarlyAskAt = new Map<string, number>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
@@ -117,7 +160,31 @@ export class ChatTitleService implements OnModuleInit {
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly adapters: AgentAdapterRegistry,
+    /**
+     * Clock (test seam) — the cooldown above is the only reader.
+     *
+     * `@Optional()` is load-bearing, not decoration: swc emits `Function` as
+     * this parameter's `design:paramtypes` entry, so without it Nest tries to
+     * RESOLVE a provider for it and the daemon dies at boot with
+     * `Nest can't resolve dependencies of ChatTitleService` — a default value
+     * does not help, because the injector never gets as far as calling the
+     * constructor. Caught by launching the app, not by this file's specs, which
+     * construct the service themselves.
+     */
+    @Optional() private readonly now: () => number = Date.now,
   ) {}
+
+  /**
+   * Whether the agent talking should trigger a naming right now.
+   *
+   * The cooldown alone: whether there is anything left to SPEND is
+   * {@link upgrade}'s and {@link askForTitle}'s question, and duplicating their
+   * budgets here is how the two answers would come to disagree.
+   */
+  private earlyAskIsDue(runId: string): boolean {
+    const last = this.lastEarlyAskAt.get(runId);
+    return last === undefined || this.now() - last >= EARLY_NAMING_COOLDOWN_MS;
+  }
 
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
@@ -142,6 +209,38 @@ export class ChatTitleService implements OnModuleInit {
       // the name the AGENT gave the conversation once there is one.
       if (event.item.kind === 'message' && event.item.role === 'user') {
         void this.name(event.runId, { unnamedOnly: true }).catch((err) => {
+          this.logger.warn(
+            `failed to name run ${event.runId}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        });
+        return;
+      }
+      // The agent's FIRST words, which is the earliest moment this conversation
+      // can be named by anything better than its own opening line.
+      //
+      // REPORTED as "still there is no title generation" — a third time — and
+      // the reason it kept surviving is that the naming WORKS and could not be
+      // seen doing it. Measured on the reporter's own `geniro.db`: every
+      // COMPLETED chat carries a real generated name (`Remove redundant geniro
+      // cursor skill clones` over an opening line about auto-install), and
+      // every RUNNING one still wears its raw prompt — because the upgrade
+      // fired on `turn_complete` alone, and a turn of the work this app is for
+      // runs for hours. The screenshot in the report was a running chat, and so
+      // is every chat at the moment somebody is looking for it in the sidebar.
+      //
+      // It costs no extra spawn: the budgets are per RUN, so this spends the
+      // same one ask earlier rather than an additional one, and a naming that
+      // succeeds retires them. Once per run — a `-p` turn per assistant message
+      // would be a model call per paragraph.
+      if (
+        event.item.kind === 'message' &&
+        event.item.role === 'assistant' &&
+        this.earlyAskIsDue(event.runId)
+      ) {
+        this.lastEarlyAskAt.set(event.runId, this.now());
+        void this.name(event.runId).catch((err) => {
           this.logger.warn(
             `failed to name run ${event.runId}: ${
               err instanceof Error ? err.message : String(err)
@@ -180,6 +279,7 @@ export class ChatTitleService implements OnModuleInit {
     this.bus.allDeleted().subscribe((runId) => {
       this.upgradesTried.delete(runId);
       this.generationTried.delete(runId);
+      this.lastEarlyAskAt.delete(runId);
     });
   }
 
@@ -327,6 +427,16 @@ export class ChatTitleService implements OnModuleInit {
       return null;
     }
     this.generationTried.set(run.id, asked + 1);
+    // Announced HERE and not around `upgrade`, because only this arm is slow
+    // enough to be worth drawing: reading a title a CLI already wrote is a file
+    // open, while this spawns a whole `-p` turn. Status and activity are
+    // omitted for the reason the naming announce omits them — this call read
+    // neither, and `null` asserts in both fields.
+    this.bus.publishRunStatus({
+      runId: run.id,
+      status: null,
+      titlePending: true,
+    });
     try {
       // The newest exchange only from the SECOND ask on: on the first there is
       // nothing later than the opening, and repeating it would spend prompt on
@@ -357,6 +467,16 @@ export class ChatTitleService implements OnModuleInit {
         }`,
       );
       return null;
+    } finally {
+      // In a `finally`, so a throw cannot leave a run shimmering for the rest
+      // of the window — nothing else would ever lower it. It fires BEFORE the
+      // title announce that may follow, which is the right order: the pending
+      // flag is about the attempt, and the client lowers it either way.
+      this.bus.publishRunStatus({
+        runId: run.id,
+        status: null,
+        titlePending: false,
+      });
     }
   }
 

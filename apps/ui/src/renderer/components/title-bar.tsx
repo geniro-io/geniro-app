@@ -1,6 +1,5 @@
 import { TITLEBAR_CONTENT_INSET } from '../../shared/contracts';
 import type { FooterUpdate } from '../updates/update-status';
-import { StatusDot } from './status-dot';
 import { UpdateControl } from './update-control';
 
 /**
@@ -37,11 +36,20 @@ import { UpdateControl } from './update-control';
  * the version, opening a developer panel — while the two beside it report the
  * app's health and offer its update. ⌥⌘L still opens the drawer (`App.tsx`),
  * which is the whole of what the button did.
+ *
+ * The VERSION and the DAEMON-STATUS readout that stood beside it are gone as
+ * well, in that order and both on report ("давай уберем полностью оттуда
+ * версию и берём её в меню приложения", then "also remove connected status at
+ * all"). The version is in the app menu now (`main/app-menu.ts`), where macOS
+ * puts what an app IS. The status needed no new home: a daemon that is not
+ * answering already raises `ConnectionBanner` across the top of every view,
+ * with the reason and a retry — so the dot was a second, quieter telling of
+ * something already said in full, and its only other state was a green pip
+ * confirming that nothing was wrong. What is left in the band is the title and
+ * the update offer.
  */
 export function TitleBar({
   title,
-  connected,
-  daemonVersion,
   update,
   onInstallUpdate,
   onRelaunchUpdate,
@@ -56,10 +64,6 @@ export function TitleBar({
    * shell is the only party that knows both — and the whole point is that the
    * divider lands exactly on the column border below it.
    */
-  /** Whether the daemon is answering — the dot's tone. */
-  connected: boolean;
-  /** The running daemon's version, for the readout beside the dot. */
-  daemonVersion: string | null;
   update: FooterUpdate;
   onInstallUpdate?: () => void;
   onRelaunchUpdate?: () => void;
@@ -100,29 +104,6 @@ export function TitleBar({
       </span>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
-        {/* Connection + version. Both lived in the rail's footer under a
-              rule, where collapsing the rail reduced them to one green pip
-              alone under a line — a readout with nothing to read it against.
-              Here they sit with the other things that describe the app rather
-              than a column, and the version is beside the update that offers a
-              newer one, which is the comparison a user actually makes. */}
-        <span
-          data-slot="titlebar-status"
-          title={
-            connected
-              ? `connected to the daemon${daemonVersion ? ` · v${daemonVersion}` : ''}`
-              : 'not connected to the daemon'
-          }
-          className="flex shrink-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-          <StatusDot tone={connected ? 'ok' : 'bad'} />
-          <span className="truncate">
-            {connected
-              ? daemonVersion
-                ? `v${daemonVersion}`
-                : 'connected'
-              : 'disconnected'}
-          </span>
-        </span>
         <UpdateControl
           update={update}
           onInstall={onInstallUpdate}

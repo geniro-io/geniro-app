@@ -40,17 +40,6 @@ const Stats = lazy(() =>
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
-/** The daemon's `hello` event payload (`{ version }`), sent on connect. */
-function helloVersion(data: unknown): string | null {
-  if (typeof data === 'object' && data !== null) {
-    const version = (data as { version?: unknown }).version;
-    if (typeof version === 'string') {
-      return version;
-    }
-  }
-  return null;
-}
-
 /**
  * What the title bar says for a view that is not a document.
  *
@@ -76,7 +65,6 @@ export function App(): React.JSX.Element {
     setGraphsMounted(true);
   }
   const [connected, setConnected] = useState(false);
-  const [daemonVersion, setDaemonVersion] = useState<string | null>(null);
   const [handle, setHandle] = useState<DaemonHandle | null>(null);
   /**
    * Why the daemon is not answering, in its own words. Held even while a retry
@@ -189,14 +177,6 @@ export function App(): React.JSX.Element {
       onError: (message) => {
         setConnected(false);
         setConnectionError(message);
-      },
-      onMessage: (event, data) => {
-        if (event === 'hello') {
-          const version = helloVersion(data);
-          if (version) {
-            setDaemonVersion(version);
-          }
-        }
       },
     });
     clientRef.current = client;
@@ -323,8 +303,6 @@ export function App(): React.JSX.Element {
           for why it is not three rows in three columns any more. */}
       <TitleBar
         title={view === 'chats' ? (chatTitle ?? 'New chat') : VIEW_TITLE[view]}
-        connected={connected}
-        daemonVersion={daemonVersion}
         // The offer, resolved HERE from main's one state so the bar renders it
         // rather than deciding it — including `canInstall`, main's own answer
         // about this install (read-only volume, another account, a translocated

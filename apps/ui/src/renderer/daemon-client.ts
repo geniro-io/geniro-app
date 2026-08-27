@@ -151,6 +151,12 @@ export interface RunStatusEvent {
    * user arrives as the PATCH's own response instead.
    */
   title?: string;
+  /**
+   * Whether a name for this run is being worked out right now — absent when the
+   * announce says nothing about it, `true` while an attempt is in flight,
+   * `false` once it has finished, named or not.
+   */
+  titlePending?: boolean;
 }
 
 /**
@@ -173,6 +179,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     housekeeping,
     restored,
     title,
+    titlePending,
   } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || runId.length === 0) {
     return null;
@@ -238,6 +245,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // An empty string is dropped rather than applied: a blank title would
     // relabel the row with nothing, which reads as the chat having lost its name.
     ...(typeof title === 'string' && title !== '' ? { title } : {}),
+    // Only a real boolean, so a skewed daemon sending something else leaves the
+    // client's reading alone rather than latching a shimmer nothing lowers.
+    ...(typeof titlePending === 'boolean' ? { titlePending } : {}),
   };
 }
 

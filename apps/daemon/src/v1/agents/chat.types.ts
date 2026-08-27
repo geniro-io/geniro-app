@@ -1163,6 +1163,26 @@ export interface RunStatusEvent {
    * after its turn ended has to land.
    */
   title?: string;
+  /**
+   * Whether a NAME for this run is being worked out right now — absent when this
+   * announce says nothing about it.
+   *
+   * Three states like its neighbours: `undefined` asserts nothing, `true` says
+   * an attempt is in flight, `false` says it has finished (named or not).
+   *
+   * It exists because the attempt is not instant and the wait is silent. Naming
+   * a claude chat means a whole extra `-p` turn — measured at 3–7s after the
+   * prompt was cut down, and 8–11s before — during which the sidebar row shows
+   * the raw opening line and nothing says a better name is coming. REPORTED as
+   * "I see it was updated, but it took LONG time. Like 30 sec", followed by
+   * "while it's happening can we change thread title with some small
+   * animation". This is the fact that animation is drawn from.
+   *
+   * Only the ASK raises it, never the free read of a title a CLI already wrote:
+   * that one is a file open, and a shimmer nobody can see costs a re-render on
+   * every announce.
+   */
+  titlePending?: boolean;
 }
 
 /**

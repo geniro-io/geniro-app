@@ -1490,10 +1490,17 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(other().textContent).toContain('running Bash');
   });
 
-  it('does not rename a run the user has already named', async () => {
-    // The daemon guards this too, but the two decide from different snapshots:
-    // a rename typed while the naming was in flight is on screen here first,
-    // and must not be replaced by a title that read the row a moment earlier.
+  it('applies the generated title OVER the one it derived from the prompt', async () => {
+    // Naming happens in two steps: the opening message names the chat at once,
+    // and the agent's own name REPLACES it seconds later. This event is the
+    // only thing that carries the second step to a row.
+    //
+    // It used to be applied only to a run with NO title — which every named run
+    // has by then — so the upgrade never reached the screen and appeared solely
+    // on the next full list refetch. REPORTED as "still title wasn't generated.
+    // I saw some animation, but after it finished title wasn't changed", over a
+    // run whose database row already read `Chat startup or greeting` while the
+    // sidebar still showed `heyyy hiiii`.
     api.listChats.mockResolvedValue([run1]);
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
@@ -1510,7 +1517,59 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
 
     const row = (): HTMLElement =>
       container.querySelector<HTMLElement>('li[draggable="true"]')!;
-    expect(row().textContent).toContain('My chat');
+    expect(row().textContent).toContain('Auto Generated Name');
+    expect(row().textContent).not.toContain('My chat');
+  });
+
+  it('does not rename a run the USER has named', async () => {
+    // The daemon guards this too, but the two decide from different snapshots:
+    // a rename typed while the naming was in flight is on screen here first,
+    // and must not be replaced by a title that read the row a moment earlier.
+    //
+    // The rename is DRIVEN rather than assumed from the fixture's title, which
+    // is what the previous version of this test did — and reading "has a title"
+    // as "the user named it" is exactly the bug above.
+    api.listChats.mockResolvedValue([run1]);
+    api.renameRun.mockResolvedValue({ ...run1, title: 'Auth deep-dive' });
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    const pencil = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rename My chat"]',
+    )!;
+    await act(async () => {
+      pencil.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const input = container.querySelector<HTMLInputElement>(
+      'aside li input[aria-label="Rename My chat"]',
+    )!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(input, 'Auth deep-dive');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    // …and only now does the naming announce land.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: null,
+        title: 'Auto Generated Name',
+      });
+    });
+
+    const row = (): HTMLElement =>
+      container.querySelector<HTMLElement>('li[draggable="true"]')!;
+    expect(row().textContent).toContain('Auth deep-dive');
     expect(row().textContent).not.toContain('Auto Generated Name');
   });
 

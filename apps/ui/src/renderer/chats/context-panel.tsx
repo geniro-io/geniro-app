@@ -506,7 +506,15 @@ function Section({
         title={title}
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
-        className="flex items-center gap-1 text-left outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
+        // `text-xs` EXPLICITLY, and it is a fix rather than decoration: a
+        // `<button>` does not inherit the panel's type, so this row was drawn
+        // at the app's base size while every other line under it took the
+        // container's `text-xs`. Measured in the running app — 15px against
+        // 11.25px, a third larger — which is what put three folded headings on
+        // screen louder than the figures the panel exists to show. REPORTED as
+        // "we should reduce font size for groups and their counts in bottom".
+        // It stays a HEADING by weight and colour below, not by size.
+        className="flex items-center gap-1 text-left text-xs outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50">
         <ChevronRight
           aria-hidden="true"
           className={cn(

@@ -537,3 +537,44 @@
     transform: translateX(300%);
   }
 }
+
+/*
+ * A title being worked out — `chats/chat-list.tsx`, driven by the daemon's
+ * `run_status.titlePending`.
+ *
+ * Naming a claude chat costs a whole extra CLI turn (measured 3–7s), during
+ * which the row shows the raw opening line and nothing says a better name is
+ * coming. REPORTED once the wait became visible: "while it's happening can we
+ * change thread title with some small animation".
+ *
+ * It pulses the text's OPACITY rather than sweeping a highlight across it: a
+ * shimmer gradient has to paint a colour over the text, and every colour here
+ * comes from a token — while opacity borrows whatever colour the row already
+ * has, so it stays right on a selected row, a hovered one and a group's tint
+ * alike. Keyframes cannot be an arbitrary Tailwind value; `animate-[…]` can
+ * only name one, which is why this lives here beside `progress-slide`.
+ */
+@keyframes title-naming {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/*
+ * Honoured, not decorative: a pulse is exactly the kind of motion a reader who
+ * has asked for less of it does not want, and the row is perfectly legible
+ * without it — the name still arrives either way.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .title-naming {
+    animation: none;
+  }
+}
+
+.title-naming {
+  animation: title-naming 1.4s ease-in-out infinite;
+}

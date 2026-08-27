@@ -143,13 +143,18 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import { runningShellsByAgent, type ShellRun } from './shell-activity';
+import {
+  hasRunningBackgroundShell,
+  runningShellsByAgent,
+  type ShellRun,
+} from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
   filterSkills,
   slashQuery,
   unknownSlashCommand,
+  withAgentSlashSpelling,
 } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -664,6 +669,8 @@ export function Chats({
     hasOlder,
     loadingOlder,
     loadOlder,
+    namingRunIds,
+    markRenamed,
     liveText,
     streaming,
     setStreaming,
@@ -931,6 +938,11 @@ export function Chats({
         runId,
         renameRunDto: { title },
       });
+      // BEFORE the state write, so a naming announce that lands between the two
+      // cannot put the generated title back over the name just typed. The
+      // daemon already refuses to rename a run the user has renamed; this
+      // covers the other order, where its write had already won.
+      markRenamed(runId);
       // Patch only the title — a concurrent WS item may have fresher
       // status/preview in state than this response's snapshot.
       setRuns((prev) =>
@@ -939,7 +951,7 @@ export function Chats({
         ),
       );
     },
-    [chatApi],
+    [chatApi, markRenamed],
   );
 
   /**
@@ -2320,7 +2332,11 @@ export function Chats({
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
   const send = useCallback(async (): Promise<void> => {
-    const text = input.trim();
+    // Spelled the way THIS agent spells it — see `withAgentSlashSpelling`. It
+    // wraps the trim rather than sitting beside the refusal below, so every
+    // use of `text` downstream (the send body, the optimistic row) is the one
+    // string, and none of them can be the pre-rewrite one.
+    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
     // The staged form of those same images, kept so a refusal can put the
     // composer back exactly as it was — `toWire` is the send body, which the
@@ -2572,7 +2588,10 @@ export function Chats({
    * red banner.
    */
   const sendFollowUp = useCallback(async (): Promise<void> => {
-    const text = input.trim();
+    // Rewritten before anything reads it, for the reason `send` states — and it
+    // matters more here, where the text may sit in the queue for the length of
+    // a turn before it is handed over.
+    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
     const runId = activeRunIdRef.current;
     if ((!text && images.length === 0) || !runId) {
@@ -3710,7 +3729,35 @@ export function Chats({
       ),
     [durableEntries, runStoppedAt],
   );
-  const activeRunStatus = useMemo(
+  /**
+   * A detached command this run started is still going.
+   *
+   * Read STRAIGHT from the transcript rather than from `shellsByAgent`, which
+   * is the same question one layer up: that map filters by each agent's
+   * display status, so feeding it back in here would be a cycle. This asks
+   * only what the rows say.
+   */
+  const backgroundShellRunning = useMemo(
+    () => hasRunningBackgroundShell(items, handle.startedAt),
+    [items, handle.startedAt],
+  );
+  /**
+   * The badge reading WITHOUT the background-command clause — what the run
+   * would say if the only question were whether its agent is working.
+   *
+   * It exists because the two readings are owed to different consumers. The
+   * notification and the unseen mark fire on the transition INTO a settled
+   * status, and both mean "your agent has stopped, come and look" — which a
+   * `pnpm dev` running on in the background does not change. Feeding them the
+   * badge below would have suppressed the turn-end banner and the unread dot
+   * for every chat that left a command running, which is most of them.
+   *
+   * So the divergence is deliberate and narrow, against the rule those hooks
+   * are documented with ("the SAME status the sidebar badge shows"): the
+   * banner reports the TURN ending, the badge reports what is still out. Two
+   * facts, not one fact spelled two ways.
+   */
+  const agentRunStatus = useMemo(
     () =>
       activeRun
         ? displayRunStatus({
@@ -3722,6 +3769,27 @@ export function Chats({
           })
         : 'pending',
     [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
+  );
+  const activeRunStatus = useMemo(
+    () =>
+      activeRun
+        ? displayRunStatus({
+            status: activeRun.status,
+            streaming,
+            awaitingAnswer: awaitingAnswer.size > 0,
+            subagentRunning,
+            heldForBackgroundWork: holding.has(activeRun.id),
+            shellsRunning: backgroundShellRunning,
+          })
+        : 'pending',
+    [
+      activeRun,
+      streaming,
+      awaitingAnswer,
+      subagentRunning,
+      holding,
+      backgroundShellRunning,
+    ],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -4565,6 +4633,15 @@ export function Chats({
       run.id === activeRunId ? activeRunStatus : unfocusedRunStatus(run),
     [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
+  /**
+   * The same per-run reading for the two consumers that ask "has this thread
+   * stopped" rather than "what is it doing" — see {@link agentRunStatus}.
+   */
+  const agentStoppedRunStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      run.id === activeRunId ? agentRunStatus : unfocusedRunStatus(run),
+    [activeRunId, agentRunStatus, unfocusedRunStatus],
+  );
 
   const notificationLabel = useCallback(
     (run: ChatRun): string => runLabel(run, workflowNames),
@@ -4585,7 +4662,7 @@ export function Chats({
    */
   useRunNotifications({
     runs,
-    statusOf: sidebarRunStatus,
+    statusOf: agentStoppedRunStatus,
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
@@ -4598,7 +4675,7 @@ export function Chats({
   // of a run's status: see `use-unseen-runs`.
   const { unseen, markSeen } = useUnseenRuns({
     runs,
-    statusOf: sidebarRunStatus,
+    statusOf: agentStoppedRunStatus,
     quiet: quietSettles,
     activeRunId,
   });
@@ -4784,6 +4861,7 @@ export function Chats({
                               runId={run.id}
                               active={run.id === activeRunId}
                               unseen={unseen.has(run.id)}
+                              naming={namingRunIds.has(run.id)}
                               label={runLabel(run, workflowNames)}
                               isWorkflow={run.workflowId != null}
                               status={sidebarRunStatus(run)}

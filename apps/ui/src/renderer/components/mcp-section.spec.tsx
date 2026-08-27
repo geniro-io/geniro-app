@@ -921,3 +921,92 @@ describe('McpSection — a sign-in that has been asked for', () => {
     expect(button.disabled).toBe(false);
   });
 });
+
+describe('McpSection — where a sign-in in flight is shown', () => {
+  /** Three signed-out servers, which is what makes placement matter at all. */
+  const SIGNED_OUT = listing(
+    { name: 'plugin:vercel:vercel', status: 'needs_auth' },
+    { name: 'ticktick', status: 'needs_auth' },
+    { name: 'wispr', status: 'needs_auth' },
+  );
+
+  it('puts the panel under the ROW whose sign-in was started', () => {
+    // REPORTED as "I have broken UI - i wanna this status line from down to b
+    // under item where we actually clicked sign in", against a dialog where
+    // the panel was a sibling of the whole section, pinned to its foot. With
+    // three signed-out rows it named no server and could have been about any
+    // of them.
+    //
+    // Asserted on DOCUMENT ORDER against both neighbours, which is the thing
+    // that actually regressed and the only thing jsdom can see — it computes
+    // no layout, so "is it near the row" has no other observable. Checking
+    // both sides is what stops it passing again from the foot of the panel:
+    // that position is also "after ticktick".
+    const el = render({
+      listing: SIGNED_OUT,
+      loading: false,
+      onSignIn: vi.fn(),
+      loginServer: 'ticktick',
+      loginPanel: <span data-testid="login-panel">signing in…</span>,
+    });
+
+    const panel = el.querySelector('[data-testid="login-panel"]')!;
+    expect(panel).not.toBeNull();
+    const rows = [...el.querySelectorAll('li')];
+    const ticktick = rows.find((li) => li.textContent?.includes('ticktick'))!;
+    const wispr = rows.find((li) => li.textContent?.includes('wispr'))!;
+    expect(
+      ticktick.compareDocumentPosition(panel) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      wispr.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it('opens the sign-in group and holds it open, so the panel cannot be folded away', () => {
+    // The group is collapsed by default and the user can collapse it again.
+    // Doing that mid-sign-in would take the progress — and the pasted-code
+    // field the CLI is blocking on — off screen, which is a worse dead end
+    // than the misplaced strip this replaced.
+    const el = render({
+      listing: SIGNED_OUT,
+      loading: false,
+      onSignIn: vi.fn(),
+      loginServer: 'ticktick',
+      loginPanel: <span data-testid="login-panel">signing in…</span>,
+    });
+
+    const group = [...el.querySelectorAll('button[aria-expanded]')].find((b) =>
+      b.textContent?.includes('Needs sign-in'),
+    ) as HTMLButtonElement;
+    expect(group.getAttribute('aria-expanded')).toBe('true');
+
+    // Pressing it does not put the panel away. TWICE, deliberately: the first
+    // press only sets the group's own `open` to true — which it already looks
+    // like — so a single click would pass with the force deleted. The second
+    // returns that state to false, which is the press this has to survive.
+    for (const _ of [0, 1]) {
+      act(() => {
+        group.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+    expect(el.querySelector('[data-testid="login-panel"]')).not.toBeNull();
+    expect(group.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('renders no panel slot at all when nothing is signing in', () => {
+    // The slot is an `li` inside the group's `ul`, so an always-present empty
+    // one would be a row of padding between two servers.
+    const el = render({
+      listing: SIGNED_OUT,
+      loading: false,
+      onSignIn: vi.fn(),
+      loginServer: null,
+      loginPanel: <span data-testid="login-panel">signing in…</span>,
+    });
+
+    expect(el.querySelector('[data-slot="mcp-login-slot"]')).toBeNull();
+    expect(el.querySelector('[data-testid="login-panel"]')).toBeNull();
+  });
+});

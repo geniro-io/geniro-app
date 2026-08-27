@@ -50,6 +50,7 @@ export const ChatListItem = memo(function ChatListItem({
   awaiting = null,
   active,
   unseen = false,
+  naming = false,
   onActivate,
   onRename,
   onDelete,
@@ -96,6 +97,16 @@ export const ChatListItem = memo(function ChatListItem({
    * nothing else about it moves.
    */
   unseen?: boolean;
+  /**
+   * The daemon is working out a NAME for this run right now, so the label on
+   * screen is the placeholder it is about to replace.
+   *
+   * Drawn as a pulse on the label alone. Naming a claude chat costs a whole
+   * extra CLI turn, and until this the row simply sat on the raw opening line
+   * with nothing saying a better name was on its way — reported as exactly
+   * that once the wait was measured.
+   */
+  naming?: boolean;
   onActivate: (runId: string) => void;
   /** Commit a new title. Rejects to report the failure back into the row. */
   onRename: (runId: string, title: string) => Promise<void>;
@@ -258,10 +269,16 @@ export const ChatListItem = memo(function ChatListItem({
         ) : (
           <>
             <span
+              data-slot="chat-row-label"
+              // The pulse marks the LABEL and nothing else on the row: it is
+              // the one thing about to change, and animating the row would
+              // read as the chat itself doing something.
               className={cn(
                 'min-w-0 flex-1 truncate text-sm font-medium',
                 unseen && 'font-semibold text-foreground',
-              )}>
+                naming && 'title-naming',
+              )}
+              title={naming ? 'Naming this chat…' : undefined}>
               {label}
             </span>
             {/* Chats only: a workflow run's name comes from the workflow it

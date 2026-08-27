@@ -135,6 +135,7 @@ export function displayRunStatus({
   awaitingAnswer,
   subagentRunning = false,
   heldForBackgroundWork = false,
+  shellsRunning = false,
 }: {
   /** The status on the run row, as the daemon last reported it. */
   status: RunStatusKind;
@@ -156,6 +157,33 @@ export function displayRunStatus({
    * background row, a workflow node) are unaffected.
    */
   subagentRunning?: boolean;
+  /**
+   * At least one background COMMAND this run started is still running.
+   *
+   * REPORTED against a thread reading `completed` beside a header counting two
+   * running shells, with the agent's own last words being "the orphan branch
+   * and the PR-body patch both wait on that" — "there is something in
+   * progress, but it shows completed status".
+   *
+   * It is a DISPLAY reading and deliberately not a hold on the turn. The turn
+   * settling is correct and load-bearing: the agent has finished speaking, the
+   * composer must accept the next message, and holding for a command that
+   * never ends (`pnpm dev`, a tailed log) is the previous defect this codebase
+   * carved shells out of `openWork` to fix — a thread that read `running ·
+   * 20m 18s` over an answer written twenty minutes earlier. So the run stays
+   * SETTLED underneath; only the word on the badge changes, and it names the
+   * commands rather than claiming the agent is busy.
+   *
+   * Answers `held` for that reason — the vocabulary's existing "the agent has
+   * said its piece and something it started is still out" — never `running`,
+   * which would put a spinner over an agent that has stopped.
+   *
+   * Ranked BELOW `heldForBackgroundWork` (a delegate hold is the stronger fact
+   * and already says `waiting on N sub-agents`) and below a live turn, which
+   * is the agent genuinely working. Defaulted, so every call site that knows
+   * nothing about shells — a background row, a workflow node — is unaffected.
+   */
+  shellsRunning?: boolean;
   /**
    * This run's turn is merely HELD: the agent has said its piece and stopped,
    * and the process is alive only until background work it launched reports
@@ -222,6 +250,17 @@ export function displayRunStatus({
   if (streaming) {
     return 'running';
   }
+  // LAST of the live readings, and only over a run the daemon calls finished:
+  // a command outliving its turn is the weakest evidence here, so anything the
+  // agent is doing itself outranks it, and a run still `pending` has not
+  // started. See the field for why this is a display reading rather than a
+  // hold on the turn.
+  // `completed` ALONE, spelled out rather than asked of `isSettledRunStatus`:
+  // failed and cancelled already returned above, and `skipped` is a workflow
+  // node nothing ever ran, which has no commands of its own to be waiting on.
+  if (shellsRunning && status === 'completed') {
+    return 'held';
+  }
   return status;
 }
 
@@ -276,8 +315,16 @@ export const STANDING_ACTIVITY = 'Working…';
  * The daemon names the count while the window is connected (`waiting on 6
  * sub-agents`); this is what a window that reconnected mid-hold shows,
  * the activity plane being events-only.
+ *
+ * "background work" rather than "sub-agents", which it said until a SECOND
+ * thing could hold a run: a detached command outliving its turn now reads
+ * `held` too (see `shellsRunning`), and the daemon names no activity for that
+ * case at all — so the sub-agent wording was the sentence a shell-held run
+ * would always have shown, and it would have been false every time. The
+ * daemon's own phrase still wins wherever it has one, so nothing that could
+ * name the count stops naming it.
  */
-export const HELD_ACTIVITY = 'waiting on sub-agents';
+export const HELD_ACTIVITY = 'waiting on background work';
 
 /**
  * Something is working on this run RIGHT NOW, with nobody being waited for.

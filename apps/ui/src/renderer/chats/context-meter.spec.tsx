@@ -153,18 +153,31 @@ describe('ContextMeter', () => {
     expect(container.textContent).toBe('');
   });
 
-  it('shows the count bare when the CLI named no window', () => {
+  it('keeps a MUTED ring when the CLI named no window, and invents no denominator', () => {
     // No assumed denominator. Substituting a flat 200k made a 1M-window model
     // read as a fifth full before its first turn had finished — the count is
     // true, the fraction would not have been.
     //
-    // And it stays ON SCREEN here, unlike the ring case: with no ring there is
-    // nothing to hover, so hiding it would leave the user with nothing at all.
+    // The ring STAYS, muted and at nought. REPORTED as "sometimes context
+    // circle is disappearing and instead i just see something like ctx. 167k":
+    // the old shape swapped the control for a line of text mid-turn, which is
+    // what reads as the meter breaking. Reproduced by clearing this machine's
+    // remembered windows — `ctx 63.6k` for the whole of a first turn, because
+    // claude reports the window only on its `result` line.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={null} />);
-    expect(meterLabel()).toBeNull();
-    expect(ring()).toBeNull();
-    expect(container.textContent).toContain('ctx 100k');
+
+    expect(ring()).not.toBeNull();
+    // Muted, not green: a filled arc would be a claim about how full a window
+    // nobody has measured is.
+    expect(ring()?.getAttribute('class') ?? '').toContain('muted-foreground');
+    // The reading is reachable rather than printed beside the ring, like every
+    // other state's — and it still names no fraction.
+    expect(meterLabel()).toContain('100k');
+    expect(meterLabel()).not.toContain('%');
     expect(container.textContent).not.toContain('/');
+
+    openMeter();
+    expect(panel()?.textContent).toContain('ctx 100k');
   });
 
   it('treats a zero window as no window at all', () => {
@@ -173,8 +186,9 @@ describe('ContextMeter', () => {
     // any number it is given), and dividing by it puts "Infinity" in the one
     // place the figure is legible.
     render(<ContextMeter contextTokens={100_000} contextWindowTokens={0} />);
-    expect(ring()).toBeNull();
-    expect(container.textContent).toContain('ctx 100k');
+
+    expect(meterLabel()).toContain('100k');
+    expect(meterLabel()).not.toContain('%');
     expect(container.textContent).not.toContain('/');
   });
 
@@ -966,7 +980,8 @@ describe('the expanded readout the meter opens onto', () => {
   it('DATES a reading whose agent has since been closed, and drops the re-read claim', async () => {
     // The figures are real and the moment is not now: they were taken on the
     // way out of a process that has since been closed, and the standing caption
-    // ("re-read each time this opens") describes a live reading only. Saying it
+    // ("as of the last thing said in this chat") describes a live reading
+    // only. Saying it
     // over a stored one is the same lie as the sentence this whole fix started
     // from — a panel promising a reading nobody was going to take.
     renderWithLoader(() =>
@@ -982,7 +997,7 @@ describe('the expanded readout the meter opens onto', () => {
     expect(text).toContain('before its process was closed');
     expect(text).toContain('(3h)');
     expect(text).toContain('Send a message to take a fresh one');
-    expect(text).not.toContain('re-read each time this opens');
+    expect(text).not.toContain('as of the last thing said');
     // ...and the figures themselves are still drawn, which is the whole point.
     // A category from the BREAKDOWN, which stays open — the drill-downs below
     // it are folded by default.

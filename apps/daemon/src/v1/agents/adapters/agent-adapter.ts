@@ -51,6 +51,9 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  CarrySessionInput,
+  CarrySessionResult,
+  ConfigDirPin,
   FollowUpMessage,
   HandoffInput,
   HandoffResult,
@@ -299,6 +302,31 @@ export abstract class AgentAdapter {
     const trimmed = configDir?.trim();
     const envVar = this.getConfig().configDir.envVar;
     return trimmed && envVar ? { [envVar]: trimmed } : {};
+  }
+
+  /**
+   * Make one conversation readable from ANOTHER of this CLI's profiles, so a
+   * chat repointed at a second account carries on where it left off instead of
+   * starting over.
+   *
+   * Concrete here and driven by config, on the base's own rule: what differs
+   * per CLI is whether a conversation can be moved at all
+   * (`configDir.sessionCarryUnavailableReason`), and a CLI that can override
+   * the MECHANISM. Refusing is a legitimate answer and never an exception —
+   * the switch itself still happens, and the caller prints the reason.
+   *
+   * The default is the refusal, which is right for every CLI that has not
+   * measured the move: a copy into another program's store, made on a guess
+   * about where it keeps things, is worse than an honest fresh start.
+   */
+  async carrySessionToConfigDir(
+    _input: CarrySessionInput,
+  ): Promise<CarrySessionResult> {
+    const reason = this.getConfig().configDir.sessionCarryUnavailableReason;
+    return {
+      carried: false,
+      reason: reason ?? 'this CLI cannot move a conversation between profiles',
+    };
   }
 
   /**
@@ -1839,6 +1867,26 @@ export abstract class AgentAdapter {
     _input: AgentSessionReadInput,
   ): Promise<AgentPlanLimits | null> {
     return Promise.resolve(null);
+  }
+
+  /**
+   * Which config directory this FOLDER pins for this CLI, overriding the one
+   * geniro hands it — or null when nothing does.
+   *
+   * The default is null for every folder, which is also the honest answer for a
+   * CLI that reads no per-project settings: nothing pins anything, so the
+   * profile the run names is the profile the turn runs under. An adapter whose
+   * CLI CAN be overridden this way must say so, because the alternative is the
+   * app stating an account the agent is not on — see {@link ConfigDirPin} for
+   * the report and the measurement.
+   *
+   * SYNCHRONOUS and never throwing: it is a small file read on a path the
+   * caller already holds, consulted while projecting a run row, and an
+   * unreadable or malformed settings file means "nothing is pinned" rather than
+   * a failed request.
+   */
+  readConfigDirPin(_cwd: string): ConfigDirPin | null {
+    return null;
   }
 
   /**

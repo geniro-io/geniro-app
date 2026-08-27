@@ -207,6 +207,7 @@ const run1: ChatRun = {
   contextTokens: null,
   contextWindowTokens: null,
   configDir: null,
+  configDirPin: null,
   groupId: null,
   createdAt: 'now',
   updatedAt: 'now',
@@ -1490,10 +1491,17 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     expect(other().textContent).toContain('running Bash');
   });
 
-  it('does not rename a run the user has already named', async () => {
-    // The daemon guards this too, but the two decide from different snapshots:
-    // a rename typed while the naming was in flight is on screen here first,
-    // and must not be replaced by a title that read the row a moment earlier.
+  it('applies the generated title OVER the one it derived from the prompt', async () => {
+    // Naming happens in two steps: the opening message names the chat at once,
+    // and the agent's own name REPLACES it seconds later. This event is the
+    // only thing that carries the second step to a row.
+    //
+    // It used to be applied only to a run with NO title — which every named run
+    // has by then — so the upgrade never reached the screen and appeared solely
+    // on the next full list refetch. REPORTED as "still title wasn't generated.
+    // I saw some animation, but after it finished title wasn't changed", over a
+    // run whose database row already read `Chat startup or greeting` while the
+    // sidebar still showed `heyyy hiiii`.
     api.listChats.mockResolvedValue([run1]);
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
@@ -1510,7 +1518,59 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
 
     const row = (): HTMLElement =>
       container.querySelector<HTMLElement>('li[draggable="true"]')!;
-    expect(row().textContent).toContain('My chat');
+    expect(row().textContent).toContain('Auto Generated Name');
+    expect(row().textContent).not.toContain('My chat');
+  });
+
+  it('does not rename a run the USER has named', async () => {
+    // The daemon guards this too, but the two decide from different snapshots:
+    // a rename typed while the naming was in flight is on screen here first,
+    // and must not be replaced by a title that read the row a moment earlier.
+    //
+    // The rename is DRIVEN rather than assumed from the fixture's title, which
+    // is what the previous version of this test did — and reading "has a title"
+    // as "the user named it" is exactly the bug above.
+    api.listChats.mockResolvedValue([run1]);
+    api.renameRun.mockResolvedValue({ ...run1, title: 'Auth deep-dive' });
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+
+    const pencil = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Rename My chat"]',
+    )!;
+    await act(async () => {
+      pencil.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const input = container.querySelector<HTMLInputElement>(
+      'aside li input[aria-label="Rename My chat"]',
+    )!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!;
+      setValue.call(input, 'Auth deep-dive');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
+      );
+    });
+
+    // …and only now does the naming announce land.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        activity: null,
+        title: 'Auto Generated Name',
+      });
+    });
+
+    const row = (): HTMLElement =>
+      container.querySelector<HTMLElement>('li[draggable="true"]')!;
+    expect(row().textContent).toContain('Auth deep-dive');
     expect(row().textContent).not.toContain('Auto Generated Name');
   });
 
@@ -2949,6 +3009,7 @@ describe('Chats workflow runs', () => {
     contextTokens: null,
     contextWindowTokens: null,
     configDir: null,
+    configDirPin: null,
     groupId: null,
     createdAt: 'later',
     updatedAt: 'later',
@@ -3503,6 +3564,7 @@ describe('Chats — handing a conversation to the user', () => {
       contextTokens: null,
       contextWindowTokens: null,
       configDir: null,
+      configDirPin: null,
       groupId: null,
       createdAt: 'later',
       updatedAt: 'later',
@@ -3675,32 +3737,51 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
-  /** The composer's approval chip (the only ghost select showing a mode). */
-  const approvalTrigger = (container: HTMLElement): HTMLButtonElement =>
-    [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-    ].find(
-      (trigger) => trigger.getAttribute('aria-label') === 'Tool-approval mode',
-    )!;
+  /**
+   * Where the approval posture STANDS, read off its axis row in the model
+   * settings panel.
+   *
+   * It was a chip of its own with an `aria-label` to find it by. ASKED FOR as
+   * "add auto-approve option to model settings popover instead", so it is now
+   * the panel's first axis and is read the way the other four are.
+   */
+  async function approvalStands(container: HTMLElement): Promise<string> {
+    await act(async () => {
+      modelTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    const row = axisRow(container, 'Approval');
+    if (!row) {
+      throw new Error('no "Approval" row in the model panel');
+    }
+    const text = row.textContent ?? '';
+    await act(async () => {
+      modelTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    return text;
+  }
 
   it('opens on the remembered approval mode instead of resetting to ask', async () => {
     stubSettings({ lastApprovalMode: 'acceptEdits' });
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(approvalTrigger(container).textContent).toContain('accept edits');
+    expect(await approvalStands(container)).toContain('accept edits');
   });
 
   it('persists an approval-mode change as the next default', async () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(container, approvalTrigger(container), 'auto-approve');
+    await pickSetting(container, 'Approval', 'auto-approve');
 
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastApprovalMode: 'auto',
     });
-    expect(approvalTrigger(container).textContent).toContain('auto-approve');
+    expect(await approvalStands(container)).toContain('auto-approve');
   });
 
   it('ignores a stored mode the daemon does not accept', async () => {
@@ -3710,7 +3791,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(approvalTrigger(container).textContent).toContain('ask');
+    expect(await approvalStands(container)).toContain('ask');
   });
 
   /** Type a task into the composer and send it, creating the run. */
@@ -4647,9 +4728,14 @@ describe('Chats queued messages', () => {
         (el) => el.getAttribute('aria-label') ?? '',
       );
     expect(labelsIn(topRow)).toContain('Folder for new chats');
-    expect(labelsIn(topRow)).toContain('Tool-approval mode');
     expect(labelsIn(bottomRow)).toContain('Model and its settings');
     expect(labelsIn(bottomRow)).not.toContain('Folder for new chats');
+    // Approval used to be a chip of its own up here. ASKED FOR as "add
+    // auto-approve option to model settings popover instead", so it is an axis
+    // inside that panel now and there is no chip on either row — which is what
+    // fails if one is put back.
+    expect(labelsIn(topRow)).not.toContain('Tool-approval mode');
+    expect(labelsIn(bottomRow)).not.toContain('Tool-approval mode');
 
     // OUTSIDE the card, and before it. Pinned as its own claim: putting the
     // row back inside is a one-line change that every other assertion here
@@ -4767,18 +4853,27 @@ describe('Chats queued messages', () => {
     // ONE of them, which is not a formality: this chip has been moved four
     // times, and every move that left the old one in place rendered the folder
     // twice — once above the textarea AND again beside Send.
-    const folders = [
-      ...container.querySelectorAll('[data-slot="chip"]'),
-    ].filter((chip) => chip.getAttribute('title')?.includes('/proj'));
-    expect(folders).toHaveLength(1);
-    const folder = folders[0]!;
+    const identities = [
+      ...container.querySelectorAll('[data-slot="thread-identity"]'),
+    ];
+    expect(identities).toHaveLength(1);
+    const folder = identities[0]!.querySelector('button')!;
     expect(folder.textContent).toContain('proj');
 
-    // In the header's identity line, beside the agent chip.
-    const agent = [...container.querySelectorAll('[data-slot="chip"]')].find(
-      (chip) => chip.textContent === 'claude',
-    )!;
-    expect(folder.parentElement).toBe(agent.parentElement);
+    // And no CHIP names it either. The folder used to be one, so this is the
+    // same "every move left the old one behind" guard read against the shape
+    // the header has now.
+    expect(
+      [...container.querySelectorAll('[data-slot="chip"]')].filter(
+        (chip) =>
+          chip.textContent?.includes('proj') === true ||
+          chip.getAttribute('title')?.includes('/proj') === true,
+      ),
+    ).toEqual([]);
+
+    // The agent is named by the SAME control — the two life-long facts are one
+    // chip now rather than two beside each other.
+    expect(folder.getAttribute('aria-label')).toContain('claude');
 
     // …and nowhere in the composer: not in the card, and not in the row above
     // it. The header check alone would still pass with a second chip left
@@ -6352,25 +6447,29 @@ describe('Chats run composer chips', () => {
 
     // The agent cannot change for the life of a run, so it states itself on
     // the header's identity line rather than sitting among five chips that DO
-    // change things.
+    // change things. Three such facts used to be three chips there; the
+    // reported "we have soo much information here" folded them into ONE, whose
+    // face is the folder and whose label carries all three.
     const header = container.querySelector('h2')!.parentElement!;
-    expect(header.textContent).toContain('claude');
-    const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    expect(header.textContent).toContain('proj');
+    const identity = container.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-identity"] button',
+    )!;
+    expect(identity.getAttribute('aria-label')).toContain('claude');
+    expect(identity.getAttribute('aria-label')).toContain('/proj');
     // No chip is rendered as a disabled button (the tooltip-blocking shape).
     expect(
       [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // The folder chip's full-path tooltip is reachable again (native title).
-    const folderChip = chips(container).find((el) =>
-      el.textContent?.includes('proj'),
-    );
-    // Labelled now, not a bare path: the header shows this chip beside the
-    // profile chip, and two unlabelled paths side by side say nothing about
-    // which is which.
-    expect(folderChip?.getAttribute('title')).toContain('/proj');
+    // And the full path is behind it, under its own name — which the chip it
+    // replaced could only ever put in a `title`.
+    await act(async () => {
+      identity.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(header.textContent).toContain('Folder');
+    expect(header.textContent).toContain('/proj');
     // The send action is the same round icon button as the create screen.
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
@@ -6474,8 +6573,13 @@ describe('Chats run composer chips', () => {
     // The run's IDENTITY (which workflow) is the header's line; the footer
     // carries only what a run of it needs stated or changed.
     expect(container.querySelector('h2')?.textContent).toBe('Review team');
+    // The folder is the header's identity chip — a workflow run has no agent
+    // of its own, so the chip's face is the folder either way.
+    expect(
+      container.querySelector('[data-slot="thread-identity"] button')
+        ?.textContent,
+    ).toContain('proj');
     const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
     expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
       true,
     );
@@ -7408,6 +7512,42 @@ describe('Chats — signing a server in', () => {
     message: 'Waiting for authorization…',
   };
 
+  it('asks for the MCP list under the profile the FOLDER pins, not the one the chat picked', async () => {
+    // REPORTED as "Chat cn see datadog, but i cant see it in the list". The
+    // panel asked with the run's own `configDir` while the CLI had applied the
+    // folder's `env.CLAUDE_CONFIG_DIR` over it — measured on the reporter's own
+    // folder at 15 servers against 50, with the row they were looking for only
+    // in the second. Revert `effectiveConfigDir` at the call site and this
+    // asserts the requested profile instead.
+    api.listChats.mockResolvedValue([
+      {
+        ...chatIn('r1', 'First chat', '/proj-a'),
+        configDir: '/profiles/personal',
+        configDirPin: {
+          effective: '/profiles/team',
+          source: '/proj-a/.claude/settings.local.json',
+        },
+      },
+    ]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'aside[aria-label="Run agents"] button[aria-label="MCP servers"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const asked = agentsApi.listAgentMcpServers.mock.calls.map(
+      (call) => (call[0] as { configDir?: string | null }).configDir,
+    );
+    expect(asked).toContain('/profiles/team');
+    expect(asked).not.toContain('/profiles/personal');
+  });
+
   it('signs in against the RUN’s folder, not the composer’s', async () => {
     // The load-bearing rule, and the one nothing pinned. A server name resolves
     // against the directory the CLI runs in, so signing in from the composer's
@@ -7756,37 +7896,35 @@ describe('Chats — the open thread lays its composer out differently', () => {
   const contextRing = (container: HTMLElement): HTMLElement | null =>
     container.querySelector<HTMLElement>('button[aria-label^="Context "]');
 
-  it('runs effort → auto-approve → context, so approval sits with the per-turn controls', async () => {
+  it('offers approval INSIDE the model settings panel, with no chip of its own', async () => {
+    // It was a chip between the model settings and the context ring. ASKED FOR
+    // as "add auto-approve option to model settings popover instead" — on
+    // `claude-opus-5` that row was already five pickers wide, and approval is
+    // the one of them that is not a model setting at all.
     api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
-    const { client, emitLiveText } = makeClient();
+    // The patch answers with the updated row, which the run list then replaces
+    // — an unstubbed mock resolves undefined and takes the sidebar down.
+    api.updateChatSettings.mockResolvedValue({ ...run1, approval: 'auto' });
+    const { client } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
-    // The ring renders only once a turn has reported a window, and it is the
-    // right-hand anchor of the order being pinned.
-    await act(async () => {
-      emitLiveText({
+
+    // Nothing in the open chat is a standalone approval picker any more.
+    expect(
+      [
+        ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+      ].map((trigger) => trigger.getAttribute('aria-label')),
+    ).not.toContain('Tool-approval mode');
+
+    // And the posture is reachable — and settable — from the panel that
+    // replaced it, against the RUN rather than the composer's next-chat default.
+    await pickSetting(container, 'Approval', 'auto-approve');
+    expect(api.updateChatSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
         runId: 'r1',
-        nodeId: null,
-        text: 'working',
-        thinkingTokens: null,
-        ...LIVE_DELTA_REST,
-        contextTokens: 120_000,
-        contextWindowTokens: 200_000,
-      });
-    });
-
-    const effort = modelTrigger(container);
-    const approval = approvalTrigger(container);
-    const ring = contextRing(container);
-    expect(effort, 'model-and-settings chip').toBeDefined();
-    expect(approval, 'approval chip').toBeDefined();
-    expect(ring, 'context ring').not.toBeNull();
-
-    // The approval chip used to sit in the identity row ABOVE the textarea,
-    // which put it before model and effort in document order. Asserting it now
-    // falls BETWEEN effort and the ring is what fails if it moves back up.
-    expect(order(container, effort)).toBeLessThan(order(container, approval));
-    expect(order(container, approval)).toBeLessThan(order(container, ring));
+        updateChatSettingsDto: expect.objectContaining({ approval: 'auto' }),
+      }),
+    );
   });
 
   it('answers a branch switch blocked by uncommitted work with a WARNING and a Pull', async () => {

@@ -31,6 +31,7 @@ import { ChatService } from './services/chat.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
+import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
@@ -140,6 +141,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Plain provider, unlike its siblings above: it has no options bag to seed,
     // because an adapter answers from a documented constant (no spawn, no TTL).
     CliSessionsService,
+    ConfigDirPinService,
     {
       // A factory now, and for the same reason `ModelsService` is one: asking a
       // model's effort axis SPAWNS a CLI handshake, so this gained a version

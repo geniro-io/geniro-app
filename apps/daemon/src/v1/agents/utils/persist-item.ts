@@ -2,7 +2,12 @@ import type { EntityManager } from '@mikro-orm/sqlite';
 
 import type { Run } from '../../runs/entity/run.entity';
 import type { ItemKind } from '../../runs/runs.types';
-import type { ItemWire, RunAwaiting, RunWire } from '../chat.types';
+import type {
+  ConfigDirPinWire,
+  ItemWire,
+  RunAwaiting,
+  RunWire,
+} from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import { readModelParameters } from './model-parameters';
@@ -78,6 +83,15 @@ export function runToWire(
    * message back in the queue.
    */
   holdingFor = 0,
+  /**
+   * The config directory this run's FOLDER pins, from `ConfigDirPinService`.
+   *
+   * Passed in for the reason the two above are: this is a pure projection of a
+   * row, and the answer comes from an adapter behind a cache. Defaulted to null
+   * so the callers that cannot usefully ask — a workflow node's own run row,
+   * whose agents are per node — say nothing rather than guessing.
+   */
+  configDirPin: ConfigDirPinWire | null = null,
 ): RunWire {
   return {
     id: run.id,
@@ -96,6 +110,7 @@ export function runToWire(
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,
     configDir: run.configDir,
+    configDirPin,
     groupId: run.groupId,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),

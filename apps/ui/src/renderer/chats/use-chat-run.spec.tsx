@@ -38,6 +38,7 @@ const run1: ChatRun = {
   contextTokens: null,
   contextWindowTokens: null,
   configDir: null,
+  configDirPin: null,
   groupId: null,
   createdAt: 'now',
   updatedAt: 'now',
@@ -395,6 +396,32 @@ describe('useChatRun', () => {
     expect(harness.state().runs.find((r) => r.id === 'r2')?.lastMessage).toBe(
       'main did not move — the tag points at the same commit.',
     );
+  });
+
+  it('moves a background thread’s preview MID-TURN, not only when the turn ends', async () => {
+    // The settle-time fix above still left the reported "still i see here
+    // outdated last llm message. As soon as i click on thread - it will be
+    // updated to actual one", because that screenshot is a thread that is still
+    // RUNNING: a turn working for twenty minutes settles far too late to be the
+    // thing that moves the line.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        // Exactly what the daemon sends for a message: no status, no activity.
+        status: null,
+        preview: 'checking the second hypothesis',
+      } as RunStatusEvent);
+    });
+
+    const r2 = harness.state().runs.find((r) => r.id === 'r2')!;
+    expect(r2.lastMessage).toBe('checking the second hypothesis');
+    // And the badge is untouched — this announce read no status and asserts
+    // none, which is what lets it fire in the middle of a turn at all.
+    expect(r2.status).toBe(run2.status);
   });
 
   it('keeps the preview a WORDLESS settle would otherwise blank', async () => {

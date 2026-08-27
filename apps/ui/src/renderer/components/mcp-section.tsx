@@ -7,7 +7,7 @@ import {
   RefreshCw,
   ShieldCheck,
 } from 'lucide-react';
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 
 import type {
   AgentMcpListingDto as AgentMcpListing,
@@ -345,10 +345,19 @@ function McpGroup({
   title,
   count,
   note,
+  forceOpen = false,
   children,
 }: {
   title: string;
   count: number;
+  /**
+   * Hold the group open regardless of the user's fold — for content inside it
+   * that must not be hideable, which today is a sign-in in flight.
+   *
+   * It does not WRITE the fold: when it goes false the group returns to
+   * whatever the user last chose, rather than to whatever this forced.
+   */
+  forceOpen?: boolean;
   /**
    * One sentence saying what this group IS, shown above its rows when open.
    *
@@ -372,11 +381,12 @@ function McpGroup({
   // than merely empty: a disclosure that opens onto nothing is a worse lie
   // than no disclosure at all.
   const disclosable = count > 0;
+  const shown = (open || forceOpen) && disclosable;
   return (
     <div className="flex flex-col">
       <button
         type="button"
-        aria-expanded={disclosable ? open : undefined}
+        aria-expanded={disclosable ? shown : undefined}
         disabled={!disclosable}
         onClick={() => setOpen((value) => !value)}
         className={cn(
@@ -390,14 +400,14 @@ function McpGroup({
           aria-hidden="true"
           className={cn(
             'size-3 shrink-0 transition-transform',
-            open && disclosable && 'rotate-90',
+            shown && 'rotate-90',
             !disclosable && 'invisible',
           )}
         />
         <span className="font-medium">{title}</span>
         <span>· {count}</span>
       </button>
-      {open && disclosable ? (
+      {shown ? (
         <>
           {note ? (
             <span className="px-1.5 pb-1 text-xs text-muted-foreground">
@@ -455,6 +465,8 @@ export function McpSection({
   onSetEnabled,
   onSignIn,
   signingIn = null,
+  loginServer = null,
+  loginPanel,
   onRefresh,
   className,
 }: {
@@ -481,6 +493,25 @@ export function McpSection({
    * each believe they own it.
    */
   signingIn?: string | null;
+  /**
+   * Which server {@link loginPanel} belongs to — null when no sign-in is in
+   * flight.
+   *
+   * Threaded as a NAME rather than the panel carrying its own: the panel is
+   * built by the screen that owns the sign-in controller, and matching it to a
+   * row is this component's business, since only this one knows what the rows
+   * are.
+   */
+  loginServer?: string | null;
+  /**
+   * A sign-in in flight, rendered directly under the row it was started from.
+   *
+   * See the placement itself for what it replaced. It is a `ReactNode` rather
+   * than props for a login session because the controller, its four states and
+   * the code field belong to `CliLoginProgress` and to the screen holding it —
+   * this section only decides WHERE it goes.
+   */
+  loginPanel?: React.ReactNode;
   /**
    * Re-dial this listing's servers. Rendered in the section's own header.
    *
@@ -516,15 +547,32 @@ export function McpSection({
     servers?.filter(
       (server) => server.status !== 'needs_auth' && server.status !== 'pending',
     ) ?? [];
+  // Whose sign-in {@link loginPanel} is about, matched against the rows so the
+  // panel lands under the one the user pressed.
+  const loginRow =
+    loginPanel !== undefined && loginServer !== null ? loginServer : null;
   const row = (server: AgentMcpServer): React.JSX.Element => (
-    <McpRow
-      key={server.name}
-      server={server}
-      loading={loading}
-      signingIn={signingIn === server.name}
-      onSetEnabled={onSetEnabled}
-      onSignIn={onSignIn}
-    />
+    // A Fragment rather than a wrapper element: these are `<li>` children of
+    // the group's `<ul>`, and anything between the two would be invalid there.
+    <Fragment key={server.name}>
+      <McpRow
+        server={server}
+        loading={loading}
+        signingIn={signingIn === server.name}
+        onSetEnabled={onSetEnabled}
+        onSignIn={onSignIn}
+      />
+      {loginRow === server.name ? (
+        // REPORTED as "I have broken UI - i wanna this status line from down
+        // to b under item where we actually clicked sign in". It used to be a
+        // sibling of this whole section, pinned to the dialog's foot — so on a
+        // listing of fifteen servers the answer to "what happened when I
+        // pressed Sign in on ticktick" was a strip at the bottom of the panel
+        // naming no server at all, with three signed-out rows above it that it
+        // could equally have been about.
+        <li data-slot="mcp-login-slot">{loginPanel}</li>
+      ) : null}
+    </Fragment>
   );
   return (
     <div
@@ -620,7 +668,18 @@ export function McpSection({
           {/* Rendered UNCONDITIONALLY once a listing exists, empty included —
               see {@link McpGroup}. The condition here is that we have an
               answer at all, not that the answer is non-zero. */}
-          <McpGroup title="Needs sign-in" count={signedOut.length}>
+          <McpGroup
+            title="Needs sign-in"
+            count={signedOut.length}
+            // A group the user collapses while a sign-in is running would take
+            // the progress panel — and the pasted-code field the CLI is
+            // waiting on — off screen with it, which is a worse dead end than
+            // the misplaced strip this fix replaced. The fold is theirs again
+            // the moment the sign-in settles.
+            forceOpen={
+              loginRow !== null &&
+              signedOut.some((server) => server.name === loginRow)
+            }>
             {signedOut.map(row)}
           </McpGroup>
         </>

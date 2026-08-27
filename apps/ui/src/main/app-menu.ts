@@ -1,4 +1,9 @@
-import { BrowserWindow, Menu, type MenuItemConstructorOptions } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  type MenuItemConstructorOptions,
+} from 'electron';
 
 import { IPC } from '../shared/contracts';
 
@@ -13,17 +18,52 @@ import { IPC } from '../shared/contracts';
  * menu bar is the app's most public surface, and a row that opens Chromium's
  * inspector belongs to whoever is building the app, not to whoever is using it.
  *
- * So the template restates the default rather than inventing one — four role
- * menus (`appMenu`/`fileMenu`/`editMenu`/`windowMenu`) reproduce their halves
- * byte for byte, with the platform's own labels and accelerators, and only View
- * is spelled out because only View changes. Dumped from a probe Electron before
- * writing it, so this is a copy of what shipped rather than of the docs.
+ * So the template restates the default rather than inventing one — three role
+ * menus (`fileMenu`/`editMenu`/`windowMenu`) reproduce their halves byte for
+ * byte, with the platform's own labels and accelerators, and only the two that
+ * CHANGE are spelled out. Dumped from a probe Electron before writing it, so
+ * this is a copy of what shipped rather than of the docs.
+ *
+ * The app menu is spelled out for one added row: the running version, REPORTED
+ * out of the title bar and asked for here instead ("давай уберем полностью
+ * оттуда версию и берём её в меню приложения, там, где Geniro файл edit you
+ * window"). Every other row stays a role, so only the version readout is this
+ * file's own words. It is `enabled: false` because there is nothing to press —
+ * a version is a fact, and a live row would promise an action behind it.
  *
  * macOS only, like the app.
  */
-export function applicationMenuTemplate(): MenuItemConstructorOptions[] {
+export function applicationMenuTemplate({
+  name,
+  version,
+}: {
+  /** What macOS calls this app — electron-builder's `productName`. */
+  name: string;
+  /** The running build, for the row the title bar gave up. */
+  version: string;
+}): MenuItemConstructorOptions[] {
   return [
-    { role: 'appMenu' },
+    {
+      // macOS names the first submenu after the app whatever this says, so the
+      // label is cosmetically irrelevant — and Electron REFUSES a template item
+      // carrying none of label/role/type, which is how the first cut of this
+      // menu threw at install and left the default menu (dev-tools row and all)
+      // in place. Read from the app rather than written out, so the one place
+      // the name could drift from `productName` does not exist.
+      label: name,
+      submenu: [
+        { role: 'about' },
+        { label: `Version ${version}`, enabled: false },
+        { type: 'separator' },
+        { role: 'services', submenu: [] },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
     { role: 'fileMenu' },
     { role: 'editMenu' },
     {
@@ -80,5 +120,17 @@ function sendToFocusedWindow(channel: string): void {
 
 /** Replace Electron's default menu with {@link applicationMenuTemplate}. */
 export function installApplicationMenu(): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(applicationMenuTemplate()));
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate(
+      applicationMenuTemplate({
+        name: app.getName(),
+        // The same reading the About panel above this row and the updater's
+        // `currentVersion` already take, so the three cannot disagree. Under a
+        // DEV launch it is Electron's own version — there is no app bundle to
+        // read one from — which is why the row is read off the packaged app
+        // when it is checked.
+        version: app.getVersion(),
+      }),
+    ),
+  );
 }

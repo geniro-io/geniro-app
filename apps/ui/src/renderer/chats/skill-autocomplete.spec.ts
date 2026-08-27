@@ -7,6 +7,7 @@ import {
   mergeSkills,
   slashQuery,
   unknownSlashCommand,
+  withAgentSlashSpelling,
 } from './skill-autocomplete';
 
 function skill(name: string, overrides: Partial<AgentSkill> = {}): AgentSkill {
@@ -116,5 +117,68 @@ describe('unknownSlashCommand', () => {
     // under it would slip past the guard.
     expect(unknownSlashCommand('/review\nthe pasted diff', known)).toBeNull();
     expect(unknownSlashCommand('/summarize\nplease', known)).toBe('summarize');
+  });
+});
+
+describe('the two CLIs’ spellings of one plugin command', () => {
+  // What each CLI actually reports for the geniro plugin, measured against the
+  // running daemon: claude composes `<plugin>:<skill>` itself, cursor resolves
+  // the plugin's `cursor/skills/geniro-*` directory name.
+  const cursor = [skill('geniro-review'), skill('compact')];
+  const claude = [skill('geniro:review'), skill('compact')];
+
+  it('accepts either spelling and sends the one the agent answers to', () => {
+    // The report: `/geniro:review` refused on cursor, where the command exists
+    // under the other separator.
+    expect(unknownSlashCommand('/geniro:review some args', cursor)).toBeNull();
+    expect(withAgentSlashSpelling('/geniro:review some args', cursor)).toBe(
+      '/geniro-review some args',
+    );
+    // And the same in reverse, so neither CLI is the one you have to learn.
+    expect(withAgentSlashSpelling('/geniro-review x', claude)).toBe(
+      '/geniro:review x',
+    );
+  });
+
+  it('rewrites the NAME only, never the arguments that repeat it', () => {
+    // The arguments are the user's own words and routinely carry the same
+    // characters — a path, a URL, a branch. Rewriting those would corrupt the
+    // message the agent is asked to act on.
+    expect(
+      withAgentSlashSpelling('/geniro:review see geniro:review docs', cursor),
+    ).toBe('/geniro-review see geniro:review docs');
+  });
+
+  it('leaves an exact match and a genuinely unknown command alone', () => {
+    expect(withAgentSlashSpelling('/geniro-review x', cursor)).toBe(
+      '/geniro-review x',
+    );
+    // Rewriting is not a way past the refusal: nothing resolves, so the text is
+    // untouched and `unknownSlashCommand` still names it.
+    expect(withAgentSlashSpelling('/nope x', cursor)).toBe('/nope x');
+    expect(unknownSlashCommand('/nope x', cursor)).toBe('nope');
+  });
+
+  it('refuses rather than guessing when the alias is ambiguous', () => {
+    // Two skills differing only by that separator are two commands, and
+    // running either would run something nobody asked for.
+    //
+    // The typed name has to match NEITHER exactly and both under the alias, or
+    // the exact-match arm answers first and this branch is never entered —
+    // which is why it takes two separators rather than the obvious `a-b`/`a:b`
+    // pair, where every name that aliases to them IS one of them.
+    const both = [skill('a-b:c'), skill('a:b-c')];
+    expect(unknownSlashCommand('/a-b-c', both)).toBe('a-b-c');
+    expect(withAgentSlashSpelling('/a-b-c x', both)).toBe('/a-b-c x');
+    // …while an exact match is still resolved with those same two present.
+    expect(unknownSlashCommand('/a-b:c', both)).toBeNull();
+  });
+
+  it('does not touch a pasted absolute path', () => {
+    // The guard `unknownSlashCommand` already documents, restated for the
+    // rewrite: a path is not a command and must survive byte for byte.
+    expect(withAgentSlashSpelling('/Users/me/a:b.ts', cursor)).toBe(
+      '/Users/me/a:b.ts',
+    );
   });
 });

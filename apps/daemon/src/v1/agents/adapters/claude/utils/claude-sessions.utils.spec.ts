@@ -6,6 +6,7 @@ import {
   utimesSync,
   writeFileSync,
 } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import type { AgentSessionRecord } from '../../adapter.types';
 import {
+  carryClaudeSession,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './claude-sessions.utils';
@@ -780,5 +782,132 @@ describe('searching what was SAID in a conversation', () => {
 
     expect(rows[0]?.snippet).toContain('asar');
     expect(rows[0]?.snippet?.length).toBeLessThanOrEqual(162);
+  });
+});
+
+describe('carryClaudeSession', () => {
+  const CWD = '/private/tmp/carry';
+
+  it('puts the conversation where the OTHER profile will look for it', async () => {
+    // The mechanism behind switching an open chat to another account, and it
+    // is a measurement rather than a hope: probed on claude 2.1.237 across two
+    // real profiles, `--resume <id>` under a profile that does not hold the
+    // file answers "No conversation found with session ID: …", and answers the
+    // conversation's own codeword the moment the `.jsonl` is copied in.
+    //
+    // What this pins is the PLACEMENT, which is the half a copy can get wrong
+    // silently: the project directory name is the cwd with its separators
+    // flattened, which this module's own doc block records as lossy and
+    // undocumented — so the target must be the SOURCE's directory name, never
+    // one composed here. A copy one directory off is a file the CLI never
+    // opens, and the switch then looks exactly like a CLI that forgot.
+    const from = profile([
+      {
+        dir: '-private-tmp-carry',
+        id: 'aaaaaaaa-1111-2222-3333-444444444444',
+        lines: [userLine(CWD, 'the codeword is PLUM')],
+      },
+    ]);
+    const to = profile([]);
+
+    const result = await carryClaudeSession({
+      sessionId: 'aaaaaaaa-1111-2222-3333-444444444444',
+      fromProfileDir: from,
+      toProfileDir: to,
+    });
+
+    expect(result).toEqual({ carried: true });
+    const landed = join(
+      to,
+      'projects',
+      '-private-tmp-carry',
+      'aaaaaaaa-1111-2222-3333-444444444444.jsonl',
+    );
+    expect(readFileSync(landed, 'utf8')).toContain('the codeword is PLUM');
+    // A COPY: the account the user switched AWAY from keeps the conversation
+    // it genuinely held, which is what they see in that account's own `claude`.
+    expect(
+      readFileSync(
+        join(
+          from,
+          'projects',
+          '-private-tmp-carry',
+          'aaaaaaaa-1111-2222-3333-444444444444.jsonl',
+        ),
+        'utf8',
+      ),
+    ).toContain('the codeword is PLUM');
+  });
+
+  it('leaves a conversation the target ALREADY holds exactly as it is', async () => {
+    // Switching back and forth between two accounts reaches this, and so does
+    // a retry. The id is the CLI's own, so a file of that name in the target is
+    // the same thread — carried once and appended to since. Overwriting would
+    // replace those later turns with an older prefix of themselves, which is a
+    // silent loss of the user's own conversation, so `COPYFILE_EXCL` refuses
+    // and the refusal reads as success.
+    const id = 'bbbbbbbb-1111-2222-3333-444444444444';
+    const from = profile([
+      { dir: '-private-tmp-carry', id, lines: [userLine(CWD, 'first turn')] },
+    ]);
+    const to = profile([
+      {
+        dir: '-private-tmp-carry',
+        id,
+        lines: [userLine(CWD, 'first turn'), userLine(CWD, 'and a later one')],
+      },
+    ]);
+
+    expect(
+      await carryClaudeSession({
+        sessionId: id,
+        fromProfileDir: from,
+        toProfileDir: to,
+      }),
+    ).toEqual({ carried: true });
+    expect(
+      readFileSync(
+        join(to, 'projects', '-private-tmp-carry', `${id}.jsonl`),
+        'utf8',
+      ),
+    ).toContain('and a later one');
+  });
+
+  it('says so when the old profile no longer holds the conversation', async () => {
+    // A refusal is DATA here and never a thrown error: the switch itself is
+    // still legitimate, and this sentence is what the transcript prints so the
+    // user knows the agent is starting fresh rather than silently forgetting
+    // the thread.
+    const result = await carryClaudeSession({
+      sessionId: 'cccccccc-1111-2222-3333-444444444444',
+      fromProfileDir: profile([]),
+      toProfileDir: profile([]),
+    });
+
+    expect(result.carried).toBe(false);
+    expect(result.carried === false ? result.reason : '').toContain(
+      'no longer holds this conversation',
+    );
+  });
+
+  it('refuses an id that is not one, rather than joining it into a path', async () => {
+    // The id reaches here from geniro's own `node_state` row, so this is not a
+    // guard against user input — it is a guard against a path segment being
+    // built from a value whose shape nothing downstream re-checks, in somebody
+    // else's directory. `findSessionFile` owns the check; this pins that the
+    // carry goes through it rather than around it.
+    const result = await carryClaudeSession({
+      sessionId: '../../escape',
+      fromProfileDir: profile([
+        {
+          dir: '-private-tmp-carry',
+          id: 'dddddddd-1111-2222-3333-444444444444',
+          lines: [userLine(CWD, 'hi')],
+        },
+      ]),
+      toProfileDir: profile([]),
+    });
+
+    expect(result.carried).toBe(false);
   });
 });

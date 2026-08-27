@@ -275,6 +275,7 @@ export function AgentsPanel({
   onSetMcpEnabled,
   onSignInMcp,
   mcpLoginPanel,
+  mcpLoginServer,
   mcpSigningIn,
   mcpToggleError = null,
   onDismissMcpToggleError,
@@ -341,6 +342,11 @@ export function AgentsPanel({
    * (`Chats`), so nothing here has to know what a login session is.
    */
   mcpLoginPanel?: React.ReactNode;
+  /**
+   * Which server {@link mcpLoginPanel} is about, so the dialog can place it
+   * under that row rather than at its own foot.
+   */
+  mcpLoginServer?: string | null;
   /**
    * The server whose sign-in has been asked for and not yet answered.
    *
@@ -791,6 +797,7 @@ export function AgentsPanel({
                               : undefined
                           }
                           signingIn={mcpSigningIn}
+                          loginServer={mcpLoginServer}
                           loginPanel={mcpLoginPanel}
                         />
                       ) : null}

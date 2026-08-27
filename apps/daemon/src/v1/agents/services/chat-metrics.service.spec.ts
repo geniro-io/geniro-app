@@ -1,5 +1,6 @@
 import type { EntityManager } from '@mikro-orm/sqlite';
 import { NotFoundException } from '@packages/common';
+import { Subject } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
@@ -8,12 +9,13 @@ import type {
   UsageReading,
 } from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
-import type { PlanLimitsWire } from '../chat.types';
+import type { PlanLimitsWire, RunItemEvent } from '../chat.types';
 import { ChatMetricsWireSchema } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
 import type { RunDao } from '../dao/run.dao';
 import type { AgentAdapterRegistry } from './agent-adapter.registry';
+import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
 
@@ -75,6 +77,7 @@ function build(opts: {
   planReading?: UsageReading;
 }) {
   const remembered = vi.fn().mockResolvedValue(undefined);
+  const turns = new Subject<RunItemEvent>();
   let farewell: ((runId: string) => Promise<void>) | null = null;
   const readContextUsage =
     opts.readContextUsage ??
@@ -133,6 +136,9 @@ function build(opts: {
           readPlanLimits: opts.readPlanLimits ?? (() => Promise.resolve(null)),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry,
+    // The prewarm's own channel. A Subject rather than a stub, so a spec can
+    // play a real turn ending and watch what the service does about it.
+    { all: () => turns.asObservable() } as unknown as AgentEventBus,
   );
   service.onModuleInit();
   return {
@@ -141,6 +147,12 @@ function build(opts: {
     remembered,
     /** Fire what the session registry would fire on an idle close. */
     farewell: () => farewell!('run-1'),
+    /** Play a settled turn onto the agent bus, as the chat service would. */
+    settleTurn: (runId = 'run-1') =>
+      turns.next({
+        runId,
+        item: { kind: 'turn_complete', seq: opts.maxSeq ?? 7 },
+      } as unknown as RunItemEvent),
   };
 }
 
@@ -324,6 +336,105 @@ describe('ChatMetricsService', () => {
         atSeq: 9,
         context: BREAKDOWN,
       });
+    });
+
+    it('does NOT ask again when a stored reading still describes this conversation', async () => {
+      // REPORTED as "'reading agent context' is too slow when i hover on
+      // current context circly. Why it working without delays for claude /
+      // cursor in their UI?" — because those UIs ARE the CLI and the figures
+      // are already in its memory. geniro has to ask over stdin, measured at
+      // 1.84–2.18s against a warm claude, and it paid that on EVERY open: the
+      // stored reading was consulted only where the live answer came back
+      // empty, so a second hover a minute later, with not a word said in
+      // between, asked the whole question again.
+      //
+      // `atSeq` is what makes reusing it safe, and the next case pins the
+      // other side of that.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: STORED,
+        maxSeq: 7,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(readContextUsage).not.toHaveBeenCalled();
+      expect(metrics.context).toEqual(BREAKDOWN);
+      // Not dated: nothing has been said since it was taken, so these figures
+      // ARE what the agent would answer. The stamp drives the panel's "the
+      // agent was closed — send a message" line, which would be false here.
+      expect(metrics.takenAt).toBeNull();
+      expect(metrics.breakdownReason).toBeNull();
+    });
+
+    it('asks again the moment the transcript has moved', async () => {
+      // The guard the shortcut rests on. One new row of any kind and the
+      // stored figures describe a window that no longer exists — so this is
+      // the case that must still pay the two seconds.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: STORED,
+        maxSeq: 8,
+      });
+
+      await service.read('run-1');
+
+      expect(readContextUsage).toHaveBeenCalled();
+    });
+
+    it('FILES a live answer, so the next open is the fast one', async () => {
+      // Without this the shortcut above could never fire on a chat the user is
+      // actually in: readings were only ever written on a session's way out,
+      // so the first open asked, wrote nothing, and the second open asked
+      // again. The write is not awaited — the reader is waiting on the reply
+      // and the file is for whoever opens next — so this drains the microtask
+      // queue before looking.
+      const { service, remembered } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: null,
+        maxSeq: 4,
+      });
+
+      await service.read('run-1');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const [runId, json] = remembered.mock.calls[0] ?? [];
+      expect(runId).toBe('run-1');
+      expect(JSON.parse(String(json))).toMatchObject({
+        atSeq: 4,
+        context: BREAKDOWN,
+      });
+    });
+
+    it('takes a reading when a WATCHED chat settles a turn, and only then', async () => {
+      // The prewarm, and the gate on it. Asking costs a real control write on
+      // the user's own agent, so it is spent on chats whose readout they have
+      // opened — never as a tax on every turn of every conversation.
+      const { service, readContextUsage, settleTurn } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        maxSeq: 9,
+      });
+
+      // Nobody has opened this chat's readout yet.
+      settleTurn();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(vi.mocked(readContextUsage)).not.toHaveBeenCalled();
+
+      // Opening it is what marks the chat as watched. That open ASKS (nothing
+      // is stored yet), so the prewarm's own ask is the SECOND call — counted
+      // rather than cleared, since the default double is not always a spy.
+      await service.read('run-1');
+      const afterOpen = vi.mocked(readContextUsage).mock.calls.length;
+
+      settleTurn();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(vi.mocked(readContextUsage).mock.calls.length).toBeGreaterThan(
+        afterOpen,
+      );
     });
 
     it('files nothing when the agent answered neither question', async () => {

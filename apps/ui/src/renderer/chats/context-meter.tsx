@@ -418,36 +418,64 @@ export function ContextMeter({
     return null;
   }
 
-  // No ring to hover means no way to reach a hover-only readout, so the figures
-  // stay on screen. This is the "the CLI has not told us the window" case, and
-  // it must not degrade into showing the user nothing at all.
+  // A reading with no window to scale it against. It keeps the RING — muted,
+  // and at nought, exactly like the compaction branch above — rather than
+  // collapsing to a line of text.
+  //
+  // REPORTED as "sometimes context circle is disappearing and instead i just
+  // see something like ctx. 167k". Reproduced by clearing this machine's
+  // remembered windows and opening a chat: claude reports the used side on
+  // every `assistant` line and the WINDOW only on `result`, so until some turn
+  // of that model has completed once, the first request has a numerator and no
+  // denominator — measured live as `ctx 63.6k` for the whole of a first turn.
+  // The old shape swapped one control for another mid-turn, which is what reads
+  // as the meter breaking; a muted ring holds the composer's layout still and
+  // says the same thing, and the figures are one hover away like every other
+  // state's.
+  //
+  // Muted rather than filled for the compaction branch's own reason: a green
+  // arc is a claim about how full the window is, and nobody has measured one
+  // here. The count itself is not withheld — it is in the readout, where the
+  // ring's figures always are.
   //
   // Testing the two INPUTS rather than a derived fraction is what narrows them
   // to numbers for the ring branch below; deriving first and testing that left
   // both operands nullable everywhere they are actually used.
   if (contextTokens === null || windowTokens === null) {
+    const unscaled =
+      contextTokens === null
+        ? null
+        : `${formatTokens(contextTokens)} used — this model's window has not been reported yet`;
     return (
-      <span
-        // The SAME `data-slot` as the ring branch below, so "where in the
-        // composer does the meter sit" is one query regardless of which shape
-        // it currently takes. (Both branches render something; the case with
-        // nothing to say returned null above.)
-        data-slot="context-meter"
-        className={cn(
-          'flex items-center gap-2 text-xs text-muted-foreground',
-          className,
-        )}>
-        {contextTokens !== null ? (
-          <span title="Context of the latest turn — the model's window has not been reported yet">
-            ctx {formatTokens(contextTokens)}
-          </span>
-        ) : null}
-        {spentUsd !== null ? (
-          <span title="Total spend across this run's turns">
-            {formatUsd(spentUsd)}
-          </span>
-        ) : null}
-      </span>
+      <MeterReadout
+        side={side}
+        className={className}
+        runId={runId}
+        live={live}
+        label={unscaled ?? 'No context reading yet'}
+        ring={
+          <ProgressRing
+            fraction={0}
+            size={14}
+            className="text-muted-foreground/60"
+          />
+        }>
+        <span className="flex max-w-64 flex-col gap-0.5 text-xs text-muted-foreground">
+          {contextTokens !== null ? (
+            <span className="font-medium text-foreground">
+              ctx {formatTokens(contextTokens)}
+            </span>
+          ) : null}
+          {unscaled !== null ? (
+            <span>
+              The window arrives with this model’s first completed turn.
+            </span>
+          ) : null}
+          {spentUsd !== null ? (
+            <span>{formatUsd(spentUsd)} spent across this run</span>
+          ) : null}
+        </span>
+      </MeterReadout>
     );
   }
 

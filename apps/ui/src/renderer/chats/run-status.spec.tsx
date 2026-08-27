@@ -309,3 +309,63 @@ describe('isSettledRunStatus', () => {
     );
   });
 });
+
+describe('a command still running after its turn', () => {
+  const settled = {
+    status: 'completed' as const,
+    streaming: false,
+    awaitingAnswer: false,
+  };
+
+  it('reads the run as HELD rather than completed', () => {
+    // REPORTED against a thread reading `completed` beside a header counting
+    // two running shells, with the agent's own last words being "the orphan
+    // branch and the PR-body patch both wait on that".
+    expect(displayRunStatus({ ...settled, shellsRunning: true })).toBe('held');
+    expect(displayRunStatus({ ...settled, shellsRunning: false })).toBe(
+      'completed',
+    );
+  });
+
+  it('never resurrects a run the user stopped, or one that failed', () => {
+    // Stop is final, and a failed run is failed — neither becomes "working"
+    // because something it launched outlived it.
+    for (const status of ['cancelled', 'failed'] as const) {
+      expect(
+        displayRunStatus({ ...settled, status, shellsRunning: true }),
+      ).toBe(status);
+    }
+  });
+
+  it('is outranked by everything the AGENT itself is doing', () => {
+    // The weakest evidence here: a command outliving its turn says nothing
+    // about the agent, so any reading about the agent wins.
+    expect(
+      displayRunStatus({
+        ...settled,
+        shellsRunning: true,
+        awaitingAnswer: true,
+      }),
+    ).toBe('needs-input');
+    expect(
+      displayRunStatus({ ...settled, shellsRunning: true, streaming: true }),
+    ).toBe('running');
+    expect(
+      displayRunStatus({
+        ...settled,
+        shellsRunning: true,
+        subagentRunning: true,
+      }),
+    ).toBe('running');
+  });
+
+  it('leaves a run that never started alone', () => {
+    // `pending` has no commands of its own to be waiting on, and neither does
+    // a workflow node nothing ever ran.
+    for (const status of ['pending', 'skipped'] as const) {
+      expect(
+        displayRunStatus({ ...settled, status, shellsRunning: true }),
+      ).toBe(status);
+    }
+  });
+});

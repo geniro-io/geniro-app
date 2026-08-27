@@ -52,6 +52,15 @@ function build(opts: {
   const items = new Subject<RunItemEvent>();
   const deleted = new Subject<string>();
   const statuses: RunStatusEvent[] = [];
+  /**
+   * The service's clock, driven by the spec.
+   *
+   * Injected rather than faked globally: `drain()` is a real `setTimeout(0)`,
+   * so vitest's fake timers would have to be advanced by hand for every await
+   * in the naming chain — and the only thing this service reads a clock for is
+   * the early-naming cooldown.
+   */
+  let clock = 1_000_000;
 
   const row =
     opts.run === null
@@ -148,6 +157,7 @@ function build(opts: {
     } as unknown as ItemDao,
     { getByRunNode } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
+    () => clock,
   );
   service.onModuleInit();
 
@@ -183,6 +193,15 @@ function build(opts: {
     await drain();
   };
 
+  /** The agent's own message — what names a chat while its turn is still running. */
+  const assistantMessage = async (): Promise<void> => {
+    items.next({
+      runId: 'run-a',
+      item: { ...item(null, 'message'), role: 'assistant' },
+    });
+    await drain();
+  };
+
   /** Two settles in a row, the second after the first has fully drained. */
   const settleTwice = async (): Promise<void> => {
     await settle();
@@ -206,10 +225,17 @@ function build(opts: {
     await drain();
   };
 
+  /** Move the service's clock past the early-naming cooldown. */
+  const waitOutCooldown = (): void => {
+    clock += 2 * 60_000;
+  };
+
   return {
     settle,
     settleKind,
     userMessage,
+    assistantMessage,
+    waitOutCooldown,
     settleTwice,
     settleConcurrently,
     deleteRun,
@@ -737,5 +763,135 @@ describe('ChatTitleService', () => {
 
     expect(retitle).not.toHaveBeenCalled();
     expect(statuses).toEqual([]);
+  });
+});
+
+describe('naming while the turn is still running', () => {
+  it("upgrades on the agent's FIRST words, without waiting for the turn to end", async () => {
+    // The report, three times over. Measured on the reporter's own geniro.db:
+    // every COMPLETED chat carried a generated name and every RUNNING one still
+    // wore its raw prompt, because the upgrade fired on `turn_complete` alone —
+    // and these turns run for hours, which is the whole window somebody is
+    // looking at the sidebar in.
+    const { assistantMessage, retitle, statuses } = build({
+      run: { title: 'can you look at the merge conflicts in the worktree' },
+      firstUserMessageText:
+        'can you look at the merge conflicts in the worktree',
+      nativeTitle: 'Fix Conflicts Worktree',
+    });
+
+    await assistantMessage();
+
+    // No settle anywhere above: remove the assistant-message branch and this is
+    // zero calls, which is the state that got reported.
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Fix Conflicts Worktree',
+      'can you look at the merge conflicts in the worktree',
+      expect.anything(),
+    );
+    expect(statuses.at(-1)?.title).toBe('Fix Conflicts Worktree');
+  });
+
+  it('asks once per cooldown, however many messages the agent writes', async () => {
+    // A `-p` turn per paragraph is what the cooldown prevents. The CLI is
+    // unable to name it here, so nothing retires the budget — the cooldown is
+    // the only thing holding the line.
+    const {
+      assistantMessage,
+      waitOutCooldown,
+      readSessionTitle,
+      generateTitle,
+    } = build({
+      run: { agentKind: AgentKind.Claude, title: 'fix the flaky spec' },
+      firstUserMessageText: 'fix the flaky spec',
+      nativeTitle: null,
+      generatedTitle: null,
+    });
+
+    await assistantMessage();
+    await assistantMessage();
+    await assistantMessage();
+
+    expect(readSessionTitle).toHaveBeenCalledTimes(1);
+    expect(generateTitle).toHaveBeenCalledTimes(1);
+
+    // …and it is a COOLDOWN, not a one-shot: a long turn gets another go, which
+    // is the whole point on work that runs for hours.
+    waitOutCooldown();
+    await assistantMessage();
+
+    expect(generateTitle).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a DECLINED early ask later in the same turn', async () => {
+    // Measured in the running app: the agent's first words at 12:51:33, the ask
+    // declined at 12:51:54, and the same exchange put to the same model by hand
+    // answering a perfectly good title. One shot would have left the raw prompt
+    // standing for the rest of the turn on nothing but that variance.
+    const { assistantMessage, waitOutCooldown, retitle } = build({
+      run: { title: 'fix the flaky spec' },
+      firstUserMessageText: 'fix the flaky spec',
+      readSessionTitle: vi
+        .fn<() => Promise<string | null>>()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue('Stabilise Flaky Timer Spec'),
+    });
+
+    await assistantMessage();
+    expect(retitle).not.toHaveBeenCalled();
+
+    waitOutCooldown();
+    await assistantMessage();
+
+    // No settle anywhere: the turn is still running, which is the case that had
+    // no naming at all before this.
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Stabilise Flaky Timer Spec',
+      'fix the flaky spec',
+      expect.anything(),
+    );
+  });
+
+  it('leaves the ending free to try again when the early attempt found nothing', async () => {
+    // The early moment is an ADDITION, not a replacement: they share one per-run
+    // budget, so an agent that could not be named yet is still named at the end.
+    const { assistantMessage, settle, retitle } = build({
+      run: { title: 'fix the flaky spec' },
+      firstUserMessageText: 'fix the flaky spec',
+      readSessionTitle: vi
+        .fn<() => Promise<string | null>>()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValue('Stabilise Flaky Timer Spec'),
+    });
+
+    await assistantMessage();
+    expect(retitle).not.toHaveBeenCalled();
+
+    await settle();
+
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Stabilise Flaky Timer Spec',
+      'fix the flaky spec',
+      expect.anything(),
+    );
+  });
+
+  it('does not name an UNTITLED run from the agent, only from the user', async () => {
+    // A run with no title has not had its opening message yet (the user branch
+    // names it the moment that lands), so an agent message reaching `resolve`
+    // would name the chat after whatever the CLI happened to answer. Asserted
+    // through the derived path: with no user message there is nothing to derive.
+    const { assistantMessage, retitle } = build({
+      run: { title: null },
+      firstUserMessageText: null,
+      nativeTitle: null,
+    });
+
+    await assistantMessage();
+
+    expect(retitle).not.toHaveBeenCalled();
   });
 });

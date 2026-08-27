@@ -461,3 +461,28 @@ describe('ChatListItem — a HELD row reads as live, not as history', () => {
     expect(container.textContent).not.toContain(STANDING_ACTIVITY);
   });
 });
+
+describe('a title being worked out', () => {
+  it('pulses the LABEL while the daemon is naming the run, and nothing else', async () => {
+    // Asked for once the wait became visible: naming a claude chat costs a whole
+    // extra CLI turn, and the row sat on the raw opening line saying nothing.
+    const container = await mount(
+      <ChatListItem {...props({ naming: true })} />,
+    );
+    const label = container.querySelector('[data-slot="chat-row-label"]');
+
+    expect(label?.className).toContain('title-naming');
+    // The ROW must not animate: that would read as the chat doing something.
+    expect(container.querySelectorAll('.title-naming')).toHaveLength(1);
+    // And it says what it is, for anyone who wonders why it is moving.
+    expect(label?.getAttribute('title')).toBe('Naming this chat\u2026');
+  });
+
+  it('is still, and unlabelled, when nothing is being named', async () => {
+    const container = await mount(<ChatListItem {...props()} />);
+    const label = container.querySelector('[data-slot="chat-row-label"]');
+
+    expect(label?.className).not.toContain('title-naming');
+    expect(label?.getAttribute('title')).toBeNull();
+  });
+});

@@ -72,7 +72,6 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
-import { ApprovalModeSelect } from './approval-mode-select';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
@@ -122,6 +121,7 @@ import {
   runGroupSummary,
 } from './run-group';
 import { sortRunsForSidebar } from './run-order';
+import { effectiveConfigDir } from './run-profile';
 import {
   displayRunStatus,
   isSettledRunStatus,
@@ -143,13 +143,18 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import { runningShellsByAgent, type ShellRun } from './shell-activity';
+import {
+  hasRunningBackgroundShell,
+  runningShellsByAgent,
+  type ShellRun,
+} from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
   filterSkills,
   slashQuery,
   unknownSlashCommand,
+  withAgentSlashSpelling,
 } from './skill-autocomplete';
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
@@ -664,6 +669,8 @@ export function Chats({
     hasOlder,
     loadingOlder,
     loadOlder,
+    namingRunIds,
+    markRenamed,
     liveText,
     streaming,
     setStreaming,
@@ -931,6 +938,11 @@ export function Chats({
         runId,
         renameRunDto: { title },
       });
+      // BEFORE the state write, so a naming announce that lands between the two
+      // cannot put the generated title back over the name just typed. The
+      // daemon already refuses to rename a run the user has renamed; this
+      // covers the other order, where its write had already won.
+      markRenamed(runId);
       // Patch only the title — a concurrent WS item may have fresher
       // status/preview in state than this response's snapshot.
       setRuns((prev) =>
@@ -939,7 +951,7 @@ export function Chats({
         ),
       );
     },
-    [chatApi],
+    [chatApi, markRenamed],
   );
 
   /**
@@ -1825,6 +1837,31 @@ export function Chats({
     }
   }, [chooseConfigDir]);
 
+  /**
+   * Keep a profile among the recents without making it the NEXT chat's default.
+   *
+   * The split {@link chooseConfigDir} does not need and the open chat does:
+   * repointing one thread at another account says nothing about what the next
+   * chat should open as — the same rule the model chip follows, and for the
+   * same reason. The recents ARE shared, deliberately: they are the list of
+   * profiles this user works in, and a profile reached from a chat is exactly
+   * as worth offering again as one reached from the composer.
+   */
+  const rememberConfigDir = useCallback(
+    (chosen: string): void => {
+      if (recentConfigDirs[0] === chosen) {
+        return;
+      }
+      const next = [
+        chosen,
+        ...recentConfigDirs.filter((p) => p !== chosen),
+      ].slice(0, 5);
+      setRecentConfigDirs(next);
+      void window.geniro.updateSettings({ recentConfigDirs: next });
+    },
+    [recentConfigDirs],
+  );
+
   const createChatRun = useCallback(
     async (cwd: string) =>
       chatApi.createChat({
@@ -1908,6 +1945,7 @@ export function Chats({
       effort?: string | null;
       contextWindow?: string | null;
       modelParameters?: Record<string, string>;
+      configDir?: string | null;
     }): Promise<void> => {
       const runId = activeRunIdRef.current;
       if (!runId) {
@@ -1938,6 +1976,39 @@ export function Chats({
     },
     [chatApi],
   );
+
+  /**
+   * Point the OPEN chat at another account — the profile chip in its composer.
+   *
+   * REPORTED as "I wanna have ability to dynamically change config directory
+   * for current claude threads to have an ability continue thread with other
+   * account". The profile used to be stated in the header and nowhere else,
+   * because it was fixed for the run's life; now that it changes something it
+   * belongs where the run's other live choices are, which is the composer's
+   * own rule.
+   *
+   * The conversation follows the switch — the daemon copies the CLI's session
+   * into the new profile and writes a transcript line saying whether it could
+   * — so nothing here has to explain the consequence: the answer lands in the
+   * thread the user is looking at.
+   */
+  const changeRunConfigDir = useCallback(
+    (chosen: string | null): void => {
+      if (chosen !== null) {
+        rememberConfigDir(chosen);
+      }
+      void changeRunSettings({ configDir: chosen });
+    },
+    [rememberConfigDir, changeRunSettings],
+  );
+
+  /** The native dialog behind that chip, applied to the open chat. */
+  const pickRunConfigDir = useCallback(async (): Promise<void> => {
+    const chosen = await window.geniro.pickProjectFolder();
+    if (chosen) {
+      changeRunConfigDir(chosen);
+    }
+  }, [changeRunConfigDir]);
 
   /**
    * Read one message attachment's bytes for the transcript. Stable per launch
@@ -2320,7 +2391,11 @@ export function Chats({
   /** The new-run composer's start: seed a fresh workflow run (fired from its
    *  trigger) or create a chat run and send its first message. */
   const send = useCallback(async (): Promise<void> => {
-    const text = input.trim();
+    // Spelled the way THIS agent spells it — see `withAgentSlashSpelling`. It
+    // wraps the trim rather than sitting beside the refusal below, so every
+    // use of `text` downstream (the send body, the optimistic row) is the one
+    // string, and none of them can be the pre-rewrite one.
+    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
     // The staged form of those same images, kept so a refusal can put the
     // composer back exactly as it was — `toWire` is the send body, which the
@@ -2572,7 +2647,10 @@ export function Chats({
    * red banner.
    */
   const sendFollowUp = useCallback(async (): Promise<void> => {
-    const text = input.trim();
+    // Rewritten before anything reads it, for the reason `send` states — and it
+    // matters more here, where the text may sit in the queue for the length of
+    // a turn before it is handed over.
+    const text = withAgentSlashSpelling(input.trim(), skillsRef.current);
     const images = attachments.toWire();
     const runId = activeRunIdRef.current;
     if ((!text && images.length === 0) || !runId) {
@@ -3710,7 +3788,35 @@ export function Chats({
       ),
     [durableEntries, runStoppedAt],
   );
-  const activeRunStatus = useMemo(
+  /**
+   * A detached command this run started is still going.
+   *
+   * Read STRAIGHT from the transcript rather than from `shellsByAgent`, which
+   * is the same question one layer up: that map filters by each agent's
+   * display status, so feeding it back in here would be a cycle. This asks
+   * only what the rows say.
+   */
+  const backgroundShellRunning = useMemo(
+    () => hasRunningBackgroundShell(items, handle.startedAt),
+    [items, handle.startedAt],
+  );
+  /**
+   * The badge reading WITHOUT the background-command clause — what the run
+   * would say if the only question were whether its agent is working.
+   *
+   * It exists because the two readings are owed to different consumers. The
+   * notification and the unseen mark fire on the transition INTO a settled
+   * status, and both mean "your agent has stopped, come and look" — which a
+   * `pnpm dev` running on in the background does not change. Feeding them the
+   * badge below would have suppressed the turn-end banner and the unread dot
+   * for every chat that left a command running, which is most of them.
+   *
+   * So the divergence is deliberate and narrow, against the rule those hooks
+   * are documented with ("the SAME status the sidebar badge shows"): the
+   * banner reports the TURN ending, the badge reports what is still out. Two
+   * facts, not one fact spelled two ways.
+   */
+  const agentRunStatus = useMemo(
     () =>
       activeRun
         ? displayRunStatus({
@@ -3722,6 +3828,27 @@ export function Chats({
           })
         : 'pending',
     [activeRun, streaming, awaitingAnswer, subagentRunning, holding],
+  );
+  const activeRunStatus = useMemo(
+    () =>
+      activeRun
+        ? displayRunStatus({
+            status: activeRun.status,
+            streaming,
+            awaitingAnswer: awaitingAnswer.size > 0,
+            subagentRunning,
+            heldForBackgroundWork: holding.has(activeRun.id),
+            shellsRunning: backgroundShellRunning,
+          })
+        : 'pending',
+    [
+      activeRun,
+      streaming,
+      awaitingAnswer,
+      subagentRunning,
+      holding,
+      backgroundShellRunning,
+    ],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -3866,12 +3993,19 @@ export function Chats({
           id: CHAT_AGENT_KEY,
           name: activeRun.agentKind ?? 'agent',
           agent: activeRun.agentKind,
-          // The chat's OWN config directory (null on the chats that run as
-          // the CLI's default). A workflow node reads its from the graph; a
-          // chat reads its from the run row, and the MCP panel needs it either
-          // way — a profile carries its own servers, so two chats in one folder
-          // under different profiles genuinely load different sets.
-          configDir: activeRun.configDir,
+          // The profile this chat's turns ACTUALLY run under — the folder's
+          // pin where there is one, the chat's own pick otherwise (null on the
+          // chats that run as the CLI's default). A workflow node reads its
+          // from the graph; a chat reads its from the run row, and the MCP
+          // panel needs it either way — a profile carries its own servers, so
+          // two chats in one folder under different profiles genuinely load
+          // different sets.
+          //
+          // The EFFECTIVE one, because this listing answers "what can this
+          // agent see": reading the requested profile showed the reporter 15
+          // servers while their agent had loaded the pinned profile's 50, one
+          // of which was the row they came looking for.
+          configDir: effectiveConfigDir(activeRun),
           // The SAME badge rule the header uses. This used to be a second one,
           // built from `streaming` and the row alone, so it could never report
           // `needs-input` — a chat parked on a question read "needs more info"
@@ -4565,6 +4699,15 @@ export function Chats({
       run.id === activeRunId ? activeRunStatus : unfocusedRunStatus(run),
     [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
+  /**
+   * The same per-run reading for the two consumers that ask "has this thread
+   * stopped" rather than "what is it doing" — see {@link agentRunStatus}.
+   */
+  const agentStoppedRunStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      run.id === activeRunId ? agentRunStatus : unfocusedRunStatus(run),
+    [activeRunId, agentRunStatus, unfocusedRunStatus],
+  );
 
   const notificationLabel = useCallback(
     (run: ChatRun): string => runLabel(run, workflowNames),
@@ -4585,7 +4728,7 @@ export function Chats({
    */
   useRunNotifications({
     runs,
-    statusOf: sidebarRunStatus,
+    statusOf: agentStoppedRunStatus,
     labelOf: notificationLabel,
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
@@ -4598,7 +4741,7 @@ export function Chats({
   // of a run's status: see `use-unseen-runs`.
   const { unseen, markSeen } = useUnseenRuns({
     runs,
-    statusOf: sidebarRunStatus,
+    statusOf: agentStoppedRunStatus,
     quiet: quietSettles,
     activeRunId,
   });
@@ -4784,6 +4927,7 @@ export function Chats({
                               runId={run.id}
                               active={run.id === activeRunId}
                               unseen={unseen.has(run.id)}
+                              naming={namingRunIds.has(run.id)}
                               label={runLabel(run, workflowNames)}
                               isWorkflow={run.workflowId != null}
                               status={sidebarRunStatus(run)}
@@ -5038,27 +5182,6 @@ export function Chats({
                                   onValueChange={setTriggerId}
                                 />
                               ) : null}
-                              {!workflowSlug ? (
-                                // Approval mode of the next chat — graph runs keep their
-                                // per-node modes from the workflow YAML instead.
-                                <ApprovalModeSelect
-                                  supportedModes={composerApprovalModes}
-                                  // A mode this CLI does not honour shows as the "cli
-                                  // default" placeholder rather than a lie — the user
-                                  // may have picked it while another agent was selected.
-                                  value={
-                                    composerApprovalModes?.includes(
-                                      approvalMode,
-                                    )
-                                      ? approvalMode
-                                      : null
-                                  }
-                                  planSupported={
-                                    capabilities?.claudeModes.plan === 'pass'
-                                  }
-                                  onChange={changeApprovalMode}
-                                />
-                              ) : null}
                             </ComposerTopRow>
                             <ComposerCard>
                               <AttachmentStrip
@@ -5146,6 +5269,26 @@ export function Chats({
                                     onEffortChange={(effort) =>
                                       changeEffort(agentKind, effort)
                                     }
+                                    // The approval posture of the NEXT chat,
+                                    // moved in here from a chip of its own —
+                                    // ASKED FOR as "add auto-approve option to
+                                    // model settings popover instead". A mode
+                                    // this CLI does not honour shows as the
+                                    // "cli default" placeholder rather than a
+                                    // lie: the user may have picked it while
+                                    // another agent was selected.
+                                    approvalModes={composerApprovalModes}
+                                    approval={
+                                      composerApprovalModes?.includes(
+                                        approvalMode,
+                                      )
+                                        ? approvalMode
+                                        : null
+                                    }
+                                    planSupported={
+                                      capabilities?.claudeModes.plan === 'pass'
+                                    }
+                                    onApprovalChange={changeApprovalMode}
                                     windows={agentContextWindows.windows}
                                     contextWindow={
                                       contextWindows[agentKind] ?? null
@@ -5252,6 +5395,11 @@ export function Chats({
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.
                         configDir={activeRun.configDir}
+                        // And whichever profile the FOLDER pins over that one,
+                        // since the CLI applies its project settings over the
+                        // environment geniro hands it — so the row above is
+                        // what this chat asked for, not necessarily what it got.
+                        configDirPin={activeRun.configDirPin}
                         status={activeRunStatus}
                         lastActivityAt={activeRun.updatedAt}
                         workedMs={threadTotalsShown.ms}
@@ -5748,6 +5896,27 @@ export function Chats({
                                   onEffortChange={(effort) =>
                                     void changeRunSettings({ effort })
                                   }
+                                  // Approval rides the same popover as the rest
+                                  // now. Unlike model and effort it does NOT
+                                  // wait for the next turn — the CLI accepts a
+                                  // mode change on a turn already in flight —
+                                  // which is why the trigger's `nextTurnOnly`
+                                  // wording stays about the model settings and
+                                  // this row is simply always live.
+                                  approvalModes={
+                                    capabilities
+                                      ? (approvalModesByAgent.get(
+                                          activeRun.agentKind,
+                                        ) ?? [])
+                                      : null
+                                  }
+                                  approval={activeRun.approval}
+                                  planSupported={
+                                    capabilities?.claudeModes.plan === 'pass'
+                                  }
+                                  onApprovalChange={(approval) =>
+                                    void changeRunSettings({ approval })
+                                  }
                                   windows={agentContextWindows.windows}
                                   contextWindow={activeRun.contextWindow}
                                   // The window the AGENT reported for this
@@ -5770,29 +5939,33 @@ export function Chats({
                                     })
                                   }
                                 />
-                                {/* Between effort and the context readout, not up in
-                          the identity row: the permission posture is editable
-                          at any time — mid-turn included, since the daemon
-                          hands the change to the turn already running — which
-                          makes it a live control of how this turn behaves, the
-                          same category as model and effort. Unlike those two it
-                          carries no `nextTurnOnly`, precisely because it does
-                          NOT wait for the next turn. */}
-                                <ApprovalModeSelect
-                                  supportedModes={
-                                    capabilities
-                                      ? (approvalModesByAgent.get(
-                                          activeRun.agentKind,
-                                        ) ?? [])
-                                      : null
-                                  }
-                                  value={activeRun.approval}
-                                  planSupported={
-                                    capabilities?.claudeModes.plan === 'pass'
-                                  }
-                                  onChange={(approval) =>
-                                    void changeRunSettings({ approval })
-                                  }
+                                {/* WHICH ACCOUNT the next turns run as, and it
+                          is here rather than in the header because it now
+                          CHANGES something — the composer's own rule. It was
+                          stated in the header beside the folder for as long as
+                          it was fixed for the run's life; the report that made
+                          it live ("I wanna have ability to dynamically change
+                          config directory for current claude threads to have
+                          an ability continue thread with other account") is
+                          what moved it.
+
+                          It carries no `nextTurnOnly`: the daemon REFUSES the
+                          change mid-turn rather than deferring it, because
+                          switching profiles moves the CLI's own conversation
+                          and retires the run's process — neither of which is
+                          safe to do underneath a turn writing into the profile
+                          being left. The refusal arrives as the daemon's own
+                          sentence through `changeRunSettings`. */}
+                                <ConfigDirSelect
+                                  configDir={activeRun.configDir}
+                                  recentConfigDirs={recentConfigDirs}
+                                  unavailableReason={configDirReasonFor(
+                                    activeRun.agentKind,
+                                  )}
+                                  ariaLabel="Agent config directory this chat runs as"
+                                  hint="The config directory (account / profile) this chat's next turns run as — its conversation comes with it"
+                                  onChange={changeRunConfigDir}
+                                  onBrowse={() => void pickRunConfigDir()}
                                 />
                                 {/* The context readout, DIRECTLY after the effort
                           chip rather than over beside Send.
@@ -5890,6 +6063,7 @@ export function Chats({
                     // there is no session to render, which is the reported
                     // "I press Sign In and there is no loader, nothing".
                     mcpSigningIn={login.starting?.server ?? null}
+                    mcpLoginServer={login.login?.server ?? null}
                     mcpLoginPanel={
                       // The SERVER half of the one controller. An account
                       // sign-in shares its lifecycle but not its home: it is
@@ -5904,6 +6078,12 @@ export function Chats({
                           onCancel={() => void login.cancel()}
                           onDismiss={login.dismiss}
                           error={login.error}
+                          // Among rows rather than across the foot of a card,
+                          // so it does not cancel padding it is not inside —
+                          // the negative margin took the pasted-code field off
+                          // the dialog's edge, which is the second half of the
+                          // reported "broken UI".
+                          variant="inline"
                         />
                       ) : null
                     }

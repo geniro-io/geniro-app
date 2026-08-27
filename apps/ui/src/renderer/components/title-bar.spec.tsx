@@ -32,8 +32,6 @@ afterEach(() => {
 function bar(
   options: {
     title?: string;
-    connected?: boolean;
-    daemonVersion?: string | null;
     update?: {
       state: UpdateState | null;
       engaged?: boolean;
@@ -49,8 +47,6 @@ function bar(
     root!.render(
       <TitleBar
         title={options.title ?? 'New chat'}
-        connected={options.connected ?? true}
-        daemonVersion={options.daemonVersion ?? '1.2.3'}
         // Through the REAL projection, not a hand-made value: what the bar
         // shows for a given phase is the thing under test, so a fixture that
         // skipped `footerUpdate` would pin the markup against a shape nothing
@@ -279,27 +275,19 @@ describe('TitleBar', () => {
     expect(updateControl(engaged)?.title).toContain('checksum did not match');
   });
 
-  it('carries the daemon status and version, which the rail no longer does', () => {
-    // They sat in the rail's footer under a rule, and collapsing the rail left
-    // a single green pip alone under a line — "that dot looks all alone".
-    // Here the version also sits beside the update offering a
-    // newer one, which is the comparison a user actually makes.
-    const status = bar({
-      connected: true,
-      daemonVersion: '1.48.1',
-    }).querySelector('[data-slot="titlebar-status"]');
+  it('carries neither a version nor a daemon-status readout', () => {
+    // Both were reported out of the band, in that order — the version to the
+    // app menu (`main/app-menu.ts`), the status to nowhere, because a daemon
+    // that is not answering already raises `ConnectionBanner` across every
+    // view. Pinned three ways, since each half could come back on its own: the
+    // slot the readout rendered into, the STATUS DOT it was built from (a
+    // version-less readout would still draw one), and any digit at all in the
+    // bar's own chrome, which is what a restored version looks like.
+    const rendered = bar({ title: 'New chat' });
 
-    expect(status?.textContent).toContain('1.48.1');
-    expect(status?.querySelectorAll('span.rounded-full')).toHaveLength(1);
-    act(() => {
-      root?.unmount();
-    });
-    container?.remove();
-
-    expect(
-      bar({ connected: false }).querySelector('[data-slot="titlebar-status"]')
-        ?.textContent,
-    ).toContain('disconnected');
+    expect(rendered.querySelector('[data-slot="titlebar-status"]')).toBeNull();
+    expect(rendered.querySelectorAll('span.rounded-full')).toHaveLength(0);
+    expect(rendered.textContent).not.toMatch(/\d/);
   });
 
   it('carries no debug trigger', () => {

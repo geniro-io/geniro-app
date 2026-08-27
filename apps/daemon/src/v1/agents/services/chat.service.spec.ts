@@ -1,9 +1,26 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { Item } from '../../runs/entity/item.entity';
@@ -15,6 +32,7 @@ import type {
   AgentApprovalMode,
   AgentEvent,
   AgentTurnInput,
+  CarrySessionInput,
   InstalledApprovalSupport,
   InstalledCapabilities,
 } from '../adapters/adapter.types';
@@ -41,6 +59,7 @@ import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
 import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
@@ -475,6 +494,16 @@ function fakeAdapter(kind: AgentKind): {
       // would let the dispatch rot while every spec stayed green.
       listGeniroCommands: () => real.listGeniroCommands(),
       geniroCommandFor: (text: string) => real.geniroCommandFor(text),
+      // The REAL copy, into the REAL directories the spec hands it. This one
+      // touches no process at all — it is a file move inside the CLI's own
+      // store — so stubbing it would replace the whole mechanism under test
+      // with a promise that it was called.
+      carrySessionToConfigDir: (input: CarrySessionInput) =>
+        real.carrySessionToConfigDir(input),
+      // Real for the same reason: it is a settings-file read against the cwd
+      // the spec supplies, with no process anywhere in it, so a stub would
+      // replace the mechanism with an assertion that it was called.
+      readConfigDirPin: (cwd: string) => real.readConfigDirPin(cwd),
       // The real one opens a handshake, which is the spawn this double exists
       // to avoid — so it answers as the base does when it cannot ask: the
       // CLI-wide union, marked INEXACT so it can never ground a refusal. A test
@@ -657,6 +686,11 @@ function setup(
       importHistory: async () => ({ events: [], notice: null }),
       ...opts.cliSessions,
     } as unknown as CliSessionsService,
+    // The REAL service over the real adapter registry: it reads the run's own
+    // cwd off disk, and every run these tests create sits in a temp directory
+    // that pins nothing — so the honest answer is the null the production path
+    // gives, and a double would pin the double instead.
+    new ConfigDirPinService(adapters),
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -2756,6 +2790,56 @@ describe('ChatService — approval modes (parity M1)', () => {
       id: 'q-off',
       allow: true,
       answer: 'Blue',
+    });
+  });
+
+  it('announces what the run just SAID, mid-turn, on the client-wide channel', async () => {
+    // Items reach ONE room and a client joins one at a time, so a thread
+    // working in the background delivers none of them to the window watching
+    // the sidebar. REPORTED as "still i see here outdated last llm message. As
+    // soon as i click on thread - it will be updated to actual one", against a
+    // thread that was still RUNNING — the settle-time fix moves the line when a
+    // turn ends, which is minutes too late on a long one.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    await drain();
+    statuses.length = 0;
+
+    claude.emit({ type: 'text', text: 'halfway there' });
+    await drain();
+
+    // No status and no activity key: this announce read neither, and a null
+    // activity would blank the phrase of a turn that is still working.
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      preview: 'halfway there',
+    });
+    // And NOT as `summary`, which is terminal-only and is what the system
+    // notification reads — a mid-turn sentence there would have a banner
+    // announce half a turn.
+    expect(statuses.some((event) => event.summary !== undefined)).toBe(false);
+
+    claude.finish();
+    await drain();
+  });
+
+  it('announces the USER’s own message too, because the row’s line is whatever spoke last', async () => {
+    // `lastMessage` is the run's latest `message` row whatever wrote it, and
+    // the list endpoints enrich it that way — announcing only the agent's would
+    // make the live line disagree with the value the next refetch puts back.
+    const { service, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    statuses.length = 0;
+
+    await service.sendMessage(run.id, 'my question');
+    await drain();
+
+    expect(statuses).toContainEqual({
+      runId: run.id,
+      status: null,
+      preview: 'my question',
     });
   });
 
@@ -5479,7 +5563,17 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     // way — and the badge is left exactly as the turn left it.
     expect(itemDao.items.length).toBeGreaterThan(before);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
-    expect(statuses).toEqual([]);
+    // Nothing that could move the badge or the phrase. This was `toEqual([])`,
+    // which was stricter than the promise the test's own name makes: a
+    // preview-only announce carries no status and no activity key, so it cannot
+    // restate the run as working — and the delegate's line IS the run's latest
+    // message row, which is what the next list refetch would show anyway. What
+    // is pinned is the badge, which is what was reported.
+    expect(
+      statuses.filter(
+        (event) => event.status !== null || event.activity !== undefined,
+      ),
+    ).toEqual([]);
   });
 
   it('still goes back to RUNNING when the CLI itself carries on', async () => {
@@ -5507,5 +5601,226 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
     });
     await drain();
     expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+});
+
+describe('ChatService — pointing an open chat at another account', () => {
+  let dir: string;
+  let profileA: string;
+  let profileB: string;
+  beforeEach(() => {
+    // `realpathSync` because `resolveValidConfigDir` canonicalizes, and on
+    // macOS a `mkdtemp` under `/tmp` comes back as `/private/var/…` — an
+    // assertion against the raw path would fail for the wrong reason.
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-chat-profile-')));
+    profileA = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-profile-a-')));
+    profileB = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-profile-b-')));
+  });
+  afterEach(() => {
+    for (const path of [dir, profileA, profileB]) {
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
+  const SESSION = 'eeeeeeee-1111-2222-3333-444444444444';
+
+  /** The session file the CLI would have written for this thread. */
+  function seedSession(profile: string, text: string): void {
+    const projects = join(profile, 'projects', '-a-folder');
+    mkdirSync(projects, { recursive: true });
+    writeFileSync(
+      join(projects, `${SESSION}.jsonl`),
+      `${JSON.stringify({ type: 'user', cwd: '/a/folder', message: { role: 'user', content: text } })}\n`,
+    );
+  }
+
+  it('carries the CLI’s own conversation across, retires the old process, and says so', async () => {
+    // REPORTED as "I wanna have ability to dynamically change config directory
+    // for current claude threads to have an ability continue thread with other
+    // account", and the second half is what this pins. geniro's transcript
+    // never moves; the CLI's memory lives in the profile, and `--resume` under
+    // a profile that does not hold the file answers "No conversation found"
+    // (probed on 2.1.237 across two real accounts). A switch that only rewrote
+    // the column would hand the user an agent with amnesia under a transcript
+    // still showing the conversation it had forgotten.
+    const { service, claude, nodeDao, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    // One turn, so the run holds a live process AND a session id — the two
+    // things a switch has to deal with.
+    await service.sendMessage(run.id, 'hello');
+    claude.finish();
+    await drain();
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    seedSession(profileA, 'the codeword is PLUM');
+    expect(claude.sessions[0]?.closed).toBe(false);
+
+    const updated = await service.updateSettings(run.id, {
+      configDir: profileB,
+    });
+
+    expect(updated.configDir).toBe(profileB);
+    // The conversation is now where the new profile looks for it.
+    expect(
+      readFileSync(
+        join(profileB, 'projects', '-a-folder', `${SESSION}.jsonl`),
+        'utf8',
+      ),
+    ).toContain('the codeword is PLUM');
+    // The live process was spawned with the OLD profile in its env and can
+    // never be told otherwise, so leaving it would serve the next turn from
+    // the account the user just switched away from.
+    expect(claude.sessions[0]?.closed).toBe(true);
+    const notice = published
+      .map((event) => event.item.payload as { message?: string } | null)
+      .find((payload) => payload?.message?.includes('now runs as'));
+    expect(notice?.message).toContain(profileB);
+    expect(notice?.message).toContain('conversation came with it');
+  });
+
+  it('refuses mid-turn, because the turn is writing into the profile being left', async () => {
+    // `model` and `effort` are accepted on a claimed run — they only describe
+    // the NEXT turn. This one does more than describe: a copy taken now would
+    // carry a conversation missing its last minutes, and retiring the process
+    // under a running turn kills work the user asked for.
+    const { service, registry, nodeDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    seedSession(profileA, 'mid-turn');
+
+    expect(registry.tryClaim(run.id)).toBe(true);
+    await expect(
+      service.updateSettings(run.id, { configDir: profileB }),
+    ).rejects.toThrow('still working');
+    registry.release(run.id);
+
+    // Nothing was copied on the refused attempt — a half-done switch is worse
+    // than none, since the file would then be in a profile the run is not on.
+    expect(existsSync(join(profileB, 'projects'))).toBe(false);
+    // …and it goes through once the turn is over.
+    const updated = await service.updateSettings(run.id, {
+      configDir: profileB,
+    });
+    expect(updated.configDir).toBe(profileB);
+  });
+
+  it('refuses while a SUB-AGENT is still working, after its turn has settled', async () => {
+    // The hole a registry-only guard leaves, and the one that would cost real
+    // work. `ProcessRegistry` tracks TURNS; a delegate routinely outlives the
+    // one that launched it, going on producing rows after the `result` line —
+    // which is why `leaseOnDelegateRow` puts the badge back to `running` with
+    // no turn claimed. In that window a registry-only check would let the
+    // switch through, and the switch CLOSES the run's CLI process: the
+    // sub-agent lives inside it, so its work would be killed mid-flight and
+    // the session file copied halfway through being appended to.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    seedSession(profileA, 'a delegate is out');
+    // A turn that has ENDED — nothing claimed, no process registered.
+    await service.sendMessage(run.id, 'launch a sub-agent');
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    // …and then the delegate speaks, which is the whole of the window.
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'delegate still going',
+      parentToolUseId: 'sub-1',
+    });
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    await expect(
+      service.updateSettings(run.id, { configDir: profileB }),
+    ).rejects.toThrow('sub-agents');
+    // The process it lives in is untouched, and nothing was copied out from
+    // under it.
+    expect(claude.sessions[0]?.closed).toBe(false);
+    expect(existsSync(join(profileB, 'projects'))).toBe(false);
+    expect(runDao.runs.get(run.id)?.configDir).toBe(profileA);
+  });
+
+  it('refuses a CLI that cannot be pointed at a profile at all', async () => {
+    // The adapter owns the verdict, so no agent is named in the service. The
+    // honest answer for a chat is "no" rather than a silently dropped field:
+    // the profile is picked one control away from the agent picker.
+    const { service } = setup();
+    const run = await service.createChat({
+      agentKind: 'cursor-agent',
+      cwd: dir,
+    });
+
+    await expect(
+      service.updateSettings(run.id, { configDir: profileB }),
+    ).rejects.toThrow('would not change the subscription');
+  });
+
+  it('switches anyway when the conversation could NOT come along, and says the agent starts fresh', async () => {
+    // A carry refusal is not a switch refusal. The user asked to run as
+    // another account and that is legitimate whether or not the CLI's memory
+    // can follow — what would be wrong is doing it silently, since the
+    // transcript on screen still shows a conversation the agent no longer has.
+    const { service, nodeDao, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    // A session id with no file behind it: the profile no longer holds it.
+    await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+
+    const updated = await service.updateSettings(run.id, {
+      configDir: profileB,
+    });
+
+    expect(updated.configDir).toBe(profileB);
+    const notice = published
+      .map((event) => event.item.payload as { message?: string } | null)
+      .find((payload) => payload?.message?.includes('now runs as'));
+    expect(notice?.message).toContain('starts a fresh conversation');
+    expect(notice?.message).toContain('no longer holds this conversation');
+  });
+
+  it('says nothing and copies nothing when the pick is the profile already in use', async () => {
+    // A picker can re-choose what is already chosen, and that is not an event:
+    // a notice would put a line in the transcript about nothing happening, and
+    // retiring the process would cost a cold start for the same reason.
+    const { service, claude, published } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: profileA,
+    });
+    await service.sendMessage(run.id, 'hello');
+    claude.finish();
+    await drain();
+    const before = published.length;
+
+    const updated = await service.updateSettings(run.id, {
+      configDir: profileA,
+    });
+
+    expect(updated.configDir).toBe(profileA);
+    expect(published).toHaveLength(before);
+    expect(claude.sessions[0]?.closed).toBe(false);
   });
 });

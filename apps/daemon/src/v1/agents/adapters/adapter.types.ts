@@ -2560,6 +2560,72 @@ export interface HandoffInput {
  * A refusal is DATA, not an exception: the adapter layer knows nothing about
  * HTTP, and the owning module decides how to say it.
  */
+/**
+ * Which conversation is being moved to which profile, for
+ * {@link AgentAdapter.carrySessionToConfigDir}.
+ *
+ * The FOLDER is deliberately absent. A CLI that stores conversations per
+ * working directory already records which one this session belongs to, and
+ * asking the caller would let the two disagree — claude's own doc block says
+ * the directory name it uses is lossy and must never be re-derived, so the
+ * only safe answer is the one the store itself gives.
+ */
+export interface CarrySessionInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that holds it now — null for the CLI's own default. */
+  readonly from: string | null;
+  /** The profile it should also be readable from — null for the default. */
+  readonly to: string | null;
+}
+
+/**
+ * Whether the conversation followed the run to its new profile.
+ *
+ * A refusal is DATA on the same rule {@link HandoffResult} follows, and here it
+ * is not even a failure: the switch is legitimate either way, and `reason` is
+ * the sentence the transcript prints so the user knows the agent is starting
+ * fresh rather than silently forgetting the thread.
+ */
+export type CarrySessionResult =
+  { carried: true } | { carried: false; reason: string };
+
+/**
+ * A config directory the FOLDER pins, overriding the one geniro hands the CLI.
+ *
+ * geniro passes the run's profile as an environment variable, and an env var is
+ * not the last word: a CLI that reads per-project settings can carry its own
+ * `env` block, apply it to ITSELF, and run under a different account than the
+ * one the chat says it is on. That is not hypothetical — measured 2026-08-27 on
+ * claude 2.1.247, a folder whose `.claude/settings.local.json` sets
+ * `env.CLAUDE_CONFIG_DIR` makes the CLI answer `get_usage` for the PINNED
+ * profile's account while `CLAUDE_CONFIG_DIR` in its own environment still
+ * names the one geniro chose.
+ *
+ * REPORTED as "I'm running my claude session in different config directory with
+ * different account - but now its showing my limits for another account". The
+ * limits were right and the PROFILE was wrong, which is the reading this type
+ * exists to let the app state: the panel reports whichever account the CLI is
+ * actually on, so the two must be able to disagree out loud rather than one of
+ * them quietly winning.
+ *
+ * A null from {@link AgentAdapter.readConfigDirPin} means "nothing pins this
+ * folder" — never "this CLI has no such mechanism", which the base's own
+ * default already answers by returning null for every folder.
+ */
+export interface ConfigDirPin {
+  /**
+   * The directory the CLI will actually use, as the settings file spells it.
+   *
+   * NOT canonicalized: it is quoted back to the user beside the path they
+   * picked, and resolving it would make the two look different for reasons
+   * that have nothing to do with the override.
+   */
+  readonly effective: string;
+  /** The file that pinned it — a path the user can open and edit. */
+  readonly source: string;
+}
+
 export type HandoffResult =
   | {
       ok: true;
@@ -3201,6 +3267,21 @@ export interface AdapterConfig {
      * null reason promises a var to carry it.
      */
     readonly unavailableReason: string | null;
+    /**
+     * Why an OPEN conversation cannot follow the run to another profile, or
+     * null when it can.
+     *
+     * A separate question from `unavailableReason`, and a run can genuinely
+     * answer them differently: pointing the NEXT turn at another account is
+     * one thing, and taking the conversation so far with it is another. Where
+     * this is non-null the switch still happens — the thread's transcript is
+     * geniro's own and is untouched — but the agent starts a fresh CLI
+     * conversation from that point, which is what the user is told.
+     *
+     * MUST agree with {@link AgentAdapter.carrySessionToConfigDir}: a null
+     * reason promises that method does something.
+     */
+    readonly sessionCarryUnavailableReason: string | null;
   };
 
   // ── A message into a turn that is already running ───────────────────────

@@ -461,6 +461,19 @@ export const CLAUDE_MODE_REJECTION_VERDICT_PATTERN =
 // ── Naming a conversation ─────────────────────────────────────────────────
 
 /**
+ * How much reasoning the naming turn may spend — see {@link CLAUDE_TITLE_ARGS}.
+ *
+ * Declared BEFORE that array because the array reads it at module evaluation:
+ * `const` is hoisted into the temporal dead zone, not initialized, so the
+ * obvious placement beside its sibling below throws on import.
+ *
+ * Spelled `--max-thinking-tokens` rather than its `--maxThinkingTokens` alias,
+ * for the reason every other flag here is: the hyphenated form is the one the
+ * CLI's own help prints.
+ */
+export const CLAUDE_MAX_THINKING_TOKENS_FLAG = '--max-thinking-tokens';
+
+/**
  * The argv of the throwaway turn that names a chat.
  *
  * `--output-format json` rather than the turns' `stream-json`: this is one
@@ -468,6 +481,15 @@ export const CLAUDE_MODE_REJECTION_VERDICT_PATTERN =
  * single object's `result`. The MCP pair is the same isolation an internal
  * probe turn takes — a title has no use for the user's servers, and dialling
  * them would cost seconds and launch their processes to write five words.
+ *
+ * `--max-thinking-tokens 0` is a MEASUREMENT, not tidiness. Naming a chat is a
+ * one-line judgement, and the model was spending 400–780 reasoning tokens on
+ * it — most of the turn. Measured on 2.1.237 over four runs per arm, same
+ * prompt: 7.7–11.0s with thinking, 3.0–6.9s without, every answer valid. It is
+ * only safe alongside the transcript framing in `titlePrompt`: with the OLD
+ * wording, taking thinking away made the model act on the quoted conversation
+ * INSTEAD of pausing to work out what it was, which is a 16s turn answering
+ * with prose. The two changes are one change.
  */
 export const CLAUDE_TITLE_ARGS: readonly string[] = [
   '-p',
@@ -476,6 +498,8 @@ export const CLAUDE_TITLE_ARGS: readonly string[] = [
   CLAUDE_MCP_CONFIG_FLAG,
   CLAUDE_EMPTY_MCP_CONFIG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
+  CLAUDE_MAX_THINKING_TOKENS_FLAG,
+  '0',
 ];
 
 /**

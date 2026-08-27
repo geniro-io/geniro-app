@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('electron', () => ({
+  app: { getVersion: () => '9.9.9' },
   Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => undefined },
   BrowserWindow: { getFocusedWindow: () => mocks.focused },
 }));
@@ -20,12 +21,26 @@ vi.mock('electron', () => ({
  * same reason, as `context-menu.ts`).
  */
 
+const APP = { name: 'Geniro', version: '1.48.1' };
+const VERSION = APP.version;
+
 const viewSubmenu = (): MenuItemConstructorOptions[] => {
-  const view = applicationMenuTemplate().find((item) => item.label === 'View');
+  const view = applicationMenuTemplate(APP).find(
+    (item) => item.label === 'View',
+  );
   if (!view || !Array.isArray(view.submenu)) {
     throw new Error('the template has no View submenu');
   }
   return view.submenu;
+};
+
+/** The first submenu — the one macOS names after the app. */
+const appSubmenu = (): MenuItemConstructorOptions[] => {
+  const submenu = applicationMenuTemplate(APP)[0]?.submenu;
+  if (!Array.isArray(submenu)) {
+    throw new Error('the template has no app submenu');
+  }
+  return submenu;
 };
 
 beforeEach(() => {
@@ -58,16 +73,73 @@ describe('applicationMenuTemplate', () => {
     expect(devTools?.accelerator).toBeUndefined();
   });
 
+  it('states the running version in the app menu, as a row nothing can press', () => {
+    // The report: the version came OUT of the title bar and belongs here
+    // instead. `enabled: false` because there is nothing behind it — a live row
+    // promises an action a version does not have.
+    // ONE template, for the reason the Clear Agent Cache test states: each call
+    // builds a fresh one, so a row from one compared against the positions of
+    // another can only ever be absent.
+    const submenu = appSubmenu();
+    const row = submenu.find((item) =>
+      String(item.label ?? '').startsWith('Version'),
+    );
+
+    expect(row?.label).toBe(`Version ${VERSION}`);
+    expect(row?.enabled).toBe(false);
+    // Directly under About, which is the other row about what this app IS.
+    expect(submenu.indexOf(row!)).toBe(1);
+  });
+
+  it('gives every item something Electron will build — label, role or type', () => {
+    // Not a style rule: `Menu.buildFromTemplate` THROWS on an item carrying
+    // none of the three ("Invalid template for MenuItem"), and the throw
+    // happens inside `installApplicationMenu`, where it aborts the install and
+    // leaves Electron's own default menu — dev-tools row included — standing.
+    // The first cut of the app submenu shipped with only `submenu` on it and
+    // did exactly that in the running app, with every unit test green.
+    const items = applicationMenuTemplate(APP).flatMap((item) => [
+      item,
+      ...(Array.isArray(item.submenu) ? item.submenu : []),
+    ]);
+
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(
+        item.label !== undefined ||
+          item.role !== undefined ||
+          item.type !== undefined,
+      ).toBe(true);
+    }
+  });
+
   it('restates the rest of the default menu rather than inventing one', () => {
-    // The four halves that do not change are role menus, so they keep the
+    // The three halves that do not change are role menus, so they keep the
     // platform's labels, accelerators and behaviour for free — a hand-built
     // Edit menu is how Paste and Match Style or the Speech submenu go missing.
-    expect(applicationMenuTemplate().map((item) => item.role)).toEqual([
-      'appMenu',
+    expect(applicationMenuTemplate(APP).map((item) => item.role)).toEqual([
+      undefined, // the app menu — spelled out for the version row
       'fileMenu',
       'editMenu',
       undefined, // View — spelled out, being the one that changes
       'windowMenu',
+    ]);
+    // The app menu keeps every row Electron's own `appMenu` role builds, in
+    // order, with only the version added — so a role dropped from it (Services,
+    // Hide Others) has to be stated here rather than going missing in silence.
+    expect(
+      appSubmenu().map((item) => item.role ?? item.type ?? item.label),
+    ).toEqual([
+      'about',
+      `Version ${VERSION}`,
+      'separator',
+      'services',
+      'separator',
+      'hide',
+      'hideOthers',
+      'unhide',
+      'separator',
+      'quit',
     ]);
     // And View itself still offers everything the default did, in order, with
     // this app's own row identified by its label — so an added entry has to be

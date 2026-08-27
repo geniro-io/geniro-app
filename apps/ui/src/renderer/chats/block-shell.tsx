@@ -60,6 +60,18 @@ export function BlockStatusIcon({
   return <RunStatusIcon status={RUN_STATUS_OF[status]} className={className} />;
 }
 
+/**
+ * The block vocabulary's own WORD for a status.
+ *
+ * Exported for the one caller that needs the word without the pill's chrome —
+ * a delegate's ending line, which is prose in a thread rather than a badge on
+ * a header. It reads the same table {@link StatusBadge} does, so the two can
+ * never spell one ending differently.
+ */
+export function blockStatusLabel(status: BlockStatus): string {
+  return RUN_STATUS_META[RUN_STATUS_OF[status]].label;
+}
+
 export function StatusBadge({
   status,
 }: {

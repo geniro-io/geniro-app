@@ -2735,6 +2735,27 @@ export interface AdapterConfig {
    * Meaningless when `questionToolName` is null; declare it false there.
    */
   readonly questionsCostAskPosture: boolean;
+  /**
+   * Why geniro must SUPPLY this CLI's agent a question tool of its own, or
+   * null when the CLI already gives its model one.
+   *
+   * {@link questionToolName} answers a different question — whether geniro can
+   * RECEIVE a question this CLI raises — and the two came apart the moment one
+   * was measured against the other. cursor-agent declares a question method
+   * geniro answers in full, and its model has no tool with which to raise one:
+   * asked to list its tools in a real chat, it answered "I do not have a tool
+   * that lets me ask you a multiple-choice question and wait for your answer."
+   * Its `askQuestionToolCall` is decided by that vendor's SERVER, and nothing
+   * on this side can ask for it — the shipped 2026.08.11-e8db854 bundle reads
+   * exactly one ACP client capability, `_meta.parameterizedModelPicker`, so
+   * there is no flag to set and no capability to advertise.
+   *
+   * Non-null therefore means: register geniro's own `ask_user_question` over
+   * the run's MCP endpoint, so the agent has a tool to reach the user with.
+   * Null means the CLI's own tool is already there and a second one would be a
+   * duplicate the model has to choose between.
+   */
+  readonly hostQuestionToolReason: string | null;
 
   // ── Background sub-agents ───────────────────────────────────────────────
   /**

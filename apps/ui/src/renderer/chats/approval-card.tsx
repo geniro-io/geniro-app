@@ -1027,8 +1027,13 @@ export function ApprovalCard({
   // payload is untyped on the wire by design, so no generated type reaches
   // here), and a name spelled on both sides is what the doc blocks above
   // cross-reference.
+  // `ask_user_question` is geniro's OWN tool, registered for a CLI whose model
+  // has none (the daemon's `HOST_QUESTION_TOOL`), and it deliberately takes the
+  // AskUserQuestion shape so it reads through this same parser — a host-asked
+  // question and a claude-asked one are the same card, not two that could
+  // drift.
   const questions =
-    toolName === 'AskUserQuestion'
+    toolName === 'AskUserQuestion' || toolName === 'ask_user_question'
       ? readQuestions(input)
       : toolName === 'cursor/ask_question'
         ? readCursorQuestions(input)

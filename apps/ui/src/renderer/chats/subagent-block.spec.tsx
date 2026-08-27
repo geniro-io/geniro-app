@@ -495,6 +495,16 @@ describe('a delegate whose CLI streams none of its work', () => {
    */
   function declaredBlock(
     over: Record<string, unknown> = {},
+    /**
+     * What the launching call was answered WITH.
+     *
+     * The default is the pre-fix shape, still sitting in transcripts written
+     * before the adapter declared `resultIsBookkeeping`: the CLI's
+     * `{durationMs, isBackground}` reaching the block as a result. `null` is
+     * what the daemon writes today — verified in the running app, where a real
+     * cursor delegate's `tool_result` row carries `"result":null`.
+     */
+    resultBody: unknown = { durationMs: 13075, isBackground: false },
   ): SubagentBlockEntry {
     const items: ChatItem[] = [
       item('tool_call', {
@@ -515,7 +525,7 @@ describe('a delegate whose CLI streams none of its work', () => {
       item('tool_result', {
         id: 'toolu_1',
         name: null,
-        result: { durationMs: 13075, isBackground: false },
+        result: resultBody,
       }),
     ];
     const block = collectSubagentBlocks(
@@ -547,6 +557,85 @@ describe('a delegate whose CLI streams none of its work', () => {
     expect(
       container.querySelectorAll('[data-role="subagent-steps-missing"]'),
     ).toHaveLength(1);
+  });
+
+  it('says the sub-agent ENDED, which nothing else in its body does', () => {
+    // REPORTED as "cursor agent doesn't seem to have success message". Its
+    // body is the brief, the model and the steps-unavailable sentence — none
+    // of which changes when the work finishes — so a delegate that ran for a
+    // minute read exactly like one that did nothing. Deleting the line puts
+    // the ending back on a 14px header glyph alone and fails here.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail
+            block={declaredBlock({}, null)}
+            chatAgentName="cursor"
+          />
+        </Dialog>,
+      ),
+    );
+
+    const ended = container.querySelector('[data-role="subagent-ended"]');
+    expect(ended).not.toBeNull();
+    // The block vocabulary's own word, so this line, the header glyph and the
+    // panel row cannot spell one ending three ways.
+    expect(ended?.textContent).toContain('completed');
+  });
+
+  it('withholds the ending line while the delegate is still working', () => {
+    // A launch with no result yet: the live row above it is what says what is
+    // happening, and an "ended" line beside a spinner is the card
+    // contradicting itself.
+    const RUNNING_ITEMS: ChatItem[] = [
+      item('tool_call', {
+        id: 'toolu_2',
+        name: 'Task: Subagent task',
+        input: { _toolName: 'task' },
+      }),
+      item('subagent_info', {
+        id: 'toolu_2',
+        label: 'Still going',
+        kind: null,
+        prompt: 'take your time',
+        model: null,
+        durationMs: null,
+        stepsUnavailableReason: REASON,
+      }),
+    ];
+    const running = collectSubagentBlocks(
+      buildTurnBlocks(
+        buildSubagentBlocks(groupTranscript(RUNNING_ITEMS), RUNNING_ITEMS),
+      ),
+    )[0];
+    if (!running) {
+      throw new Error('expected a sub-agent block');
+    }
+
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={running} chatAgentName="cursor" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.querySelector('[data-role="subagent-ended"]')).toBeNull();
+  });
+
+  it('withholds it from a delegate whose own work already shows the ending', () => {
+    // The footer this thread removed once, for repeating what the header says
+    // better — a delegate that streamed its steps ends on those steps, and one
+    // whose answer is printed ends on the answer.
+    act(() =>
+      root.render(
+        <Dialog open onClose={() => undefined} title="Sub-agent">
+          <SubagentDetail block={makeBlock()} chatAgentName="claude" />
+        </Dialog>,
+      ),
+    );
+
+    expect(container.querySelector('[data-role="subagent-ended"]')).toBeNull();
   });
 
   it('states the model and the duration, the only substance the CLI gives', () => {

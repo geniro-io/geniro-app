@@ -259,6 +259,23 @@ export class CursorAcpAdapter extends AgentAdapter {
        * permission dialogue to keep the tool wired at all.
        */
       questionsCostAskPosture: false,
+      /**
+       * Non-null — and it reads as a contradiction of the line above until the
+       * two questions are separated. `questionToolName` says geniro can ANSWER
+       * this CLI's question method, which it can and does; this says the
+       * model is never in a position to raise one. Measured in the running app
+       * on 2026.08.11-e8db854: asked to list its tools, a real chat answered
+       * "I do not have a tool that lets me ask you a multiple-choice question
+       * and wait for your answer. I can only communicate with you by
+       * outputting text directly in my response here." That is consistent with
+       * the note beside `question` in the ACP protocol block — the request has
+       * still never been seen on the wire — and with the binary: the tool is a
+       * SERVER-side `askQuestionToolCall`, and the only ACP client capability
+       * the bundle reads is `_meta.parameterizedModelPicker`, so there is
+       * nothing this side can advertise to earn it.
+       */
+      hostQuestionToolReason:
+        'cursor-agent offers its model no tool for asking the user — its own ask-question call is raised by the vendor server, and no ACP client capability requests it',
       subagents: {
         /**
          * True — and it read `false` here for two milestones on a measurement

@@ -200,6 +200,13 @@ export class ClaudeAdapter extends AgentAdapter {
        * that must be able to ask has to be moved off the bypass.
        */
       questionsCostAskPosture: true,
+      /**
+       * Null: this CLI hands its model AskUserQuestion itself wherever a
+       * permission-prompt channel is wired, which every user-facing turn has
+       * (`spawnsOnPermissionDialogue`). Supplying a second question tool would
+       * put two of them in front of the model with nothing to choose between.
+       */
+      hostQuestionToolReason: null,
       subagents: {
         /**
          * The Task tool's delegates ride the SAME stream-json stream as the

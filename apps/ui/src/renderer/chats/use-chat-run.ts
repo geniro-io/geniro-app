@@ -198,6 +198,21 @@ export interface ChatRunState {
    * own doc for why it has no default.
    */
   addItem: (item: ChatItem, live: boolean) => void;
+  /**
+   * File a context reading against this client's copy of the run row — the
+   * middle source `chatContext` ranks between the live plane and the
+   * transcript.
+   *
+   * Exposed for the ONE reader outside the live plane that holds a fresher
+   * figure than either: the context panel's own ask, which reaches the CLI's
+   * accounting directly. Its guards belong to the callback, so a caller states
+   * a reading and never decides whether it counts.
+   */
+  rememberRunContext: (
+    runId: string,
+    tokens: number | null,
+    window: number | null,
+  ) => void;
   refreshRuns: () => void;
   activateRun: (runId: string) => Promise<void>;
   /** Stable id-keyed activation for the memoized ChatListItem rows. */
@@ -1327,6 +1342,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     pendingScrollRef,
     sawTerminalRef,
     addItem,
+    rememberRunContext,
     refreshRuns,
     activateRun,
     handleActivateRun,

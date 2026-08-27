@@ -705,6 +705,7 @@ export function Chats({
     pendingScrollRef,
     sawTerminalRef,
     addItem,
+    rememberRunContext,
     refreshRuns,
     activateRun,
     handleActivateRun,
@@ -2054,8 +2055,33 @@ export function Chats({
    * fresh identity per render would re-run their effects.
    */
   const loadChatMetrics = useCallback(
-    (runId: string) => chatApi.readChatMetrics({ runId }),
-    [chatApi],
+    (runId: string) =>
+      chatApi.readChatMetrics({ runId }).then((metrics) => {
+        // The reading the PANEL takes is the freshest one this client can get:
+        // it is the CLI's own accounting, asked over the live process, while
+        // the ring's own sources are a turn's `context_progress` — emitted on
+        // main-thread assistant lines only — and the last settled turn. So a
+        // tool-heavy stretch moves the panel and leaves the ring where the
+        // last assistant line put it.
+        //
+        // REPORTED as "Context circle wasnt synced, it took 15s to sync",
+        // against an open panel reading 425.4k while the ring beside it still
+        // showed the previous figure — and 15s is simply how long that agent
+        // went without producing a main-thread line.
+        //
+        // Mirrored through the SAME seam the live plane uses, so the ranking
+        // is unchanged: `chatContext` reads the live delta first, and this
+        // only ever refreshes the run-row copy underneath it. Its own guards
+        // do the rest — a non-positive count is not a measurement, and an
+        // unchanged one re-renders nothing.
+        rememberRunContext(
+          runId,
+          metrics.context?.totalTokens ?? null,
+          metrics.context?.maxTokens ?? null,
+        );
+        return metrics;
+      }),
+    [chatApi, rememberRunContext],
   );
 
   /**

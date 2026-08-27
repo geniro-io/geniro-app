@@ -155,6 +155,7 @@ export class ChatMetricsService implements OnModuleInit {
     const usable =
       current !== null &&
       current.context !== null &&
+      planReadingIsCurrent(current, Date.now()) &&
       this.sessions.peek(runId) !== null
         ? current
         : null;
@@ -537,6 +538,58 @@ export class ChatMetricsService implements OnModuleInit {
     const reading = this.adapters.for(agentKind).getConfig().usage[field];
     return reading.kind === 'unavailable' ? reading.reason : null;
   }
+}
+
+/**
+ * How long a stored PLAN reading may be served as though it were current.
+ *
+ * The shortcut above is guarded by `atSeq` alone, and that guard is exactly
+ * right for the CONTEXT half: a window is a function of the conversation, so a
+ * transcript that has not moved holds a context that has not moved either. It
+ * says nothing at all about an ALLOWANCE, which moves with wall-clock time and
+ * with every turn the account spends in another chat, another terminal or
+ * another machine — none of which writes a row here.
+ *
+ * So a chat nobody has typed in keeps its `atSeq` forever and served its plan
+ * figures forever. REPORTED as "I STILL have team session", against a panel
+ * reading `TEAM · Current week 100% · resets in 1d 15h`. Reconstructed from
+ * the reporter's own `geniro.db`: six runs held a stored `plan: "team"` at
+ * 100%, every one of them still servable (`atSeq === maxSeq`), with `takenAt`
+ * up to twelve hours old — while the same profile, asked live, answered
+ * `subscription_type: "max"` with its week at 1%. The account had changed and
+ * the week had rolled; nothing in the guard could notice either.
+ *
+ * Two minutes keeps what the shortcut was FOR — a second open moments after
+ * the first, which is the reported "too slow when i hover" — and bounds the
+ * lie to a window in which an allowance cannot meaningfully move. Past it the
+ * reading is taken again, which is what every open cost before the shortcut
+ * existed.
+ *
+ * A reading served with NO live process is a different case and is not bounded
+ * here: that path stamps `takenAt` and the panel dates it out loud, so it is
+ * offered as the last thing anyone measured rather than as the present.
+ */
+const STORED_PLAN_MAX_AGE_MS = 2 * 60 * 1000;
+
+/**
+ * Whether a stored reading's PLAN half may still be presented as current.
+ *
+ * True when there is no plan half at all: the bound exists to stop a stale
+ * allowance being served, and a reading that carries none has none to serve —
+ * refusing it there would cost every CLI that reports no allowance the whole
+ * shortcut, for a figure it never had.
+ */
+function planReadingIsCurrent(
+  reading: StoredMetricsReading,
+  now: number,
+): boolean {
+  if (reading.plan === null) {
+    return true;
+  }
+  const takenAt = Date.parse(reading.takenAt);
+  // An unparseable stamp is not evidence of freshness. It cannot be dated, so
+  // it cannot be claimed to be current.
+  return Number.isFinite(takenAt) && now - takenAt <= STORED_PLAN_MAX_AGE_MS;
 }
 
 /** Which of the adapter's two declared readings to consult. */

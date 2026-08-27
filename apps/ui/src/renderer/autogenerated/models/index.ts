@@ -1540,7 +1540,8 @@ export interface DiagnosticsReportDtoRuns {
  */
 export const EdgeKind = {
     Data: 'data',
-    Call: 'call'
+    Call: 'call',
+    Instruction: 'instruction'
 } as const;
 export type EdgeKind = typeof EdgeKind[keyof typeof EdgeKind];
 
@@ -2766,7 +2767,7 @@ export interface WorkflowEdge {
      */
     to: string;
     /**
-     * Edge kind — 'data' feeds output text; 'call' grants the call_agent tool
+     * Edge kind — 'data' feeds output text; 'call' grants the call_agent tool; 'instruction' appends instruction text
      * @type {EdgeKind}
      * @memberof WorkflowEdge
      */
@@ -2800,11 +2801,52 @@ export interface WorkflowFileDto {
     workflow: Workflow;
 }
 /**
+ * 
+ * @export
+ * @interface WorkflowInstructionNode
+ */
+export interface WorkflowInstructionNode {
+    /**
+     * Unique node id within the workflow
+     * @type {string}
+     * @memberof WorkflowInstructionNode
+     */
+    id: string;
+    /**
+     * Display name (defaults to id)
+     * @type {string}
+     * @memberof WorkflowInstructionNode
+     */
+    name?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof WorkflowInstructionNode
+     */
+    kind: WorkflowInstructionNodeKindEnum;
+    /**
+     * Instruction text appended to every wired agent’s turn
+     * @type {string}
+     * @memberof WorkflowInstructionNode
+     */
+    instructions: string;
+}
+
+
+/**
+ * @export
+ */
+export const WorkflowInstructionNodeKindEnum = {
+    Instruction: 'instruction'
+} as const;
+export type WorkflowInstructionNodeKindEnum = typeof WorkflowInstructionNodeKindEnum[keyof typeof WorkflowInstructionNodeKindEnum];
+
+/**
  * @type WorkflowNode
  * 
  * @export
  */
-export type WorkflowNode = WorkflowAgentNode | WorkflowTriggerNode;
+export type WorkflowNode = WorkflowAgentNode | WorkflowInstructionNode | WorkflowTriggerNode;
 /**
  * 
  * @export

@@ -2,7 +2,12 @@ import { BadRequestException } from '@packages/common';
 import { describe, expect, it } from 'vitest';
 
 import type { WorkflowEdge, WorkflowNode } from '../graphs.types';
-import { buildEdgeMaps, computeRunOrder, onDemandNodeIds } from './graph-order';
+import {
+  buildEdgeMaps,
+  computeRunOrder,
+  isNonExecutableNode,
+  onDemandNodeIds,
+} from './graph-order';
 
 function node(id: string): WorkflowNode {
   return { id, kind: 'agent', agent: 'claude', approval: 'auto' };
@@ -112,5 +117,62 @@ describe('onDemandNodeIds', () => {
   it('nodes without call edges are never on-demand', () => {
     const nodes = [node('a'), node('b')];
     expect(onDemandNodeIds(nodes, [data('a', 'b')]).size).toBe(0);
+  });
+});
+
+function instructionBlock(id: string): WorkflowNode {
+  return { id, kind: 'instruction', instructions: 'Be terse.' };
+}
+
+function instructionEdge(from: string, to: string): WorkflowEdge {
+  return { from, to, kind: 'instruction' };
+}
+
+describe('onDemandNodeIds and instruction edges', () => {
+  // An instruction edge feeds no prompt, so it must not count as a data input:
+  // treating it as one makes a call-only callee look DAG-scheduled, and the
+  // walk then waits on a node it never launches.
+  it('leaves a call-only callee on demand when an instruction block is wired to it', () => {
+    const nodes = [
+      node('caller'),
+      node('callee'),
+      instructionBlock('house-style'),
+    ];
+    const edges = [
+      call('caller', 'callee'),
+      instructionEdge('house-style', 'callee'),
+    ];
+    expect([...onDemandNodeIds(nodes, edges)]).toEqual(['callee']);
+  });
+
+  it('still takes a real data input off the on-demand set', () => {
+    const nodes = [node('caller'), node('callee'), node('feeder')];
+    const edges = [call('caller', 'callee'), data('feeder', 'callee')];
+    expect([...onDemandNodeIds(nodes, edges)]).toEqual([]);
+  });
+});
+
+describe('isNonExecutableNode', () => {
+  it('is true for an instruction block and false for the kinds that run', () => {
+    expect(isNonExecutableNode(instructionBlock('note'))).toBe(true);
+    expect(isNonExecutableNode(node('a'))).toBe(false);
+    expect(isNonExecutableNode({ kind: 'trigger' })).toBe(false);
+  });
+});
+
+describe('computeRunOrder with instruction blocks', () => {
+  // An instruction edge orders nothing, so a block wired to an agent must not
+  // become one of that agent's producers — the agent stays a root and the
+  // trigger-fed chain keeps its shape.
+  it('does not make an instruction block a producer of its target', () => {
+    const nodes = [node('writer'), instructionBlock('style')];
+    const edges = [instructionEdge('style', 'writer')];
+    const { producersOf } = buildEdgeMaps(nodes, edges);
+    expect([...(producersOf.get('writer') ?? [])]).toEqual([]);
+    expect(
+      computeRunOrder(nodes, edges)
+        .map((n) => n.id)
+        .sort(),
+    ).toEqual(['style', 'writer']);
   });
 });

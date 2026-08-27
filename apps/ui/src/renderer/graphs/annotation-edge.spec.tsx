@@ -29,7 +29,7 @@ vi.mock('@xyflow/react', () => ({
   getBezierPath: () => ['M0 0 L100 0', 50, 0],
 }));
 
-import { CallEdge } from './call-edge';
+import { CallEdge, InstructionEdge } from './annotation-edge';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -143,5 +143,62 @@ describe('CallEdge', () => {
       group.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
     });
     expect(container.querySelector('[data-testid="edge-label"]')).toBeNull();
+  });
+});
+
+describe('InstructionEdge', () => {
+  // Same wire mechanics, its own tone and wording: an instruction block hands
+  // text to an agent, which must not read as the amber "may invoke" wire —
+  // nor as a solid data edge, which is the only kind that orders the run.
+  it('draws a dashed primary-toned bezier with its own arrowhead def', () => {
+    render(
+      <svg>
+        <InstructionEdge {...PROPS} />
+      </svg>,
+    );
+    const path = container.querySelector('[data-testid="edge-path"]')!;
+    expect((path as SVGPathElement).style.stroke).toBe('var(--color-primary)');
+    expect((path as SVGPathElement).style.strokeDasharray).toBe('6 4');
+    expect(path.getAttribute('marker-end')).toBe(
+      'url(#geniro-instruction-arrow)',
+    );
+    expect(
+      container
+        .querySelector('marker#geniro-instruction-arrow')
+        ?.querySelector('path')
+        ?.getAttribute('fill'),
+    ).toBe('var(--color-primary)');
+  });
+
+  it('names itself on the midpoint chip', () => {
+    render(
+      <svg>
+        <InstructionEdge {...PROPS} selected />
+      </svg>,
+    );
+    expect(
+      container.querySelector('[data-testid="edge-label"]')?.textContent,
+    ).toBe('instruction');
+  });
+
+  it('routes a back edge to the identical path the call wire takes', () => {
+    // The two kinds share ONE routing implementation, and the assertion has to
+    // be able to notice if they stop: comparing each against a literal would
+    // pass just as well on a copy-pasted second `backEdgePath`, so the
+    // observable is that both components answer the same for the same props.
+    const back = { sourceX: 100, sourceY: 0, targetX: 0, targetY: 0 };
+    const pathOf = (element: React.ReactNode): string => {
+      render(<svg>{element}</svg>);
+      return container
+        .querySelector('[data-testid="edge-path"]')!
+        .getAttribute('d')!;
+    };
+
+    const instruction = pathOf(<InstructionEdge {...PROPS} {...back} />);
+    expect(instruction).toBe(pathOf(<CallEdge {...PROPS} {...back} />));
+    expect(instruction).toBe(
+      'M 100,0 H 112 Q 124,0 124,12 V 52 Q 124,64 112,64 ' +
+        'H -12 Q -24,64 -24,52 V 12 Q -24,0 -12,0 H 0',
+    );
   });
 });

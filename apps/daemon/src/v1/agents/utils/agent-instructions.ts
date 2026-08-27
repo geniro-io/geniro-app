@@ -81,6 +81,11 @@ export interface TurnInstructionParts {
   includePreamble?: boolean;
   /** The user's own global custom instructions, as snapshotted onto the run. */
   customInstructions?: string | null;
+  /**
+   * The instruction blocks wired to this graph node, already joined. Absent
+   * for plain chat, which has no canvas to wire one on.
+   */
+  instructionBlocks?: string | null;
   /** This turn's own role text — a graph node's `role`. Absent for plain chat. */
   systemPrompt?: string | null;
   /** The "May call" block, already gated on the call tools being registered. */
@@ -93,10 +98,12 @@ export interface TurnInstructionParts {
  * **Order is precedence, and it runs general → specific.** The preamble is
  * first because it is the weakest claim in the stack — facts about the host
  * that anything more specific may qualify. The user's global instructions come
- * next. A graph node's own role comes after them, because a node authored for
- * one job is a more specific instruction than a preference the user set once
- * for every agent. The call surface stays last, where it already was, so this
- * change does not reorder the two parts that existed before it.
+ * next. The instruction blocks wired to this node follow — written for a
+ * handful of agents rather than for every one of them, but not for this node
+ * alone. A graph node's own role comes after all of it, because a node
+ * authored for one job is the most specific instruction in the stack. The call
+ * surface stays last, where it already was, so this change does not reorder
+ * the parts that existed before it.
  *
  * Blank parts are dropped rather than joined as empty paragraphs — a user who
  * has typed nothing into the settings box must not cost the turn a stray blank
@@ -107,6 +114,7 @@ export function composeTurnInstructions(parts: TurnInstructionParts): string {
   return [
     parts.includePreamble === false ? null : GENIRO_UI_PREAMBLE,
     parts.customInstructions,
+    parts.instructionBlocks,
     parts.systemPrompt,
     parts.callSurfacePrompt,
   ]

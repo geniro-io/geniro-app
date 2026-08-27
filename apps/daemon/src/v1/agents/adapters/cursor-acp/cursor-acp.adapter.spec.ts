@@ -547,6 +547,38 @@ describe('CursorAcpAdapter turn shaping', () => {
     );
   });
 
+  it('carries a graph node’s instruction blocks into the prompt text', () => {
+    // The ACP half of the claude argv case: one seam composes the block, so a
+    // field that reaches one transport and not the other is the drift both
+    // these tests exist to catch.
+    const { spawn, child } = fakeSpawn();
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(
+      {
+        ...BASE,
+        customInstructions: 'Always answer in British English.',
+        instructionBlocks: 'Prefer short sentences.',
+        systemPrompt: 'You are a reviewer.',
+      },
+      () => {},
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 2, result: { sessionId: 's' } })}\n`,
+    );
+
+    const prompt = framesOn(child).find(
+      (frame) => frame.method === 'session/prompt',
+    )?.params as { prompt: { text: string }[] };
+    expect(prompt.prompt[0]?.text).toBe(
+      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are a reviewer.`)}`,
+    );
+  });
+
   it('applies a requested model the agent offers, before prompting', () => {
     // The turn used to announce up front that the model had been dropped —
     // ACP does carry one (`session/set_model`, probe-verified on

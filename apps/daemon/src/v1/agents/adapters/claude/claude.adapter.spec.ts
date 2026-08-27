@@ -586,6 +586,32 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
+  it('carries a graph node’s instruction blocks into argv, between the user’s text and the role', () => {
+    // The ONE line that delivers an instruction block to a CLI is
+    // `instructionBlocks: input.instructionBlocks` inside composeSystemPrompt.
+    // Every other test of the feature observes the AgentTurnInput object or
+    // the pure joiner, one layer below it — delete that line and they all stay
+    // green while no agent ever receives a block. This is the assertion that
+    // fails, and the order it pins is the precedence: a block is written once
+    // for several agents, so the node's own role still outranks it.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        customInstructions: 'Always answer in British English.',
+        instructionBlocks: 'Prefer short sentences.',
+        systemPrompt: 'You are the reviewer.',
+      },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are the reviewer.`,
+    );
+  });
+
   it('sends the preamble alone when the user has typed no instructions', () => {
     // The default state for every existing chat, and the reason the preamble is
     // built in rather than seeded into the settings box: an empty box must

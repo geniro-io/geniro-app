@@ -2127,6 +2127,17 @@ export interface AgentTurnInput {
    */
   customInstructions?: string | null;
   /**
+   * The instruction blocks wired to this graph node, already joined by the
+   * executor. Undefined for plain chat and for a node nothing is wired to.
+   *
+   * A THIRD peer beside {@link systemPrompt} and {@link customInstructions};
+   * `composeTurnInstructions` owns where it ranks between them.
+   *
+   * Joined by the executor rather than sent as a list, because the ORDER of
+   * several blocks is a graph fact (the wiring) that no adapter can recover.
+   */
+  instructionBlocks?: string | null;
+  /**
    * Run every turn at the largest window the agent can give it, where the
    * agent HAS such a switch.
    *

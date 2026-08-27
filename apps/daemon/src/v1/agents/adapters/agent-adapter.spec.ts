@@ -1868,3 +1868,55 @@ describe('geniroCommandFor', () => {
     expect(new BareAdapter().listGeniroCommands()).toEqual([]);
   });
 });
+
+describe('AgentAdapter sessions separate on the instruction blocks', () => {
+  /** {@link sessionAfterFirstTurn}'s twin for the graph-node instruction text. */
+  async function sessionAfterBlocks(
+    instructionBlocks: string,
+  ): Promise<ReturnType<AgentAdapter['startSession']>> {
+    const { spawn, child } = fakeSpawn();
+    const input: AgentTurnInput = {
+      prompt: 'first',
+      cwd: '/proj',
+      instructionBlocks,
+    };
+    const session = new SessionWithoutModeChangeAdapter(spawn).startSession(
+      input,
+      { runScoped: true },
+    );
+    const turn = session.startTurn(input, () => {});
+    child.stdout.emitData('{"done":true}\n');
+    await turn?.done;
+    return session;
+  }
+
+  it('refuses to serve a turn whose instruction blocks differ from the spawn’s', async () => {
+    // The blocks ride the same composed block as the role and the user's own
+    // instructions, so they belong to the SPAWN. No graph path uses a kept
+    // session today — the executor calls `start()` — which is what makes this
+    // a guard rather than a live path, and why it is pinned now: the moment
+    // one does, two nodes wired to different blocks would share a process and
+    // the second would run on the first's instructions.
+    const session = await sessionAfterBlocks('BLOCK A');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', instructionBlocks: 'BLOCK B' },
+        () => {},
+      ),
+    ).toBeNull();
+  });
+
+  it('still reuses the process when the blocks are unchanged', async () => {
+    // The control: an implementation refusing every second turn would pass the
+    // test above while costing every kept process its reuse.
+    const session = await sessionAfterBlocks('BLOCK A');
+
+    expect(
+      session.startTurn(
+        { prompt: 'second', cwd: '/proj', instructionBlocks: 'BLOCK A' },
+        () => {},
+      ),
+    ).not.toBeNull();
+  });
+});

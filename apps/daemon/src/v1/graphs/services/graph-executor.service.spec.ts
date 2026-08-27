@@ -31,6 +31,7 @@ import { CursorAcpAdapter } from '../../agents/adapters/cursor-acp/cursor-acp.ad
 import {
   ChatApprovalModeSchema,
   type ClaudeModesCapability,
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
 import type { ItemDao } from '../../agents/dao/item.dao';
@@ -52,7 +53,11 @@ import type { Item } from '../../runs/entity/item.entity';
 import type { NodeState } from '../../runs/entity/node-state.entity';
 import type { Run } from '../../runs/entity/run.entity';
 import { errorOf } from '../__tests__/call-envelope';
-import { ApprovalModeSchema, type Workflow } from '../graphs.types';
+import {
+  ApprovalModeSchema,
+  type Workflow,
+  type WorkflowNode,
+} from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
 import type { WorkflowStoreService } from './workflow-store.service';
@@ -3334,5 +3339,286 @@ describe('GraphExecutorService — deleting a workflow run', () => {
   it('404s on a run that does not exist', async () => {
     const { service } = setup();
     await expect(service.deleteRun('nope')).rejects.toThrow();
+  });
+});
+
+describe('instruction blocks', () => {
+  // Node order and edge order deliberately DISAGREE: the blocks are listed
+  // style-then-safety while the wires are safety-then-style, so the assertion
+  // below can only pass on the node-list order the executor promises.
+  const NOTED_WF: Workflow = {
+    name: 'noted',
+    nodes: [
+      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      {
+        id: 'writer',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You write.',
+      },
+      {
+        id: 'style',
+        kind: 'instruction',
+        instructions: 'Prefer short sentences.',
+      },
+      {
+        id: 'safety',
+        kind: 'instruction',
+        instructions: 'Never delete files.',
+      },
+    ],
+    edges: [
+      { from: 'start', to: 'writer', kind: 'data' },
+      { from: 'safety', to: 'writer', kind: 'instruction' },
+      { from: 'style', to: 'writer', kind: 'instruction' },
+    ],
+  };
+
+  it('hands every wired block to the turn without displacing the node role', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'n',
+      workflow: NOTED_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const turn = claude.starts[0]!;
+    expect(turn.input.instructionBlocks).toBe(
+      'Prefer short sentences.\n\nNever delete files.',
+    );
+    expect(turn.input.systemPrompt).toBe('You write.');
+
+    // The run settles on the trigger and the agent ALONE. A block left in the
+    // settled denominator would never settle — nothing ever launches one — and
+    // the run would read `running` for ever, which is the failure this
+    // exclusion exists to prevent.
+    completeTurn(turn, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('writes no node-state row for a block, which never has a status to report', async () => {
+    const { service, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'n',
+      workflow: NOTED_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(nodeDao.row(run.id, 'writer')).toBeDefined();
+    expect(nodeDao.row(run.id, 'style')).toBeUndefined();
+    expect(nodeDao.row(run.id, 'safety')).toBeUndefined();
+  });
+
+  it('leaves the field unset for a node no block is wired to', async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'n',
+      workflow: {
+        ...NOTED_WF,
+        edges: [{ from: 'start', to: 'writer', kind: 'data' }],
+      },
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.instructionBlocks).toBeNull();
+  });
+
+  it('skips a block nobody wrote text into', async () => {
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'n',
+      workflow: {
+        ...NOTED_WF,
+        nodes: NOTED_WF.nodes.map((n) =>
+          n.id === 'style'
+            ? { ...n, kind: 'instruction' as const, instructions: '  ' }
+            : n,
+        ),
+      },
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.instructionBlocks).toBe(
+      'Never delete files.',
+    );
+  });
+});
+
+describe('instruction blocks on a call-only callee', () => {
+  // The case the `onDemandNodeIds` edge-kind fix exists for, at RUN level.
+  // A callee wired to a block gains an incoming edge; counting that edge as a
+  // data input would make the callee look DAG-scheduled, and the walk would
+  // then wait for a node it never launches.
+  const CALLEE_NOTED_WF: Workflow = {
+    name: 'callee-noted',
+    nodes: [
+      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      {
+        id: 'orch',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You orchestrate.',
+      },
+      {
+        id: 'helper',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        description: 'Helps.',
+        role: 'You help.',
+      },
+      {
+        id: 'style',
+        kind: 'instruction',
+        instructions: 'Prefer short sentences.',
+      },
+    ],
+    edges: [
+      { from: 'start', to: 'orch', kind: 'data' },
+      { from: 'orch', to: 'helper', kind: 'call' },
+      { from: 'style', to: 'helper', kind: 'instruction' },
+    ],
+  };
+
+  it('leaves the callee on demand and hands it the block when it is called', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'cn',
+      workflow: CALLEE_NOTED_WF,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    // Only the caller has been launched — the callee is still on demand.
+    expect(claude.starts).toHaveLength(1);
+    expect(claude.starts[0]!.input.systemPrompt).toBe('You orchestrate.');
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    const callee = claude.starts[1]!;
+    expect(callee.input.instructionBlocks).toBe('Prefer short sentences.');
+    expect(callee.input.systemPrompt).toBe('You help.');
+
+    completeTurn(callee, 'helped');
+    expect(await envelope).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
+    });
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+});
+
+describe('instruction blocks past the ceiling', () => {
+  // The schema caps each block; what reaches argv is the JOIN, and a node's
+  // instruction in-degree is unbounded. Two blocks that each fit individually
+  // cannot both be sent, so the second is withheld and NAMED — an imported
+  // workflow could otherwise wire enough text into one agent to blow ARG_MAX
+  // and kill every turn of that node inside `spawn`.
+  const wide = (label: string, chars: number): WorkflowNode => ({
+    id: label,
+    name: `Block ${label}`,
+    kind: 'instruction',
+    instructions: 'x'.repeat(chars),
+  });
+
+  function workflowWith(nodes: WorkflowNode[]): Workflow {
+    return {
+      name: 'wide',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'writer', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ...nodes,
+      ],
+      edges: [
+        { from: 'start', to: 'writer', kind: 'data' },
+        ...nodes.map((n) => ({
+          from: n.id,
+          to: 'writer',
+          kind: 'instruction' as const,
+        })),
+      ],
+    };
+  }
+
+  it('sends what fits, withholds the rest, and names the blocks it withheld', async () => {
+    const { service, claude, itemDao } = setup();
+    const half = Math.floor(MAX_CUSTOM_INSTRUCTIONS_CHARS / 2);
+    await service.startRun({
+      slug: 'w',
+      // Two blocks of half the ceiling plus the separator cannot both fit.
+      workflow: workflowWith([wide('a', half), wide('b', half)]),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const sent = claude.starts[0]!.input.instructionBlocks;
+    expect(sent).toBe('x'.repeat(half));
+    expect(sent!.length).toBeLessThanOrEqual(MAX_CUSTOM_INSTRUCTIONS_CHARS);
+
+    const notice = itemDao.items.find(
+      (item) =>
+        item.kind === 'system' &&
+        String(JSON.parse(item.payload).message).includes(
+          'more instruction text than one turn can carry',
+        ),
+    );
+    // Named by the block's own display name, so the user can find it.
+    expect(String(JSON.parse(notice!.payload).message)).toContain('Block b');
+  });
+
+  it('keeps a later block that still fits after a wide one is withheld', async () => {
+    // The withheld block does not end the walk — a short block after it is
+    // still the user's instruction and still fits.
+    const { service, claude } = setup();
+    await service.startRun({
+      slug: 'w',
+      workflow: workflowWith([
+        wide('a', MAX_CUSTOM_INSTRUCTIONS_CHARS - 20),
+        wide('b', MAX_CUSTOM_INSTRUCTIONS_CHARS),
+        wide('c', 5),
+      ]),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.instructionBlocks).toBe(
+      `${'x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS - 20)}\n\n${'x'.repeat(5)}`,
+    );
+  });
+
+  it('sends nothing and still runs when the only block is itself too wide', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'w',
+      workflow: workflowWith([wide('a', MAX_CUSTOM_INSTRUCTIONS_CHARS + 1)]),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(claude.starts[0]!.input.instructionBlocks).toBeNull();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
   });
 });

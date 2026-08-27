@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { NODE_DND_MIME, NodePalette, parsePaletteItem } from './node-palette';
+import {
+  NODE_DND_MIME,
+  NodePalette,
+  paletteNode,
+  parsePaletteItem,
+} from './node-palette';
 import { NODE_CONNECTION_RULES, NODE_TYPE_SCHEMAS } from './node-schema';
 
 (
@@ -60,11 +65,12 @@ function dialog(): Element | null {
 }
 
 describe('NodePalette', () => {
-  it('renders one draggable tile per trigger and agent', () => {
+  it('renders one draggable tile per trigger, agent and instruction block', () => {
     render();
-    expect(tiles()).toHaveLength(3); // Manual + Claude + Cursor
+    expect(tiles()).toHaveLength(4); // Manual + Claude + Cursor + Instructions
     expect(container.textContent).toContain('Triggers');
     expect(container.textContent).toContain('Agents');
+    expect(container.textContent).toContain('Instructions');
     expect(container.textContent).toContain('Manual');
     expect(container.textContent).toContain('Claude');
     expect(container.textContent).toContain('Cursor');
@@ -215,26 +221,27 @@ describe('NodePalette', () => {
 
   it('folds the whole panel to a rail and expands again', () => {
     render();
-    expect(tiles()).toHaveLength(3);
+    expect(tiles()).toHaveLength(4);
 
     click(byLabel('Collapse palette'));
     expect(tiles()).toHaveLength(0); // folded — tiles gone
 
     click(byLabel('Expand palette'));
-    expect(tiles()).toHaveLength(3);
+    expect(tiles()).toHaveLength(4);
   });
 
-  it('collapses one category block without touching the other', () => {
+  it('collapses one category block without touching the others', () => {
     render();
     const headers = Array.from(
       container.querySelectorAll<HTMLButtonElement>('button'),
     ).filter((b) => b.getAttribute('aria-expanded') === 'true');
-    expect(headers).toHaveLength(2); // Triggers + Agents
+    expect(headers).toHaveLength(3); // Triggers + Agents + Instructions
 
     const agentsHeader = headers.find((b) => b.textContent?.includes('Agents'));
     click(agentsHeader);
     expect(agentsHeader?.getAttribute('aria-expanded')).toBe('false');
-    expect(tiles()).toHaveLength(1); // Manual stays; Claude/Cursor hidden
+    // Manual and the instruction block stay; Claude/Cursor hidden.
+    expect(tiles()).toHaveLength(2);
   });
 
   it('resizes on drag and persists the new width', () => {
@@ -254,5 +261,47 @@ describe('NodePalette', () => {
 
     expect(width()).toBe(start + 80); // 240 + (320 − 240)
     expect(localStorage.getItem('geniro.builder.paletteWidth')).toBe('320');
+  });
+});
+
+describe('parsePaletteItem — instruction blocks', () => {
+  // A block carries no variant: what distinguishes two of them is the text
+  // somebody writes afterwards, so the payload is the kind alone and the
+  // parser must accept it without looking for a second field.
+  it('accepts a bare instruction payload', () => {
+    expect(parsePaletteItem(JSON.stringify({ kind: 'instruction' }))).toEqual({
+      kind: 'instruction',
+    });
+  });
+
+  it('still refuses an unknown kind', () => {
+    expect(parsePaletteItem(JSON.stringify({ kind: 'webhook' }))).toBeNull();
+  });
+});
+
+describe('paletteNode', () => {
+  // The EMPTY string is load-bearing: it is why the schema admits `\'\'` at all,
+  // and it is what makes a freshly dropped block saveable before anyone has
+  // written into it.
+  it('creates an instruction block with empty text', () => {
+    expect(paletteNode({ kind: 'instruction' }, 'instruction-1')).toEqual({
+      id: 'instruction-1',
+      kind: 'instruction',
+      instructions: '',
+    });
+  });
+
+  it('creates the other kinds with their palette variant', () => {
+    expect(paletteNode({ kind: 'trigger', trigger: 'manual' }, 't1')).toEqual({
+      id: 't1',
+      kind: 'trigger',
+      trigger: 'manual',
+    });
+    expect(paletteNode({ kind: 'agent', agent: 'claude' }, 'a1')).toEqual({
+      id: 'a1',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+    });
   });
 });

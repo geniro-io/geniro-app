@@ -471,11 +471,21 @@ function RunConfigEditor({
   const kind = targetAgentKind(draft.target);
   // Null while closed, so neither list is fetched for a dialog nobody opened.
   const vocabularyKind = open && !workflow ? kind : null;
+  // Every listing below is asked about the CONFIGURATION's own profile, since
+  // each is an ACCOUNT fact — a saved configuration naming a profile has to be
+  // edited against that account's models and levels, not the composer's.
+  const vocabularyConfigDir = open && !workflow ? draft.configDir : null;
   const { models, loading: modelsLoading } = useAgentModels(
     agentsApi,
     vocabularyKind,
+    vocabularyConfigDir,
   );
-  const efforts = useAgentEfforts(agentsApi, vocabularyKind);
+  const efforts = useAgentEfforts(
+    agentsApi,
+    vocabularyKind,
+    null,
+    vocabularyConfigDir,
+  );
   // Asked WITH the draft's model, unlike the effort listing above: a window
   // size belongs to the model outright, so there is no CLI-wide list to fall
   // back on — asked without one the daemon answers "pick a model first", which
@@ -484,6 +494,7 @@ function RunConfigEditor({
     agentsApi,
     vocabularyKind,
     draft.model,
+    vocabularyConfigDir,
   );
   // Asked about the CONFIGURATION's agent and model like its two neighbours —
   // here it decides which rows exist at all, not only what they contain.
@@ -491,6 +502,7 @@ function RunConfigEditor({
     agentsApi,
     vocabularyKind,
     draft.model,
+    vocabularyConfigDir,
   );
   // Branches of the folder the DRAFT points at, not the composer's.
   const git = useGitInfo(draft.cwd === '' ? null : draft.cwd);

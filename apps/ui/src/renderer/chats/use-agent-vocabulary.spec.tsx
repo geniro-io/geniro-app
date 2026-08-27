@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CliKind } from '../../shared/contracts';
-import { useAgentVocabulary } from './use-agent-vocabulary';
+import { useAgentVocabulary, vocabularyVariant } from './use-agent-vocabulary';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -296,5 +296,31 @@ describe('useAgentVocabulary', () => {
 
     probe.setKind(null);
     expect(probe.latest()).toEqual({ items: [], loading: false });
+  });
+});
+
+describe('vocabularyVariant — the account is part of the question', () => {
+  it('separates two profiles of one model, and the CLI default from both', () => {
+    // Every vocabulary this hook caches is a fact about a SUBSCRIPTION, and the
+    // subscription is the config directory — measured, one login's two profiles
+    // report `max` and `team` from the same binary. Drop the profile and the
+    // first one to ask has its account's models served to every other, which is
+    // the daemon-side defect this mirrors one layer up.
+    const team = vocabularyVariant('opus', '/profiles/team');
+    const max = vocabularyVariant('opus', '/profiles/max');
+    const cliDefault = vocabularyVariant('opus', null);
+
+    expect(new Set([team, max, cliDefault]).size).toBe(3);
+    // …and the MODEL still separates too, so neither dimension swallows the
+    // other.
+    expect(vocabularyVariant('sonnet', '/profiles/team')).not.toBe(team);
+  });
+
+  it('cannot be collided by a path that looks like the join', () => {
+    // NUL-joined precisely so no (model, profile) pair can be spelled as
+    // another by concatenation.
+    expect(vocabularyVariant('opus', '/a')).not.toBe(
+      vocabularyVariant('opus/a', null),
+    );
   });
 });

@@ -1239,7 +1239,15 @@ export class GraphExecutorService {
           if (event.type === 'slash_commands') {
             // The CLI's own invokable set for this run's cwd — feeds the
             // composer's `/` autocomplete, never the transcript.
-            this.skillHarvest.record(node.agent, cwd, event.commands);
+            // Keyed by the NODE's config directory for the reason the MCP
+            // harvest below takes it: a CLI answers for the plugins installed
+            // in the profile it is running under.
+            this.skillHarvest.record(
+              node.agent,
+              cwd,
+              node.configDir ?? null,
+              event.commands,
+            );
             return;
           }
           if (event.type === 'mcp_servers') {

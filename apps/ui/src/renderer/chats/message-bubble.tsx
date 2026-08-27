@@ -30,7 +30,13 @@ const bubbleVariants = cva('flex min-w-0 flex-col gap-1 rounded-xl text-sm', {
       call: 'self-start w-full bg-warning/10 border border-warning/30 px-3.5 py-2.5',
       error:
         'self-start max-w-[85%] bg-destructive/10 border border-destructive/30 text-destructive px-3.5 py-2.5',
-      note: 'self-center text-xs text-muted-foreground py-1',
+      // `text-center` beside `self-center`, and the pair is one intent rather
+      // than two: `self-center` centres the BOX, which is all a short row like
+      // `✓ tool approved` ever needed. A note long enough to wrap then filled
+      // the column and read as a left-aligned paragraph — REPORTED against the
+      // profile-switch notice, "this message should be in center". `max-w`
+      // keeps a long one off both edges so the centring is visible at all.
+      note: 'self-center max-w-[76%] text-center text-xs text-muted-foreground py-1',
     },
   },
   defaultVariants: { variant: 'assistant' },

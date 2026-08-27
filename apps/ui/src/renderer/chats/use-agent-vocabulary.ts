@@ -68,9 +68,9 @@ export function useAgentVocabulary<T>(
    *
    * The effort listing needs it: its levels belong to the MODEL, not only to
    * the CLI, so two models are two answers and a kind-only key served the
-   * previous model's list from cache forever. Null for a vocabulary that is
-   * genuinely per-kind (the model picker), which keeps its key exactly what it
-   * was.
+   * previous model's list from cache forever. Every one of these vocabularies
+   * ALSO belongs to the account — see {@link vocabularyVariant}, which is what
+   * every caller composes this from.
    */
   variant: string | null = null,
 ): AgentVocabularyState<T> {
@@ -177,4 +177,25 @@ export function useAgentVocabulary<T>(
     return { items: answered.items, loading: false };
   }
   return { items: NOTHING_YET, loading: true };
+}
+
+/**
+ * The cache dimension every vocabulary hook shares: the model it is about, and
+ * the ACCOUNT it is about.
+ *
+ * The account half is the config directory. Each of these listings is a fact
+ * about a subscription — which models exist, which levels and windows they
+ * take — so two profiles are two answers, and a key without it served the first
+ * profile to ask to every other. The daemon keys its own caches the same way and
+ * for the same reason; this is the renderer's half of it, and a hook that
+ * forgets it would re-introduce the defect one layer up, exactly as the model
+ * dimension once did.
+ *
+ * NUL-joined, since neither a model id nor a path can contain one.
+ */
+export function vocabularyVariant(
+  model: string | null,
+  configDir: string | null,
+): string {
+  return `${model ?? ''}\u0000${configDir ?? ''}`;
 }

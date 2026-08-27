@@ -17,9 +17,11 @@ interface HarvestRecord<T> {
  * is the one byte neither an agent kind nor a path can contain — the same key
  * shape the daemon's MCP cache and the renderer's own caches use.
  *
- * Extra dimensions are appended by the subclass that has them (a config
- * directory changes which MCP servers a folder loads, so the MCP harvest keys
- * by it; skills do not).
+ * Extra dimensions are appended by the subclass that has them — and BOTH
+ * subclasses key by the config directory, because it is the account: it decides
+ * which MCP servers a folder loads and which plugins the CLI reports commands
+ * for. (The skills harvest did not, and served one account's invokable set for
+ * every chat in the folder.)
  */
 export function harvestKey(agent: AgentKind, ...parts: string[]): string {
   return [agent, ...parts].join('\u0000');
@@ -114,6 +116,23 @@ export abstract class HarvestStore<T> {
     return this.now() - record.harvestedAt < this.maxAgeMs
       ? record.entries
       : null;
+  }
+
+  /**
+   * The last report stored under this key WHATEVER its age, or null when there
+   * has never been one.
+   *
+   * The age bound exists to stop a harvest SHADOWING a live read — an answer
+   * served past it would be one nobody re-checks. Showing the user something
+   * while that live read runs is a different act with no such hazard, and it is
+   * the case the expiry note on {@link getAt} already describes: the record is
+   * kept precisely because it stays the best guess available.
+   *
+   * Callers must not answer from this. Paint with it, and let the live read
+   * settle what is true.
+   */
+  protected getAnyAt(key: string): T[] | null {
+    return this.load().get(key)?.entries ?? null;
   }
 
   private load(): Map<string, HarvestRecord<T>> {

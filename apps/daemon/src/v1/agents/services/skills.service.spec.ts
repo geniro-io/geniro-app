@@ -191,7 +191,7 @@ describe('SkillsService', () => {
     writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Ship it');
     // The harvest is keyed by the CANONICAL cwd — exactly what the executor
     // records (its cwd went through resolveValidCwd).
-    harvest.record('claude', realpathSync(cwd), [
+    harvest.record('claude', realpathSync(cwd), null, [
       named('condense'),
       named('deploy'),
       named('review'),
@@ -256,7 +256,7 @@ describe('SkillsService', () => {
     // ACP report is the only place their sentences exist. Reading just the
     // name left every row in the popup a bare word — the reported defect.
     const { service, cwd, harvest } = build();
-    harvest.record('cursor-agent', realpathSync(cwd), [
+    harvest.record('cursor-agent', realpathSync(cwd), null, [
       { name: 'shell', description: 'Runs the rest as a shell command' },
     ]);
 
@@ -278,7 +278,7 @@ describe('SkillsService', () => {
     const { service, cwd, harvest } = build();
     // Frontmatter naming no description and no body to fall back on.
     writeCommand(cwd, '.cursor', 'fix.md', '---\nallowed-tools: Bash\n---\n');
-    harvest.record('cursor-agent', realpathSync(cwd), [
+    harvest.record('cursor-agent', realpathSync(cwd), null, [
       { name: 'fix', description: 'Repair the failing build' },
     ]);
 
@@ -296,7 +296,7 @@ describe('SkillsService', () => {
   it('asks each CLI only about itself', async () => {
     const { service, cwd, harvest, claude, cursor } = build([named('clear')]);
     writeCommand(cwd, '.cursor', 'fix.md', 'Fix the thing.');
-    harvest.record('claude', realpathSync(cwd), [named('condense')]);
+    harvest.record('claude', realpathSync(cwd), null, [named('condense')]);
 
     // The claude harvest and the claude catalog are claude's alone: neither
     // may leak into what a cursor chat is told it can run.

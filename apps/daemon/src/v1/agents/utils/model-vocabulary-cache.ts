@@ -107,10 +107,11 @@ export class ModelVocabularyCache<T> {
   async read(
     kind: AgentKind,
     model: string | null,
+    configDir: string | null,
     version: string | null,
     fetch: (previous: T | undefined) => Promise<T | VolatileAnswer<T>>,
   ): Promise<T> {
-    const key = keyFor(kind, model);
+    const key = keyFor(kind, model, configDir);
     const cached = this.entries.get(key);
     if (
       cached &&
@@ -159,8 +160,12 @@ export class ModelVocabularyCache<T> {
    * exists precisely so a caller need not. A CLI upgraded inside the TTL is the
    * one case that answers from the previous binary's vocabulary.
    */
-  fresh(kind: AgentKind, model: string | null): T | undefined {
-    const entry = this.entries.get(keyFor(kind, model));
+  fresh(
+    kind: AgentKind,
+    model: string | null,
+    configDir: string | null,
+  ): T | undefined {
+    const entry = this.entries.get(keyFor(kind, model, configDir));
     if (!entry || this.options.now() - entry.fetchedAt >= this.options.ttlMs) {
       return undefined;
     }
@@ -184,7 +189,20 @@ export class ModelVocabularyCache<T> {
 }
 
 /**
- * `(agent, model)` — a null model is its own key, not a missing one.
+ * `(agent, model, configDir)` — a null model is its own key, not a missing one,
+ * and so is a null config directory.
+ *
+ * THE CONFIG DIRECTORY IS THE ACCOUNT, and everything cached here is an ACCOUNT
+ * fact: which models exist, what efforts one takes, what context windows it
+ * offers. A key without it served one subscription's vocabulary to a chat
+ * running on another — silently, since a model list looks equally plausible
+ * either way. Measured on the reporter's own machine: the two profiles of one
+ * login report different subscriptions (`max` against `team`) from the same CLI
+ * binary, so the version already in the entry cannot stand in for it.
+ *
+ * A CLI whose account is NOT decided by a config directory — cursor, whose
+ * `configDir.unavailableReason` says exactly that — passes null and keeps the
+ * key it always had.
  *
  * Joined on a character no model id can contain, written as the ESCAPE and
  * never as the raw byte: a NUL inside a `.ts` file makes git classify the blob
@@ -192,6 +210,10 @@ export class ModelVocabularyCache<T> {
  * own pre-commit hook refuses one for exactly that reason. The two are the
  * same code unit at runtime, so nothing about the key changes.
  */
-function keyFor(kind: AgentKind, model: string | null): string {
-  return `${kind}\u0000${model ?? ''}`;
+function keyFor(
+  kind: AgentKind,
+  model: string | null,
+  configDir: string | null,
+): string {
+  return `${kind}\u0000${model ?? ''}\u0000${configDir ?? ''}`;
 }

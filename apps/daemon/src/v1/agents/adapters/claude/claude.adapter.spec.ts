@@ -26,6 +26,7 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
 } from '../adapter.types';
+import type { AgentSkillsInput } from '../adapter.types';
 import { ClaudeAdapter } from './claude.adapter';
 import {
   CLAUDE_ARTIFACT_ENV,
@@ -1435,9 +1436,58 @@ describe('ClaudeAdapter — skills and commands on disk', () => {
     writeFileSync(path, content);
   }
 
-  function build(): { cwd: string; homeDir: string } {
-    return { cwd: tempDir('claude-cwd-'), homeDir: tempDir('claude-home-') };
+  function build(): AgentSkillsInput {
+    return {
+      cwd: tempDir('claude-cwd-'),
+      homeDir: tempDir('claude-home-'),
+      configDir: null,
+    };
   }
+
+  /** A skill/command inside a PROFILE, where they sit one level shallower. */
+  function writeProfileSkill(
+    profile: string,
+    name: string,
+    desc: string,
+  ): void {
+    const dir = join(profile, 'skills', name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(dir + '/SKILL.md', `---\ndescription: ${desc}\n---\nBody.\n`);
+  }
+
+  it("scans the RUN's profile instead of the home dir, not beside it", async () => {
+    // A config directory REPLACES the CLI's home configuration — it does not
+    // add to it — so a chat on a profile must be offered that account's skills
+    // and not the default account's. Measured on the reporter's machine,
+    // `~/.claude` held 10 plugins and 2 skills while each of their profiles
+    // held 7 plugins and a command of its own, none of which the `/` menu could
+    // offer. Revert `listSkills` to the home dir and this fails twice over.
+    const { cwd, homeDir } = build();
+    const profile = tempDir('claude-profile-');
+    writeSkill(homeDir, 'home-only', 'description: The default account');
+    writeProfileSkill(profile, 'profile-only', 'This account');
+
+    const found = await new ClaudeAdapter().listSkills({
+      cwd,
+      homeDir,
+      configDir: profile,
+    });
+
+    expect(found.map((entry) => entry.name)).toEqual(['profile-only']);
+  });
+
+  it('keeps the home dir when the run names no profile', async () => {
+    const { cwd, homeDir } = build();
+    writeSkill(homeDir, 'home-only', 'description: The default account');
+
+    const found = await new ClaudeAdapter().listSkills({
+      cwd,
+      homeDir,
+      configDir: null,
+    });
+
+    expect(found.map((entry) => entry.name)).toEqual(['home-only']);
+  });
 
   it('scans skills and commands from the project folder and from ~', async () => {
     const { cwd, homeDir } = build();
@@ -1446,7 +1496,9 @@ describe('ClaudeAdapter — skills and commands on disk', () => {
     writeSkill(homeDir, 'zsh-help', 'description: Home skill');
     writeCommand(homeDir, 'auth.md', 'Check auth flows.');
 
-    expect(await new ClaudeAdapter().listSkills({ cwd, homeDir })).toEqual([
+    expect(
+      await new ClaudeAdapter().listSkills({ cwd, homeDir, configDir: null }),
+    ).toEqual([
       {
         name: 'deploy',
         description: 'Ship it',
@@ -1483,7 +1535,11 @@ describe('ClaudeAdapter — skills and commands on disk', () => {
     writeCommand(cwd, 'deploy.md', '---\ndescription: Project command\n---\n');
     writeSkill(homeDir, 'deploy', 'name: deploy\ndescription: User skill');
 
-    const found = await new ClaudeAdapter().listSkills({ cwd, homeDir });
+    const found = await new ClaudeAdapter().listSkills({
+      cwd,
+      homeDir,
+      configDir: null,
+    });
     expect(found.map((entry) => entry.description)).toEqual([
       'Project skill',
       'Project command',
@@ -1494,7 +1550,7 @@ describe('ClaudeAdapter — skills and commands on disk', () => {
   it('returns [] when no skill/command directories exist at all', async () => {
     const { cwd, homeDir } = build();
     await expect(
-      new ClaudeAdapter().listSkills({ cwd, homeDir }),
+      new ClaudeAdapter().listSkills({ cwd, homeDir, configDir: null }),
     ).resolves.toEqual([]);
   });
 
@@ -1504,7 +1560,7 @@ describe('ClaudeAdapter — skills and commands on disk', () => {
     writeFileSync(join(cwd, '.cursor', 'commands', 'fix.md'), 'Fix it.');
 
     await expect(
-      new ClaudeAdapter().listSkills({ cwd, homeDir }),
+      new ClaudeAdapter().listSkills({ cwd, homeDir, configDir: null }),
     ).resolves.toEqual([]);
   });
 });
@@ -2130,7 +2186,7 @@ describe('ClaudeAdapter — models', () => {
 
     const models = await new ConfiguredClaudeAdapter({
       homeDir: emptyHome(),
-    }).listModels();
+    }).listModels({ configDir: null });
 
     expect(models).toEqual([
       {
@@ -2141,12 +2197,50 @@ describe('ClaudeAdapter — models', () => {
     ]);
   });
 
+  it("reads the account models out of the RUN's profile, not the home dir", async () => {
+    // The extra models an account offers are cached by the CLI inside the
+    // config directory's own `.claude.json`, so reading the home copy answered
+    // with the DEFAULT profile's account for every chat whatever subscription
+    // it ran on. Measured on the reporter's machine, one login's two profiles
+    // report different subscriptions (`max` against `team`) from the same
+    // binary — so no version check could have caught it, and their cached lists
+    // happening to coincide is why it had to be found by reading.
+    const homeDir = mkdtempSync(join(tmpdir(), 'claude-home-'));
+    const profile = mkdtempSync(join(tmpdir(), 'claude-profile-'));
+    dirs.push(homeDir, profile);
+    writeFileSync(
+      join(homeDir, '.claude.json'),
+      JSON.stringify({
+        additionalModelOptionsCache: [
+          { value: 'default-account-model', label: 'Default account' },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(profile, '.claude.json'),
+      JSON.stringify({
+        additionalModelOptionsCache: [
+          { value: 'this-account-model', label: 'This account' },
+        ],
+      }),
+    );
+
+    const models = await new ClaudeAdapter({ homeDir }).listModels({
+      configDir: profile,
+    });
+
+    expect(models.map((model) => model.id)).toContain('this-account-model');
+    expect(models.map((model) => model.id)).not.toContain(
+      'default-account-model',
+    );
+  });
+
   it('offers the shipped aliases as the floor of a stock adapter', async () => {
     // The other half: the config the adapter actually ships must carry the
     // documented tier aliases, so a real install's picker is never empty.
     const models = await new ClaudeAdapter({
       homeDir: emptyHome(),
-    }).listModels();
+    }).listModels({ configDir: null });
 
     expect(models.map((model) => model.id)).toEqual([
       'opus',
@@ -2293,7 +2387,7 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
 
     await adapter.setMcpServerEnabled('/proj', 'sentry', false);
 
-    expect((await adapter.readMcpFolderFacts('/proj')).disabled).toEqual([
+    expect((await adapter.readMcpFolderFacts('/proj', null)).disabled).toEqual([
       'sentry',
     ]);
   });

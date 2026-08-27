@@ -68,6 +68,7 @@ export class ModelParametersService {
   async list(
     kind: AgentKind,
     model: string | null = null,
+    configDir: string | null = null,
   ): Promise<AgentModelParameterListing> {
     const version = await this.versions.resolve(kind, {
       onSpawn: (child, spawnInfo) =>
@@ -76,7 +77,10 @@ export class ModelParametersService {
           childProcessHandle(child, spawnInfo),
         ),
     });
-    return this.cache.read(kind, model, version, (previous) =>
+    // Keyed by the PROFILE as well, because this is an account fact — the
+    // adapter says whether its own account is a directory at all.
+    const profile = this.adapters.for(kind).vocabularyProfile(configDir);
+    return this.cache.read(kind, model, profile, version, (previous) =>
       this.fetch(kind, model, previous),
     );
   }
@@ -85,8 +89,9 @@ export class ModelParametersService {
   async listWire(
     kind: AgentKind,
     model: string | null = null,
+    configDir: string | null = null,
   ): Promise<AgentModelParameterListingWire> {
-    const listing = await this.list(kind, model);
+    const listing = await this.list(kind, model, configDir);
     return {
       parameters: listing.parameters,
       unavailableReason: listing.unavailableReason,

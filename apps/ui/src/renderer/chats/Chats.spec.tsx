@@ -69,6 +69,7 @@ const agentsApi = vi.hoisted(() => ({
   // — and whether it is asked at all — is the whole contract behind the panel's
   // lazy disclosure.
   listAgentMcpServers: vi.fn(),
+  recheckAgentMcpServer: vi.fn(),
   listAgentModels: vi.fn(),
   listAgentEfforts: vi.fn(),
 }));
@@ -711,6 +712,7 @@ beforeEach(() => {
   // an un-reset spy lets a later test pass on an earlier one's press.
   cliAuthApi.startCliLogin.mockReset();
   cliAuthApi.startMcpLogin.mockReset();
+  agentsApi.recheckAgentMcpServer.mockReset();
 });
 
 afterEach(async () => {
@@ -7512,13 +7514,56 @@ describe('Chats — signing a server in', () => {
     message: 'Waiting for authorization…',
   };
 
-  it('asks for the MCP list under the profile the FOLDER pins, not the one the chat picked', async () => {
-    // REPORTED as "Chat cn see datadog, but i cant see it in the list". The
-    // panel asked with the run's own `configDir` while the CLI had applied the
-    // folder's `env.CLAUDE_CONFIG_DIR` over it — measured on the reporter's own
-    // folder at 15 servers against 50, with the row they were looking for only
-    // in the second. Revert `effectiveConfigDir` at the call site and this
-    // asserts the requested profile instead.
+  it('names the profile the CHAT picked on the chip, whatever the folder pins', async () => {
+    // This asserted the opposite for a release. The report behind it — "Its
+    // again showing different account plan", `Plan limits · TEAM` under a chip
+    // reading `-personal` — turned out to hold no contradiction at all: the
+    // config directory decides which credentials and MCP servers a turn uses,
+    // while the PLAN comes from whatever account those credentials are, and
+    // probing both of the reporter's profiles returns `subscription_type:
+    // "team"` on the same five-hour bucket. A directory is not a subscription.
+    // The override invented to explain it does not exist either: from that same
+    // pinned folder on 2.1.247, `CLAUDE_CONFIG_DIR` decided the profile every
+    // time and setting none loaded the CLI's default rather than the pin.
+    api.listChats.mockResolvedValue([
+      {
+        ...chatIn('r1', 'First chat', '/proj-a'),
+        configDir: '/profiles/personal',
+        configDirPin: {
+          effective: '/profiles/team',
+          source: '/proj-a/.claude/settings.local.json',
+        },
+      },
+    ]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+
+    const chip = container.querySelector<HTMLElement>(
+      '[aria-label="Agent config directory this chat runs as"]',
+    );
+    expect(chip?.textContent).toContain('personal');
+    expect(chip?.textContent).not.toContain('team');
+    // It names no folder file either: a pin that decides nothing must not be
+    // reported as having decided this.
+    expect(chip?.getAttribute('title')).not.toContain('settings.local.json');
+    // And it stays PICKABLE. It was disabled under a pin for one pass, on the
+    // reasoning that a control whose value cannot move is a lie — REPORTED as
+    // "now i cant change profile at all", which by then it genuinely could not.
+    expect((chip as HTMLButtonElement | null)?.disabled).toBe(false);
+  });
+
+  it('asks for the MCP list under the profile the CHAT runs as, not a folder pin', async () => {
+    // REPORTED as "Chat cn see datadog, but i cant see it in the list", 15
+    // servers against 50 — and the cause was the HARVEST STORE having been
+    // keyed `configDir: null`, so the panel asked under the CLI's default while
+    // the chat ran under the profile it was configured with. That is fixed in
+    // `ChatService`. This test spent a release asserting the pinned profile
+    // instead, which is a second explanation layered onto an already-fixed
+    // defect — and one the CLI refutes: from a pinned folder on 2.1.247 the
+    // profile geniro names wins every time. The ask must therefore carry the
+    // run's own directory, which is the one its turns actually load.
     api.listChats.mockResolvedValue([
       {
         ...chatIn('r1', 'First chat', '/proj-a'),
@@ -7544,8 +7589,8 @@ describe('Chats — signing a server in', () => {
     const asked = agentsApi.listAgentMcpServers.mock.calls.map(
       (call) => (call[0] as { configDir?: string | null }).configDir,
     );
-    expect(asked).toContain('/profiles/team');
-    expect(asked).not.toContain('/profiles/personal');
+    expect(asked).toContain('/profiles/personal');
+    expect(asked).not.toContain('/profiles/team');
   });
 
   it('signs in against the RUN’s folder, not the composer’s', async () => {
@@ -7570,6 +7615,86 @@ describe('Chats — signing a server in', () => {
       cwd: '/proj-a',
       server: 'linear',
     });
+  });
+
+  it('keeps the row busy after the command exits, while the browser half runs', async () => {
+    // `claude mcp login` EXITS as soon as it has handed the challenge to the
+    // browser — probe-verified, under a second — so the session is already
+    // `succeeded` while the user is still authorizing. Measured on a real
+    // connector at 15–20s, during which the row offered a live Sign in button.
+    // Pressing it again there opens a SECOND challenge and invalidates the
+    // first, which is the one thing this control must not invite. Revert
+    // `mcpSigningIn` to `starting` alone and this fails.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    // The settle re-checks the row; it still needs auth, which is the state
+    // this test is about.
+    agentsApi.recheckAgentMcpServer.mockResolvedValue(needsAuth);
+    cliAuthApi.startMcpLogin.mockResolvedValue({
+      ...waitingSession,
+      status: 'succeeded' as const,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // The panel is still up — the listing still says `needs_auth`, so this is
+    // the middle of the flow and not its end. Without that the next assertion
+    // would also pass on a dialog that had simply closed.
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).not.toBeNull();
+    // Whether the row hides the button or disables it is the row's business;
+    // what must not exist is a PRESSABLE one, since pressing is what opens the
+    // second challenge.
+    const pressable = [
+      ...container.querySelectorAll<HTMLButtonElement>('button'),
+    ].filter(
+      (button) => button.textContent?.includes('Sign in') && !button.disabled,
+    );
+    expect(pressable).toHaveLength(0);
+  });
+
+  it('takes the panel down once the LISTING says the server is authorized', async () => {
+    // The instruction is about work still to do, so it must not outlive the
+    // work. REPORTED as "it moved to top — but now i see this", with
+    // "Finish signing in in your browser" still sitting under a row that had
+    // just gone green. The LISTING is the authority — never the exit status —
+    // so this waits for the refresh the settle already runs.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    const authorized = {
+      ...needsAuth,
+      servers: [{ ...needsAuth.servers[0]!, status: 'connected' as const }],
+    };
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    // The narrow re-check is what answers after a sign-in — the panel comes
+    // down off ITS answer, never off a full re-read.
+    agentsApi.recheckAgentMcpServer.mockResolvedValue(authorized);
+    cliAuthApi.startMcpLogin.mockResolvedValue({
+      ...waitingSession,
+      status: 'succeeded' as const,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    // The settle re-reads the listing; let that answer land.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('[data-slot="cli-login-progress"]'),
+    ).toBeNull();
   });
 
   it('opens NO terminal window — the daemon runs it and reports back', async () => {
@@ -7597,15 +7722,21 @@ describe('Chats — signing a server in', () => {
     ).not.toBeNull();
   });
 
-  it('re-reads the listing when the window comes back mid sign-in', async () => {
+  it('re-checks THAT SERVER when the window comes back mid sign-in', async () => {
     // The BACKSTOP for the other half of the report — "the status only updated
     // after 30 seconds, probably". The settle is the primary mechanism and it
     // fires when the CLI PROCESS EXITS, so a CLI that lingers after the browser
     // round-trip leaves the row stale for as long as it lingers. Coming back to
     // the window is exactly the moment the answer may have changed, because
     // leaving for a browser tab and returning IS the shape of this flow.
+    //
+    // It re-dials that ONE server rather than the folder, which is the rest of
+    // the same report: "we dont need to update all list of mcps". A full
+    // re-read here costs ~30s on a large profile to answer a question about one
+    // row — so the narrow route is asserted, and the broad one asserted absent.
     api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
     agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    agentsApi.recheckAgentMcpServer.mockResolvedValue(needsAuth);
     cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
     const { client } = makeClient();
     const container = await mount(client);
@@ -7615,15 +7746,27 @@ describe('Chats — signing a server in', () => {
       signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const before = agentsApi.listAgentMcpServers.mock.calls.length;
+    const listedBefore = agentsApi.listAgentMcpServers.mock.calls.length;
+    const rechecked = agentsApi.recheckAgentMcpServer.mock.calls.length;
     await act(async () => {
       window.dispatchEvent(new Event('focus'));
       await Promise.resolve();
     });
 
-    expect(agentsApi.listAgentMcpServers.mock.calls.length).toBeGreaterThan(
-      before,
+    expect(agentsApi.recheckAgentMcpServer.mock.calls.length).toBeGreaterThan(
+      rechecked,
     );
+    expect(agentsApi.recheckAgentMcpServer).toHaveBeenLastCalledWith(
+      {
+        recheckMcpServerDto: {
+          agent: 'claude',
+          cwd: '/proj-a',
+          server: 'linear',
+        },
+      },
+      expect.anything(),
+    );
+    expect(agentsApi.listAgentMcpServers.mock.calls.length).toBe(listedBefore);
   });
 
   it('does NOT re-dial every server just because the window was clicked', async () => {

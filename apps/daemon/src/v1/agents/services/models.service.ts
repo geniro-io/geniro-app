@@ -26,6 +26,22 @@ interface CacheEntry {
 }
 
 /**
+ * `(agent, profile)` — the memory cache's key.
+ *
+ * The PROFILE is in it because a model vocabulary is an ACCOUNT fact and the
+ * account is the config directory: without it, the first chat to ask filed its
+ * subscription's list under the CLI's name and every other account was served
+ * that. The version cannot stand in for it — measured, one login's two profiles
+ * report `max` and `team` from the same binary.
+ *
+ * Joined on a NUL written as its escape, the same rule and the same reason as
+ * `ModelVocabularyCache`'s own key.
+ */
+function cacheKey(kind: AgentKind, profile: string | null): string {
+  return `${kind}\u0000${profile ?? ''}`;
+}
+
+/**
  * Re-ask no more than this often. The list only moves when the CLI or the
  * account changes, and asking cursor costs a process spawn.
  */
@@ -51,7 +67,7 @@ const DEFAULT_TTL_MS = 10 * 60_000;
 @Injectable()
 export class ModelsService {
   private readonly logger = new Logger(ModelsService.name);
-  private readonly cache = new Map<AgentKind, CacheEntry>();
+  private readonly cache = new Map<string, CacheEntry>();
   /**
    * Cold reads already running, keyed by agent — the same single-flight
    * `AgentMcpService` keeps, needed here now for the same reason: listing
@@ -60,7 +76,7 @@ export class ModelsService {
    * account-level answer. Omitting it was safe only while every adapter
    * answered from memory or a file.
    */
-  private readonly inFlight = new Map<AgentKind, Promise<AgentModelWire[]>>();
+  private readonly inFlight = new Map<string, Promise<AgentModelWire[]>>();
   private readonly ttlMs: number;
   private readonly now: () => number;
 
@@ -75,7 +91,10 @@ export class ModelsService {
     this.now = options.now ?? Date.now;
   }
 
-  async list(kind: AgentKind): Promise<AgentModelWire[]> {
+  async list(
+    kind: AgentKind,
+    configDir: string | null = null,
+  ): Promise<AgentModelWire[]> {
     const version = await this.versions.resolve(kind, {
       onSpawn: (child, spawnInfo) =>
         this.processes.register(
@@ -83,7 +102,11 @@ export class ModelsService {
           childProcessHandle(child, spawnInfo),
         ),
     });
-    const cached = this.cache.get(kind);
+    // The adapter says whether its own account is a directory at all, so a CLI
+    // where it decides nothing keeps ONE entry instead of a copy per profile.
+    const profile = this.adapters.for(kind).vocabularyProfile(configDir);
+    const key = cacheKey(kind, profile);
+    const cached = this.cache.get(key);
     if (
       cached &&
       cached.version === version &&
@@ -94,7 +117,7 @@ export class ModelsService {
     // The DURABLE cache, consulted before anything is spawned. Its answer also
     // seeds the memory entry above, so the reads inside the next TTL cost
     // neither a disk map lookup nor a version compare.
-    const stored = this.store.read(kind, null, version, isModelList);
+    const stored = this.store.read(kind, null, profile, version, isModelList);
     if (stored !== null) {
       // Seeded with the CURRENT time, not `stored.fetchedAt`: this is a fresh
       // memory reading of an answer that was already judged fresh enough to
@@ -103,27 +126,27 @@ export class ModelsService {
       // than the TTL but younger than the store's own revalidate window fail
       // the memory check on EVERY call — the disk read and shape walk re-ran
       // per request instead of the intended one-per-TTL-window.
-      this.cache.set(kind, {
+      this.cache.set(key, {
         version,
         fetchedAt: this.now(),
         models: stored.value,
       });
       if (stored.stale) {
-        this.revalidate(kind, version, cached);
+        this.revalidate(kind, key, profile, version, cached);
       }
       return stored.value;
     }
     // Joined AFTER the cache check, so a fresh answer still costs nothing.
-    const running = this.inFlight.get(kind);
+    const running = this.inFlight.get(key);
     if (running) {
       return running;
     }
-    const pending = this.fetch(kind, version, cached);
-    this.inFlight.set(kind, pending);
+    const pending = this.fetch(kind, key, profile, version, cached);
+    this.inFlight.set(key, pending);
     try {
       return await pending;
     } finally {
-      this.inFlight.delete(kind);
+      this.inFlight.delete(key);
     }
   }
 
@@ -149,35 +172,42 @@ export class ModelsService {
    */
   private revalidate(
     kind: AgentKind,
+    key: string,
+    profile: string | null,
     version: string | null,
     cached: CacheEntry | undefined,
   ): void {
-    if (this.inFlight.has(kind)) {
+    if (this.inFlight.has(key)) {
       return;
     }
-    const pending = this.fetch(kind, version, cached);
-    this.inFlight.set(kind, pending);
-    void pending.finally(() => this.inFlight.delete(kind));
+    const pending = this.fetch(kind, key, profile, version, cached);
+    this.inFlight.set(key, pending);
+    void pending.finally(() => this.inFlight.delete(key));
   }
 
   private async fetch(
     kind: AgentKind,
+    key: string,
+    profile: string | null,
     version: string | null,
     cached: CacheEntry | undefined,
   ): Promise<AgentModelWire[]> {
     const adapter: AgentAdapter = this.adapters.for(kind);
     let models: AgentModelWire[];
     try {
-      models = await adapter.listModels({
-        onSpawn: (child, spawnInfo) =>
-          this.processes.register(
-            `models:list:${randomUUID()}`,
-            // Taken from the spawn, not restated: this is the one converted
-            // site that IS handed the real value, so hand-writing `false` here
-            // is the exact drift the required parameter exists to prevent.
-            childProcessHandle(child, spawnInfo),
-          ),
-      });
+      models = await adapter.listModels(
+        { configDir: profile },
+        {
+          onSpawn: (child, spawnInfo) =>
+            this.processes.register(
+              `models:list:${randomUUID()}`,
+              // Taken from the spawn, not restated: this is the one converted
+              // site that IS handed the real value, so hand-writing `false`
+              // here is the exact drift the required parameter prevents.
+              childProcessHandle(child, spawnInfo),
+            ),
+        },
+      );
     } catch (err) {
       // An adapter must not throw here, but a picker with no rows is a dead
       // control — keep the last good answer rather than propagate.
@@ -186,13 +216,13 @@ export class ModelsService {
       );
       return cached?.models ?? [];
     }
-    this.cache.set(kind, { version, fetchedAt: this.now(), models });
+    this.cache.set(key, { version, fetchedAt: this.now(), models });
     // An EMPTY list is deliberately not filed: every adapter answers one when
     // it could not ask, so storing it would re-serve "this CLI has no models"
     // for as long as the entry stood — the same rule the cursor adapter applies
     // to a reply that enumerated nothing.
     if (models.length > 0) {
-      this.store.remember(kind, null, version, models);
+      this.store.remember(kind, null, profile, version, models);
     }
     return models;
   }

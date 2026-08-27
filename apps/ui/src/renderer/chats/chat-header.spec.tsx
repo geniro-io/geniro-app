@@ -411,12 +411,15 @@ describe('ChatHeader — how long this turn has been running', () => {
     expect(el.textContent).toContain('The CLI’s default');
   });
 
-  it('reports the profile the FOLDER pins, not the one the chat asked for', async () => {
-    // The CLI applies a project settings `env` block over the environment
-    // geniro hands it, so the chat's own pick can be overruled and the turn
-    // runs on a different ACCOUNT. REPORTED from the other side — "it's showing
-    // my limits for another account" — where the limits were the honest reading
-    // and this row was the one making a claim the turn did not support.
+  it('reports the profile the chat asked for, and names no folder pin over it', async () => {
+    // This test asserted the OPPOSITE for a release, on an override that
+    // measurement refutes: on claude 2.1.247, from a folder carrying
+    // `env.CLAUDE_CONFIG_DIR` in `.claude/settings.local.json`, the variable
+    // geniro sets decided the profile every time (17 servers for one, 51 for
+    // the other) and setting none loaded the CLI's default's 12 rather than the
+    // folder's. So the row now states the chat's own profile, and the `Pinned
+    // by` row is gone rather than merely unreached — it named a real file
+    // beside a claim that was never true.
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -440,67 +443,28 @@ describe('ChatHeader — how long this turn has been running', () => {
     const profile = [...el.querySelectorAll('li')].find((row) =>
       row.textContent?.startsWith('Profile'),
     )!;
-    // The pinned one is what the agent is on, so it is what the row states.
-    expect(profile.textContent).toContain('/profiles/team');
-    expect(profile.textContent).not.toContain('/profiles/personal');
-    // And the file that decided it is named, with the overruled pick beside it
-    // — the way out of the override is to edit that file.
-    expect(el.textContent).toContain(
-      '/Users/me/Desktop/Projects/Lab/.claude/settings.local.json',
-    );
-    expect(el.textContent).toContain('/profiles/personal');
+    expect(profile.textContent).toContain('/profiles/personal');
+    expect(profile.textContent).not.toContain('/profiles/team');
+    expect(el.textContent).not.toContain('Pinned by');
+    expect(el.textContent).not.toContain('settings.local.json');
   });
 
   it('bounds a long value at three rows and keeps the whole of it on hover', async () => {
-    // The pin row states two full paths and ran to five lines, taller than the
-    // other three rows together. REPORTED as "titles should look as one line,
-    // and the value max 3 rows, then on hover i can see full value" — so the
-    // clamp may not be allowed to LOSE anything, which is what the `title`
-    // carries. jsdom computes no layout, so the clamp itself is unobservable
-    // here; what a test can pin is that nothing is dropped by it.
-    const source = '/Users/me/Desktop/Projects/Lab/.claude/settings.local.json';
+    // REPORTED as "titles should look as one line, and the value max 3 rows,
+    // then on hover i can see full value" — so the clamp may not be allowed to
+    // LOSE anything, which is what the `title` carries. jsdom computes no
+    // layout, so the clamp itself is unobservable here; what a test can pin is
+    // that nothing is dropped by it. Driven off the PROFILE row now that the
+    // pin row is gone — a config directory is the same kind of long absolute
+    // path, and the clamp is a property of the row rather than of any one fact.
+    const configDir =
+      '/Users/me/Desktop/Projects/Lab/profiles/.claude-manifest-lab-personal';
     const el = render(
       <ChatHeader
         {...baseProps}
         agentKind="claude"
         cwd="/Users/me/Desktop/Projects/Lab"
-        configDir="/profiles/personal"
-        configDirPin={{ effective: '/profiles/team', source }}
-      />,
-    );
-
-    const trigger = el
-      .querySelector('[data-slot="thread-identity"]')!
-      .querySelector('button')!;
-    await act(async () => {
-      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    const pinRow = [...el.querySelectorAll('li')].find((row) =>
-      row.textContent?.startsWith('Pinned by'),
-    )!;
-    const spans = [...pinRow.querySelectorAll('span')];
-    const label = spans[0]!;
-    const value = spans[1]!;
-    // The label is one line whatever the panel's width — two words wrapped, and
-    // the wrap pushed its own value up against the row above.
-    expect(label.className).toContain('whitespace-nowrap');
-    // Three rows, and the rest reachable rather than gone.
-    expect(value.className).toContain('line-clamp-3');
-    expect(value.getAttribute('title')).toBe(value.textContent);
-    expect(value.getAttribute('title')).toContain(source);
-    expect(value.getAttribute('title')).toContain('/profiles/personal');
-  });
-
-  it('says nothing about a pin for the folders that have none', async () => {
-    // Which is nearly all of them: an extra row on every chat would make the
-    // override unremarkable, and being remarkable is the whole point of it.
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        agentKind="claude"
-        cwd="/Users/me/Desktop/Projects/Lab"
-        configDir="/profiles/personal"
+        configDir={configDir}
         configDirPin={null}
       />,
     );
@@ -512,8 +476,19 @@ describe('ChatHeader — how long this turn has been running', () => {
       trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    expect(el.textContent).toContain('/profiles/personal');
-    expect(el.textContent).not.toContain('Pinned by');
+    const profileRow = [...el.querySelectorAll('li')].find((row) =>
+      row.textContent?.startsWith('Profile'),
+    )!;
+    const spans = [...profileRow.querySelectorAll('span')];
+    const label = spans[0]!;
+    const value = spans[1]!;
+    // The label is one line whatever the panel's width — two words wrapped, and
+    // the wrap pushed its own value up against the row above.
+    expect(label.className).toContain('whitespace-nowrap');
+    // Three rows, and the rest reachable rather than gone.
+    expect(value.className).toContain('line-clamp-3');
+    expect(value.getAttribute('title')).toBe(value.textContent);
+    expect(value.getAttribute('title')).toContain(configDir);
   });
 });
 

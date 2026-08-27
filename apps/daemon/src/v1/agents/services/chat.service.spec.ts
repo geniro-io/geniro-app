@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import type { EntityManager } from '@mikro-orm/sqlite';
 import {
@@ -148,6 +148,16 @@ class FakeRunDao {
     const run = this.runs.get(id);
     if (run) {
       run.contextTokens = null;
+    }
+  }
+  /** The reading kept from a closed session — see `Run.lastMetricsReading`. */
+  async rememberMetricsReading(
+    id: string,
+    reading: string | null,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.lastMetricsReading = reading;
     }
   }
   /** Mirrors the real write: the window is only ever set, never cleared. */
@@ -513,6 +523,12 @@ function fakeAdapter(kind: AgentKind): {
         unavailableReason: real.getConfig().effortsUnavailableReason,
         exact: false,
       }),
+      // Real, and it has to be: it answers "is this CLI's account a directory"
+      // off that CLI's own config, which is what every vocabulary cache keys
+      // by. Stubbing it would key both doubles the same way and hide exactly
+      // the confusion the key exists to prevent.
+      vocabularyProfile: (configDir: string | null) =>
+        real.vocabularyProfile(configDir),
     } as unknown as ClaudeAdapter,
     start,
     emit: (event) => onEvent?.(event),
@@ -1363,6 +1379,7 @@ describe('ChatService', () => {
     expect(skillHarvest.record).toHaveBeenCalledWith(
       'claude',
       realpathSync(dir),
+      null,
       [
         { name: 'deploy', description: null },
         { name: 'compact', description: null },
@@ -1400,9 +1417,10 @@ describe('ChatService', () => {
     claude.finish();
     await drain();
 
-    // A chat carries no config directory — only a graph node does — and this
-    // null must match the key the panel's own read builds, or the harvest is
-    // written somewhere nothing ever looks.
+    // Null because THIS chat named no profile — not because a chat cannot have
+    // one, which is what this comment used to say. The key must match the one
+    // the panel's own read builds, or the harvest is written somewhere nothing
+    // ever looks; the profile case is pinned directly below.
     expect(mcpHarvest.record).toHaveBeenCalledWith(
       'claude',
       realpathSync(dir),
@@ -1412,6 +1430,47 @@ describe('ChatService', () => {
     expect(
       itemDao.items.filter((item) => item.payload.includes('codegraph')),
     ).toEqual([]);
+  });
+
+  it('files that report under the chat’s OWN profile, not the default one', async () => {
+    // A profile is a separate ACCOUNT with its own servers. Filing every chat's
+    // report under `null` was wrong in both directions: the profile's own panel
+    // found no harvest and paid the full cold dial (~30s on a 47-server
+    // account), while the DEFAULT profile's panel was painted with the other
+    // subscription's servers. Measured on this machine — 15 rows belonging to
+    // `.claude-manifest-lab-personal` shown where the default profile's own
+    // dial found 10.
+    const { service, claude, mcpHarvest } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      configDir: dir,
+    });
+    const codegraph = {
+      name: 'codegraph',
+      target: null,
+      transport: null,
+      status: 'connected' as const,
+      detail: null,
+    };
+
+    await service.sendMessage(run.id, 'go');
+    claude.emit({ type: 'mcp_servers', servers: [codegraph] });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(mcpHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      realpathSync(dir),
+      realpathSync(dir),
+      [codegraph],
+    );
   });
 
   it('synthesizes a turn_complete when the turn ends with no terminal event', async () => {
@@ -4418,9 +4477,12 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     await drain();
 
-    expect(skillHarvest.record).toHaveBeenCalledWith('claude', process.cwd(), [
-      { name: '/review', description: null },
-    ]);
+    expect(skillHarvest.record).toHaveBeenCalledWith(
+      'claude',
+      process.cwd(),
+      null,
+      [{ name: '/review', description: null }],
+    );
     expect(mcpHarvest.record).toHaveBeenCalledWith(
       'claude',
       process.cwd(),
@@ -5643,7 +5705,7 @@ describe('ChatService — pointing an open chat at another account', () => {
     // (probed on 2.1.237 across two real accounts). A switch that only rewrote
     // the column would hand the user an agent with amnesia under a transcript
     // still showing the conversation it had forgotten.
-    const { service, claude, nodeDao, published } = setup();
+    const { service, claude, nodeDao, runDao, published } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
@@ -5656,6 +5718,10 @@ describe('ChatService — pointing an open chat at another account', () => {
     await drain();
     await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
     seedSession(profileA, 'the codeword is PLUM');
+    // A context count and a kept metrics reading, both taken under profile A —
+    // the two account-scoped things a move has to decide about.
+    await runDao.rememberContext(run.id, { contextTokens: 4321 });
+    await runDao.rememberMetricsReading(run.id, '{"plan":{"plan":"team"}}');
     expect(claude.sessions[0]?.closed).toBe(false);
 
     const updated = await service.updateSettings(run.id, {
@@ -5676,9 +5742,18 @@ describe('ChatService — pointing an open chat at another account', () => {
     expect(claude.sessions[0]?.closed).toBe(true);
     const notice = published
       .map((event) => event.item.payload as { message?: string } | null)
-      .find((payload) => payload?.message?.includes('now runs as'));
-    expect(notice?.message).toContain(profileB);
-    expect(notice?.message).toContain('conversation came with it');
+      .find((payload) => payload?.message?.includes('Now running as'));
+    // The profile by its LAST SEGMENT: the note is a centred one-line row, and
+    // an absolute path ran to four lines on screen.
+    expect(notice?.message).toContain(basename(profileB));
+    expect(notice?.message).toContain('its conversation came too');
+    // Every reading this run holds was taken from the OLD account. The kept
+    // metrics reading carries that account's PLAN LIMITS, so serving it after
+    // the move reports one subscription's plan under another's name.
+    expect(runDao.runs.get(run.id)?.lastMetricsReading).toBeNull();
+    // The conversation CAME ALONG, so the count still measures it — clearing
+    // here would blank a meter that is telling the truth.
+    expect(runDao.runs.get(run.id)?.contextTokens).toBe(4321);
   });
 
   it('refuses mid-turn, because the turn is writing into the profile being left', async () => {
@@ -5779,7 +5854,7 @@ describe('ChatService — pointing an open chat at another account', () => {
     // another account and that is legitimate whether or not the CLI's memory
     // can follow — what would be wrong is doing it silently, since the
     // transcript on screen still shows a conversation the agent no longer has.
-    const { service, nodeDao, published } = setup();
+    const { service, nodeDao, runDao, published } = setup();
     const run = await service.createChat({
       agentKind: 'claude',
       cwd: dir,
@@ -5787,6 +5862,9 @@ describe('ChatService — pointing an open chat at another account', () => {
     });
     // A session id with no file behind it: the profile no longer holds it.
     await nodeDao.saveSessionId(run.id, SINGLE_AGENT_NODE, SESSION);
+    // Seeded so the clear below is observable — a count that was never set
+    // would assert null whether or not the move cleared anything.
+    await runDao.rememberContext(run.id, { contextTokens: 4321 });
 
     const updated = await service.updateSettings(run.id, {
       configDir: profileB,
@@ -5795,9 +5873,12 @@ describe('ChatService — pointing an open chat at another account', () => {
     expect(updated.configDir).toBe(profileB);
     const notice = published
       .map((event) => event.item.payload as { message?: string } | null)
-      .find((payload) => payload?.message?.includes('now runs as'));
-    expect(notice?.message).toContain('starts a fresh conversation');
+      .find((payload) => payload?.message?.includes('Now running as'));
+    expect(notice?.message).toContain('fresh conversation from here');
     expect(notice?.message).toContain('no longer holds this conversation');
+    // The conversation did NOT come along, so the count measures one that is
+    // gone — the same rule a compaction takes, which is this event from inside.
+    expect(runDao.runs.get(run.id)?.contextTokens).toBeNull();
   });
 
   it('says nothing and copies nothing when the pick is the profile already in use', async () => {

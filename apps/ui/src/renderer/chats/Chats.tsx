@@ -257,6 +257,27 @@ const SESSION_SEARCH_DEBOUNCE_MS = 350;
  */
 const SESSION_LIST_LIMIT = 400;
 
+/**
+ * How often a server sign-in re-checks the ONE row it is about.
+ *
+ * The authorization happens in a browser, so nothing here is told when it
+ * lands — this is the only thing that notices. Each tick dials that server
+ * alone (1.2–3.7s measured), never the folder, so the cadence is bounded by
+ * what one dial costs rather than by the ~30s a full re-dial takes.
+ */
+const MCP_SIGN_IN_WATCH_MS = 4_000;
+
+/**
+ * How many of those a single sign-in gets — about two minutes.
+ *
+ * Long enough for a real browser round-trip (measured at 15–20s on a live
+ * connector, and an OAuth consent screen can take far longer), bounded because
+ * a sign-in nobody finishes must not leave a timer starting the user's own
+ * server every few seconds for the rest of the session. Running out changes
+ * nothing on screen: the panel and its Dismiss stay, and Reconnect still works.
+ */
+const MCP_SIGN_IN_WATCH_TRIES = 30;
+
 /** The start screen's content column — the greeting and the new-run composer. */
 const START_COLUMN_WIDTH = '42rem';
 
@@ -3180,8 +3201,33 @@ export function Chats({
     }
     return [agentKind];
   }, [activeRunId, activeRun, workflowSlug, triggers, triggerId, agentKind]);
+  /**
+   * The ACCOUNT every vocabulary on this screen is about, scoped exactly like
+   * `modelKind` and `effortModel`: whichever composer is on screen owns the
+   * answer, since only one is.
+   *
+   * It exists because each of those listings — the models, the levels, the
+   * windows, the parameters, and the `/` skills — is a fact about a
+   * SUBSCRIPTION, and the subscription is the config directory. Asked without
+   * it, the first profile to load its answer had that account's vocabulary
+   * cached under the CLI's name and served to every chat afterwards. Null for a
+   * workflow target, whose nodes each name their own profile in the YAML.
+   */
+  const vocabularyConfigDir = useMemo((): string | null => {
+    if (activeRunId !== null) {
+      return activeRun && activeRun.workflowId === null
+        ? activeRun.configDir
+        : null;
+    }
+    return workflowSlug ? null : configDir;
+  }, [activeRunId, activeRun, workflowSlug, configDir]);
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
-  const skills = useAgentSkills(agentsApi, skillKinds, skillCwd);
+  const skills = useAgentSkills(
+    agentsApi,
+    skillKinds,
+    skillCwd,
+    vocabularyConfigDir,
+  );
   // Assigned during render rather than from an effect: the two send paths read
   // it in a click handler, which cannot run before the render that produced
   // this list has committed.
@@ -3201,6 +3247,7 @@ export function Chats({
   const { models: agentModels, loading: agentModelsLoading } = useAgentModels(
     agentsApi,
     modelKind,
+    vocabularyConfigDir,
   );
   /**
    * The MODEL the effort listing is about, scoped exactly like `modelKind`:
@@ -3223,7 +3270,12 @@ export function Chats({
   // Same scoping as the models above — whichever CLI the visible composer is
   // about, or none at all for a workflow target — narrowed to that composer's
   // own model, which is what makes the chip offer only what will apply.
-  const agentEfforts = useAgentEfforts(agentsApi, modelKind, effortModel);
+  const agentEfforts = useAgentEfforts(
+    agentsApi,
+    modelKind,
+    effortModel,
+    vocabularyConfigDir,
+  );
   // The window sizes THIS composer's model offers, scoped exactly like the
   // effort listing above and for a stronger version of the same reason: twelve
   // of a cursor account's models carry the axis at all and their vocabularies
@@ -3232,6 +3284,7 @@ export function Chats({
     agentsApi,
     modelKind,
     effortModel,
+    vocabularyConfigDir,
   );
   // And everything those two do not cover, scoped identically — the set of
   // chips itself is the model's answer here, not just their contents.
@@ -3239,6 +3292,7 @@ export function Chats({
     agentsApi,
     modelKind,
     effortModel,
+    vocabularyConfigDir,
   );
   /**
    * Whether the three listings above are still on their way, as ONE flag: they
@@ -4518,14 +4572,40 @@ export function Chats({
   // fresh callback each tick is how one ends up never firing.
   const mcpRefreshRef = useRef<() => void>(() => undefined);
   mcpRefreshRef.current = mcp.refresh;
+  // The NARROW re-read, for the sign-in flow alone — see the watch effect
+  // below. Behind a ref for the reason its sibling is: the controller's
+  // callbacks are keyed on identity, and a fresh closure per render is how a
+  // poll ends up never firing.
+  const mcpRecheckRef = useRef<(server: string) => void>(() => undefined);
   const login = useCliLogin(apis, (settled) => {
     if (settled.server !== null) {
-      mcpRefreshRef.current();
+      // The ONE row, never the whole folder. Re-dialling everything to answer
+      // "did that sign-in land" is what made the user wait ~30s and then press
+      // Reconnect themselves.
+      mcpRecheckRef.current(settled.server);
     }
     // An account sign-in re-reads nothing: what it changed lives in the CLI's
     // own credential store, and this screen shows no account state to refresh.
     // The panel's own last line is the report, and the next turn is the test.
   });
+  // Assigned during render, like its sibling above. The scope is the SIGN-IN's
+  // own CLI and the run's EFFECTIVE profile — `effectiveConfigDir`, never the
+  // raw `configDir`, because that is the scope the listing beside it is keyed
+  // by: a folder can pin a profile over the one the chat asked for, and asking
+  // under the requested one describes a different account's server. Its own
+  // doc block records what that mismatch cost the last time (15 servers against
+  // 50), and an answer landed under the wrong key would simply never be seen.
+  mcpRecheckRef.current = (server: string): void => {
+    const kind = login.login?.kind ?? login.starting?.kind ?? null;
+    if (kind === null || !activeRun) {
+      return;
+    }
+    void mcp.recheck(
+      { agent: kind, configDir: effectiveConfigDir(activeRun) },
+      server,
+    );
+  };
+
   /**
    * Re-read the listing when the window comes back, while a SERVER sign-in is
    * still running.
@@ -4548,10 +4628,108 @@ export function Chats({
     if (server === null) {
       return;
     }
-    const onFocus = (): void => mcpRefreshRef.current();
+    const onFocus = (): void => mcpRecheckRef.current(server);
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [login.starting?.server, login.login?.server]);
+
+  /**
+   * Watch the one server until it reports authorized, so the row moves by
+   * itself.
+   *
+   * REPORTED as "I should not click reconnect - it should be automatic. Also
+   * it's still in progress after signing in like forever." Both come from the
+   * same gap: a server is authorized in a BROWSER, so nothing in this process
+   * ever learns it happened, and the only thing that re-read health was the
+   * user pressing Reconnect — which re-dials every server the folder loads
+   * (~30s on a 47-server profile) to answer a question about one row. The rest
+   * of that report is the price: "we dont need to update all list of mcps".
+   *
+   * So this polls the NARROW route (`mcp.recheck`, one server, 1.2–3.7s) rather
+   * than the whole listing. It stops the moment the row leaves `needs_auth` —
+   * which is also what takes the panel down and releases the row's busy state,
+   * both of which read that same listing.
+   *
+   * BOUNDED, because a sign-in nobody finishes must not leave a timer dialling
+   * a server forever: {@link MCP_SIGN_IN_WATCH_TRIES} attempts at
+   * {@link MCP_SIGN_IN_WATCH_MS}. Giving up leaves the panel and its Dismiss
+   * exactly where they are — the user can still finish in the browser and press
+   * Reconnect, which is the path this exists to make unnecessary rather than to
+   * remove.
+   */
+  useEffect(() => {
+    const server = login.login?.server ?? null;
+    if (server === null || !mcpOpen) {
+      return;
+    }
+    let tries = 0;
+    let stopped = false;
+    const timer = setInterval(() => {
+      tries += 1;
+      if (tries > MCP_SIGN_IN_WATCH_TRIES || stopped) {
+        clearInterval(timer);
+        return;
+      }
+      void mcpRecheckRef.current(server);
+    }, MCP_SIGN_IN_WATCH_MS);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+    // Keyed on WHICH server is being watched, never on the listing: re-keying
+    // on the answer would tear the interval down and rebuild it on every poll,
+    // and each new one starts its wait from zero — the same way a poll comes to
+    // never fire that `usePendingRetry` documents.
+  }, [login.login?.server, mcpOpen]);
+
+  /**
+   * Take the panel down once the LISTING says the server is authorized.
+   *
+   * The panel's instruction is about work still to do — "finish in your
+   * browser, then press Reconnect" — and the moment the row stops saying
+   * `needs_auth` that work is done. Nothing was clearing it, so the sentence
+   * sat under a row that had just gone green: REPORTED as "it moved to top —
+   * but now i see this", with the instruction still there beside a connected
+   * server. Before the wording fix it was the same defect wearing a tick.
+   *
+   * The LISTING is the authority, exactly as `onSettled` already treats it —
+   * never the exit status, and never a timer. So this needs no new read: the
+   * refresh the settle and the focus-return already run is what moves the row,
+   * and this only watches the answer.
+   *
+   * Bounded to a server sign-in that is OVER. While one is in flight the panel
+   * is the only thing on screen saying so, and a row that has not moved yet is
+   * exactly when the user needs it.
+   */
+  useEffect(() => {
+    const server = login.login?.server ?? null;
+    if (server === null || login.login === null) {
+      return;
+    }
+    const settled =
+      login.login.session.status === 'succeeded' ||
+      login.login.session.status === 'failed' ||
+      login.login.session.status === 'cancelled';
+    if (!settled) {
+      return;
+    }
+    // Any scope's listing may carry the row — the dialog shows one at a time,
+    // but which one is the caller's business, not this effect's.
+    const stillNeedsAuth = [...mcp.byScope.values()].some((listing) =>
+      listing.servers.some(
+        (row) => row.name === server && row.status === 'needs_auth',
+      ),
+    );
+    const known = [...mcp.byScope.values()].some((listing) =>
+      listing.servers.some((row) => row.name === server),
+    );
+    // `known` guards the window in which the refresh has replaced the listing
+    // and the row has not arrived yet: absent is not the same as authorized,
+    // and dismissing on it would close the panel on a reading nobody has.
+    if (known && !stillNeedsAuth) {
+      login.dismiss();
+    }
+  }, [login, mcp.byScope]);
 
   // A sign-in the daemon REFUSED never becomes a session, so the controller's
   // own panel — which only exists once there is one — has nowhere to show it.
@@ -4605,13 +4783,17 @@ export function Chats({
         kind,
         server,
         cwd,
-        // The run's PROFILE, when it has one: a server is authorized inside a
-        // config directory, so signing in under the default one leaves this
-        // run exactly as unauthenticated as it was.
-        configDir: activeRun?.configDir ?? null,
+        // The run's EFFECTIVE profile: a server is authorized INSIDE a config
+        // directory, so signing in under the wrong one leaves this run exactly
+        // as unauthenticated as it was — and the folder has the last word over
+        // what the chat asked for (`effectiveConfigDir`). Signing in under the
+        // requested profile while the CLI loads the pinned one writes the
+        // credential into an account this run never uses, and the row it was
+        // pressed on never moves.
+        configDir: activeRun ? effectiveConfigDir(activeRun) : null,
       });
     },
-    [login, activeRun?.cwd, activeRun?.configDir],
+    [login, activeRun],
   );
 
   /**
@@ -5956,6 +6138,30 @@ export function Chats({
                           safe to do underneath a turn writing into the profile
                           being left. The refusal arrives as the daemon's own
                           sentence through `changeRunSettings`. */}
+                                {/* This chat's OWN profile — which is what the
+                          turn runs as. Two releases said otherwise, and both
+                          were built on an override that MEASUREMENT says does
+                          not exist: a folder's `.claude/settings.local.json`
+                          `env.CLAUDE_CONFIG_DIR` neither outranks what geniro
+                          sets nor applies when it sets nothing (see the
+                          `Profile` row in `chat-header.tsx` for the three
+                          readings). What that mistake cost is worth keeping:
+                          the chip first showed the folder's profile, which is
+                          the wrong account; then it was DISABLED under a pin,
+                          on the reasoning that a control whose value cannot
+                          move is a lie — REPORTED as "now i cant change
+                          profile at all", which by then it genuinely could not.
+                          Both are gone. The report that started it ("Its again
+                          showing different account plan", `Plan limits · TEAM`
+                          under a chip reading `-personal`) had no override in
+                          it either: both readings were true at once. The
+                          config directory decides which credentials, settings,
+                          MCP servers and history a turn uses; the PLAN comes
+                          from whatever account those credentials are, and
+                          probing both of the reporter's profiles returns
+                          `subscription_type: "team"` with the same five-hour
+                          bucket at the same 65%. A directory is not a
+                          subscription. */}
                                 <ConfigDirSelect
                                   configDir={activeRun.configDir}
                                   recentConfigDirs={recentConfigDirs}
@@ -6057,12 +6263,26 @@ export function Chats({
                     onRefreshMcp={mcp.refresh}
                     onSetMcpEnabled={mcp.setEnabled}
                     onSignInMcp={signInToMcpServer}
-                    // The window BEFORE the panel below can exist: the daemon
+                    // Busy for the WHOLE flow, which is two windows end to end.
+                    // The first is before the panel below can exist: the daemon
                     // holds its first reply until the CLI prints a URL —
                     // measured at 4001ms in the running app — and until then
                     // there is no session to render, which is the reported
                     // "I press Sign In and there is no loader, nothing".
-                    mcpSigningIn={login.starting?.server ?? null}
+                    //
+                    // The second is longer and was not covered: `mcp login`
+                    // EXITS as soon as it has handed the browser the challenge,
+                    // so `starting` clears while the user is still authorizing
+                    // — measured at 15–20s on a real connector, during which
+                    // the row offered a live Sign in button. Pressing it again
+                    // there opens a second challenge and invalidates the first,
+                    // which is the one thing this control must not invite. The
+                    // panel is on screen for exactly that stretch, so its own
+                    // server is what marks the row busy; it comes down when the
+                    // listing says the server is authorized.
+                    mcpSigningIn={
+                      login.starting?.server ?? login.login?.server ?? null
+                    }
                     mcpLoginServer={login.login?.server ?? null}
                     mcpLoginPanel={
                       // The SERVER half of the one controller. An account
@@ -6084,6 +6304,11 @@ export function Chats({
                           // the dialog's edge, which is the second half of the
                           // reported "broken UI".
                           variant="inline"
+                          // The one SERVER sign-in in the app — this branch is
+                          // already gated on `server !== null`. It is what
+                          // stops a clean exit reading as "Sign-in finished"
+                          // over a row that still says needs sign-in.
+                          scope="server"
                         />
                       ) : null
                     }

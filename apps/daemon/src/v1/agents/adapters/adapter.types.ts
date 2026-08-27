@@ -1773,6 +1773,23 @@ export type AgentMcpServerScope = 'project' | 'other' | 'unknown';
  */
 export interface AgentMcpFolderFacts {
   /**
+   * Every server name this folder's config DEFINES, across every scope — read
+   * from the CLI's own files, so it costs no dial.
+   *
+   * It is what the panel shows while the dial is still running. Listing a
+   * server means STARTING it (`claude mcp list` boots each one), measured here
+   * at ~1.1s per server — 17s for a 15-server profile, 27s for a 47-server
+   * one — and until this existed the panel had nothing to draw for that whole
+   * stretch: a spinner over an empty box, which is indistinguishable from a
+   * folder with no servers and from a read that died.
+   *
+   * Names ONLY, and that limit is the point: a name is knowable without
+   * running anything, health is not. A row built from this carries `loading`
+   * until the dial answers, which is the one honest thing to say about a
+   * server nobody has dialled yet.
+   */
+  readonly configured: readonly string[];
+  /**
    * Server names this folder currently has switched OFF, as the CLI's OWN
    * config records it — the state a `/mcp` panel in the user's terminal shows.
    *
@@ -1833,11 +1850,31 @@ export interface AgentMcpOrigin {
 }
 
 /** Everything an adapter needs to list what it can be invoked with. */
+/**
+ * Which account a model listing is ABOUT.
+ *
+ * A model vocabulary is an account fact — the subscription decides which models
+ * exist — and the account is the config directory, so the listing cannot be
+ * asked without one. A CLI whose account is not a directory ignores it and says
+ * so in its own `configDir.unavailableReason`.
+ */
+export interface AgentModelsInput {
+  /** The run's config directory (its ACCOUNT), or null for the CLI's own. */
+  configDir: string | null;
+}
+
 export interface AgentSkillsInput {
   /** The user's project folder, already validated and canonicalized. */
   cwd: string;
   /** The "user" scan root — the real home dir outside tests. */
   homeDir: string;
+  /**
+   * The run's config directory (its ACCOUNT), or null for the CLI's own.
+   *
+   * It REPLACES {@link homeDir} as the user-scope root rather than adding to
+   * it, because that is what the mechanism does — see `AgentAdapter.listSkills`.
+   */
+  configDir: string | null;
 }
 
 /**
@@ -2866,6 +2903,18 @@ export interface AdapterConfig {
    * first-occurrence-wins de-dup relies on.
    */
   readonly skillRoots: {
+    /**
+     * The segments a CONFIG DIRECTORY stands in for, under a home root — so
+     * `['.claude']` for a CLI whose home configuration lives at
+     * `~/.claude` and whose `CLAUDE_CONFIG_DIR` replaces exactly that.
+     *
+     * It exists so the roots below are declared ONCE: a profile's own copy of
+     * each is the same list with this prefix removed. `null` for a CLI whose
+     * account is not decided by a directory (cursor says so in
+     * `configDir.unavailableReason`), which then keeps the home root whatever
+     * a run asks for.
+     */
+    readonly profileAnchor: readonly string[] | null;
     /** `<root>/<…>/<name>/SKILL.md` dirs; `[]` when the CLI has no skills convention. */
     readonly skills: readonly (readonly string[])[];
     /** `<root>/<…>/**.md` command files; `[]` when the CLI has no commands convention. */

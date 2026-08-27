@@ -133,4 +133,23 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
   ): AgentMcpServer[] | null {
     return this.getAt(harvestKey(agent, cwd, configDir ?? ''));
   }
+
+  /**
+   * The same set WHATEVER its age — for painting a panel while a dial runs,
+   * never for answering one (see {@link HarvestStore.getAnyAt}).
+   *
+   * The age bound is about shadowing a live read, and a placeholder shadows
+   * nothing: the dial that will replace it is already running. Without this the
+   * bound reached the wrong decision by ten minutes — a folder whose last turn
+   * was half an hour ago fell back to the handful of servers its config file
+   * names, when a complete set was sitting on disk. The alternative there was
+   * never fresher information, only less of it.
+   */
+  getStale(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+  ): AgentMcpServer[] | null {
+    return this.getAnyAt(harvestKey(agent, cwd, configDir ?? ''));
+  }
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Put, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
@@ -6,6 +6,7 @@ import type { AgentMcpListingWire } from '../chat.types';
 import {
   AgentMcpListingDto,
   ListMcpServersQueryDto,
+  RecheckMcpServerDto,
   SetMcpServerEnabledDto,
 } from '../dto/mcp.dto';
 import { AgentMcpService } from '../services/agent-mcp.service';
@@ -34,6 +35,22 @@ export class McpController {
     return this.mcpService.list(query.agent, query.cwd ?? null, {
       configDir: query.configDir ?? null,
       refresh: query.refresh ?? false,
+    });
+  }
+
+  /**
+   * Re-dial ONE server. The narrow counterpart to `?refresh=true`, which
+   * re-dials the whole folder — see {@link AgentMcpService.recheckServer} for
+   * the price difference and the sign-in flow that needs it.
+   */
+  @Post('recheck')
+  @ApiOperation({ operationId: 'recheckAgentMcpServer' })
+  @ZodResponse({ status: 200, type: AgentMcpListingDto })
+  recheckServer(
+    @Body() body: RecheckMcpServerDto,
+  ): Promise<AgentMcpListingWire> {
+    return this.mcpService.recheckServer(body.agent, body.cwd, body.server, {
+      configDir: body.configDir ?? null,
     });
   }
 

@@ -18,9 +18,9 @@ describe('ModelVocabularyCache', () => {
       .mockResolvedValueOnce(volatile('stand-in'))
       .mockResolvedValueOnce('real-answer');
 
-    const first = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const first = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
     clock = 1; // well inside the TTL
-    const second = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const second = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
 
     // The caller still gets the stand-in — the picker is not left empty…
     expect(first).toBe('stand-in');
@@ -39,9 +39,9 @@ describe('ModelVocabularyCache', () => {
       now: () => clock,
     });
 
-    await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'good');
+    await cache.read('claude', 'opus', null, 'cli-1.0.0', async () => 'good');
     clock = 1001; // past the TTL, so the next read re-fetches
-    await cache.read('claude', 'opus', 'cli-1.0.0', async (previous) => {
+    await cache.read('claude', 'opus', null, 'cli-1.0.0', async (previous) => {
       // The fallback the services build is `previous ?? <union>` — so the
       // previous value has to still be reachable here.
       expect(previous).toBe('good');
@@ -50,7 +50,13 @@ describe('ModelVocabularyCache', () => {
 
     clock = 1002;
     expect(
-      await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'fresh'),
+      await cache.read(
+        'claude',
+        'opus',
+        null,
+        'cli-1.0.0',
+        async () => 'fresh',
+      ),
     ).toBe('fresh');
   });
 
@@ -62,9 +68,9 @@ describe('ModelVocabularyCache', () => {
     });
     const fetch = vi.fn().mockResolvedValue('v1-answer');
 
-    const first = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const first = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
     clock = 999; // still inside the TTL
-    const second = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const second = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
 
     expect(first).toBe('v1-answer');
     expect(second).toBe('v1-answer');
@@ -84,9 +90,9 @@ describe('ModelVocabularyCache', () => {
       .mockResolvedValueOnce('v1-answer')
       .mockResolvedValueOnce('v2-answer');
 
-    const first = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const first = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
     clock = 1;
-    const second = await cache.read('claude', 'opus', 'cli-2.0.0', fetch);
+    const second = await cache.read('claude', 'opus', null, 'cli-2.0.0', fetch);
 
     expect(first).toBe('v1-answer');
     expect(second).toBe('v2-answer');
@@ -104,9 +110,9 @@ describe('ModelVocabularyCache', () => {
       .mockResolvedValueOnce('first')
       .mockResolvedValueOnce('second');
 
-    await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
     clock = 1000; // >= ttlMs — stale
-    const after = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const after = await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch);
 
     expect(after).toBe('second');
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -125,8 +131,8 @@ describe('ModelVocabularyCache', () => {
     );
 
     const both = Promise.all([
-      cache.read('claude', 'opus', 'cli-1.0.0', fetch),
-      cache.read('claude', 'opus', 'cli-1.0.0', fetch),
+      cache.read('claude', 'opus', null, 'cli-1.0.0', fetch),
+      cache.read('claude', 'opus', null, 'cli-1.0.0', fetch),
     ]);
     resolveFetch('joined-answer');
 
@@ -144,8 +150,14 @@ describe('ModelVocabularyCache', () => {
       .mockResolvedValueOnce('cli-wide')
       .mockResolvedValueOnce('per-model');
 
-    const wide = await cache.read('claude', null, 'cli-1.0.0', fetch);
-    const perModel = await cache.read('claude', 'opus', 'cli-1.0.0', fetch);
+    const wide = await cache.read('claude', null, null, 'cli-1.0.0', fetch);
+    const perModel = await cache.read(
+      'claude',
+      'opus',
+      null,
+      'cli-1.0.0',
+      fetch,
+    );
 
     expect(wide).toBe('cli-wide');
     expect(perModel).toBe('per-model');
@@ -167,6 +179,7 @@ describe('ModelVocabularyCache', () => {
       await cache.read(
         'claude',
         `model-${i}`,
+        null,
         'cli-1.0.0',
         async () => `answer-${i}`,
       );
@@ -175,9 +188,9 @@ describe('ModelVocabularyCache', () => {
     // The very first entry inserted was pushed out — a fresh read re-fetches
     // it instead of finding it still cached.
     const refetch = vi.fn().mockResolvedValue('re-fetched');
-    expect(await cache.read('claude', 'model-0', 'cli-1.0.0', refetch)).toBe(
-      're-fetched',
-    );
+    expect(
+      await cache.read('claude', 'model-0', null, 'cli-1.0.0', refetch),
+    ).toBe('re-fetched');
     expect(refetch).toHaveBeenCalledTimes(1);
 
     // The newest entry survives — no fetch needed, the cached value answers.
@@ -186,6 +199,7 @@ describe('ModelVocabularyCache', () => {
       await cache.read(
         'claude',
         `model-${CAP}`,
+        null,
         'cli-1.0.0',
         shouldNotBeCalled,
       ),
@@ -201,18 +215,24 @@ describe('ModelVocabularyCache', () => {
       ttlMs: 1000,
       now: () => 0,
     });
-    await cache.read('claude', 'kept', 'cli-1.0.0', async () => 'kept-answer');
+    await cache.read(
+      'claude',
+      'kept',
+      null,
+      'cli-1.0.0',
+      async () => 'kept-answer',
+    );
 
     const CAP = 200;
     for (let i = 0; i < CAP * 2; i++) {
-      await cache.read('claude', `volatile-${i}`, 'cli-1.0.0', async () =>
+      await cache.read('claude', `volatile-${i}`, null, 'cli-1.0.0', async () =>
         volatile(`stand-in-${i}`),
       );
     }
 
     const shouldNotBeCalled = vi.fn();
     expect(
-      await cache.read('claude', 'kept', 'cli-1.0.0', shouldNotBeCalled),
+      await cache.read('claude', 'kept', null, 'cli-1.0.0', shouldNotBeCalled),
     ).toBe('kept-answer');
     expect(shouldNotBeCalled).not.toHaveBeenCalled();
   });
@@ -233,20 +253,20 @@ describe('ModelVocabularyCache', () => {
         .mockResolvedValueOnce('first')
         .mockResolvedValueOnce('second');
 
-      expect(await cache.read('claude', 'opus', 'cli-1.0.0', fetch)).toBe(
+      expect(await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch)).toBe(
         'first',
       );
       clock = 1; // well inside the TTL, so only the clear can force a re-ask
       expect(cache.clear()).toBe(1);
 
-      expect(await cache.read('claude', 'opus', 'cli-1.0.0', fetch)).toBe(
+      expect(await cache.read('claude', 'opus', null, 'cli-1.0.0', fetch)).toBe(
         'second',
       );
       expect(fetch).toHaveBeenCalledTimes(2);
       // …and the synchronous request-path read agrees, rather than answering
       // from an entry `read` has stopped serving.
       cache.clear();
-      expect(cache.fresh('claude', 'opus')).toBeUndefined();
+      expect(cache.fresh('claude', 'opus', null)).toBeUndefined();
     });
 
     it('counts what it dropped, and answers zero for an empty cache', async () => {
@@ -256,9 +276,15 @@ describe('ModelVocabularyCache', () => {
         ttlMs: 1000,
         now: () => 0,
       });
-      await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'a');
-      await cache.read('claude', 'sonnet', 'cli-1.0.0', async () => 'b');
-      await cache.read('cursor-agent', null, 'cli-2.0.0', async () => 'c');
+      await cache.read('claude', 'opus', null, 'cli-1.0.0', async () => 'a');
+      await cache.read('claude', 'sonnet', null, 'cli-1.0.0', async () => 'b');
+      await cache.read(
+        'cursor-agent',
+        null,
+        null,
+        'cli-2.0.0',
+        async () => 'c',
+      );
 
       expect(cache.clear()).toBe(3);
       expect(cache.clear()).toBe(0);
@@ -272,10 +298,16 @@ describe('ModelVocabularyCache', () => {
         ttlMs: 1000,
         now: () => clock,
       });
-      await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'answer');
+      await cache.read(
+        'claude',
+        'opus',
+        null,
+        'cli-1.0.0',
+        async () => 'answer',
+      );
       clock = 999;
 
-      expect(cache.fresh('claude', 'opus')).toBe('answer');
+      expect(cache.fresh('claude', 'opus', null)).toBe('answer');
     });
 
     it('answers undefined once the TTL has elapsed', async () => {
@@ -284,10 +316,16 @@ describe('ModelVocabularyCache', () => {
         ttlMs: 1000,
         now: () => clock,
       });
-      await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'answer');
+      await cache.read(
+        'claude',
+        'opus',
+        null,
+        'cli-1.0.0',
+        async () => 'answer',
+      );
       clock = 1000;
 
-      expect(cache.fresh('claude', 'opus')).toBeUndefined();
+      expect(cache.fresh('claude', 'opus', null)).toBeUndefined();
     });
 
     it('answers undefined for a key nothing has asked yet', () => {
@@ -296,7 +334,47 @@ describe('ModelVocabularyCache', () => {
         now: () => 0,
       });
 
-      expect(cache.fresh('claude', 'opus')).toBeUndefined();
+      expect(cache.fresh('claude', 'opus', null)).toBeUndefined();
     });
+  });
+});
+
+describe('ModelVocabularyCache — one answer per ACCOUNT', () => {
+  it('asks again for a different profile rather than serving the first', async () => {
+    const cache = new ModelVocabularyCache<string>({
+      ttlMs: 60_000,
+      now: () => 0,
+    });
+    const asked: (string | null)[] = [];
+    const ask = (profile: string | null) => async () => {
+      asked.push(profile);
+      return `answer-for-${profile ?? 'default'}`;
+    };
+
+    expect(
+      await cache.read(
+        'claude',
+        'opus',
+        '/profiles/team',
+        'v1',
+        ask('/profiles/team'),
+      ),
+    ).toBe('answer-for-/profiles/team');
+    expect(
+      await cache.read(
+        'claude',
+        'opus',
+        '/profiles/max',
+        'v1',
+        ask('/profiles/max'),
+      ),
+    ).toBe('answer-for-/profiles/max');
+    // …and each is then served from cache, so the key SPLITS rather than
+    // simply defeating the cache.
+    expect(
+      await cache.read('claude', 'opus', '/profiles/team', 'v1', ask(null)),
+    ).toBe('answer-for-/profiles/team');
+
+    expect(asked).toEqual(['/profiles/team', '/profiles/max']);
   });
 });

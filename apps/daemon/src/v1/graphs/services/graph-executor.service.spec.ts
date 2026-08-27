@@ -1284,6 +1284,7 @@ describe('GraphExecutorService', () => {
     expect(skillHarvest.record).toHaveBeenCalledWith(
       'claude',
       realpathSync(dir),
+      null,
       [
         { name: 'review', description: null },
         { name: 'compact', description: null },

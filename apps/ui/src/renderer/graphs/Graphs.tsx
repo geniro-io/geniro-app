@@ -686,9 +686,15 @@ export function Graphs({
 
   // The inspector's model rows come from the selected node's CLI itself, the
   // same source the chat composer uses — one list, so the two cannot drift.
+  // The NODE's own profile: each listing below is an account fact, and a
+  // workflow's nodes routinely name different ones — so two nodes on one CLI
+  // genuinely have two vocabularies, exactly as they have two MCP listings.
+  const selectedConfigDir =
+    selected?.kind === 'agent' ? (selected.configDir ?? null) : null;
   const { models: agentModels, loading: agentModelsLoading } = useAgentModels(
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
+    selectedConfigDir,
   );
   // Same source as the composer's chip, for the same reason the models are:
   // the levels are the CLI's own, so builder and chat cannot offer different
@@ -701,6 +707,7 @@ export function Graphs({
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
     selected?.kind === 'agent' ? (selected.model ?? null) : null,
+    selectedConfigDir,
   );
   // Same listing, same narrowing, and here the model is not an improvement but
   // the whole question: window sizes belong to the model, so a node with none
@@ -709,6 +716,7 @@ export function Graphs({
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
     selected?.kind === 'agent' ? (selected.model ?? null) : null,
+    selectedConfigDir,
   );
   // And whatever those two do not cover — here the SET of chips is the model's
   // answer, so a node that changes model changes which controls it has.
@@ -716,6 +724,7 @@ export function Graphs({
     apis?.agents ?? null,
     selected?.kind === 'agent' ? selected.agent : null,
     selected?.kind === 'agent' ? (selected.model ?? null) : null,
+    selectedConfigDir,
   );
 
   // What this node would load regardless of where the run lands: the user's

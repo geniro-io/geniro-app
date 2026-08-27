@@ -7,7 +7,7 @@ import { mergeSkills } from './skill-autocomplete';
 
 /**
  * The composer target's invokable skills, fetched from the daemon per
- * (agent kind, cwd) and cached for the session (the underlying disk layout
+ * (agent kind, cwd, PROFILE) and cached for the session (the underlying disk layout
  * rarely changes mid-session; a restart re-scans). `kinds` may hold several
  * kinds — a workflow trigger fanning out to mixed agents — whose lists union
  * de-duped by name. A fetch failure just yields an empty list: the
@@ -17,6 +17,15 @@ export function useAgentSkills(
   agentsApi: DaemonApis['agents'],
   kinds: readonly CliKind[],
   cwd: string | null,
+  /**
+   * The ACCOUNT whose skills these are — the run's config directory, or null
+   * for the CLI's own. A CLI keeps its skills, commands and installed plugins
+   * INSIDE that directory, so two profiles in one folder genuinely have two
+   * lists; measured on the reporter's machine, `~/.claude` holds 10 plugins and
+   * 2 skills against each profile's own 7 plugins and a command. Without it the
+   * `/` menu offered the default account's list to every chat.
+   */
+  configDir: string | null = null,
 ): AgentSkill[] {
   const cacheRef = useRef(new Map<string, AgentSkill[]>());
   const [skills, setSkills] = useState<AgentSkill[]>([]);
@@ -32,13 +41,18 @@ export function useAgentSkills(
     let stale = false;
     void Promise.all(
       targetKinds.map(async (kind) => {
-        const key = `${kind}\u0000${cwd}`;
+        const key = `${kind}\u0000${cwd}\u0000${configDir ?? ''}`;
         const cached = cacheRef.current.get(key);
         if (cached) {
           return cached;
         }
         try {
-          const list = await agentsApi.listAgentSkills({ agent: kind, cwd });
+          const list = await agentsApi.listAgentSkills({
+            agent: kind,
+            cwd,
+            // Omitted rather than empty — an absent directory is the CLI's own.
+            ...(configDir ? { configDir } : {}),
+          });
           cacheRef.current.set(key, list);
           return list;
         } catch {
@@ -53,6 +67,6 @@ export function useAgentSkills(
     return () => {
       stale = true;
     };
-  }, [agentsApi, kindsKey, cwd]);
+  }, [agentsApi, kindsKey, cwd, configDir]);
   return skills;
 }

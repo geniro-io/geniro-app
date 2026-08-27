@@ -12,8 +12,15 @@ const MAX_HARVESTED = 500;
 
 /**
  * The CLI-reported slash-command lists, harvested from the `slash_commands`
- * AgentEvent as turns run and keyed by the reporting agent plus the turn's
- * canonical cwd.
+ * AgentEvent as turns run, keyed by the reporting agent, the turn's canonical
+ * cwd and its CONFIG DIRECTORY.
+ *
+ * The profile is in the key because a CLI's reported commands are per-ACCOUNT:
+ * its plugins live inside the config directory, and it answers for them. On the
+ * reporter's own machine `~/.claude` holds 10 plugins while each of their two
+ * profiles holds 7 of its own, so one folder used by two accounts genuinely has
+ * two invokable sets — and without the profile the first turn to report filed
+ * its set as the folder's.
  *
  * This is a session's authoritative invokable set for one folder — it includes
  * the built-ins, plugin skills, and anything project-scoped that neither the
@@ -63,6 +70,7 @@ export class SkillHarvestStore extends HarvestStore<AgentReportedCommand> {
   record(
     agent: AgentKind,
     cwd: string,
+    configDir: string | null,
     commands: AgentReportedCommand[],
   ): void {
     const cleaned: AgentReportedCommand[] = [];
@@ -80,7 +88,7 @@ export class SkillHarvestStore extends HarvestStore<AgentReportedCommand> {
           description === undefined || description === '' ? null : description,
       });
     }
-    this.recordAt(harvestKey(agent, cwd), cleaned);
+    this.recordAt(harvestKey(agent, cwd, configDir ?? ''), cleaned);
   }
 
   /**
@@ -88,7 +96,11 @@ export class SkillHarvestStore extends HarvestStore<AgentReportedCommand> {
    * Keyed by BOTH, because one folder is routinely used by both CLIs and their
    * invokable sets have nothing to do with each other.
    */
-  get(agent: AgentKind, cwd: string): AgentReportedCommand[] | null {
-    return this.getAt(harvestKey(agent, cwd));
+  get(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null,
+  ): AgentReportedCommand[] | null {
+    return this.getAt(harvestKey(agent, cwd, configDir ?? ''));
   }
 }

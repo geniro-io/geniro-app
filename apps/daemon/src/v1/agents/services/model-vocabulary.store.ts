@@ -73,6 +73,13 @@ const MAX_ENTRY_BYTES = 256 * 1024;
  * question with a real answer, and folding it into the first model's entry
  * would file that model's list as the CLI's.
  *
+ * The CONFIG DIRECTORY is in the key for the reason the sibling cache states:
+ * it decides the ACCOUNT, and every answer filed here is an account fact. It is
+ * also why a row written before this existed is DROPPED rather than migrated —
+ * such a row cannot say which account it describes, and guessing is how one
+ * subscription's model list comes to be served under another's name. The loader
+ * enforces the shape, so the drop is automatic and costs one re-ask.
+ *
  * The CLI's VERSION is deliberately NOT in the key: it lives in the entry and
  * is compared on read, so an upgrade REPLACES a row instead of adding a second
  * one beside it. Keyed by version, an install that upgrades weekly would spend
@@ -81,8 +88,9 @@ const MAX_ENTRY_BYTES = 256 * 1024;
 export function modelVocabularyKey(
   agent: string,
   model: string | null,
+  configDir: string | null,
 ): string {
-  return `${agent}\u0000${model ?? ''}`;
+  return `${agent}\u0000${model ?? ''}\u0000${configDir ?? ''}`;
 }
 
 /** One stored answer, with what it has to be checked against. */
@@ -184,13 +192,14 @@ export class ModelVocabularyStore {
   read<T>(
     agent: string,
     model: string | null,
+    configDir: string | null,
     version: string | null,
     isValid: (value: unknown) => value is T,
   ): StoredAnswer<T> | null {
     if (version === null) {
       return null;
     }
-    const record = this.load().get(modelVocabularyKey(agent, model));
+    const record = this.load().get(modelVocabularyKey(agent, model, configDir));
     if (record === undefined || record.version !== version) {
       return null;
     }
@@ -217,6 +226,7 @@ export class ModelVocabularyStore {
   remember(
     agent: string,
     model: string | null,
+    configDir: string | null,
     version: string | null,
     value: unknown,
   ): void {
@@ -235,7 +245,7 @@ export class ModelVocabularyStore {
       return;
     }
     const records = this.load();
-    const key = modelVocabularyKey(agent, model);
+    const key = modelVocabularyKey(agent, model, configDir);
     if (!records.has(key) && records.size >= MAX_ENTRIES) {
       // DEAD rows first: an entry past the freshness window is one `read`
       // already refuses to serve, so it holds a slot for nothing and every
@@ -325,7 +335,7 @@ export class ModelVocabularyStore {
           }
           // Validated per entry rather than per file: one corrupted row must
           // not discard every other model's answer.
-          if (isStoredRecord(value) && key.split('\u0000').length === 2) {
+          if (isStoredRecord(value) && key.split('\u0000').length === 3) {
             records.set(key, value);
           }
         }

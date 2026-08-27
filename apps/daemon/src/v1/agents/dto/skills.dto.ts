@@ -20,6 +20,15 @@ import {
 export const listSkillsQuerySchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().min(1),
+  /**
+   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
+   * own. Every answer on these routes is an account fact (which models exist,
+   * which levels and windows they take, which plugins the CLI reports), so
+   * without it one subscription's vocabulary was cached under the CLI's name
+   * and served to every other. Optional and validated server-side, the same
+   * shape `/v1/agents/mcp` already carries.
+   */
+  configDir: z.string().min(1).optional(),
 });
 export class ListSkillsQueryDto extends createZodDto(listSkillsQuerySchema) {}
 
@@ -27,7 +36,18 @@ export class ListSkillsQueryDto extends createZodDto(listSkillsQuerySchema) {}
 export class AgentSkillDto extends createZodDto(AgentSkillWireSchema) {}
 
 /** Query for the model listing — which agent CLI to ask. */
-export const listModelsQuerySchema = z.object({ agent: AgentKindSchema });
+export const listModelsQuerySchema = z.object({
+  agent: AgentKindSchema,
+  /**
+   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
+   * own. Every answer on these routes is an account fact (which models exist,
+   * which levels and windows they take, which plugins the CLI reports), so
+   * without it one subscription's vocabulary was cached under the CLI's name
+   * and served to every other. Optional and validated server-side, the same
+   * shape `/v1/agents/mcp` already carries.
+   */
+  configDir: z.string().min(1).optional(),
+});
 export class ListModelsQueryDto extends createZodDto(listModelsQuerySchema) {}
 
 /** One model an agent CLI accepts for `--model`. */
@@ -46,6 +66,15 @@ export class AgentModelDto extends createZodDto(AgentModelWireSchema) {}
 export const listEffortsQuerySchema = z.object({
   agent: AgentKindSchema,
   model: z.string().min(1).optional(),
+  /**
+   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
+   * own. Every answer on these routes is an account fact (which models exist,
+   * which levels and windows they take, which plugins the CLI reports), so
+   * without it one subscription's vocabulary was cached under the CLI's name
+   * and served to every other. Optional and validated server-side, the same
+   * shape `/v1/agents/mcp` already carries.
+   */
+  configDir: z.string().min(1).optional(),
 });
 export class ListEffortsQueryDto extends createZodDto(listEffortsQuerySchema) {}
 
@@ -64,6 +93,15 @@ export class AgentEffortListingDto extends createZodDto(
 export const listContextWindowsQuerySchema = z.object({
   agent: AgentKindSchema,
   model: z.string().min(1).optional(),
+  /**
+   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
+   * own. Every answer on these routes is an account fact (which models exist,
+   * which levels and windows they take, which plugins the CLI reports), so
+   * without it one subscription's vocabulary was cached under the CLI's name
+   * and served to every other. Optional and validated server-side, the same
+   * shape `/v1/agents/mcp` already carries.
+   */
+  configDir: z.string().min(1).optional(),
 });
 export class ListContextWindowsQueryDto extends createZodDto(
   listContextWindowsQuerySchema,
@@ -83,6 +121,15 @@ export class AgentContextWindowListingDto extends createZodDto(
 export const listModelParametersQuerySchema = z.object({
   agent: AgentKindSchema,
   model: z.string().min(1).optional(),
+  /**
+   * The run's agent config directory — its ACCOUNT — or absent for the CLI's
+   * own. Every answer on these routes is an account fact (which models exist,
+   * which levels and windows they take, which plugins the CLI reports), so
+   * without it one subscription's vocabulary was cached under the CLI's name
+   * and served to every other. Optional and validated server-side, the same
+   * shape `/v1/agents/mcp` already carries.
+   */
+  configDir: z.string().min(1).optional(),
 });
 export class ListModelParametersQueryDto extends createZodDto(
   listModelParametersQuerySchema,

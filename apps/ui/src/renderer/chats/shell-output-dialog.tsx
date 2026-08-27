@@ -7,7 +7,8 @@ import { AnsiText } from '../components/ui/ansi-text';
 import { Dialog } from '../components/ui/dialog';
 import { Spinner } from '../components/ui/spinner';
 import { formatElapsed } from './live-row';
-import type { ShellRun } from './shell-activity';
+import { RUN_STATUS_META } from './run-status';
+import { RUN_STATUS_OF_SHELL, type ShellRun } from './shell-activity';
 
 /**
  * The TERMINAL behind one command — what a shell in the panel has printed.
@@ -141,7 +142,17 @@ export function ShellOutputDialog({
           <CopyButton text={shell.command} label="Copy the command" />
         </div>
         <p className="m-0 flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
-          <span>{live ? 'running' : shell.status}</span>
+          {/* Translated, never printed: `ShellStatus` is a model and
+              `RUN_STATUS_META` holds the one word each state is spelled with,
+              so a killed command reads `cancelled` here exactly as it does on
+              the block beside it. */}
+          <span>
+            {
+              RUN_STATUS_META[
+                live ? 'running' : RUN_STATUS_OF_SHELL[shell.status]
+              ].label
+            }
+          </span>
           {shell.background ? <span>· detached</span> : null}
           {shell.exitCode === null ? null : (
             <span>· exit {shell.exitCode}</span>

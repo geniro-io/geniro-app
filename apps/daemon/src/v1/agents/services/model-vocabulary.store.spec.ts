@@ -1,4 +1,10 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -229,7 +235,7 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
     expect(store.read(AGENT, MODEL, VERSION, isText)).toBeNull();
   });
 
-  it('stops growing at the entry cap, keeping what is already there', async () => {
+  it('stops growing at the entry cap while every entry is still fresh', async () => {
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
     for (let i = 0; i < 60; i += 1) {
       store.remember(AGENT, `model-${i}`, VERSION, REPLY);
@@ -240,7 +246,39 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
 
     expect(store.read(AGENT, 'one-too-many', VERSION, isText)).toBeNull();
     // …and the sixty already there are untouched, which is the point of
-    // refusing rather than evicting: the oldest may be the model in use.
+    // refusing rather than evicting: the oldest may be the model in use. Only
+    // a DEAD row is reclaimed — see the case below.
     expect(store.read(AGENT, 'model-0', VERSION, isText)?.value).toBe(REPLY);
+  });
+
+  it('reclaims entries past the freshness backstop before admitting a new one', async () => {
+    // The bug this guards: a full store of DEAD rows (past FRESH_FOR_MS, which
+    // `read` already refuses to serve) used to keep every slot forever, so a
+    // newly released model paid a cold handshake on every launch instead of
+    // the one cold probe the design intends.
+    const seeded: Record<string, unknown> = {};
+    for (let i = 0; i < 60; i += 1) {
+      seeded[modelVocabularyKey(AGENT, `model-${i}`)] = record({
+        fetchedAt: 0,
+      });
+    }
+    seed(seeded);
+
+    const store = new ModelVocabularyStore({ file, now: () => WEEK });
+    store.remember(AGENT, 'freshly-released', VERSION, REPLY);
+    await settle();
+
+    expect(store.read(AGENT, 'freshly-released', VERSION, isText)?.value).toBe(
+      REPLY,
+    );
+    // …and the dead rows are GONE, which is the half the title claims. Without
+    // it, an implementation that merely skipped the cap check whenever any row
+    // was stale would pass here while the file grew without bound.
+    const onDisk = JSON.parse(readFileSync(file, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(onDisk)).toHaveLength(1);
+    expect(onDisk[modelVocabularyKey(AGENT, 'model-0')]).toBeUndefined();
   });
 });

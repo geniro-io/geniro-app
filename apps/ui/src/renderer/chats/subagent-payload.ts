@@ -72,6 +72,38 @@ export interface SubagentDeclaration {
    * treating it as "not running" would be the old reading with extra steps.
    */
   backgroundOpen: boolean | null;
+  /**
+   * HOW it ended, when the CLI said so — `null` while it is still out, and null
+   * for a CLI that reports only THAT the work is over.
+   *
+   * The companion to {@link backgroundOpen}, and needed for the same reason
+   * that field has three states: absent must read as "nothing was said", never
+   * as success.
+   */
+  backgroundOutcome: BackgroundOutcome | null;
+}
+
+/**
+ * How a delegate ENDED, in the app's own words.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/adapters/adapter.types.ts` declares
+ * the same three as `BackgroundUnitOutcome` and each CLI's adapter translates
+ * its own vocabulary into them. An item payload is `z.unknown()` on the wire BY
+ * DESIGN, so no generated type carries this across and the two sides are
+ * independent readings of one shape — add a word there and it must be added
+ * here, or the new word reads as {@link isBackgroundOutcome} rejecting it.
+ */
+export type BackgroundOutcome = 'completed' | 'failed' | 'stopped';
+
+const OUTCOMES: ReadonlySet<string> = new Set<BackgroundOutcome>([
+  'completed',
+  'failed',
+  'stopped',
+]);
+
+/** Narrows an unknown payload word to the vocabulary, so no caller casts. */
+function isBackgroundOutcome(value: unknown): value is BackgroundOutcome {
+  return typeof value === 'string' && OUTCOMES.has(value);
 }
 
 /**
@@ -107,6 +139,13 @@ export function readSubagentDeclaration(
     stepsUnavailableReason: str(record.stepsUnavailableReason),
     backgroundOpen:
       typeof record.backgroundOpen === 'boolean' ? record.backgroundOpen : null,
+    // Narrowed against the vocabulary, never cast: this is another process's
+    // payload, typed `z.unknown()` on the wire, and a word this renderer does
+    // not know would otherwise reach the status derivation as a block state
+    // that renders nothing.
+    backgroundOutcome: isBackgroundOutcome(record.backgroundOutcome)
+      ? record.backgroundOutcome
+      : null,
   };
 }
 
@@ -130,6 +169,7 @@ export function mergeSubagentDeclarations(
     // announcement says `true`, the settle says `false`, and an anchor-only row
     // arriving between them (null) leaves whichever stands.
     backgroundOpen: next.backgroundOpen ?? base.backgroundOpen,
+    backgroundOutcome: next.backgroundOutcome ?? base.backgroundOutcome,
   };
 }
 

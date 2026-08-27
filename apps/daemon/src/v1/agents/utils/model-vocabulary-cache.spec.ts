@@ -217,6 +217,54 @@ describe('ModelVocabularyCache', () => {
     expect(shouldNotBeCalled).not.toHaveBeenCalled();
   });
 
+  describe('clear', () => {
+    it('drops a stored entry, so the next read asks again inside the TTL', async () => {
+      // What the menu bar's Clear Agent Cache actually buys. Clearing only the
+      // durable file would leave this daemon serving its memory for the rest of
+      // the TTL — a user who presses a button and sees the same stale list for
+      // ten minutes has been told the button does nothing.
+      let clock = 0;
+      const cache = new ModelVocabularyCache<string>({
+        ttlMs: 10 * 60_000,
+        now: () => clock,
+      });
+      const fetch = vi
+        .fn()
+        .mockResolvedValueOnce('first')
+        .mockResolvedValueOnce('second');
+
+      expect(await cache.read('claude', 'opus', 'cli-1.0.0', fetch)).toBe(
+        'first',
+      );
+      clock = 1; // well inside the TTL, so only the clear can force a re-ask
+      expect(cache.clear()).toBe(1);
+
+      expect(await cache.read('claude', 'opus', 'cli-1.0.0', fetch)).toBe(
+        'second',
+      );
+      expect(fetch).toHaveBeenCalledTimes(2);
+      // …and the synchronous request-path read agrees, rather than answering
+      // from an entry `read` has stopped serving.
+      cache.clear();
+      expect(cache.fresh('claude', 'opus')).toBeUndefined();
+    });
+
+    it('counts what it dropped, and answers zero for an empty cache', async () => {
+      // The count is what `CacheResetService` sums into the number it logs, so
+      // a clear that forgot to report would silently under-count the reset.
+      const cache = new ModelVocabularyCache<string>({
+        ttlMs: 1000,
+        now: () => 0,
+      });
+      await cache.read('claude', 'opus', 'cli-1.0.0', async () => 'a');
+      await cache.read('claude', 'sonnet', 'cli-1.0.0', async () => 'b');
+      await cache.read('cursor-agent', null, 'cli-2.0.0', async () => 'c');
+
+      expect(cache.clear()).toBe(3);
+      expect(cache.clear()).toBe(0);
+    });
+  });
+
   describe('fresh', () => {
     it('answers synchronously from a fresh entry, never consulting the version', async () => {
       let clock = 0;

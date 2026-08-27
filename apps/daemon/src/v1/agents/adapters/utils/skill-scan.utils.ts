@@ -1,9 +1,8 @@
-import type { Dirent } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { parseCommandMd, parseSkillMd } from '../../utils/skill-markdown';
 import type { AgentSkillEntry } from '../adapter.types';
+import { readDirSafe, readFileSafe } from './fs-safe.utils';
 
 /** Recursion bound for the commands walk (namespaced subdirectories). */
 const MAX_COMMAND_DEPTH = 3;
@@ -120,22 +119,4 @@ async function readSubdirs(dir: string): Promise<string[]> {
   return (await readDirSafe(dir))
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => join(dir, entry.name));
-}
-
-/** Directory listing that treats a missing/unreadable dir as empty. */
-async function readDirSafe(dir: string): Promise<Dirent[]> {
-  try {
-    return await readdir(dir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-}
-
-/** File read that treats missing/unreadable (e.g. a dir) as absent. */
-async function readFileSafe(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch {
-    return null;
-  }
 }

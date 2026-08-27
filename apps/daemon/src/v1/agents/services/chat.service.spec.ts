@@ -3519,6 +3519,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: true,
+      backgroundOutcome: null,
     });
     await drain();
 
@@ -3559,6 +3560,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
+      backgroundOutcome: null,
     });
     await drain();
 
@@ -5464,6 +5466,7 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
+      backgroundOutcome: null,
     });
     emit?.({
       type: 'text',

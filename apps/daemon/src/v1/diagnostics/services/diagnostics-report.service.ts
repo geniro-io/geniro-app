@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Inject, Injectable } from '@nestjs/common';
 
@@ -9,6 +11,7 @@ import { AgentSessionRegistry } from '../../agents/services/agent-session.regist
 import { AgentVersionService } from '../../agents/services/agent-version.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { resolveAgentBinary } from '../../agents/utils/agent-binary';
+import { childProcessHandle } from '../../agents/utils/child-handle';
 import { type DiagnosticsReport } from '../diagnostics.types';
 import { DebugLogService } from './debug-log.service';
 
@@ -83,7 +86,18 @@ export class DiagnosticsReportService {
         // comes back as null, which is a FACT about this machine and one of the
         // likeliest reasons a report is being read at all. Said as a reason
         // rather than left as a bare null the reader has to interpret.
-        const version = await this.versions.resolve(kind);
+        // Registered like every other consumer's version read. The service
+        // hands an in-flight fork to whoever joins it, so a call that skipped
+        // this left the child unmanaged for the JOINER too — and `execFile`'s
+        // timeout is a parent-side timer, so a hung probe would outlive the
+        // daemon rather than be reaped on shutdown.
+        const version = await this.versions.resolve(kind, {
+          onSpawn: (child, spawnInfo) =>
+            this.processes.register(
+              `diagnostics:version:${randomUUID()}`,
+              childProcessHandle(child, spawnInfo),
+            ),
+        });
         return {
           kind,
           binary,

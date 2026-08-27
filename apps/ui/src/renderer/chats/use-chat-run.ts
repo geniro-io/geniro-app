@@ -528,7 +528,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     //
     // The WINDOW is kept: it belongs to the model, which a compaction does not
     // change.
-    if (conversationReplaced(item.payload)) {
+    // The `system` guard is the twin's (`endsContextHistory` in
+    // `compaction-payload.ts`), and the pair only holds if BOTH sides apply it:
+    // the key is written onto a system row alone, so a future item kind
+    // carrying it would empty the ring in one reader and not the other — one
+    // compaction, two answers about whether the readings above it still stand.
+    if (item.kind === 'system' && conversationReplaced(item.payload)) {
       setLiveText((prev) => {
         const next = new Map(prev);
         for (const [key, state] of next) {

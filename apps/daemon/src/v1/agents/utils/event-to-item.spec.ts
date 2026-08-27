@@ -394,6 +394,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
         toolUses: null,
         stepsUnavailableReason: 'cursor-agent reports the delegation only',
         backgroundOpen: null,
+        backgroundOutcome: null,
       }),
     ).toEqual({
       kind: 'subagent_info',
@@ -409,6 +410,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
         toolUses: null,
         stepsUnavailableReason: 'cursor-agent reports the delegation only',
         backgroundOpen: null,
+        backgroundOutcome: null,
       },
     });
   });
@@ -431,6 +433,7 @@ describe('mapEventToItem — the sub-agent declaration', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: null,
+      backgroundOutcome: null,
     });
     expect(item?.payload).not.toHaveProperty('parentToolUseId');
     expect(item?.payload.id).toBe('toolu_018bc');
@@ -491,6 +494,7 @@ describe('closesWork', () => {
     toolUses: null,
     stepsUnavailableReason: null,
     backgroundOpen,
+    backgroundOutcome: null,
   });
 
   it('is true only for the announcement that a delegate has STOPPED', () => {

@@ -3774,6 +3774,28 @@ describe('Chats composer memory & suggestions', () => {
     });
   });
 
+  it('forgets the remembered model parameters when the model chip changes model', async () => {
+    // Sharper than the window above: WHICH parameter ids exist at all is the
+    // model's own answer, so a value kept across a model change names an axis
+    // the new model never enumerated. The panel stops drawing that row, so
+    // nothing on screen says the run is still being created with it.
+    stubSettings({
+      lastModels: { claude: 'sonnet' },
+      lastModelParameters: { claude: { optimize_for: 'cost' } },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Model', 'opus');
+
+    // The map WITHOUT claude's entry, for the same reason as the window test:
+    // the stored value is what reaches the next run, so an unchanged
+    // `{claude: {optimize_for: 'cost'}}` is exactly the defect.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastModelParameters: {},
+    });
+  });
+
   it('snapshots the custom instructions onto a new chat, read at send time', async () => {
     // Read at send time rather than at mount: Chats stays mounted across nav
     // switches, so a value cached on mount would start the chat on text the
@@ -4272,7 +4294,8 @@ describe('Chats composer memory & suggestions', () => {
     });
 
     expect(
-      container.querySelector<HTMLElement>('[role="listbox"]')?.style.position,
+      container.querySelector<HTMLElement>('[data-slot="menu-panel"]')?.style
+        .position,
     ).toBe('fixed');
   });
 
@@ -5164,6 +5187,100 @@ describe('Chats queued messages', () => {
       runId: 'r1',
       sendMessageDto: { text: '/compact' },
     });
+  });
+
+  it('keeps the command at the head when the retry ladder runs out, and re-drains on the NEXT terminal item', async () => {
+    // The composer's own RUN_BUSY refusal was deleted in favour of queueing,
+    // and the replacement rests on the turn-end grace window fitting inside the
+    // retry backoff. Past it there is no error and no further trigger from THIS
+    // drain — the give-up branch's own comment says "that turn's terminal item
+    // fires this drain again", and the terminal item is what fired this one. So
+    // what has to hold is that the message survives at the head and a LATER
+    // ending still delivers it.
+    vi.useFakeTimers();
+    try {
+      agentsApi.listAgentSkills.mockResolvedValue([
+        {
+          name: 'compact',
+          description: 'Compact the conversation',
+          kind: 'command' as const,
+          source: 'geniro' as const,
+        },
+      ]);
+      api.sendChatMessage.mockRejectedValue(
+        new Error('daemon POST failed (409): RUN_BUSY'),
+      );
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      await type(container, '/compact');
+      await clickButton(container, 'Queue');
+
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      // The whole ladder — 300 + 600 + 1200 + 2400 — and well past it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      const spent = api.sendChatMessage.mock.calls.length;
+      // The initial attempt plus every rung, and then it stops rather than
+      // retrying for ever.
+      expect(spent).toBe(5);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(spent);
+
+      // Given up on, and deliberately NOT an error: a turn is by definition
+      // still running, so no banner and the message is still queued.
+      expect(container.textContent).not.toContain('RUN_BUSY');
+      expect(
+        container.querySelector('[aria-label="Queued messages"]')?.textContent,
+      ).toContain('/compact');
+
+      api.sendChatMessage.mockResolvedValueOnce(msg(11, 'user', '/compact'));
+      await act(async () => {
+        emitItem(terminal(6));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(spent + 1);
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the RUN_BUSY fallback DELIVERS the message it queued, without waiting for another item', async () => {
+    // The composer believed no turn was running and the daemon disagreed — the
+    // window where a turn's teardown outlives its terminal item. There is no
+    // further item coming, so the kick beside that enqueue is the only thing
+    // that can deliver it. It read the queue off a ref the enqueue had not
+    // reached yet (it syncs in an effect), found the map empty — which on this
+    // path it always is, the message having just failed to send rather than
+    // been queued behind anything — and returned at once.
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // Settle the run first, so the composer takes the SEND path rather than the
+    // queue-it-because-busy branch above.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    api.sendChatMessage
+      .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
+      .mockResolvedValueOnce(msg(11, 'user', 'squeezed in'));
+    await type(container, 'squeezed in');
+    await clickButton(container, 'Send');
+
+    // Twice: the refused send, then the kicked drain that actually delivers.
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('RUN_BUSY');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
   });
 
   it('sends what the user wrote FIRST first, never the message typed last', async () => {

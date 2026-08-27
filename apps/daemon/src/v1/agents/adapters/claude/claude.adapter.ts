@@ -41,6 +41,7 @@ import type {
 } from '../adapter.types';
 import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
+import { readFileSafe } from '../utils/fs-safe.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
@@ -878,24 +879,17 @@ export class ClaudeAdapter extends AgentAdapter {
    * evidence behind the two questions.
    */
   override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
-    const read = async (path: string): Promise<string | null> => {
-      try {
-        return await readFile(path, 'utf8');
-      } catch {
-        // Absent, unreadable, or a directory — all mean "this file says
-        // nothing", never a failure the user should see.
-        return null;
-      }
-    };
     const home = this.claudeOptions.homeDir ?? homedir();
     const settingsSources = await Promise.all([
-      ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) => read(join(cwd, rel))),
-      read(join(home, CLAUDE_HOME_SETTINGS_FILE)),
+      ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) =>
+        readFileSafe(join(cwd, rel)),
+      ),
+      readFileSafe(join(home, CLAUDE_HOME_SETTINGS_FILE)),
     ]);
     // Where answering "No" to the CLI's own trust prompt lands — a different
     // file and a different shape from the settings ones, but the same
     // question, and the ordinary way a user switches a project server off.
-    const homeConfig = await read(join(home, CLAUDE_MODEL_CACHE_FILE));
+    const homeConfig = await readFileSafe(join(home, CLAUDE_MODEL_CACHE_FILE));
     // Union, because that is how the CLI itself combines them: a name in ANY
     // of these is one geniro cannot pull back out.
     const userDisabled = new Set<string>();

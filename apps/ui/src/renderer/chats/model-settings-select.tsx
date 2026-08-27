@@ -5,6 +5,7 @@ import {
   Sparkles,
   Zap,
 } from 'lucide-react';
+import { useMemo } from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import type {
@@ -177,6 +178,202 @@ export function ModelSettingsSelect({
   nextTurnOnly?: boolean;
   className?: string;
 }): React.JSX.Element {
+  // Memoized, and ABOVE the readout return below rather than beside the render
+  // it feeds: a hook cannot sit after a conditional return. The rows are ~40
+  // objects plus a JSX icon per axis, rebuilt on every render of a component
+  // the transcript re-renders on each streamed delta, for a list that only
+  // changes when the vocabulary or a selection does.
+  const rows = useMemo(() => {
+    /**
+     * One AXIS as a first-level row: its name, where it stands, and its values
+     * behind it. Null when the model offers nothing to choose in it.
+     *
+     * `checked` is set per value row rather than left to the menu's own value
+     * rule — one `value` cannot mark a choice in each of five submenus. The
+     * default row closes every axis for the reason it closes the model list:
+     * sending nothing is a real choice, and the one that still works when a model
+     * refuses everything else.
+     */
+    const axis = (
+      icon: React.ReactNode,
+      label: string,
+      prefix: string,
+      options: { id: string; label: string }[],
+      chosen: string | null,
+      defaultLabel: string,
+      /** What runs when nothing is chosen, for the row's own hint. */
+      effectiveLabel: string,
+      /**
+       * Whether {@link options} is ONE MODEL's list rather than the CLI's union —
+       * the same distinction {@link EffortSelect.levelsAreModelSpecific} carries,
+       * and it decides what a stored value the list does not contain MEANS. For a
+       * model's list it means this model refuses that value, so the row is
+       * disabled and the axis falls back to its default. For a CLI-wide union it
+       * means the vocabulary moved under a run that still carries the old word —
+       * the daemon honours it and the turn will run at it, so the row stays
+       * selectable and the axis states it.
+       */
+      valuesAreModelSpecific: boolean,
+      parameterId?: string,
+    ): MenuItem | null => {
+      if (options.length === 0) {
+        return null;
+      }
+      const key = (value: string): string =>
+        parameterId === undefined
+          ? encode(prefix, value)
+          : encode(prefix, parameterId, value);
+      const known = options.some((option) => option.id === chosen);
+      const refused = chosen !== null && !known && valuesAreModelSpecific;
+      const items: MenuItem[] = options.map((option) => ({
+        value: key(option.id),
+        label: option.label,
+        checked: option.id === chosen,
+      }));
+      // A stored value the list does not contain, added back rather than dropped:
+      // the run still carries it, so hiding the row would leave nothing on screen
+      // naming what the default is standing in for.
+      if (chosen !== null && !known) {
+        items.push({
+          value: key(chosen),
+          label: chosen,
+          hint: refused ? 'unavailable' : undefined,
+          disabled: valuesAreModelSpecific,
+          checked: !refused,
+        });
+      }
+      return {
+        value: `axis:${prefix}:${parameterId ?? ''}`,
+        icon,
+        label,
+        // The first level states where each axis STANDS, which is the whole
+        // reason it is worth a level of its own: five values readable at a glance
+        // where five chips could only be read one hover at a time.
+        hint:
+          chosen === null || refused
+            ? effectiveLabel
+            : (options.find((option) => option.id === chosen)?.label ?? chosen),
+        // The default row gets a GROUP of its own, which is what draws the
+        // hairline above it — the three single-axis chips each separate it that
+        // way, and pushed into the values array it reads as one more value here
+        // and as a distinct escape hatch there.
+        submenu: [
+          { items },
+          {
+            items: [
+              {
+                value: key(DEFAULT),
+                label: defaultLabel,
+                checked: chosen === null || refused,
+              },
+            ],
+          },
+        ],
+      };
+    };
+
+    const modelKnown = models.some((entry) => entry.id === model);
+    const modelRow: MenuItem = {
+      value: 'axis:model:',
+      icon: <Sparkles />,
+      label: 'Model',
+      hint:
+        model === null
+          ? 'default'
+          : (models.find((entry) => entry.id === model)?.label ?? model),
+      submenuSearchPlaceholder: 'Search models…',
+      submenu: [
+        {
+          items: [
+            ...models.map((entry) => ({
+              value: encode(MODEL, entry.id),
+              label: entry.label,
+              checked: entry.id === model,
+            })),
+            // A model the CLI no longer reports but the run still carries stays
+            // SELECTABLE, unlike a refused axis value: the CLI's own list moving
+            // is not the same as this model refusing a setting.
+            ...(model !== null && !modelKnown
+              ? [{ value: encode(MODEL, model), label: model, checked: true }]
+              : []),
+            {
+              value: encode(MODEL, DEFAULT),
+              label: 'default model',
+              checked: model === null,
+            },
+          ],
+        },
+      ],
+    };
+
+    return [
+      axis(
+        <Gauge />,
+        'Effort',
+        EFFORT,
+        efforts,
+        effort,
+        'default effort',
+        'default',
+        // The one axis with a CLI-wide union to fall back on: with no model
+        // chosen the daemon answers with it AND still honours a stored level
+        // outside it, since the union is not a superset by construction (cursor
+        // declares `effortsAreExhaustive: false` — gpt-5.2 enumerates a level no
+        // other model has).
+        model !== null,
+      ),
+      axis(
+        <Maximize2 />,
+        'Context window',
+        CONTEXT,
+        windows,
+        contextWindow,
+        'model default',
+        windowTokens !== null && windowTokens > 0
+          ? formatTokens(windowTokens)
+          : 'default',
+        // Always one model's list: there is no union of window sizes to fall
+        // back on, so a size outside the list is this model refusing it.
+        true,
+      ),
+      ...parameters.map((parameter) =>
+        axis(
+          // A recognised id gets its own glyph; everything else keeps the
+          // generic sliders — see {@link PARAMETER_ICONS} for why that asymmetry
+          // is the point rather than an omission.
+          PARAMETER_ICONS[parameter.id.toLowerCase()] ?? <SlidersHorizontal />,
+          parameter.label,
+          PARAMETER,
+          parameter.values,
+          parameterValues[parameter.id] ?? null,
+          'model default',
+          parameter.values.find((v) => v.id === parameter.current)?.label ??
+            'default',
+          // Which ids exist at all is this model's answer, so a stored value
+          // outside its list is refused rather than merely unlisted.
+          true,
+          parameter.id,
+        ),
+      ),
+      // Last of the axes and above the model, which is where the rows it stands
+      // in for will appear — so an axis arriving does not move the Model row out
+      // from under the pointer.
+      settingsLoading ? PENDING_AXES : null,
+      modelRow,
+    ].filter((row): row is MenuItem => row !== null);
+  }, [
+    models,
+    model,
+    efforts,
+    effort,
+    windows,
+    contextWindow,
+    windowTokens,
+    parameters,
+    parameterValues,
+    settingsLoading,
+  ]);
+
   // While the list is still being fetched there is nothing to open, so the chip
   // is a READOUT rather than a picker — kept from the model chip this control
   // replaced, where a pressable-but-empty picker was the thing being avoided.
@@ -196,148 +393,6 @@ export function ModelSettingsSelect({
       </span>
     );
   }
-  /**
-   * One AXIS as a first-level row: its name, where it stands, and its values
-   * behind it. Null when the model offers nothing to choose in it.
-   *
-   * `checked` is set per value row rather than left to the menu's own value
-   * rule — one `value` cannot mark a choice in each of five submenus. The
-   * default row closes every axis for the reason it closes the model list:
-   * sending nothing is a real choice, and the one that still works when a model
-   * refuses everything else.
-   */
-  const axis = (
-    icon: React.ReactNode,
-    label: string,
-    prefix: string,
-    options: { id: string; label: string }[],
-    chosen: string | null,
-    defaultLabel: string,
-    /** What runs when nothing is chosen, for the row's own hint. */
-    effectiveLabel: string,
-    parameterId?: string,
-  ): MenuItem | null => {
-    if (options.length === 0) {
-      return null;
-    }
-    const key = (value: string): string =>
-      parameterId === undefined
-        ? encode(prefix, value)
-        : encode(prefix, parameterId, value);
-    const known = options.some((option) => option.id === chosen);
-    const items: MenuItem[] = options.map((option) => ({
-      value: key(option.id),
-      label: option.label,
-      checked: option.id === chosen,
-    }));
-    // A stored value this model does not offer, added back DISABLED rather than
-    // dropped: the run still carries it, so hiding the row would leave nothing
-    // on screen naming what the default below is standing in for.
-    if (chosen !== null && !known) {
-      items.push({
-        value: key(chosen),
-        label: chosen,
-        hint: 'unavailable',
-        disabled: true,
-      });
-    }
-    items.push({
-      value: key(DEFAULT),
-      label: defaultLabel,
-      checked: chosen === null || !known,
-    });
-    return {
-      value: `axis:${prefix}:${parameterId ?? ''}`,
-      icon,
-      label,
-      // The first level states where each axis STANDS, which is the whole
-      // reason it is worth a level of its own: five values readable at a glance
-      // where five chips could only be read one hover at a time.
-      hint:
-        chosen !== null && known
-          ? (options.find((option) => option.id === chosen)?.label ?? chosen)
-          : effectiveLabel,
-      submenu: [{ items }],
-    };
-  };
-
-  const modelKnown = models.some((entry) => entry.id === model);
-  const modelRow: MenuItem = {
-    value: 'axis:model:',
-    icon: <Sparkles />,
-    label: 'Model',
-    hint:
-      model === null
-        ? 'default'
-        : (models.find((entry) => entry.id === model)?.label ?? model),
-    submenuSearchPlaceholder: 'Search models…',
-    submenu: [
-      {
-        items: [
-          ...models.map((entry) => ({
-            value: encode(MODEL, entry.id),
-            label: entry.label,
-            checked: entry.id === model,
-          })),
-          // A model the CLI no longer reports but the run still carries stays
-          // SELECTABLE, unlike a refused axis value: the CLI's own list moving
-          // is not the same as this model refusing a setting.
-          ...(model !== null && !modelKnown
-            ? [{ value: encode(MODEL, model), label: model, checked: true }]
-            : []),
-          {
-            value: encode(MODEL, DEFAULT),
-            label: 'default model',
-            checked: model === null,
-          },
-        ],
-      },
-    ],
-  };
-
-  const rows = [
-    axis(
-      <Gauge />,
-      'Effort',
-      EFFORT,
-      efforts,
-      effort,
-      'default effort',
-      'default',
-    ),
-    axis(
-      <Maximize2 />,
-      'Context window',
-      CONTEXT,
-      windows,
-      contextWindow,
-      'model default',
-      windowTokens !== null && windowTokens > 0
-        ? formatTokens(windowTokens)
-        : 'default',
-    ),
-    ...parameters.map((parameter) =>
-      axis(
-        // A recognised id gets its own glyph; everything else keeps the
-        // generic sliders — see {@link PARAMETER_ICONS} for why that asymmetry
-        // is the point rather than an omission.
-        PARAMETER_ICONS[parameter.id.toLowerCase()] ?? <SlidersHorizontal />,
-        parameter.label,
-        PARAMETER,
-        parameter.values,
-        parameterValues[parameter.id] ?? null,
-        'model default',
-        parameter.values.find((v) => v.id === parameter.current)?.label ??
-          'default',
-        parameter.id,
-      ),
-    ),
-    // Last of the axes and above the model, which is where the rows it stands
-    // in for will appear — so an axis arriving does not move the Model row out
-    // from under the pointer.
-    settingsLoading ? PENDING_AXES : null,
-    modelRow,
-  ].filter((row): row is MenuItem => row !== null);
 
   return (
     <Select

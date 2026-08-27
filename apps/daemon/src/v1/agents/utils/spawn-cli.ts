@@ -1299,6 +1299,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       toolUses: event.usage?.toolUses ?? null,
       stepsUnavailableReason: null,
       backgroundOpen: event.phase === 'started',
+      // What the settle SAID, not merely that it happened. Null on a `started`
+      // and on a settle whose CLI names no outcome, on the same terms as every
+      // other field here: absent claims nothing, so a CLI with no such
+      // vocabulary leaves the block reading exactly as it did before.
+      backgroundOutcome:
+        event.phase === 'settled' ? (event.outcome ?? null) : null,
     };
     // To whoever can carry it. A delegate launched between turns is the whole
     // reason this is not simply `turn.options.onEvent`: that path had no turn,

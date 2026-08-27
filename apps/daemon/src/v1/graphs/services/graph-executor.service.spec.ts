@@ -973,6 +973,52 @@ describe('GraphExecutorService', () => {
     expect(message).toContain(new ClaudeAdapter().listEfforts()[0]!.id);
   });
 
+  it('bounds an imported node’s model parameters before they reach the turn', async () => {
+    // An imported workflow is YAML a user could have hand-edited, and before
+    // this a node's `modelParameters` map reached the turn with none of the
+    // count/length caps the chat path applies to a run's stored settings.
+    const { service, claude } = setup();
+    // `tooLong` is inserted BEFORE the run of filler entries so its exclusion
+    // proves the length cap fired rather than merely losing a count-cap race.
+    const modelParameters: Record<string, string> = {
+      keep: 'short-value',
+      tooLong: 'x'.repeat(201),
+    };
+    for (let i = 0; i < 40; i += 1) {
+      modelParameters[`extra-${i}`] = 'y';
+    }
+
+    await service.startRun({
+      slug: 'over-cap-params',
+      workflow: triggered({
+        name: 'over-cap-params',
+        nodes: [
+          {
+            id: 'a',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            modelParameters,
+          },
+        ],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const resolved = claude.starts[0]!.input.modelParameters;
+    expect(resolved).not.toBeNull();
+    expect(Object.keys(resolved!).length).toBeLessThanOrEqual(32);
+    expect(resolved!.keep).toBe('short-value');
+    // The one entry that came in over the value-length cap must not survive.
+    expect(resolved!.tooLong).toBeUndefined();
+    for (const value of Object.values(resolved!)) {
+      expect(value.length).toBeLessThanOrEqual(200);
+    }
+  });
+
   it('leaves a cursor node’s effort alone — its list is only a UNION', async () => {
     // The twin of the claude case above, and the opposite answer, because the
     // adapters differ in the one way that matters: cursor's levels belong to

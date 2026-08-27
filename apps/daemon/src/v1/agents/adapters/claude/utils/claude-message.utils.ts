@@ -438,9 +438,11 @@ function mapClaudeLine(
         const patch = asRecord(root.patch);
         const status =
           asString(root.status) ?? (patch ? asString(patch.status) : null);
-        return id !== null &&
-          status !== null &&
-          CLAUDE_TASK_TERMINAL_STATUSES.has(status)
+        const outcome =
+          status === null
+            ? undefined
+            : CLAUDE_TASK_TERMINAL_STATUSES.get(status);
+        return id !== null && outcome !== undefined
           ? [
               {
                 type: 'background_work',
@@ -452,6 +454,10 @@ function mapClaudeLine(
                 // which is the only line that states it.
                 unit: 'other',
                 toolCallId: asString(root.tool_use_id),
+                // HOW it ended, translated out of this CLI's vocabulary here so
+                // no consumer downstream has to know that `killed` and
+                // `stopped` are the same outcome spelled by two channels.
+                outcome,
                 // What the unit spent. Only `task_notification` carries it —
                 // `task_updated` is an id and a status patch — so the two
                 // channels this daemon deliberately maps from both stay safe:

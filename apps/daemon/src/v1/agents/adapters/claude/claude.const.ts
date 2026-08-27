@@ -14,6 +14,8 @@
  * away from the shape that gives it meaning.
  */
 
+import type { BackgroundUnitOutcome } from '../adapter.types';
+
 // ── Turn argv ─────────────────────────────────────────────────────────────
 
 /**
@@ -1026,7 +1028,7 @@ export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
 export const CLAUDE_TASK_TYPE_AGENT = 'local_agent';
 
 /**
- * Task statuses meaning the work is OVER, however it ended.
+ * Task statuses meaning the work is OVER, each mapped to WHAT that ending was.
  *
  * An allowlist, not a "not running" test, and the direction matters: an
  * unrecognised status leaves the task open, so a vocabulary this list has not
@@ -1036,16 +1038,24 @@ export const CLAUDE_TASK_TYPE_AGENT = 'local_agent';
  * (as `task_updated.patch.status`) and `completed`, `stopped` (as
  * `task_notification.status`) for the same two tasks; the rest are the shapes
  * the same field takes elsewhere in the CLI's own vocabulary.
+ *
+ * The VALUE half is why this is a map and not a set: the two terminal channels
+ * spell one outcome two ways (`killed` here, `stopped` there, for the same task
+ * in one run), so translating to {@link BackgroundUnitOutcome} at the read site
+ * is what keeps a vendor's vocabulary out of every consumer downstream.
  */
-export const CLAUDE_TASK_TERMINAL_STATUSES: ReadonlySet<string> = new Set([
-  'completed',
-  'stopped',
-  'killed',
-  'failed',
-  'error',
-  'cancelled',
-  'canceled',
-  'timeout',
+export const CLAUDE_TASK_TERMINAL_STATUSES: ReadonlyMap<
+  string,
+  BackgroundUnitOutcome
+> = new Map([
+  ['completed', 'completed'],
+  ['stopped', 'stopped'],
+  ['killed', 'stopped'],
+  ['cancelled', 'stopped'],
+  ['canceled', 'stopped'],
+  ['failed', 'failed'],
+  ['error', 'failed'],
+  ['timeout', 'failed'],
 ]);
 
 /**

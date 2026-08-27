@@ -42,35 +42,67 @@ const OPTIMIZE_FOR: AgentModelParameter = {
   current: 'balanced',
 };
 
+/**
+ * Stable empties for the defaults below. `useAgentVocabulary` hands out one
+ * shared `NOTHING_YET` for the same reason: a fresh `[]` per render changes
+ * identity every time, which would silently defeat the panel's own row memo
+ * here and make the dependency-list test below pin nothing.
+ */
+const NO_ITEMS: never[] = [];
+const NO_VALUES: Record<string, string> = {};
+
 /** Every prop defaulted to "this model offers nothing", overridden per case. */
 function render(
   over: Partial<React.ComponentProps<typeof ModelSettingsSelect>> = {},
-): { el: HTMLDivElement; picked: [string, string | null][] } {
+): {
+  el: HTMLDivElement;
+  picked: [string, string | null][];
+  rerender: (
+    next: Partial<React.ComponentProps<typeof ModelSettingsSelect>>,
+  ) => void;
+} {
   const picked: [string, string | null][] = [];
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
-  act(() => {
-    root!.render(
-      <ModelSettingsSelect
-        agentKind="cursor-agent"
-        models={MODELS}
-        model={null}
-        onModelChange={(m) => picked.push(['model', m])}
-        efforts={[]}
-        effort={null}
-        onEffortChange={(e) => picked.push(['effort', e])}
-        windows={[]}
-        contextWindow={null}
-        onContextWindowChange={(w) => picked.push(['context', w])}
-        parameters={[]}
-        parameterValues={{}}
-        onParameterChange={(id, v) => picked.push([id, v])}
-        {...over}
-      />,
-    );
-  });
-  return { el: container, picked };
+  const paint = (
+    extra: Partial<React.ComponentProps<typeof ModelSettingsSelect>>,
+  ): void => {
+    act(() => {
+      root!.render(
+        <ModelSettingsSelect
+          agentKind="cursor-agent"
+          models={MODELS}
+          model={null}
+          onModelChange={(m) => picked.push(['model', m])}
+          efforts={NO_ITEMS}
+          effort={null}
+          onEffortChange={(e) => picked.push(['effort', e])}
+          windows={NO_ITEMS}
+          contextWindow={null}
+          onContextWindowChange={(w) => picked.push(['context', w])}
+          parameters={NO_ITEMS}
+          parameterValues={NO_VALUES}
+          onParameterChange={(id, v) => picked.push([id, v])}
+          {...over}
+          {...extra}
+        />,
+      );
+    });
+  };
+  paint({});
+  // ACCUMULATES rather than replaces. With replace-semantics every rerender
+  // silently reverted the props an earlier one had set, so a second dependency
+  // always moved alongside the one under test — which is exactly what a
+  // dependency-list test must not allow.
+  let applied = { ...over };
+  const rerender = (
+    next: Partial<React.ComponentProps<typeof ModelSettingsSelect>>,
+  ): void => {
+    applied = { ...applied, ...next };
+    paint(applied);
+  };
+  return { el: container, picked, rerender };
 }
 
 const trigger = (el: HTMLElement): HTMLButtonElement =>
@@ -114,6 +146,21 @@ function openAxis(el: HTMLElement, label: string): void {
   act(() => {
     axisRow(el, label)!.click();
   });
+}
+
+/** The second level's blocks — the hairline between them is drawn per group. */
+function submenuGroups(el: HTMLElement): HTMLElement[] {
+  const child = [...el.querySelectorAll<HTMLElement>('[role="listbox"]')][1];
+  return child
+    ? [...child.querySelectorAll<HTMLElement>('[data-slot="menu-group"]')]
+    : [];
+}
+
+/** The second-level row whose label matches, or undefined. */
+function submenuRow(el: HTMLElement, label: string): HTMLElement | undefined {
+  return submenuRows(el).find(
+    (r) => r.querySelector('span')?.textContent === label,
+  );
 }
 
 describe('ModelSettingsSelect', () => {
@@ -263,6 +310,79 @@ describe('ModelSettingsSelect', () => {
     expect(rows.at(-1)?.getAttribute('aria-selected')).toBe('true');
   });
 
+  it('keeps a stored effort OUTSIDE the CLI-wide union selectable, and says so', () => {
+    // With no model chosen the daemon answers with the union, and the union is
+    // not a superset by construction — cursor declares `effortsAreExhaustive:
+    // false` because gpt-5.2 enumerates a level no other model has. So a stored
+    // level the union omits still RUNS, and printing `unavailable` beside it
+    // would name the wrong outcome and leave no way to re-select it.
+    const { el } = render({
+      model: null,
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'high', label: 'high' },
+      ],
+      effort: 'xhigh',
+    });
+
+    open(el);
+    // The axis stands where the STORED level says, not at the default.
+    expect(axisRow(el, 'Effort')?.textContent).toContain('xhigh');
+    openAxis(el, 'Effort');
+    const stored = submenuRow(el, 'xhigh');
+    expect(stored).toBeDefined();
+    expect(stored?.hasAttribute('disabled')).toBe(false);
+    expect(stored?.textContent).not.toContain('unavailable');
+    expect(stored?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('refuses a stored effort outside ONE MODEL’s own list', () => {
+    // The other half of the same rule, and the case the single-axis chip was
+    // rebuilt for: with a model chosen the list is that model's, so a level it
+    // omits is that model refusing it — re-offering it would put `xhigh` back
+    // on a model that declines it every turn.
+    const { el } = render({
+      model: 'claude-opus-5',
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'high', label: 'high' },
+      ],
+      effort: 'xhigh',
+    });
+
+    open(el);
+    // The axis falls back to what will actually run.
+    expect(axisRow(el, 'Effort')?.textContent).not.toContain('xhigh');
+    openAxis(el, 'Effort');
+    const stored = submenuRow(el, 'xhigh');
+    expect(stored?.hasAttribute('disabled')).toBe(true);
+    expect(stored?.textContent).toContain('unavailable');
+    // …and the default row is the one marked, since that is what will run.
+    expect(submenuRows(el).at(-1)?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('gives the default row a block of its own, so the hairline is drawn', () => {
+    // The three single-axis chips each put it in its own menu group; pushed
+    // into the values array it reads as one more value here and as a distinct
+    // escape hatch there, for one row that means the same thing in both.
+    const { el } = render({
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'high', label: 'high' },
+      ],
+    });
+
+    open(el);
+    openAxis(el, 'Effort');
+    const groups = submenuGroups(el);
+    expect(groups).toHaveLength(2);
+    expect(
+      [...groups[1]!.querySelectorAll('[role="option"]')].map(
+        (o) => o.querySelector('span')?.textContent,
+      ),
+    ).toEqual(['default effort']);
+  });
+
   it('gives a recognised parameter its own glyph, and everything else the generic one', () => {
     // The named exception. `fast` earns a bolt because it was asked for by name;
     // every other id keeps the sliders, which is what lets a parameter the
@@ -331,6 +451,115 @@ describe('ModelSettingsSelect', () => {
 
     open(el);
     expect(axisRows(el)).toEqual(['Effort', 'Model']);
+  });
+
+  it('rebuilds the rows when any input the panel reads changes', () => {
+    // The rows are memoized, and `react-hooks/exhaustive-deps` is not enabled
+    // in this repo — nothing mechanically checks that dependency list. A
+    // forgotten entry serves a stale panel, which this drives one input at a
+    // time: change it, and the second level must state the new answer.
+    const { el, rerender } = render({
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'high', label: 'high' },
+      ],
+      effort: 'low',
+      parameters: [OPTIMIZE_FOR],
+      parameterValues: { optimize_for: 'cost' },
+    });
+
+    const checkedUnder = (axisLabel: string): string[] => {
+      open(el);
+      openAxis(el, axisLabel);
+      const marked = submenuRows(el)
+        .filter((r) => r.getAttribute('aria-selected') === 'true')
+        .map((r) => r.querySelector('span')?.textContent ?? '');
+      open(el);
+      return marked;
+    };
+
+    expect(checkedUnder('Effort')).toEqual(['low']);
+    rerender({ effort: 'high' });
+    expect(checkedUnder('Effort')).toEqual(['high']);
+
+    expect(checkedUnder('Optimize For')).toEqual(['Cost']);
+    rerender({ parameterValues: { optimize_for: 'intelligence' } });
+    expect(checkedUnder('Optimize For')).toEqual(['Intelligence']);
+
+    // The vocabulary itself, not only the selection — a model answering with a
+    // level it did not have before must reach the list.
+    rerender({
+      efforts: [
+        { id: 'low', label: 'low' },
+        { id: 'high', label: 'high' },
+        { id: 'max', label: 'max' },
+      ],
+    });
+    open(el);
+    openAxis(el, 'Effort');
+    expect(
+      submenuRows(el).map((r) => r.querySelector('span')?.textContent),
+    ).toContain('max');
+  });
+
+  it('rebuilds on EVERY remaining memo input, one at a time', () => {
+    // The companion to the case above, and between them they drive all ten
+    // entries of the dependency list. Each step changes exactly one prop and
+    // asserts an observable that only that prop can move, so dropping any single
+    // entry from the list turns one of these red — which is the whole reason
+    // the test exists, `react-hooks/exhaustive-deps` being off in this repo.
+    const { el, rerender } = render();
+    const axisNames = (): string[] => {
+      open(el);
+      const names = axisRows(el);
+      open(el);
+      return names;
+    };
+    const hintOf = (label: string): string => {
+      open(el);
+      const text = axisRow(el, label)?.textContent ?? '';
+      open(el);
+      return text;
+    };
+
+    // `model` and `models` are asserted on the MODEL AXIS ROW, never the
+    // trigger: the trigger's label is composed in the JSX, outside the memo, so
+    // it moves whether or not either is in the dependency list and would pass
+    // with both dropped.
+    expect(hintOf('Model')).toContain('default');
+    rerender({ model: 'claude-opus-5' });
+    expect(hintOf('Model')).toContain('Claude Opus 5');
+    rerender({ models: [{ ...MODELS[1]!, label: 'Opus (renamed)' }] });
+    expect(hintOf('Model')).toContain('Opus (renamed)');
+
+    // `windows` — an axis that did not exist appears.
+    expect(axisNames()).not.toContain('Context window');
+    rerender({ windows: [{ id: '1m', label: '1m' }] });
+    expect(axisNames()).toContain('Context window');
+
+    // `contextWindow` — where that axis STANDS. The row's hint is the
+    // EFFECTIVE label ('default'), not the submenu's `model default` row.
+    expect(hintOf('Context window')).toContain('default');
+    rerender({ contextWindow: '1m' });
+    expect(hintOf('Context window')).toContain('1m');
+
+    // `windowTokens` — the fallback shown with nothing chosen. Cleared FIRST as
+    // its own step, so the step that follows moves this prop alone; changing
+    // both at once would let `contextWindow` account for the rebuild.
+    rerender({ contextWindow: null });
+    expect(hintOf('Context window')).toContain('default');
+    rerender({ windowTokens: 200_000 });
+    expect(hintOf('Context window')).toContain('200k');
+
+    // `parameters` — another axis appearing.
+    expect(axisNames()).not.toContain('Optimize For');
+    rerender({ parameters: [OPTIMIZE_FOR] });
+    expect(axisNames()).toContain('Optimize For');
+
+    // `settingsLoading` — the pending row standing in for the axes.
+    expect(axisNames()).not.toContain('Reading what this model offers…');
+    rerender({ settingsLoading: true });
+    expect(axisNames()).toContain('Reading what this model offers…');
   });
 
   it('is a READOUT while the model list is still being fetched', () => {

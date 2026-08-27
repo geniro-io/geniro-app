@@ -1,7 +1,6 @@
 import {
   ArrowUp,
   Clock,
-  FolderOpen,
   FolderPlus,
   History,
   Square,
@@ -91,9 +90,6 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
-import { ContextWindowSelect } from './context-window-select';
-import { folderName } from './directory-select';
-import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { JumpToLatest } from './jump-to-latest';
@@ -103,7 +99,6 @@ import { MarkdownImageLoaderContext } from './markdown-image';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { withModelParameter } from './model-parameter-select';
-import { ModelSelect } from './model-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
@@ -147,7 +142,7 @@ import {
   SESSION_SEARCH_CONCURRENCY,
   sessionProfiles,
 } from './session-search';
-import { lastTerminalItemAt, TERMINAL_KINDS } from './settled-status';
+import { lastTerminalItemAt } from './settled-status';
 import { runningShellsByAgent, type ShellRun } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
@@ -335,6 +330,16 @@ async function currentRunSettings(): Promise<{
 
 /** Draft key for the landing composer, which has no run id of its own. */
 const NEW_CHAT_DRAFT = '__new__';
+
+/**
+ * One frozen empty map for "this CLI has no parameter picks", shared by every
+ * render.
+ *
+ * A `?? {}` at the prop would mint a fresh object each time and defeat the
+ * settings panel's own memo on exactly the runs that have nothing stored — the
+ * common case — so the memo would only ever hit once a parameter was set.
+ */
+const NO_PARAMETER_VALUES: Record<string, string> = {};
 
 export function Chats({
   client,
@@ -562,9 +567,24 @@ export function Chats({
   // message without one.
   const enqueueMessage = useCallback(
     (runId: string, message: Omit<QueuedMessage, 'id'>): void => {
+      const entry = { ...message, id: randomId() };
+      // The REF is written here too, not left to the effect that mirrors the
+      // state — because a caller may kick the drain in the same tick, and the
+      // drain reads this ref both to find its head and to re-read it per retry.
+      // Through the effect alone that kick saw the PRE-enqueue map: on the
+      // RUN_BUSY fallback path, where the queue was empty by construction, it
+      // found nothing and returned, so the message sat in the strip until the
+      // user left the chat and came back — the exact window that kick exists to
+      // cover. Minting the id in one place is what makes this safe: the state
+      // and the ref receive the SAME entry, and the effect re-syncs after the
+      // render either way.
+      queuesRef.current = {
+        ...queuesRef.current,
+        [runId]: [...(queuesRef.current[runId] ?? []), entry],
+      };
       setQueues((prev) => ({
         ...prev,
-        [runId]: [...(prev[runId] ?? []), { ...message, id: randomId() }],
+        [runId]: [...(prev[runId] ?? []), entry],
       }));
     },
     [],
@@ -791,6 +811,19 @@ export function Chats({
         const next = { ...current };
         delete next[kind];
         void window.geniro.updateSettings({ lastContextWindows: next });
+        return next;
+      });
+      // The other model settings go the same way, and the case is sharper:
+      // WHICH parameter ids exist at all is the model's own answer, so a value
+      // kept across a model change names an axis the new model never
+      // enumerated — sent on every turn, and for months on a workflow node.
+      setModelParameters((current) => {
+        if (current[kind] === undefined) {
+          return current;
+        }
+        const next = { ...current };
+        delete next[kind];
+        void window.geniro.updateSettings({ lastModelParameters: next });
         return next;
       });
     },
@@ -1335,27 +1368,6 @@ export function Chats({
     () =>
       new Map<string, string | null>(
         (capabilities?.interactiveTerminals ?? []).map((row) => [
-          row.agent,
-          row.unavailableReason,
-        ]),
-      ),
-    [capabilities],
-  );
-  /**
-   * Per CLI: `null` if it offers a reasoning-effort picker, else the daemon's
-   * own sentence for where the effort is set instead.
-   *
-   * Derived like the two maps above, and for the same reason — `EffortSelect`
-   * already hides itself on an empty vocabulary, but the read-only chip that
-   * replaces it needs a cause, and inventing one here is how the renderer came
-   * to hold a hand-written sentence behind an `agentKind === 'cursor-agent'`
-   * branch. An agent MISSING from the map is unknown (the report has not
-   * landed), which is not the same as "has a picker".
-   */
-  const effortReasons = useMemo(
-    () =>
-      new Map<string, string | null>(
-        (capabilities?.modelEfforts ?? []).map((row) => [
           row.agent,
           row.unavailableReason,
         ]),
@@ -5143,7 +5155,8 @@ export function Chats({
                                     }
                                     parameters={agentModelParameters.parameters}
                                     parameterValues={
-                                      modelParameters[agentKind] ?? {}
+                                      modelParameters[agentKind] ??
+                                      NO_PARAMETER_VALUES
                                     }
                                     onParameterChange={(id, next) =>
                                       changeModelParameter(agentKind, id, next)

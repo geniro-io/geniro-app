@@ -12,12 +12,12 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
-import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
+import { AgentVersionService } from '../../services/agent-version.service';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
@@ -1200,6 +1200,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
           'not the work inside it',
         ),
         backgroundOpen: null,
+        backgroundOutcome: null,
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -1266,6 +1267,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       toolUses: null,
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
+      backgroundOutcome: null,
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the
@@ -1697,6 +1699,74 @@ describe('CursorAcpAdapter misuse', () => {
         unavailableReason: null,
         exact: true,
       });
+    });
+
+    it('reads the --version ONCE across several listings, through the daemon memo', async () => {
+      // The version is the key every vocabulary cache is checked against, so it
+      // is read BEFORE any of them can answer — which meant a cache HIT still
+      // paid for a process fork. Measured at 0.54s each, three times over as
+      // the settings panel asks for its three listings.
+      const REPLY = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's1',
+          configOptions: [
+            {
+              id: 'optimize_for',
+              name: 'Optimize For',
+              category: 'model_config',
+              currentValue: 'balanced',
+              options: [{ value: 'balanced', name: 'Balance' }],
+            },
+          ],
+        },
+      })}\n`;
+      let forks = 0;
+      const { groupSpawnFn } = fakeAcpConfigProbe(REPLY, REPLY, REPLY);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => {
+          forks += 1;
+          return '2026.08.11-e8db854';
+        }),
+        versions: new AgentVersionService(),
+      });
+
+      // Three DIFFERENT models, so each listing genuinely re-probes and the
+      // count cannot be explained by the handshake cache answering instead.
+      await adapter.listModelParameters('auto-smart');
+      await adapter.listModelParameters('claude-opus-5');
+      await adapter.listModelParameters('gpt-5.6-sol');
+
+      expect(forks).toBe(1);
+    });
+
+    it('still forks directly when no version service is supplied', async () => {
+      // The collaborator is optional so a standalone construction works, and
+      // this is the arm that keeps that honest: without it the fallback could
+      // rot into a null-reference and nothing here would notice.
+      const REPLY = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { sessionId: 's1', configOptions: [] },
+      })}\n`;
+      let forks = 0;
+      const { groupSpawnFn } = fakeAcpConfigProbe(REPLY, REPLY);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => {
+          forks += 1;
+          return '2026.08.11-e8db854';
+        }),
+      });
+
+      await adapter.listModelParameters('auto-smart');
+      await adapter.listModelParameters('claude-opus-5');
+
+      expect(forks).toBe(2);
     });
 
     it('says a model offers nothing further, distinctly from not being asked', async () => {
@@ -2375,5 +2445,94 @@ describe('CursorAcpAdapter session title', () => {
         sessionStoreDir,
       }).readSessionTitle(join('..', 'outside')),
     ).resolves.toBeNull();
+  });
+});
+
+describe('CursorAcpAdapter — plugin servers the app loads and a turn does not', () => {
+  /** One plugin under `~/.cursor/plugins`, carrying the manifest shape given. */
+  function plugin(
+    home: string,
+    name: string,
+    manifest: readonly string[],
+    server: string,
+  ): void {
+    const dir = join(
+      home,
+      CURSOR_HOME_DIR_NAME,
+      'plugins',
+      'cache',
+      'publisher',
+      name,
+      'v1',
+    );
+    const manifestPath = join(dir, ...manifest);
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({ mcpServers: './mcp.json' }));
+    // The pointer is written relative to the PLUGIN, not to the manifest — so
+    // this sits at the plugin root whichever shape the manifest took.
+    writeFileSync(
+      join(dir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { [server]: {} } }),
+    );
+  }
+
+  it('names a plugin whatever manifest shape it ships', async () => {
+    // The walk read `.cursor-plugin/plugin.json` alone while the skills walk
+    // accepted three shapes, so a plugin carrying either of the other two
+    // contributed skills and NO server — and the note omitted servers the user
+    // can see working in Cursor, which is the one thing it exists to prevent.
+    // The geniro plugin itself ships two of the three.
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-'));
+    dirs.push(home);
+    plugin(home, 'cursor-shaped', ['.cursor-plugin', 'plugin.json'], 'alpha');
+    plugin(home, 'claude-shaped', ['.claude-plugin', 'plugin.json'], 'beta');
+    plugin(home, 'bare-shaped', ['plugin.json'], 'gamma');
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toContain('alpha');
+    expect(facts.interactiveOnlyNote).toContain('beta');
+    expect(facts.interactiveOnlyNote).toContain('gamma');
+  });
+
+  it('still reaches a plugin outside the cache directory', async () => {
+    // Why this walk keeps the broader `plugins/` root rather than adopting the
+    // skills walk's `plugins/cache`: `plugins/local` is a real install location
+    // the narrower root cannot see, and narrowing it was the half of this
+    // finding that was correctly declined.
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-local-'));
+    dirs.push(home);
+    const dir = join(home, CURSOR_HOME_DIR_NAME, 'plugins', 'local', 'mine');
+    mkdirSync(join(dir, '.cursor-plugin'), { recursive: true });
+    writeFileSync(
+      join(dir, '.cursor-plugin', 'plugin.json'),
+      JSON.stringify({ mcpServers: './mcp.json' }),
+    );
+    writeFileSync(
+      join(dir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { homegrown: {} } }),
+    );
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toContain('homegrown');
+  });
+
+  it('says nothing at all when no plugin declares a server', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-none-'));
+    dirs.push(home);
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toBeNull();
   });
 });

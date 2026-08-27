@@ -358,6 +358,7 @@ describe('subagentThreadsByAgent', () => {
       lastRowAt: null,
       stepsUnavailableReason: null,
       backgroundOpen: null,
+      backgroundOutcome: null,
       closed: false,
       entries: [],
       ...over,
@@ -423,6 +424,32 @@ describe('subagentThreadsByAgent', () => {
     // rows are newer than the settle is working, so the panel cannot report it
     // cancelled while the block beside it draws a spinner.
     expect(statusOf({ lastRowAt: 2_000 }, 1_000)).toBe('running');
+  });
+
+  it('reports what the CLI said a settled delegate CAME TO, not merely that it stopped', () => {
+    const statusOf = (over: Partial<SubagentBlockEntry>): string | undefined =>
+      subagentThreadsByAgent([block(over)], CHAT_AGENT_KEY, null).get(
+        CHAT_AGENT_KEY,
+      )?.[0]?.status;
+
+    // A killed delegate, reported through the settle. Both of the paths that
+    // used to answer `completed` are covered: the settle itself, and a
+    // `returned` launching call — which for a backgrounded delegate is answered
+    // within the second, so it is already true by the time the outcome lands.
+    expect(
+      statusOf({ backgroundOpen: false, backgroundOutcome: 'stopped' }),
+    ).toBe('cancelled');
+    expect(statusOf({ returned: true, backgroundOutcome: 'stopped' })).toBe(
+      'cancelled',
+    );
+    expect(statusOf({ returned: true, backgroundOutcome: 'failed' })).toBe(
+      'failed',
+    );
+    // …and a CLI that names no outcome is unchanged: silence is not a failure.
+    expect(statusOf({ backgroundOpen: false })).toBe('completed');
+    expect(statusOf({ returned: true, backgroundOutcome: 'completed' })).toBe(
+      'completed',
+    );
   });
 
   it('never offers a resumable session for a delegate', () => {

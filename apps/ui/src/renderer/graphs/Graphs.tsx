@@ -1160,14 +1160,16 @@ export function Graphs({
                           // a workflow that runs for months.
                           allowCustom
                           value={selected.model ?? null}
-                          // Changing the model clears the window with it: the
-                          // sizes belong to the model that offered them, and a
-                          // workflow keeping `1m` across a model change would
-                          // send `-32602` on every turn for months.
+                          // Changing the model clears the window and the other
+                          // parameters with it: both belong to the model that
+                          // offered them, and a workflow keeping `1m` — or an
+                          // `optimize_for` the new model never enumerated —
+                          // would send `-32602` on every turn for months.
                           onChange={(model) =>
                             patchSelected({
                               model: model ?? undefined,
                               contextWindow: undefined,
+                              modelParameters: undefined,
                             })
                           }
                         />

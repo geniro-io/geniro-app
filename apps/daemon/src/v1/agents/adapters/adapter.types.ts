@@ -45,6 +45,20 @@ export const GENIRO_MCP_CALL_TOOLS = [
  *
  * Every field nullable on the usual terms: a CLI reports what it reports.
  */
+/**
+ * How a unit of background work ENDED, in this app's own vocabulary rather than
+ * any CLI's.
+ *
+ * The words are the transcript block's own (`chats/transcript-groups.ts`
+ * `subagentBlockStatus`), so a CLI's spelling is translated once, in its
+ * adapter, and no consumer downstream has to learn another vendor's list.
+ * Claude alone spells the same outcome two ways on its two terminal channels
+ * (`killed` on one, `stopped` on the other, measured for one task in one run),
+ * which is why translating at the read site is the only place it can be done
+ * once.
+ */
+export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
   tokens: number | null;
@@ -763,6 +777,16 @@ type AgentEventBody =
        */
       stepsUnavailableReason: string | null;
       /**
+       * HOW this delegate ended, when the CLI said — {@link
+       * BackgroundUnitOutcome}, `null` while it is still out or when the CLI
+       * reports only THAT the work is over.
+       *
+       * A settle on its own says only that the work is no longer open, which
+       * is not the same as success — so absent must read as "nothing was
+       * said", never as `completed`.
+       */
+      backgroundOutcome: BackgroundUnitOutcome | null;
+      /**
        * Whether this delegate is still working in the BACKGROUND — `true` while
        * it is out, `false` once the CLI reports it done, `null` when nothing has
        * been said either way.
@@ -889,6 +913,17 @@ type AgentEventBody =
       /** The CLI's own id for this unit of work. */
       id: string;
       phase: 'started' | 'settled';
+      /**
+       * HOW it ended, on a `settled` — {@link BackgroundUnitOutcome}.
+       *
+       * Absent on a `started`, and absent on a settle from a CLI that reports
+       * only that the work is over. The three states matter for the same reason
+       * {@link AgentEvent} `subagent_info`'s `backgroundOpen` has three: absent
+       * must read as "nothing was said", never as success, or a CLI with no
+       * outcome vocabulary would have every delegate reported as having
+       * completed.
+       */
+      outcome?: BackgroundUnitOutcome;
       /**
        * WHAT this unit is, when the CLI says — a delegate (`agent`) or anything
        * else it runs in the background (a shell command, an indexing pass).

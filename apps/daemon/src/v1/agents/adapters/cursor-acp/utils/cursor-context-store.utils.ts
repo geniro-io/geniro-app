@@ -12,7 +12,7 @@ import type {
  * WHY THIS EXISTS RATHER THAN A PROTOCOL CALL. The CLI tells an ACP client
  * nothing about its window — measured twice, most recently on 2026-08-15
  * against a raw frame capture of a real tool-using turn (see the doc block at
- * `usage.breakdownUnavailableReason` in the adapter). But it is not that the
+ * `usage.breakdown` in the adapter). But it is not that the
  * figures do not exist: the CLI writes a complete breakdown into the session
  * store for every turn, which is what its own TUI renders. geniro already owns
  * that directory — `<configDir>/acp-sessions` is a symlink to

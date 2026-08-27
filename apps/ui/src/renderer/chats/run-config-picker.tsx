@@ -551,6 +551,7 @@ function RunConfigEditor({
                       model: null,
                       effort: null,
                       contextWindow: null,
+                      modelParameters: {},
                       approval: null,
                       configDir: null,
                     })
@@ -609,11 +610,13 @@ function RunConfigEditor({
                   models={models}
                   loading={modelsLoading}
                   value={draft.model}
-                  // The window belongs to the model that offered it, so a
-                  // model change clears it rather than carrying a size the new
-                  // model may not have — the same rule the daemon's settings
-                  // patch holds for an open chat.
-                  onChange={(model) => set({ model, contextWindow: null })}
+                  // The window and the other parameters belong to the model
+                  // that offered them, so a model change clears both rather
+                  // than carrying values the new model may not have — the same
+                  // rule the daemon's settings patch holds for an open chat.
+                  onChange={(model) =>
+                    set({ model, contextWindow: null, modelParameters: {} })
+                  }
                 />
               </SettingRow>
               {/* The ROW goes with the control, here and below. Both chips

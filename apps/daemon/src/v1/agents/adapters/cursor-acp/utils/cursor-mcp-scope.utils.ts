@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { dirname, join, parse as parsePath } from 'node:path';
 
 import type { AgentMcpOrigin } from '../../adapter.types';
@@ -24,15 +24,6 @@ import { CURSOR_PROJECT_ROOT_MARKER } from '../cursor-acp.const';
  * are here rather than on the adapter because none of them is a decision the
  * adapter makes — they are how a path is turned into text.
  */
-
-/** One file's contents, or null for absent, unreadable, or not a file. */
-export async function readTextOrNull(path: string): Promise<string | null> {
-  try {
-    return await readFile(path, 'utf8');
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Every directory under `root`, down to `depth` levels, `root` excluded.

@@ -96,9 +96,16 @@ export class ModelsService {
     // neither a disk map lookup nor a version compare.
     const stored = this.store.read(kind, null, version, isModelList);
     if (stored !== null) {
+      // Seeded with the CURRENT time, not `stored.fetchedAt`: this is a fresh
+      // memory reading of an answer that was already judged fresh enough to
+      // serve (the store's own staleness check, below), so the TTL clock
+      // starts now. Seeding it with the disk timestamp had every entry older
+      // than the TTL but younger than the store's own revalidate window fail
+      // the memory check on EVERY call — the disk read and shape walk re-ran
+      // per request instead of the intended one-per-TTL-window.
       this.cache.set(kind, {
         version,
-        fetchedAt: stored.fetchedAt,
+        fetchedAt: this.now(),
         models: stored.value,
       });
       if (stored.stale) {

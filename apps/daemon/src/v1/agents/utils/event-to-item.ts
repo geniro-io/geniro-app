@@ -171,6 +171,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           toolUses: event.toolUses,
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
+          backgroundOutcome: event.backgroundOutcome,
         },
       };
     case 'shell_info':

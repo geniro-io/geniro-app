@@ -237,10 +237,23 @@ export class ModelVocabularyStore {
     const records = this.load();
     const key = modelVocabularyKey(agent, model);
     if (!records.has(key) && records.size >= MAX_ENTRIES) {
-      // Dropping an entry to admit this one would evict a model the user may be
-      // working in right now; refusing to grow keeps the file bounded and costs
-      // only one cold ask on a model this machine has never opened.
-      return;
+      // DEAD rows first: an entry past the freshness window is one `read`
+      // already refuses to serve, so it holds a slot for nothing and every
+      // model arriving after it pays a cold handshake on every launch instead
+      // of the one cold probe the design intends.
+      const now = this.now();
+      for (const [existingKey, existingRecord] of records) {
+        if (now - existingRecord.fetchedAt >= FRESH_FOR_MS) {
+          records.delete(existingKey);
+        }
+      }
+      if (records.size >= MAX_ENTRIES) {
+        // Sixty entries all still fresh: refusing is the deliberate answer, not
+        // an oversight. Evicting to admit this one would drop a model the user
+        // may be working in right now, and the cost of refusing is one cold ask
+        // on a model this machine has never opened.
+        return;
+      }
     }
     records.set(key, { version, fetchedAt: this.now(), value });
     void this.save(records);

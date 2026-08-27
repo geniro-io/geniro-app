@@ -1,9 +1,10 @@
 import { existsSync } from 'node:fs';
 import { cp, mkdir, rename, rm } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
+import type { AgentVersionService } from '../../services/agent-version.service';
 import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import { spawnAgentVersion } from '../../utils/agent-version';
@@ -54,6 +55,7 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { readFileSafe } from '../utils/fs-safe.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import {
   CURSOR_ACP_ARGS,
@@ -80,7 +82,7 @@ import {
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
   CURSOR_OWNED_PARAMETER_IDS,
-  CURSOR_PLUGIN_MANIFEST_PATH,
+  CURSOR_PLUGIN_MANIFEST_PATHS,
   CURSOR_PLUGIN_SCAN_DEPTH,
   CURSOR_PLUGINS_DIR_NAME,
   CURSOR_PROFILE_DIR_NAME,
@@ -106,7 +108,6 @@ import {
   parseMcpServerNames,
   parsePluginMcpPath,
   pluginOnlyNote,
-  readTextOrNull,
 } from './utils/cursor-mcp-scope.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import {
@@ -150,6 +151,16 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
    * — see `CURSOR_SESSION_STORE_DIR_NAME`.
    */
   sessionStoreDir?: string;
+  /**
+   * The daemon's memoized `--version` reader, when one is provided.
+   *
+   * Optional so a standalone or test construction still works — it falls back
+   * to forking directly — but the module always supplies it, because this
+   * version is read BEFORE every vocabulary cache's key can be computed, so a
+   * cache HIT still paid for a process fork. See {@link
+   * CursorAcpAdapter.resolveBinaryVersion}.
+   */
+  versions?: AgentVersionService;
   /** The user's home, for reading their `cli-config.json` (test seam). */
   homeDir?: string;
   /**
@@ -423,11 +434,7 @@ export class CursorAcpAdapter extends AgentAdapter {
           ['.claude', 'plugins', 'cache'],
         ].map((cacheDir) => ({
           cacheDir,
-          manifests: [
-            ['.cursor-plugin', 'plugin.json'],
-            ['.claude-plugin', 'plugin.json'],
-            ['plugin.json'],
-          ],
+          manifests: CURSOR_PLUGIN_MANIFEST_PATHS,
           /**
            * A plugin's cursor-specific build first. Verified on the geniro
            * plugin, which ships both: `cursor/skills/` names its skills
@@ -1325,22 +1332,30 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * This CLI's own `--version` line — resolved FRESH on every raw-probe read
-   * rather than memoized here, because it IS the freshness key
-   * {@link handshakeProbeCache} checks: a memoized version would leave a
-   * stale key outliving the very upgrade this exists to catch.
+   * This CLI's own `--version` line — the freshness key
+   * {@link handshakeProbeCache} and {@link vocabularyStore} are both checked
+   * against.
    *
-   * Cheap next to what it gates: a plain `--version` fork against the ~2s ACP
-   * handshake it decides whether to repeat, so paying it once per listing (up
-   * to two per cold model) costs nothing next to the spawn it can save.
+   * Read through `AgentVersionService`'s 60s memo rather than forked here. The
+   * fork is 0.54s and three listings key off this version, so a cache HIT would
+   * otherwise pay for a process before it could read a cached byte; the memo's
+   * own TTL is short precisely so an upgrade is still noticed while somebody is
+   * wondering why. `onSpawn` is not called on a memo hit — no child, nothing to
+   * register.
    */
   private resolveBinaryVersion(
     options: AgentCommandOptions,
   ): Promise<string | null> {
-    return spawnAgentVersion(this.command, {
+    const forkOptions = {
       execFileFn: this.options.execFileFn,
       onSpawn: options.onSpawn,
-    });
+    };
+    return (
+      this.cursorOptions.versions?.resolve(
+        AgentKind.CursorAgent,
+        forkOptions,
+      ) ?? spawnAgentVersion(this.command, forkOptions)
+    );
   }
 
   /**
@@ -1627,8 +1642,8 @@ export class CursorAcpAdapter extends AgentAdapter {
     const home = this.cursorOptions.homeDir ?? homedir();
     const cursorHome = join(home, CURSOR_HOME_DIR_NAME);
     const [user, workspace] = await Promise.all([
-      readTextOrNull(join(cursorHome, CURSOR_MCP_CONFIG_NAME)),
-      readTextOrNull(
+      readFileSafe(join(cursorHome, CURSOR_MCP_CONFIG_NAME)),
+      readFileSafe(
         join(
           cursorProjectRoot(cwd),
           CURSOR_HOME_DIR_NAME,
@@ -1656,25 +1671,35 @@ export class CursorAcpAdapter extends AgentAdapter {
    * (`"mcpServers": "./.dd_cursor_mcp.json"`). The scan is depth-bounded (see
    * {@link CURSOR_PLUGIN_SCAN_DEPTH}) — the plugin cache holds a checkout per
    * plugin, and this runs on a listing the panel waits for.
+   *
+   * Every manifest shape the skills walk accepts
+   * ({@link CURSOR_PLUGIN_MANIFEST_PATHS}), not just cursor's own: a plugin
+   * carrying one of the other two contributed skills and no servers, so the
+   * note omitted servers the user can see working in Cursor. This still walks
+   * the broader `plugins/` root rather than the skills walk's `plugins/cache`,
+   * which is deliberate — `descendants` reaches the same version directories
+   * AND `plugins/local`, which that narrower root does not.
    */
   private async readPluginServerNames(cursorHome: string): Promise<string[]> {
     const names: string[] = [];
     const root = join(cursorHome, CURSOR_PLUGINS_DIR_NAME);
     for (const dir of await descendants(root, CURSOR_PLUGIN_SCAN_DEPTH)) {
-      const manifestPath = join(dir, ...CURSOR_PLUGIN_MANIFEST_PATH);
-      const relative = parsePluginMcpPath(await readTextOrNull(manifestPath));
-      if (relative === null) {
-        continue;
+      for (const manifest of CURSOR_PLUGIN_MANIFEST_PATHS) {
+        const relative = parsePluginMcpPath(
+          await readFileSafe(join(dir, ...manifest)),
+        );
+        if (relative === null) {
+          continue;
+        }
+        // Resolved against the PLUGIN's own directory, which is `dir` itself —
+        // a pointer like `./.dd_cursor_mcp.json` is written relative to the
+        // plugin, not to the manifest beside it. Taking the manifest's
+        // grandparent instead would land one level too high for the bare
+        // `plugin.json` shape, which sits AT the plugin root.
+        names.push(
+          ...parseMcpServerNames(await readFileSafe(join(dir, relative))),
+        );
       }
-      // Resolved against the PLUGIN's own directory, which is the manifest's
-      // parent's parent — the manifest lives one level down in
-      // `.cursor-plugin/`, and a path like `./.dd_cursor_mcp.json` is written
-      // relative to the plugin, not to the manifest beside it.
-      names.push(
-        ...parseMcpServerNames(
-          await readTextOrNull(join(dirname(dirname(manifestPath)), relative)),
-        ),
-      );
     }
     return names;
   }

@@ -2229,6 +2229,11 @@ export class AcpTurnDriver implements TurnDriver {
       // here cannot overwrite a value some other announcement gave.
       tokens: null,
       toolUses: null,
+      // Declared absent for the same reason, and it is the honest answer: this
+      // protocol's delegate frame says a delegate ran and how long for, never
+      // how it ended. A guessed `completed` here would put a green check on a
+      // delegate nobody reported the fate of.
+      backgroundOutcome: null,
       stepsUnavailableReason:
         this.options.delegate?.stepsUnavailableReason ?? null,
       // This protocol reports no background lifecycle for a delegate, so it

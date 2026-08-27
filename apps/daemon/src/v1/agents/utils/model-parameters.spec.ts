@@ -55,4 +55,44 @@ describe('model parameters column', () => {
       readModelParameters(JSON.stringify({ big: 'x'.repeat(201) })),
     ).toEqual({});
   });
+
+  it('bounds the parameter ID, not only its value', () => {
+    // The count and the value cap between them left the KEY unbounded, and a
+    // workflow arriving as YAML the user hand-edited or received is free to
+    // supply one — it is then persisted to the run and rides every turn's
+    // config frame for the life of that run.
+    expect(
+      readModelParameters(JSON.stringify({ ['k'.repeat(129)]: 'v' })),
+    ).toEqual({});
+    // …and the bound is generous enough that no real id trips it: the longest
+    // this app has seen is `optimize_for`.
+    expect(
+      readModelParameters(JSON.stringify({ ['k'.repeat(128)]: 'v' })),
+    ).toEqual({ ['k'.repeat(128)]: 'v' });
+  });
+
+  it('refuses a C0 control character in either half', () => {
+    // The parallel this module's doc block draws to `CustomInstructionsSchema`
+    // only holds with this — and it holds literally, because the refusal IS
+    // that schema's own `hasControlCharacters` rather than a second reading of
+    // what a control character is. Written as ESCAPES, never as the raw byte:
+    // a NUL in a `.ts` file makes git classify the blob as binary, and the
+    // repo's own pre-commit hook refuses such a file.
+    expect(readModelParameters(JSON.stringify({ 'a\u0000b': 'v' }))).toEqual(
+      {},
+    );
+    expect(readModelParameters(JSON.stringify({ ok: 'a\u001fb' }))).toEqual({});
+    // Tab, newline and carriage return are that helper's deliberate exemptions
+    // — ordinary in the prose it was written for. Kept rather than tightened
+    // here: a second, stricter definition of "control character" is exactly the
+    // drift that reusing one helper avoids.
+    expect(readModelParameters(JSON.stringify({ ok: 'a\tb' }))).toEqual({
+      ok: 'a\tb',
+    });
+    // A neighbouring GOOD entry still survives — one bad key must not cost the
+    // user the rest of their picks.
+    expect(
+      readModelParameters(JSON.stringify({ 'a\u0000b': 'v', fine: 'yes' })),
+    ).toEqual({ fine: 'yes' });
+  });
 });

@@ -1750,8 +1750,8 @@ export abstract class AgentAdapter {
    * disk). {@link AgentSessionReadInput} therefore offers BOTH channels and
    * each adapter takes what it needs.
    *
-   * The VALUE half is `AdapterConfig.usage.breakdownUnavailableReason`: what to
-   * tell the user when this returns null. The two must agree, and
+   * The VALUE half is `AdapterConfig.usage.breakdown` — its `.reason` when this
+   * returns null, its `.channel` when it doesn't. The two must agree, and
    * `agent-adapter.spec.ts` pins that they do.
    */
   readContextUsage(
@@ -1827,8 +1827,8 @@ export abstract class AgentAdapter {
    * they are asked together so a panel cannot show one from a moment the other
    * does not describe.
    *
-   * The VALUE half is `AdapterConfig.usage.planLimitsUnavailableReason`: what
-   * to tell the user when this returns null. The two must agree, and
+   * The VALUE half is `AdapterConfig.usage.planLimits` — its `.reason` when
+   * this returns null, its `.channel` when it doesn't. The two must agree, and
    * `agent-adapter.spec.ts` pins that they do.
    */
   readPlanLimits(

@@ -478,8 +478,20 @@ export const CURSOR_PROJECT_ROOT_MARKER = '.git';
  * measurements behind that claim.
  */
 export const CURSOR_PLUGINS_DIR_NAME = 'plugins';
-/** The manifest inside a cached plugin that names its MCP config. */
-export const CURSOR_PLUGIN_MANIFEST_PATH = ['.cursor-plugin', 'plugin.json'];
+/**
+ * The manifest shapes a plugin may carry, in the CLI's own precedence.
+ *
+ * All THREE, and named here because two readers spell them: the skills walk in
+ * `getConfig().skillRoots.plugins`, and `readPluginServerNames`. Both must
+ * accept every shape — a plugin matched by one walk and not the other
+ * contributes skills while its servers go unnamed, which is precisely what
+ * `pluginOnlyNote` exists to say. The geniro plugin ships two of the three.
+ */
+export const CURSOR_PLUGIN_MANIFEST_PATHS: readonly (readonly string[])[] = [
+  ['.cursor-plugin', 'plugin.json'],
+  ['.claude-plugin', 'plugin.json'],
+  ['plugin.json'],
+];
 /**
  * How deep under `plugins/` a manifest sits — `cache/<publisher>/<name>/<sha>/`,
  * observed on the installed datadog plugin. Bounded rather than walked to the

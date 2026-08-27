@@ -17,7 +17,6 @@ import {
   parseMcpServerNames,
   parsePluginMcpPath,
   pluginOnlyNote,
-  readTextOrNull,
 } from './cursor-mcp-scope.utils';
 
 const dirs: string[] = [];
@@ -162,11 +161,5 @@ describe('descendants', () => {
 
   it('answers nothing for a directory that is not there', async () => {
     expect(await descendants(join(realDir(), 'missing'), 3)).toEqual([]);
-  });
-});
-
-describe('readTextOrNull', () => {
-  it('answers null rather than throwing on an absent file', async () => {
-    expect(await readTextOrNull(join(realDir(), 'nope.json'))).toBeNull();
   });
 });

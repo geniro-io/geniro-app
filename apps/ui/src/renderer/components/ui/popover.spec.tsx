@@ -127,7 +127,7 @@ describe('the shared floating surface', () => {
         onSelect={vi.fn()}
         onClose={vi.fn()}
       />,
-    ).querySelector('[role="listbox"]')!;
+    ).querySelector('[data-slot="menu-panel"]')!;
 
     for (const surface of [popover, menu]) {
       const classes = surface.className.split(/\s+/);

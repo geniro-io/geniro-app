@@ -233,9 +233,16 @@ import { defaultSpawn } from './utils/spawn-cli';
     },
     {
       provide: CursorAcpAdapter,
-      inject: [ModelVocabularyStore],
-      useFactory: (vocabularyStore: ModelVocabularyStore) =>
+      inject: [ModelVocabularyStore, AgentVersionService],
+      useFactory: (
+        vocabularyStore: ModelVocabularyStore,
+        versions: AgentVersionService,
+      ) =>
         new CursorAcpAdapter({
+          // The `--version` this CLI's every cache is keyed by, read through
+          // the daemon's 60s memo — without it a cache HIT still forked, and
+          // the settings panel asks for three listings.
+          versions,
           // The handshake replies that survive a restart — the difference
           // between a model's settings appearing in 6s and in the frame the
           // panel opens.

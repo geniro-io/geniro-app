@@ -368,6 +368,203 @@ describe('Menu', () => {
   });
 });
 
+describe('Menu — the second level', () => {
+  const AXES: MenuGroup[] = [
+    {
+      items: [
+        {
+          value: 'axis:effort',
+          label: 'Effort',
+          hint: 'high',
+          submenu: [
+            {
+              items: [
+                { value: 'effort:low', label: 'low' },
+                { value: 'effort:high', label: 'high' },
+              ],
+            },
+          ],
+        },
+        { value: 'plain', label: 'Plain row' },
+      ],
+    },
+  ];
+
+  /** The parent's rows container, and the child's. */
+  const listboxes = (el: HTMLElement): HTMLElement[] => [
+    ...el.querySelectorAll<HTMLElement>('[role="listbox"]'),
+  ];
+
+  const axisRow = (el: HTMLElement): HTMLElement =>
+    rows(el).find((r) => r.querySelector('span')?.textContent === 'Effort')!;
+
+  function openAxis(el: HTMLElement): void {
+    act(() => {
+      axisRow(el).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  /** Press a key IN the second level, where the user's focus actually is. */
+  function pressInSubmenu(el: HTMLElement, key: string): void {
+    act(() => {
+      listboxes(el)[1]!.dispatchEvent(
+        new KeyboardEvent('keydown', { key, bubbles: true }),
+      );
+    });
+  }
+
+  it('advertises the panel behind an axis row instead of marking it chosen', () => {
+    // A row that OPENS a level is a heading with a value on it, not a choice —
+    // so it must not claim `aria-selected`, and it must say what it controls.
+    const el = open(AXES);
+    const row = axisRow(el);
+
+    expect(row.getAttribute('aria-haspopup')).toBe('listbox');
+    expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(row.hasAttribute('aria-selected')).toBe(false);
+    // …and a plain row keeps it, so this is a distinction rather than a
+    // blanket removal.
+    expect(
+      rows(el)
+        .find((r) => r.querySelector('span')?.textContent === 'Plain row')
+        ?.hasAttribute('aria-selected'),
+    ).toBe(true);
+
+    openAxis(el);
+    expect(axisRow(el).getAttribute('aria-expanded')).toBe('true');
+    const controls = axisRow(el).getAttribute('aria-controls');
+    expect(controls).not.toBeNull();
+    // By id rather than a selector: `useId` mints `:r0:`-shaped ids, which need
+    // escaping in a selector and none in `getElementById`.
+    expect(document.getElementById(controls!)).toBe(
+      listboxes(el)[1]!.closest('[data-slot="menu-panel"]'),
+    );
+  });
+
+  it('keeps the second level OUT of the first one’s listbox, and inside its panel', () => {
+    // Two rules at once, and they pull in opposite directions: a `listbox` may
+    // own only `option`/`group` children, so a nested one makes a screen reader
+    // compute the wrong set size for the outer list — while the outside-click
+    // guard asks `panel.contains(target)`, so a click two levels down must
+    // still be a descendant or choosing a value would close the menu under
+    // itself.
+    const el = open(AXES);
+    openAxis(el);
+
+    const [parentList, childList] = listboxes(el);
+    expect(childList).toBeDefined();
+    expect(parentList!.contains(childList!)).toBe(false);
+
+    const parentPanel = el.querySelector<HTMLElement>(
+      '[data-slot="menu-panel"]',
+    )!;
+    expect(parentPanel.contains(childList!)).toBe(true);
+  });
+
+  it('does not drive the FIRST level with a key pressed in the second', () => {
+    // The child is rendered inside the parent's DOM, so without
+    // `stopPropagation` every arrow press moved BOTH highlights and the parent
+    // painted its accent on a row that was not the one whose submenu is open.
+    const el = open(AXES);
+    openAxis(el);
+    const before = highlighted(listboxes(el)[0]!);
+
+    pressInSubmenu(el, 'ArrowDown');
+
+    expect(highlighted(listboxes(el)[0]!)).toEqual(before);
+    // …and the press DID reach the level it was pressed in.
+    expect(highlighted(listboxes(el)[1]!)).toEqual(['high']);
+  });
+
+  it('commits exactly once when Enter is pressed in the second level', () => {
+    // The wrong-value double commit the propagation above would cause: the
+    // parent's own Enter handler would commit whatever ITS highlight had
+    // reached, alongside the value the user actually chose.
+    const onSelect = vi.fn();
+    const el = open(AXES, { onSelect });
+    openAxis(el);
+
+    pressInSubmenu(el, 'ArrowDown');
+    pressInSubmenu(el, 'Enter');
+
+    expect(onSelect.mock.calls).toEqual([['effort:high']]);
+  });
+
+  it('lets a key it does NOT handle reach the ancestors', () => {
+    // `Menu` backs every picker in the app and renders inside whatever opened
+    // it. `Dialog` traps Tab on its card and closes on Escape from a `document`
+    // listener; `App` binds ⌥⌘L on `window`. React's stopPropagation stops the
+    // NATIVE event at its root container, below all three — so stopping every
+    // key let Tab escape the modal focus trap for as long as a picker was open.
+    const el = open(AXES);
+    openAxis(el);
+    const seen: string[] = [];
+    const onWindowKey = (event: KeyboardEvent): void => {
+      seen.push(event.key);
+    };
+    window.addEventListener('keydown', onWindowKey);
+    try {
+      pressInSubmenu(el, 'Tab');
+      pressInSubmenu(el, 'l');
+      // …and the ones it DOES consume are still stopped, or the second level
+      // would go back to driving the first.
+      pressInSubmenu(el, 'ArrowDown');
+    } finally {
+      window.removeEventListener('keydown', onWindowKey);
+    }
+
+    expect(seen).toEqual(['Tab', 'l']);
+  });
+
+  it('ArrowLeft in the SEARCH field moves the caret rather than closing the level', () => {
+    // The model list is the one submenu with a search field, and it is focused
+    // the moment the level opens — so backing out on ArrowLeft would discard a
+    // half-typed query over the very list the field exists for.
+    const el = open([
+      {
+        items: [
+          {
+            value: 'axis:model',
+            label: 'Model',
+            submenuSearchPlaceholder: 'Search models…',
+            submenu: [{ items: [{ value: 'model:opus', label: 'opus' }] }],
+          },
+        ],
+      },
+    ]);
+    act(() => {
+      rows(el)[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const field = [...el.querySelectorAll('input')].at(-1)!;
+    expect(field.getAttribute('placeholder')).toBe('Search models…');
+
+    act(() => {
+      field.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }),
+      );
+    });
+
+    // Still open: two panels, the child among them.
+    expect(el.querySelectorAll('[role="listbox"]')).toHaveLength(2);
+  });
+
+  it('ArrowLeft backs out of the second level, keeping the first open', () => {
+    // Before this the only way out was Escape, which closes the whole picker —
+    // so a keyboard user who opened the wrong axis had to reopen the panel and
+    // navigate back to where they were.
+    const onClose = vi.fn();
+    const el = open(AXES, { onClose });
+    openAxis(el);
+    expect(listboxes(el)).toHaveLength(2);
+
+    pressInSubmenu(el, 'ArrowLeft');
+
+    expect(listboxes(el)).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(axisRow(el).getAttribute('aria-expanded')).toBe('false');
+  });
+});
+
 describe('Menu — fitting the window', () => {
   /**
    * Open with the panel reporting a given rect.
@@ -394,7 +591,7 @@ describe('Menu — fitting the window', () => {
     const spy = vi
       .spyOn(Element.prototype, 'getBoundingClientRect')
       .mockImplementation(function (this: Element): DOMRect {
-        if (this.getAttribute('role') !== 'listbox') {
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
           return zero;
         }
         return {
@@ -417,7 +614,7 @@ describe('Menu — fitting the window', () => {
   }
 
   const panel = (el: HTMLElement): HTMLElement =>
-    el.querySelector<HTMLElement>('[role="listbox"]')!;
+    el.querySelector<HTMLElement>('[data-slot="menu-panel"]')!;
 
   it('shortens a panel that runs off the TOP of the window', () => {
     // The reported branch picker, as measured at 900×420 before the fix: a
@@ -486,7 +683,7 @@ describe('Menu — fitting the window', () => {
 
 describe('Menu — escaping a clipping container', () => {
   const panel = (el: HTMLElement): HTMLElement =>
-    el.querySelector<HTMLElement>('[role="listbox"]')!;
+    el.querySelector<HTMLElement>('[data-slot="menu-panel"]')!;
 
   /** A trigger whose measured box is not the origin, so placement is readable. */
   function triggerAt(rect: Partial<DOMRect>): {
@@ -539,7 +736,7 @@ describe('Menu — escaping a clipping container', () => {
     const spy = vi
       .spyOn(Element.prototype, 'getBoundingClientRect')
       .mockImplementation(function (this: Element): DOMRect {
-        if (this.getAttribute('role') !== 'listbox') {
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
           return { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
         }
         const left = Number.parseFloat((this as HTMLElement).style.left || '0');

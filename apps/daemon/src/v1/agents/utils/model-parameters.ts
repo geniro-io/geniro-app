@@ -16,9 +16,18 @@
  * Checking here would mean holding a second copy of that vocabulary.
  */
 
-/** How many parameters one run may carry, and how long a value may be. */
+import { hasControlCharacters } from '../chat.types';
+
+/** How many parameters one run may carry, and how long an id and a value may be. */
 const MAX_PARAMETERS = 32;
 const MAX_VALUE_LENGTH = 200;
+/**
+ * The id half of that bound. Generous next to any real CLI parameter id — the
+ * longest observed is `optimize_for` — and it exists because the count and the
+ * value cap between them left the KEY unbounded, which a workflow YAML the user
+ * hand-edited or received is free to supply.
+ */
+const MAX_ID_LENGTH = 128;
 
 /**
  * The stored column as a map — `{}` for null, blank, unparseable, or anything
@@ -61,9 +70,18 @@ export function writeModelParameters(
  *
  * The bounds are not paranoia about this app's own writers — they are what
  * makes a value safe to hand to a CLI as a config option every turn, for the
- * life of the chat. Same reasoning as `CustomInstructionsSchema`'s ceiling.
+ * life of the chat. Same reasoning as `CustomInstructionsSchema`'s ceiling —
+ * and literally its control-character refusal, reused rather than restated so
+ * the two cannot drift about what a control character is.
+ *
+ * Exported for the callers whose map never was a column: a workflow node's
+ * parameters arrive as parsed YAML, so routing them through
+ * {@link readModelParameters} would mean stringifying an object in order to
+ * parse it straight back.
  */
-function sanitizeModelParameters(value: unknown): Record<string, string> {
+export function sanitizeModelParameters(
+  value: unknown,
+): Record<string, string> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     return {};
   }
@@ -77,7 +95,14 @@ function sanitizeModelParameters(value: unknown): Record<string, string> {
     }
     const key = id.trim();
     const entry = raw.trim();
-    if (key === '' || entry === '' || entry.length > MAX_VALUE_LENGTH) {
+    if (
+      key === '' ||
+      entry === '' ||
+      key.length > MAX_ID_LENGTH ||
+      entry.length > MAX_VALUE_LENGTH ||
+      hasControlCharacters(key) ||
+      hasControlCharacters(entry)
+    ) {
       continue;
     }
     out[key] = entry;

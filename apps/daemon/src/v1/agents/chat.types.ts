@@ -123,6 +123,60 @@ export const MAX_ANSWER_LENGTH = 32_768;
 export const MAX_QUESTION_HEADER_LENGTH = 64;
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/approval-card.tsx — the third name
+ * in `ApprovalCard`'s router.
+ *
+ * The tool geniro REGISTERS for a CLI that gives its own model no way to ask
+ * the user anything ({@link AdapterConfig.hostQuestionToolReason}). It is
+ * served over the run's MCP endpoint, so the agent sees it beside its other
+ * MCP tools, and its input is deliberately the shape claude's own
+ * AskUserQuestion takes — the renderer already parses that, so a host-asked
+ * question renders through the same card as a CLI-asked one rather than
+ * through a second one free to disagree with it.
+ *
+ * The name is geniro's, not any CLI's, which is why it lives here rather than
+ * in an adapter: the whole point is that no adapter owns it.
+ */
+export const HOST_QUESTION_TOOL = 'ask_user_question';
+
+/**
+ * Sanity cap on one host-asked question's option count and question count.
+ * A model is free to send more; the cap is what stops a card from becoming a
+ * scrolling wall the answer controls sit below.
+ */
+export const MAX_HOST_QUESTIONS = 4;
+export const MAX_HOST_QUESTION_OPTIONS = 8;
+
+/** One option of a host-asked question. */
+export interface HostQuestionOption {
+  label: string;
+  description?: string;
+}
+
+/** One question of a host-asked `ask_user_question` call. */
+export interface HostQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: HostQuestionOption[];
+}
+
+/**
+ * What a host-asked question resolves to.
+ *
+ * `answered` carries the user's words; `declined` is a Deny verdict; and
+ * `unavailable` is every way the ask could not be PUT — no turn to park, the
+ * turn settled underneath it, the card could not be persisted. The three are
+ * separate because the agent must be able to tell "they said no" from "nobody
+ * was asked", and a tool that answered both with an empty string would have
+ * the model treat an unasked question as a refusal.
+ */
+export type HostQuestionOutcome =
+  | { status: 'answered'; answer: string }
+  | { status: 'declined' }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

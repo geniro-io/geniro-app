@@ -46,7 +46,7 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
-import { SINGLE_AGENT_NODE } from '../chat.types';
+import { HOST_QUESTION_TOOL, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -68,6 +68,7 @@ import { ProcessRegistry } from './process-registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
+import { UserQuestionBroker } from './user-question.broker';
 
 // ── In-memory fakes (the DAOs ignore the passed EntityManager) ───────────────
 class FakeRunDao {
@@ -617,6 +618,7 @@ function setup(
     new FakeContextWindowStore().asStore(),
   );
   const callTokens = new CallTokenRegistry();
+  const userQuestions = new UserQuestionBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -707,6 +709,13 @@ function setup(
     // that pins nothing — so the honest answer is the null the production path
     // gives, and a double would pin the double instead.
     new ConfigDirPinService(adapters),
+    // The REAL broker: it is a rendezvous with no I/O, and what these tests
+    // observe through it — that a host-asked question reaches the same card
+    // and the same verdict path a CLI-asked one does — is exactly what a
+    // double would have to fake.
+    userQuestions,
+    callTokens,
+    { token: 'launch', version: '0.0.0', startedAt: 0, port: 4870 },
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -719,6 +728,7 @@ function setup(
     deltas,
     partials,
     callTokens,
+    userQuestions,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -931,6 +941,128 @@ describe('ChatService', () => {
     expect((await service.setGroup(run.id, null)).groupId).toBeNull();
     // Null names no group, so there is nothing to check — one assertion still.
     expect(assertedGroups).toEqual(['g-work']);
+  });
+
+  describe('host question channel', () => {
+    async function settle(agent: {
+      emit: (e: AgentEvent) => void;
+      finish: () => void;
+    }): Promise<void> {
+      agent.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: null,
+      });
+      agent.finish();
+      await drain();
+      await drain();
+    }
+
+    it('hands a cursor turn geniro’s own question tool, and lets it be asked', async () => {
+      const { service, cursor, userQuestions, callTokens } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const startArg = cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.mcpEndpoint?.url).toContain(
+        `/v1/mcp/${run.id}/${SINGLE_AGENT_NODE}`,
+      );
+      // The endpoint is only usable with a token the guard will accept on that
+      // route, so an endpoint whose token was never issued is a tool the agent
+      // is told about and refused at.
+      expect(startArg.mcpEndpoint?.token).toBe(
+        callTokens.get(run.id, SINGLE_AGENT_NODE),
+      );
+      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+    });
+
+    it('hands a claude turn neither — its model already has AskUserQuestion', async () => {
+      const { service, claude, userQuestions } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.mcpEndpoint ?? null).toBeNull();
+      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await settle(claude);
+    });
+
+    it('puts a card on screen and returns the verdict’s answer to the agent', async () => {
+      const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'Which database?', options: [{ label: 'Postgres' }] }],
+        null,
+      );
+      await drain();
+
+      // The SAME card a CLI-raised question puts: one approval_request item,
+      // one entry in the shared registry, flagged as a question so the badge
+      // says the agent is asking rather than waiting on a permission.
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(card).toBeDefined();
+      expect(card?.payload).toContain(HOST_QUESTION_TOOL);
+      const pending = approvals.listByRun(run.id);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.question).toBe(true);
+
+      expect(
+        approvals.resolve(run.id, pending[0]!.requestId, true, 'Postgres'),
+      ).toBe(true);
+      expect(await asked).toEqual({ status: 'answered', answer: 'Postgres' });
+      await drain();
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'approval_verdict' &&
+            item.payload.includes('Postgres'),
+        ),
+      ).toBe(true);
+      await settle(cursor);
+    });
+
+    it('answers an ask left parked when the turn ends, instead of leaving it hanging', async () => {
+      const { service, cursor, userQuestions } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'Which?', options: [{ label: 'A' }] }],
+        null,
+      );
+      await drain();
+      await settle(cursor);
+
+      // `ApprovalRegistry.sweepNode` only DROPS the card; the promise the MCP
+      // request is blocked on has to be settled here or that call waits for
+      // its own client timeout with the turn long gone.
+      expect(await asked).toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the question was answered',
+      });
+      // …and the asker is gone with the turn, so a later call is refused
+      // rather than parked on a card nothing will close.
+      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
+    });
   });
 
   describe('geniro commands', () => {

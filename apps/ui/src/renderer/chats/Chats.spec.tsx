@@ -1168,6 +1168,86 @@ describe('Chats transcript auto-scroll', () => {
     ).toBe('Context 46% full — 462.3k of 1M');
   });
 
+  it('moves the ring onto the reading the PANEL just took', async () => {
+    // REPORTED as "Context circle wasnt synced, it took 15s to sync": the
+    // panel had asked the CLI directly and read 425.4k while the ring beside
+    // it still showed the figure from the last main-thread assistant line —
+    // which is the only thing that moves it on this CLI, and 15s is simply how
+    // long that agent went without producing one.
+    //
+    // The panel's ask is the freshest figure this client can hold, so it is
+    // filed against the run row — the source `chatContext` ranks directly
+    // under the live plane.
+    const settled: ChatItem = {
+      id: 'i-settled',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: {
+          contextTokens: 100_000,
+          contextWindowTokens: 1_000_000,
+          costUsd: null,
+        },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([
+      { ...run1, contextTokens: 100_000, contextWindowTokens: 1_000_000 },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), settled]);
+    api.readChatMetrics.mockResolvedValue({
+      context: {
+        categories: [],
+        totalTokens: 425_400,
+        maxTokens: 1_000_000,
+        model: null,
+        autoCompactAtTokens: null,
+        autoCompactEnabled: null,
+        memoryFiles: [],
+        servers: [],
+      },
+      breakdownReason: null,
+      totals: {
+        turns: 1,
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        workedMs: null,
+      },
+    });
+
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const meter = (): Element | null =>
+      container.querySelector(
+        '[data-slot="context-meter"] button[aria-expanded]',
+      );
+    expect(meter()?.getAttribute('aria-label')).toBe(
+      'Context 10% full — 100k of 1M',
+    );
+
+    // Opening the readout is what takes the reading.
+    await act(async () => {
+      meter()?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(meter()?.getAttribute('aria-label')).toBe(
+      'Context 43% full — 425.4k of 1M',
+    );
+  });
+
   it('takes the ring DOWN once a compaction has replaced the conversation', async () => {
     // REPORTED as "после компакта кружочек не обновляется. Он все еще так же
     // заполнен с контекстом". On a CLI whose compaction geniro performs itself,

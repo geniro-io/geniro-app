@@ -9,6 +9,8 @@ import {
   BlockResult,
   BlockShell,
   type BlockStatus,
+  BlockStatusIcon,
+  blockStatusLabel,
   BlockTitle,
 } from './block-shell';
 import { formatElapsed, RunSettledContext, WorkingRow } from './live-row';
@@ -208,6 +210,54 @@ function SubagentStepsMissing({
 }
 
 /**
+ * That the delegate ENDED, for a block where nothing else would say so.
+ *
+ * REPORTED against a finished cursor delegate as "cursor agent doesn't seem to
+ * have success message". Its body is the brief, the model, and the sentence
+ * explaining that this CLI streams none of the delegate's steps — and not one
+ * of those three changes when the work finishes, so a delegate that ran for a
+ * minute and came back reads exactly like one that did nothing. What marks the
+ * ending is a 14px check in the header, which is not where a reader who has
+ * opened the block is looking.
+ *
+ * Deliberately narrow, and the condition is the whole argument: only a body
+ * with NO entries and no result that is the delegate's OWN.
+ * {@link SubagentBlockEntry.resultIsOwn} and not merely `result`, on that
+ * field's own reading: a launch acknowledgement is the CLI answering the
+ * launching call, not the delegate reporting, so a block showing one under
+ * `Reply to the launching call` still has nothing in it that says the work
+ * ended. A delegate that streamed its work
+ * ends on that work, and one whose answer is printed ends on the answer —
+ * stating it a second time there is the footer this thread already removed
+ * once, for repeating what the header says better. This states what neither
+ * says: nothing else in the body reports the outcome.
+ *
+ * The word comes from the block vocabulary's own table
+ * ({@link blockStatusLabel}), never a literal here, so a delegate cut off by
+ * Stop reads `cancelled` in the same sentence its header, its panel row and
+ * the run badge use.
+ */
+function SubagentEnded({
+  block,
+  status,
+}: {
+  block: SubagentBlockEntry;
+  status: BlockStatus;
+}): React.JSX.Element | null {
+  if (status === 'running' || block.entries.length > 0 || block.resultIsOwn) {
+    return null;
+  }
+  return (
+    <p
+      data-role="subagent-ended"
+      className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <BlockStatusIcon status={status} className="size-3" />
+      <span>Sub-agent {blockStatusLabel(status)}</span>
+    </p>
+  );
+}
+
+/**
  * One sub-agent's conversation, for the detail dialog the panel row and the
  * block's own control open.
  *
@@ -267,7 +317,10 @@ export function SubagentThread({
   // Read from the SAME source the header's own spinner uses, so the block
   // cannot show a live row under a header that says the delegate has stopped.
   const runSettledAt = useContext(RunSettledContext);
-  const working = subagentBlockStatus(block, runSettledAt) === 'running';
+  // ONE reading for both the live row and the ending below it, so the thread
+  // can never show a spinner and a "completed" line at once.
+  const status = shellStatusOf(block, runSettledAt);
+  const working = status === 'running';
   return (
     <NestedThreadContext.Provider value={true}>
       {block.prompt ? (
@@ -317,8 +370,10 @@ export function SubagentThread({
           text={block.result}
         />
       ) : null}
+      <SubagentEnded block={block} status={status} />
       {/*
-        No footer. It used to close every delegate's thread with `<title> is
+        No footer beyond that one line. It used to close every delegate's
+        thread with `<title> is
         working...` and `N tools` — both of which the header directly above
         already says, and says better: the status is a spinner and a chip, the
         tool count is a chip, and both are legible with the block still closed.

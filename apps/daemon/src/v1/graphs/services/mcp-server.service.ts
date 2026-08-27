@@ -8,7 +8,17 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
-import { MAX_ANSWER_LENGTH } from '../../agents/chat.types';
+import {
+  HOST_QUESTION_TOOL,
+  MAX_ANSWER_LENGTH,
+  MAX_HOST_QUESTION_OPTIONS,
+  MAX_HOST_QUESTIONS,
+} from '../../agents/chat.types';
+import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import {
+  hostQuestionResultText,
+  readHostQuestions,
+} from '../../agents/utils/host-question';
 import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { closeQuietly } from '../utils/close-quietly';
@@ -16,9 +26,13 @@ import { CallBroker } from './call-broker.service';
 
 /**
  * The MCP protocol host behind the per-run endpoint
- * (`POST /v1/mcp/<runId>/<callerNodeId>`, see McpController) serving exactly
- * two tools — call_agent and await_agent — to caller agents over the
- * streamable-http transport. Stateless by design: every POST builds a fresh
+ * (`POST /v1/mcp/<runId>/<nodeId>`, see McpController), serving the tools THIS
+ * node can use over the streamable-http transport: the call surface
+ * (call_agent / await_agent / answer_agent) to a node with callees, and
+ * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
+ * own. The listing is composed per request rather than fixed, so a chat is
+ * never offered agents to call and a graph node is never offered a card
+ * nobody is watching. Stateless by design: every POST builds a fresh
  * SDK `Server` + transport pair (no session ids, plain JSON responses), so
  * nothing leaks between requests and the per-run call token in the guard is
  * the only session there is. Tool results are ALWAYS the broker's envelope
@@ -34,6 +48,7 @@ export class McpServerService {
 
   constructor(
     private readonly broker: CallBroker,
+    private readonly questions: UserQuestionBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -109,8 +124,19 @@ export class McpServerService {
         callees
           .map((callee) => calleeSummary(callee, CALLEE_DESCRIPTION_MAX))
           .join('; ') || 'none';
-      return {
-        tools: [
+      // Two independent reasons a run holds this endpoint, so the listing is
+      // composed from what this node can actually DO rather than fixed: a
+      // caller node has callees to reach, and a chat on a CLI that cannot ask
+      // its user anything has a question to put. A node with both gets both;
+      // one with neither is a node that should not have been handed an
+      // endpoint at all, and an empty list says so honestly.
+      const tools: {
+        name: string;
+        description: string;
+        inputSchema: Record<string, unknown>;
+      }[] = [];
+      if (callees.length > 0) {
+        tools.push(
           {
             name: 'call_agent',
             description:
@@ -188,13 +214,113 @@ export class McpServerService {
               required: ['call_id', 'answer'],
             },
           },
-        ],
-      };
+        );
+      }
+      if (this.questions.canAsk(runId, nodeId)) {
+        tools.push({
+          name: HOST_QUESTION_TOOL,
+          description:
+            'Ask the USER a multiple-choice question and WAIT for their answer. ' +
+            'Use it when a choice is genuinely theirs to make — an ambiguous requirement, a decision between real alternatives, ' +
+            'anything where guessing wrong would waste the work. Do NOT use it for questions you can answer from the code, ' +
+            'and never to check in on something already decided. ' +
+            'The answer comes back as text; when it cannot be put to them the result says so and you continue in your reply instead.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'Optional short heading for the whole card, when several questions belong to one decision.',
+              },
+              questions: {
+                type: 'array',
+                description: `The questions to ask — at most ${MAX_HOST_QUESTIONS}, each with its own options.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    question: {
+                      type: 'string',
+                      description:
+                        'The question, written so it can be answered without reading your reasoning.',
+                    },
+                    header: {
+                      type: 'string',
+                      description:
+                        'A 1-3 word label for this question, used as its tab title.',
+                    },
+                    multiSelect: {
+                      type: 'boolean',
+                      description:
+                        'True when more than one option may be picked. Defaults to false.',
+                    },
+                    options: {
+                      type: 'array',
+                      description: `The choices, at most ${MAX_HOST_QUESTION_OPTIONS}. Offer real alternatives; the user can always answer in their own words instead.`,
+                      items: {
+                        type: 'object',
+                        properties: {
+                          label: {
+                            type: 'string',
+                            description: 'The choice, in a few words.',
+                          },
+                          description: {
+                            type: 'string',
+                            description:
+                              'What picking it means or leads to. Optional.',
+                          },
+                        },
+                        required: ['label'],
+                      },
+                    },
+                  },
+                  required: ['question', 'options'],
+                },
+              },
+            },
+            required: ['questions'],
+          },
+        });
+      }
+      return { tools };
     });
 
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const name = request.params.name;
       const args = (request.params.arguments ?? {}) as Record<string, unknown>;
+      if (name === HOST_QUESTION_TOOL) {
+        // Answered ahead of the call tools and in its OWN shape: the call
+        // envelope is a contract between two AGENTS, and a question put to a
+        // person has no status, no call_id and nothing to collect later. The
+        // agent reads plain words back.
+        const questions = readHostQuestions(args);
+        if (questions.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: 'questions' must be a non-empty array, each entry carrying a 'question' string and at least one option.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const title = typeof args.title === 'string' ? args.title : null;
+        const outcome = await this.questions.ask(
+          runId,
+          nodeId,
+          questions,
+          title,
+        );
+        return {
+          content: [{ type: 'text', text: hostQuestionResultText(outcome) }],
+          // None of the three outcomes is a tool FAILURE: a dismissal and an
+          // unavailable channel are both answers the agent carries on from,
+          // and flagging them as errors is how a model comes to retry a
+          // question the user has already declined.
+          isError: false,
+        };
+      }
       let envelope: CallEnvelope;
       if (name === 'call_agent') {
         envelope =
@@ -221,7 +347,7 @@ export class McpServerService {
       } else {
         envelope = {
           status: 'error',
-          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves call_agent, await_agent, and answer_agent`,
+          error: `UNKNOWN_TOOL: '${name}' — this endpoint serves whatever tools/list reported for this node`,
         };
       }
       return {

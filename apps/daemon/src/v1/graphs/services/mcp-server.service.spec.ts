@@ -6,6 +6,8 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
+import { HOST_QUESTION_TOOL } from '../../agents/chat.types';
+import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
@@ -38,8 +40,11 @@ function broker(): CallBroker {
   instance.registerRun('run-1', capability);
   return instance;
 }
-function service(callBroker = broker()): McpServerService {
-  return new McpServerService(callBroker, {
+function service(
+  callBroker = broker(),
+  questions = new UserQuestionBroker(),
+): McpServerService {
+  return new McpServerService(callBroker, questions, {
     token: 'launch',
     version: '9.9.9',
     startedAt: 0,
@@ -152,6 +157,93 @@ describe('McpServerService', () => {
     expect(tools[0]!.description).toContain('"question"');
     expect(tools[2]!.description).toContain('ask the user');
     expect(tools[2]!.description).toContain('await_agent');
+  });
+
+  it('withholds ask_user_question from a node no turn can ask through', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_QUESTION_TOOL);
+  });
+
+  it('offers ask_user_question — and only it — to a chat node with no callees', async () => {
+    const questions = new UserQuestionBroker();
+    questions.register('run-1', 'agent', async () => ({
+      status: 'answered',
+      answer: 'Postgres',
+    }));
+    // A CHAT's node: it is registered with no call capability at all, so
+    // `listCallees` is empty and the call surface would be three tools naming
+    // nobody.
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).toEqual([HOST_QUESTION_TOOL]);
+  });
+
+  it('tools/call ask_user_question returns the user’s own answer as plain text', async () => {
+    const questions = new UserQuestionBroker();
+    const asked: string[] = [];
+    questions.register('run-1', 'agent', async (qs, title) => {
+      asked.push(`${title ?? '-'}:${qs[0]?.question ?? ''}`);
+      return { status: 'answered', answer: 'Postgres' };
+    });
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: {
+          title: 'Storage',
+          questions: [
+            { question: 'Which database?', options: [{ label: 'Postgres' }] },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { type: string; text: string }[];
+      isError: boolean;
+    };
+    expect(asked).toEqual(['Storage:Which database?']);
+    expect(result.content[0]!.text).toContain('Postgres');
+    // A question the user ANSWERED is not a tool failure, and neither are the
+    // other two outcomes — see the dispatch's own note.
+    expect(result.isError).toBe(false);
+  });
+
+  it('refuses a call whose questions cannot be read, without asking anybody', async () => {
+    const questions = new UserQuestionBroker();
+    let asks = 0;
+    questions.register('run-1', 'agent', async () => {
+      asks += 1;
+      return { status: 'declined' };
+    });
+    const { json } = await post(
+      service(new CallBroker(), questions),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_QUESTION_TOOL,
+        arguments: { questions: [{ question: 'Which?', options: [] }] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(asks).toBe(0);
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
   });
 
   it('tools/call call_agent returns the broker envelope as text content', async () => {

@@ -1,13 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
   BadRequestException,
   ConflictException,
   NotFoundException,
 } from '@packages/common';
 
+import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { mintToken } from '../../../auth/mint-token';
+import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import {
@@ -24,6 +28,9 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ClaudeModesCapability,
+  HOST_QUESTION_TOOL,
+  type HostQuestion,
+  type HostQuestionOutcome,
   type ItemWire,
   type RunWire,
   type SendMessageImage,
@@ -44,6 +51,7 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
@@ -71,6 +79,7 @@ import { ProcessRegistry } from './process-registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
+import { UserQuestionBroker } from './user-question.broker';
 
 function parsePayload(raw: string): unknown {
   try {
@@ -316,6 +325,9 @@ export class ChatService implements OnModuleInit {
     private readonly groups: RunGroupsService,
     private readonly cliSessions: CliSessionsService,
     private readonly configDirPins: ConfigDirPinService,
+    private readonly userQuestions: UserQuestionBroker,
+    private readonly callTokens: CallTokenRegistry,
+    @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
   /**
@@ -2091,12 +2103,26 @@ export class ChatService implements OnModuleInit {
        * mode, so it reads the run's. Passing the turn's copy there is what let
        * a chip moved to `ask` after a turn ended go on auto-approving.
        */
+      /**
+       * geniro's own MCP server for this run, when this CLI is being handed
+       * one.
+       *
+       * A FUNCTION rather than a value: `adapter` is resolved further down,
+       * and every reader of this runs later still. Computed here rather than
+       * read off the endpoint built below, because the permission gate needs
+       * it and the endpoint does not exist at that point.
+       */
+      const hostQuestionServer = (): string | null =>
+        adapter.getConfig().hostQuestionToolReason === null
+          ? null
+          : hostMcpServerName(runId);
       const autoApproves = (
         toolName: string,
         mode: ChatApprovalMode | undefined,
       ): boolean =>
-        mode === 'auto' &&
-        !isUserQuestion(adapter.getConfig().questionToolName, toolName);
+        isHostQuestionCall(hostQuestionServer(), toolName) ||
+        (mode === 'auto' &&
+          !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
       const effort = settings.effort ?? undefined;
       const contextWindow = settings.contextWindow ?? undefined;
@@ -2413,6 +2439,146 @@ export class ChatService implements OnModuleInit {
           'this chat was deleted while the turn was starting',
         );
       }
+      /**
+       * Every ask still parked, so the settle can answer them.
+       *
+       * `ApprovalRegistry.sweepNode` DROPS a pending card without responding —
+       * correct for a CLI-raised question, whose asker dies with the process,
+       * and not for this one, where the promise is held by an MCP request that
+       * would otherwise wait for its own client timeout with the turn already
+       * gone.
+       */
+      const outstandingAsks = new Set<
+        (outcome: HostQuestionOutcome) => boolean
+      >();
+      /**
+       * geniro's own question channel, for a CLI that hands its model none
+       * (`AdapterConfig.hostQuestionToolReason`).
+       *
+       * It puts the SAME card the CLI's own questions put — one
+       * `approval_request` item, one entry in the shared `ApprovalRegistry` —
+       * because the alternative is a second question surface with its own
+       * badge, its own verdict path and its own way of going wrong. What
+       * differs is only where the answer goes: there it is folded back into a
+       * paused tool call, here it resolves the MCP call the agent is blocked
+       * on.
+       */
+      const askUser = async (
+        questions: HostQuestion[],
+        title: string | null,
+      ): Promise<HostQuestionOutcome> => {
+        const requestId = randomUUID();
+        const input = {
+          ...(title === null ? {} : { title }),
+          questions,
+        };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: HOST_QUESTION_TOOL, input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was
+          // never written is a question nobody can ever see — reported back
+          // as unavailable rather than left parked forever on a verdict that
+          // cannot arrive.
+          return {
+            status: 'unavailable',
+            reason: err instanceof Error ? err.message : String(err),
+          };
+        }
+        return await new Promise<HostQuestionOutcome>((resolve) => {
+          const settle = (outcome: HostQuestionOutcome): boolean => {
+            if (!outstandingAsks.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          outstandingAsks.add(settle);
+          this.approvals.track({
+            runId,
+            nodeId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: HOST_QUESTION_TOOL,
+            input,
+            // The badge's whole reason for existing: this is the agent asking
+            // the user something, not a tool held at a permission gate.
+            question: true,
+            respond: (allow, answer) => {
+              const delivered = settle(
+                allow && answer !== undefined
+                  ? { status: 'answered', answer }
+                  : allow
+                    ? // Approved with nothing said — the card's own arity can
+                      // produce this, and an empty answer is not the same as
+                      // a refusal.
+                      { status: 'answered', answer: '' }
+                    : { status: 'declined' },
+              );
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              if (delivered) {
+                enqueue(async () => {
+                  await this.persist(
+                    em,
+                    runId,
+                    await this.seqs.reserve(runId),
+                    'approval_verdict',
+                    null,
+                    {
+                      id: requestId,
+                      allow,
+                      // Recorded whenever it reached the agent, which for this
+                      // channel is whenever there was one — the answer IS the
+                      // tool's result, so there is no fold that could silently
+                      // drop it.
+                      ...(allow && answer !== undefined ? { answer } : {}),
+                    },
+                  );
+                });
+              }
+              return delivered;
+            },
+          });
+          this.announceAwaiting(runId);
+        });
+      };
+      // Only a CLI that needs the tool is handed the endpoint at all — that is
+      // what `hostQuestionServer` being non-null says. An agent told about a
+      // server it has no use for pays for its tools in every prompt, and
+      // claude would be offered a second question tool beside its own.
+      //
+      // The token is REUSED across a run's turns where one was already minted:
+      // it is the run's credential for its own route, and re-minting per turn
+      // would leave the previous turn's endpoint refused for no reason.
+      const questionServer = hostQuestionServer();
+      const callToken =
+        questionServer === null
+          ? null
+          : (this.callTokens.get(runId, SINGLE_AGENT_NODE) ?? mintToken());
+      if (callToken !== null) {
+        this.callTokens.issue(runId, SINGLE_AGENT_NODE, callToken);
+      }
+      const mcpEndpoint =
+        callToken !== null &&
+        questionServer !== null &&
+        this.runtime.port !== null
+          ? {
+              url: `http://127.0.0.1:${this.runtime.port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
+              token: callToken,
+              serverName: questionServer,
+            }
+          : null;
+      const disposeAsker = mcpEndpoint
+        ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
+        : null;
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -2437,6 +2603,11 @@ export class ChatService implements OnModuleInit {
           // words as they are written. Each adapter decides what that costs —
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
+          // …and for a CLI whose own model has no way to ask, the endpoint
+          // carrying geniro's `ask_user_question`. Null for one that already
+          // has its own tool, so nothing is registered where it would only be
+          // a second way to do the same thing.
+          ...(mcpEndpoint === null ? {} : { mcpEndpoint }),
           streamPartials,
           images: attachments.map((attachment) => ({
             path: this.attachments.pathOf(runId, attachment.id),
@@ -3056,6 +3227,17 @@ export class ChatService implements OnModuleInit {
       const finalized = handle.done
         .then(async () => {
           await chain; // drain pending persists before finalizing
+          // The turn that could put a question on screen is over: take the
+          // asker down FIRST, so a call arriving during the rest of this
+          // finalizer is refused outright rather than parked on a card the
+          // sweep below is in the middle of closing.
+          disposeAsker?.();
+          for (const settle of [...outstandingAsks]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the question was answered',
+            });
+          }
           // Sweep BEFORE the branches below — the failure path early-returns,
           // and a settled turn must never leave a pending card that no
           // verdict can ever reach. Each swept request is SAID so in the

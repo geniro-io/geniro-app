@@ -368,6 +368,84 @@ describe('ChatMetricsService', () => {
       expect(metrics.breakdownReason).toBeNull();
     });
 
+    /**
+     * The same stored reading, but carrying an ALLOWANCE — which is the half
+     * `atSeq` cannot vouch for.
+     */
+    const storedWithPlan = (takenAt: string): string =>
+      JSON.stringify({
+        takenAt,
+        atSeq: 7,
+        context: BREAKDOWN,
+        plan: {
+          plan: 'team',
+          windows: [
+            {
+              key: 'weekly_all',
+              label: 'Current week',
+              percent: 100,
+              resetsAt: '2026-08-29T09:00:00.000Z',
+            },
+          ],
+        },
+      });
+
+    it('asks again for an allowance the transcript cannot vouch for', async () => {
+      // REPORTED as "I STILL have team session", against a panel reading
+      // `TEAM · Current week 100% · resets in 1d 15h`. `atSeq` is the whole
+      // guard on the shortcut, and it is right about the CONTEXT and blind to
+      // the ALLOWANCE: a week rolls, an account changes plan, and every turn
+      // spent in another chat or another terminal moves the figure without
+      // writing a row here. Reconstructed from the reporter's own geniro.db —
+      // six runs holding `plan: "team"` at 100%, all still servable, the
+      // oldest twelve hours old, while the same profile asked live answered
+      // `max` with its week at 1%.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan('2026-08-26T13:18:49.000Z'),
+        maxSeq: 7,
+      });
+
+      await service.read('run-1');
+
+      expect(readContextUsage).toHaveBeenCalled();
+    });
+
+    it('still serves an allowance taken moments ago, which is what the shortcut is FOR', async () => {
+      // The other side of the bound. Without this arm the fix could be "never
+      // reuse a plan reading", which puts the reported two-second wait back on
+      // every hover.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan(new Date().toISOString()),
+        maxSeq: 7,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(readContextUsage).not.toHaveBeenCalled();
+      expect(metrics.plan?.plan).toBe('team');
+      expect(metrics.takenAt).toBeNull();
+    });
+
+    it('refuses to date an allowance whose stamp will not parse', async () => {
+      // An unparseable stamp is not evidence of freshness — it is the absence
+      // of evidence, and the defensive branch this asserts is the one a later
+      // "dead code" pass would otherwise delete.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan('not a timestamp'),
+        maxSeq: 7,
+      });
+
+      await service.read('run-1');
+
+      expect(readContextUsage).toHaveBeenCalled();
+    });
+
     it('asks again the moment the transcript has moved', async () => {
       // The guard the shortcut rests on. One new row of any kind and the
       // stored figures describe a window that no longer exists — so this is

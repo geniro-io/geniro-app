@@ -49,6 +49,7 @@ import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { UserQuestionBroker } from './services/user-question.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
 
@@ -75,6 +76,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     ChatService,
+    UserQuestionBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -280,6 +282,10 @@ import { defaultSpawn } from './utils/spawn-cli';
   exports: [
     AgentEventBus,
     ApprovalRegistry,
+    // Exported for the graphs module: its MCP host serves the
+    // `ask_user_question` tool through this broker, and the turn that can
+    // actually put the card on screen registers here.
+    UserQuestionBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

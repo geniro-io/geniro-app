@@ -471,6 +471,28 @@ export type PlanLimitsWire = z.infer<typeof PlanLimitsWireSchema>;
 export const StoredMetricsReadingSchema = z.object({
   takenAt: z.string(),
   atSeq: z.number(),
+  /**
+   * The agent config directory — the ACCOUNT — this reading was taken under,
+   * null for the CLI's own default profile.
+   *
+   * `atSeq` says the reading still describes this CONVERSATION; this says it
+   * still describes the account whose allowance it reports. The two are
+   * independent, and a chat can change account without saying a word: switching
+   * a live chat's profile carries its conversation across, so the transcript
+   * position is untouched while every account-level figure in the reading now
+   * belongs to somebody else.
+   *
+   * REPORTED as a panel reading `TEAM · Current week 100%` on a chat whose
+   * chip said `.claude-manifest-lab-personal`. Both profiles were on disk:
+   * `.claude-manifest-lab` is `claude_team`, `-personal` is `claude_max`, and
+   * the run row's own `config_dir` was the personal one — so the figures were
+   * the team account's, kept across the switch.
+   *
+   * Required rather than optional, so a reading filed before this field
+   * existed fails the parse and is simply taken again. There is nothing to
+   * migrate: the whole value is a cache of one question.
+   */
+  configDir: z.string().nullable(),
   context: ContextBreakdownWireSchema.nullable(),
   plan: PlanLimitsWireSchema.nullable(),
 });

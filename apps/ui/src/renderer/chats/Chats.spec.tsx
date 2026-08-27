@@ -5027,7 +5027,21 @@ describe('Chats queued messages', () => {
     });
     // A SHORT page is the start of the conversation — the notice goes away.
     expect(container.querySelector('[data-slot="older-messages"]')).toBeNull();
-  });
+    // A budget sized for what this test actually does, replacing vitest's 5s
+    // default — which is a default, not a decision anyone made about this case.
+    //
+    // It mounts a FULL page: `HISTORY_PAGE` is 1,000 and a full page is the
+    // signal the assertions are about, so the render cannot be made smaller
+    // without pinning something other than the behaviour. That makes it the
+    // heaviest test in the UI suite by CPU (measured: 424ms on its own, 891ms
+    // under the full suite's parallelism) and, unlike the timer-bound tests
+    // above it, its cost scales with how contended the machine is. On a shared
+    // CI runner it crossed 5s and failed on wall-clock alone — never on an
+    // assertion, and never with a byte of this file changed.
+    //
+    // Per-test rather than `vi.setConfig`, which would raise it for all 286
+    // tests in this file and blunt the hang guard for every one of them.
+  }, 20_000);
 
   it('does not page a chat that arrived whole', async () => {
     // The common case, and the one a threshold bug would break loudest: every

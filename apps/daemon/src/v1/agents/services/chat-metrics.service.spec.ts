@@ -71,6 +71,8 @@ function build(opts: {
   liveSession?: unknown;
   /** What the run row holds as its last farewell reading, verbatim JSON. */
   lastMetricsReading?: string | null;
+  /** The profile the run is on NOW — what a stored reading is checked against. */
+  configDir?: string | null;
   /** Where the transcript stands NOW — what a stored `atSeq` is checked against. */
   maxSeq?: number;
   readPlanLimits?: () => Promise<PlanLimitsWire | null>;
@@ -94,6 +96,7 @@ function build(opts: {
                 agentKind:
                   'agentKind' in opts ? opts.agentKind : AgentKind.Claude,
                 lastMetricsReading: opts.lastMetricsReading ?? null,
+                configDir: opts.configDir ?? null,
               },
         ),
     } as unknown as RunDao,
@@ -242,6 +245,7 @@ describe('ChatMetricsService', () => {
     const STORED = JSON.stringify({
       takenAt: '2026-08-26T13:18:49.000Z',
       atSeq: 7,
+      configDir: null,
       context: BREAKDOWN,
       plan: null,
     });
@@ -372,10 +376,14 @@ describe('ChatMetricsService', () => {
      * The same stored reading, but carrying an ALLOWANCE — which is the half
      * `atSeq` cannot vouch for.
      */
-    const storedWithPlan = (takenAt: string): string =>
+    const storedWithPlan = (
+      takenAt: string,
+      configDir: string | null = null,
+    ): string =>
       JSON.stringify({
         takenAt,
         atSeq: 7,
+        configDir,
         context: BREAKDOWN,
         plan: {
           plan: 'team',
@@ -410,6 +418,73 @@ describe('ChatMetricsService', () => {
       await service.read('run-1');
 
       expect(readContextUsage).toHaveBeenCalled();
+    });
+
+    it('asks again when the chat has CHANGED ACCOUNT since the reading', async () => {
+      // REPORTED as a panel reading `TEAM · Current week 100%` on a chat whose
+      // profile chip said `.claude-manifest-lab-personal`. Both profiles were
+      // on disk — `.claude-manifest-lab` is `claude_team`, `-personal` is
+      // `claude_max` — and the transcript carried the app's own row saying the
+      // chat had been switched to the personal one, which brings the
+      // conversation across. So `atSeq` was untouched and every account-level
+      // figure in the reading belonged to the account the chat had left.
+      //
+      // Fresh in TIME, deliberately: the age bound cannot see this, which is
+      // the whole reason the profile is its own key.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan(
+          new Date().toISOString(),
+          '/Users/x/ManifestLab/.claude-manifest-lab',
+        ),
+        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        maxSeq: 7,
+      });
+
+      await service.read('run-1');
+
+      expect(readContextUsage).toHaveBeenCalled();
+    });
+
+    it('serves a reading taken under the profile the chat is STILL on', async () => {
+      // The other side of that key: a chat that never switched keeps the
+      // shortcut, or the fix would cost every profiled chat the full ask.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: storedWithPlan(
+          new Date().toISOString(),
+          '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        ),
+        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        maxSeq: 7,
+      });
+
+      await service.read('run-1');
+
+      expect(readContextUsage).not.toHaveBeenCalled();
+    });
+
+    it('files the profile it read under, so the next open can check it', async () => {
+      // Without the write there is nothing to compare and every stored reading
+      // fails the parse forever — the shortcut would simply never fire again.
+      const { service, remembered } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: null,
+        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        maxSeq: 4,
+      });
+
+      await service.read('run-1');
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const [, json] = remembered.mock.calls[0] ?? [];
+      expect(JSON.parse(String(json))).toMatchObject({
+        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+      });
     });
 
     it('still serves an allowance taken moments ago, which is what the shortcut is FOR', async () => {

@@ -24,17 +24,20 @@ import type {
   AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
+  RecheckMcpServerDto,
   SetMcpServerEnabledDto,
 } from '../models/index';
 
 export interface AgentsApiListAgentContextWindowsRequest {
     agent: AgentKind;
     model?: string;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentEffortsRequest {
     agent: AgentKind;
     model?: string;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentMcpServersRequest {
@@ -47,10 +50,12 @@ export interface AgentsApiListAgentMcpServersRequest {
 export interface AgentsApiListAgentModelParametersRequest {
     agent: AgentKind;
     model?: string;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentModelsRequest {
     agent: AgentKind;
+    configDir?: string;
 }
 
 export interface AgentsApiListAgentSessionsRequest {
@@ -63,6 +68,11 @@ export interface AgentsApiListAgentSessionsRequest {
 export interface AgentsApiListAgentSkillsRequest {
     agent: AgentKind;
     cwd: string;
+    configDir?: string;
+}
+
+export interface AgentsApiRecheckAgentMcpServerRequest {
+    recheckMcpServerDto: RecheckMcpServerDto;
 }
 
 export interface AgentsApiSetAgentMcpServerEnabledRequest {
@@ -132,6 +142,10 @@ export class AgentsApi extends runtime.BaseAPI {
             queryParameters['model'] = requestParameters['model'];
         }
 
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -182,6 +196,10 @@ export class AgentsApi extends runtime.BaseAPI {
 
         if (requestParameters['model'] != null) {
             queryParameters['model'] = requestParameters['model'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -296,6 +314,10 @@ export class AgentsApi extends runtime.BaseAPI {
             queryParameters['model'] = requestParameters['model'];
         }
 
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -342,6 +364,10 @@ export class AgentsApi extends runtime.BaseAPI {
 
         if (requestParameters['agent'] != null) {
             queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -463,6 +489,10 @@ export class AgentsApi extends runtime.BaseAPI {
             queryParameters['cwd'] = requestParameters['cwd'];
         }
 
+        if (requestParameters['configDir'] != null) {
+            queryParameters['configDir'] = requestParameters['configDir'];
+        }
+
         const headerParameters: runtime.HTTPHeaders = {};
 
         if (this.configuration && this.configuration.accessToken) {
@@ -491,6 +521,53 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentSkills(requestParameters: AgentsApiListAgentSkillsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<AgentSkillDto>> {
         const response = await this.listAgentSkillsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async recheckAgentMcpServerRaw(requestParameters: AgentsApiRecheckAgentMcpServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentMcpListingDto>> {
+        if (requestParameters['recheckMcpServerDto'] == null) {
+            throw new runtime.RequiredError(
+                'recheckMcpServerDto',
+                'Required parameter "recheckMcpServerDto" was null or undefined when calling recheckAgentMcpServer().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/mcp/recheck`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['recheckMcpServerDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async recheckAgentMcpServer(requestParameters: AgentsApiRecheckAgentMcpServerRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
+        const response = await this.recheckAgentMcpServerRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

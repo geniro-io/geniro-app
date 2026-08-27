@@ -46,6 +46,7 @@ import type {
   AgentMcpServersInput,
   AgentModel,
   AgentModelParameterListing,
+  AgentModelsInput,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
@@ -401,6 +402,11 @@ export class CursorAcpAdapter extends AgentAdapter {
        * in the workspace, so a project that had one would not be wrong either.
        */
       skillRoots: {
+        // None: this CLI's ACCOUNT is not a config directory (see
+        // `configDir.unavailableReason`), so a run naming one changes nothing
+        // about which skills it can be invoked with, and the home roots below
+        // stand whatever a run asks for.
+        profileAnchor: null,
         skills: [
           ['.cursor', 'skills'],
           ['.cursor', 'skills-cursor'],
@@ -1012,8 +1018,15 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `execFile` either way — the answer requires WRITING two frames first.
    */
   override async listModels(
+    _input: AgentModelsInput,
     options: AgentCommandOptions = {},
   ): Promise<AgentModel[]> {
+    // The profile is ignored, and that is this CLI's own declaration rather
+    // than an omission: its ACCOUNT is not a config directory (probed — a
+    // fresh `CURSOR_CONFIG_DIR` still reports the default account), which is
+    // what `configDir.unavailableReason` says. So every run's model list is the
+    // same list, and the caller keys it under a null profile.
+
     // A DISPOSABLE folder, never the daemon's own cwd. A model vocabulary is an
     // ACCOUNT fact — `ModelsService` caches it per CLI version with no cwd in
     // the key — so no caller's folder belongs here; but `session/new` still
@@ -1288,9 +1301,14 @@ export class CursorAcpAdapter extends AgentAdapter {
   ): Promise<string | null | undefined> {
     const version = await this.resolveBinaryVersion(options);
     const kind = this.getConfig().kind;
+    // A NULL profile, always: this CLI's account is not a config directory
+    // (`configDir.unavailableReason`), so one answer serves every run and
+    // keying by profile would only split it into copies, each paying this
+    // CLI's own cold handshake — measured at 6–7s.
     const stored = this.vocabularyStore.read(
       kind,
       model,
+      null,
       version,
       isProbeReply,
     );
@@ -1321,7 +1339,7 @@ export class CursorAcpAdapter extends AgentAdapter {
     options: AgentCommandOptions,
   ): Promise<string | null | undefined> {
     return this.handshakeProbeCache
-      .read(kind, model, version, async () => {
+      .read(kind, model, null, version, async () => {
         const fresh = await this.probeModelConfigOptions(model, label, options);
         // Only a reply that ENUMERATED options is worth keeping. The two it
         // excludes are the ones that would be served back as a fact: a probe
@@ -1332,7 +1350,7 @@ export class CursorAcpAdapter extends AgentAdapter {
           typeof fresh === 'string' &&
           acpProbeEnumeratedConfigOptions(fresh)
         ) {
-          this.vocabularyStore.remember(kind, model, version, fresh);
+          this.vocabularyStore.remember(kind, model, null, version, fresh);
         }
         return fresh;
       })
@@ -1659,13 +1677,16 @@ export class CursorAcpAdapter extends AgentAdapter {
         ),
       ),
     ]);
+    const userNames = parseMcpServerNames(user);
+    const workspaceNames = parseMcpServerNames(workspace);
     return {
+      // The union of the two files this CLI merges, deduped BY NAME because
+      // that is how the CLI itself merges them — a name defined at both scopes
+      // is one server, which is the same collapse `origins` describes.
+      configured: [...new Set([...userNames, ...workspaceNames])],
       disabled: [],
       lockedOff: [],
-      origins: mcpOrigins(
-        parseMcpServerNames(user),
-        parseMcpServerNames(workspace),
-      ),
+      origins: mcpOrigins(userNames, workspaceNames),
       interactiveOnlyNote: pluginOnlyNote(
         await this.readPluginServerNames(cursorHome),
       ),

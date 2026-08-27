@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { effectiveConfigDir } from './run-profile';
 
 describe('effectiveConfigDir', () => {
-  it('answers the FOLDER’s pin, because that is what the CLI ends up using', () => {
-    // REPORTED as "Chat cn see datadog, but i cant see it in the list": the MCP
-    // panel asked under the profile the chat was pointed at and got 15 servers,
-    // while the agent had loaded the pinned profile's 50 — Datadog among them.
+  it('answers the chat’s own profile even when the folder carries a pin', () => {
+    // The correction, as a test. Two of this suite's cases used to assert the
+    // OPPOSITE, on an override that measurement says does not exist: on claude
+    // 2.1.247, from one pinned folder, `CLAUDE_CONFIG_DIR=<A>` loaded profile
+    // A's 17 MCP servers and `<B>` profile B's 51 — the folder's own
+    // `env.CLAUDE_CONFIG_DIR` never won. Revert the function and this fails.
     expect(
       effectiveConfigDir({
         configDir: '/profiles/personal',
@@ -15,7 +17,7 @@ describe('effectiveConfigDir', () => {
           source: '/repo/.claude/settings.local.json',
         },
       }),
-    ).toBe('/profiles/team');
+    ).toBe('/profiles/personal');
   });
 
   it('answers the chat’s own pick when nothing pins the folder', () => {
@@ -35,10 +37,10 @@ describe('effectiveConfigDir', () => {
     ).toBeNull();
   });
 
-  it('lets a pin decide even for a chat that asked for the default', () => {
-    // The override does not care that the chat named no profile: the CLI reads
-    // the folder either way, so a default-profile chat in a pinned folder is
-    // not running on the default.
+  it('leaves a default-profile chat on the default, pin or no pin', () => {
+    // The sharpest of the three readings: with NO variable set, that same
+    // pinned folder loaded the default `~/.claude`'s 12 servers rather than the
+    // 51 its settings file names. A pin does not fill a silence either.
     expect(
       effectiveConfigDir({
         configDir: null,
@@ -47,6 +49,6 @@ describe('effectiveConfigDir', () => {
           source: '/repo/.claude/settings.json',
         },
       }),
-    ).toBe('/profiles/team');
+    ).toBeNull();
   });
 });

@@ -5,6 +5,8 @@ import {
   CLAUDE_MCP_READY_MAX_WAIT_MS,
   CLAUDE_MCP_READY_POLL_MS,
   CLAUDE_MCP_READY_STALL_MS,
+  CLAUDE_MCP_RECONNECT_FAILED_MESSAGE,
+  CLAUDE_MCP_RECONNECTED_MESSAGE,
 } from './claude.const';
 import { ClaudeTurnDriver } from './claude-turn.driver';
 
@@ -600,5 +602,194 @@ describe('the request the provider failed', () => {
       },
     ]);
     expect(driver.onMessage({})).toEqual([]);
+  });
+});
+
+describe('repairing an MCP server that dropped out of the session', () => {
+  const notConnected = (server: string): unknown => ({
+    type: 'user',
+    message: {
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 't1',
+          is_error: true,
+          content: `MCP server "${server}" is not connected`,
+        },
+      ],
+    },
+  });
+
+  const reconnectReply = (id: string, error?: string): unknown => ({
+    type: 'control_response',
+    response:
+      error === undefined
+        ? { subtype: 'success', request_id: id }
+        : { subtype: 'error', request_id: id, error },
+  });
+
+  /** A driver holding a live stdin, with every write captured. */
+  function repairing(writeOk = true) {
+    const writes: string[] = [];
+    const driver = new ClaudeTurnDriver({
+      mapMessage: () => [],
+      buildApprovalResponse: () => undefined,
+    });
+    driver.onStdinReady({
+      write: (payload) => {
+        writes.push(payload);
+        return writeOk;
+      },
+      emit: () => undefined,
+    });
+    const sent = () =>
+      writes.map(
+        (payload) =>
+          JSON.parse(payload) as {
+            request_id: string;
+            request: { subtype: string; serverName?: string };
+          },
+      );
+    return { driver, sent };
+  }
+
+  it('re-dials the named server when a tool call says it is not connected', () => {
+    // The reported failure: four calls on one claude.ai connector over 23
+    // seconds, every one of them "is not connected", with nothing in geniro
+    // able to repair or explain it.
+    const { driver, sent } = repairing();
+
+    driver.onMessage(notConnected('claude.ai Manifest OS Google Workspace'));
+
+    expect(sent()).toHaveLength(1);
+    expect(sent()[0]?.request).toEqual({
+      subtype: 'mcp_reconnect',
+      serverName: 'claude.ai Manifest OS Google Workspace',
+    });
+  });
+
+  it('says nothing until the reply, then reports the server is back', () => {
+    const { driver, sent } = repairing();
+
+    // The attempt itself is silent — only the reply knows the outcome.
+    expect(driver.onMessage(notConnected('linear'))).toEqual([]);
+
+    const id = sent()[0]?.request_id ?? '';
+    expect(driver.onMessage(reconnectReply(id))).toEqual([
+      {
+        type: 'notice',
+        severity: 'info',
+        message: CLAUDE_MCP_RECONNECTED_MESSAGE.replace('%s', 'linear'),
+      },
+    ]);
+  });
+
+  it("quotes the CLI's own reason when the re-dial failed", () => {
+    // Measured against the broken profile on 2.1.247. This sentence is the
+    // whole point of asking: "not connected" says a tool is missing, this says
+    // the account's connector record points at a server that no longer exists.
+    const error =
+      'Error POSTing to endpoint: {"error":{"type":"not_found_error","message":"Server not found"}}';
+    const { driver, sent } = repairing();
+
+    driver.onMessage(notConnected('claude.ai Manifest OS Google Workspace'));
+    const events = driver.onMessage(
+      reconnectReply(sent()[0]?.request_id ?? '', error),
+    );
+
+    expect(events).toEqual([
+      {
+        type: 'notice',
+        severity: 'warning',
+        message: CLAUDE_MCP_RECONNECT_FAILED_MESSAGE.replace(
+          '%s',
+          'claude.ai Manifest OS Google Workspace',
+        ).replace('%r', error),
+      },
+    ]);
+  });
+
+  it('sends ONE request while the model retries the same dead tool', () => {
+    const { driver, sent } = repairing();
+
+    driver.onMessage(notConnected('linear'));
+    driver.onMessage(notConnected('linear'));
+    driver.onMessage(notConnected('linear'));
+
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('never asks again about a server the CLI said it could not reconnect', () => {
+    const { driver, sent } = repairing();
+
+    driver.onMessage(notConnected('linear'));
+    driver.onMessage(
+      reconnectReply(sent()[0]?.request_id ?? '', 'Server not found'),
+    );
+    driver.onMessage(notConnected('linear'));
+
+    expect(sent()).toHaveLength(1);
+  });
+
+  it('repairs a server that drops AGAIN after a successful repair', () => {
+    // A new incident, not a retry of the old one — and the driver outlives the
+    // turn (one per session), so without this a chat gets one repair per server
+    // for its whole life.
+    const { driver, sent } = repairing();
+
+    driver.onMessage(notConnected('linear'));
+    driver.onMessage(reconnectReply(sent()[0]?.request_id ?? ''));
+    driver.onMessage(notConnected('linear'));
+
+    expect(sent()).toHaveLength(2);
+    expect(sent()[1]?.request.serverName).toBe('linear');
+  });
+
+  it('does not record an attempt whose write never landed', () => {
+    // A refused write reached the CLI with nothing, so the next failure must
+    // still be able to ask; and no reply can ever arrive for it, so recording
+    // one would leave a phantom attempt in flight.
+    const { driver, sent } = repairing(false);
+
+    driver.onMessage(notConnected('linear'));
+    driver.onMessage(notConnected('linear'));
+
+    expect(sent()).toHaveLength(2);
+  });
+
+  it('stays silent when the session has no stdin channel', () => {
+    const driver = new ClaudeTurnDriver({
+      mapMessage: () => [],
+      buildApprovalResponse: () => undefined,
+    });
+
+    expect(driver.onMessage(notConnected('linear'))).toEqual([]);
+  });
+
+  it('leaves the failed tool row above the notice it earned', () => {
+    // Order is the claim: the transcript reads "this call failed" and then
+    // "here is why", never the other way round.
+    const toolRow: AgentEvent = {
+      type: 'tool_result',
+      id: 't1',
+      name: null,
+      result: 'MCP server "linear" is not connected',
+      isError: true,
+    };
+    const writes: string[] = [];
+    const driver = new ClaudeTurnDriver({
+      mapMessage: () => [toolRow],
+      buildApprovalResponse: () => undefined,
+    });
+    driver.onStdinReady({
+      write: (payload) => {
+        writes.push(payload);
+        return true;
+      },
+      emit: () => undefined,
+    });
+
+    expect(driver.onMessage(notConnected('linear'))).toEqual([toolRow]);
+    expect(writes).toHaveLength(1);
   });
 });

@@ -174,6 +174,7 @@ function harness(
   const off = new Set(facts?.disabled ?? []);
   const readMcpFolderFacts = vi.fn(() =>
     Promise.resolve({
+      configured: facts?.configured ?? [],
       disabled: [...off],
       lockedOff: facts?.lockedOff ?? [],
       origins: facts?.origins ?? {},
@@ -629,6 +630,119 @@ describe('AgentMcpService.list', () => {
 
     expect(during.pending).toBe(true);
     expect(during.servers.map((s) => s.name)).toEqual(['codegraph']);
+  });
+
+  it('paints a REFRESH from the harvest while the re-dial runs', async () => {
+    // Reconnect re-dials every server the folder loads — ~1.1s each, so ~30s on
+    // a 47-server profile — and until this, a folder with no cached reading
+    // showed nothing at all for that whole stretch. The harvest is what the
+    // CLI's own `/mcp` is instant off: a turn's `system/init` names every server
+    // it loaded, including the account connectors and plugins that appear in no
+    // file this daemon can read.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    // Recorded, then aged well past the store's own bound. That bound stops a
+    // harvest ANSWERING — shadowing a live read nobody then re-checks — and a
+    // placeholder shadows nothing, so it must not apply here. Without the
+    // distinction this reached the wrong decision by ten minutes: a folder
+    // whose last turn was half an hour ago fell back to the handful of servers
+    // its config names, with the complete set sitting on disk.
+    let clock = 0;
+    const harvest = new McpHarvestStore({
+      file: join(realDir(), 'mcp-harvest.json'),
+      now: () => clock,
+    });
+    harvest.record('claude', cwd, null, [server('gmail'), server('slack')]);
+    clock = 60 * 60 * 1000;
+    expect(harvest.get('claude', cwd, null)).toBeNull();
+
+    const { service } = harness(
+      () => new Promise<AgentMcpServer[]>(() => undefined),
+      { harvest },
+    );
+
+    const asked = service.list(AgentKind.Claude, cwd, { refresh: true });
+    await vi.advanceTimersByTimeAsync(400);
+    const first = await asked;
+
+    // Painted, not ANSWERED: the dial is still the thing that will settle this,
+    // which is what keeps Reconnect meaningful for a server that has since
+    // recovered.
+    expect(first.pending).toBe(true);
+    expect(first.servers.map((s) => s.name)).toEqual(['gmail', 'slack']);
+  });
+
+  it('paints the UNION of everything known, so the list cannot grow', async () => {
+    // REPORTED as the panel showing a short list that then expands once the
+    // dial lands. Each source is partial and none contains the others — the
+    // harvest holds what the last turn loaded (account connectors and plugins,
+    // which appear in no readable file), the config holds definitions the last
+    // turn may predate — so taking the first non-null paints the smaller set
+    // and the reader watches rows appear under them. Growing is the one shape
+    // to avoid: a settled-looking list is one somebody acts on.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record('claude', cwd, null, [server('gmail')]);
+    const { service } = harness(
+      () => new Promise<AgentMcpServer[]>(() => undefined),
+      { facts: { configured: ['codegraph'] }, harvest },
+    );
+
+    // Through Reconnect, which is where the union is visible at all: a fresh
+    // harvest ANSWERS an ordinary read outright, and only a refresh forces the
+    // dial that leaves the panel painting while it runs.
+    const asked = service.list(AgentKind.Claude, cwd, { refresh: true });
+    await vi.advanceTimersByTimeAsync(400);
+    const first = await asked;
+
+    expect(first.pending).toBe(true);
+    expect([...first.servers.map((s) => s.name)].sort()).toEqual([
+      'codegraph',
+      'gmail',
+    ]);
+  });
+
+  it('fills a cold panel from the config while the dial is still running', async () => {
+    // The dial STARTS every server it lists, measured at ~1.1s each — 17s on a
+    // 15-server profile, 27s on a 47-server one — and for that whole stretch
+    // the panel used to have nothing to draw. The config already names them, so
+    // the rows are there from the first answer and the wait is spent watching
+    // them settle rather than watching a spinner over an empty box.
+    vi.useFakeTimers();
+    const cwd = realDir();
+    const { service } = harness(
+      () => new Promise<AgentMcpServer[]>(() => undefined),
+      { facts: { configured: ['sentry', 'codegraph'] } },
+    );
+
+    const asked = service.list(AgentKind.Claude, cwd);
+    await vi.advanceTimersByTimeAsync(400);
+    const first = await asked;
+
+    expect(first.pending).toBe(true);
+    expect(first.servers.map((s) => s.name)).toEqual(['sentry', 'codegraph']);
+    // `loading` and not a guessed health: the name is all the config knows, and
+    // claiming `connected` for a server nobody has dialled is the confident lie
+    // the whole ok/err split exists to prevent.
+    expect(first.servers.map((s) => s.status)).toEqual(['loading', 'loading']);
+    expect(first.unavailableReason).toBeNull();
+  });
+
+  it('does not invent rows once the dial has settled on none', async () => {
+    // The config names a server the CLI then reported as absent — switched off
+    // outside geniro, or removed since. A settled empty answer is the real
+    // "this folder loads none", so the placeholder must give way to it rather
+    // than putting the row back for the rest of the TTL.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([]), {
+      facts: { configured: ['sentry'] },
+    });
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.pending).toBe(false);
+    expect(listing.servers).toEqual([]);
   });
 
   it('still shows an empty panel for a folder nothing has ever read', async () => {
@@ -1835,5 +1949,50 @@ describe('cold-dial deadlines', () => {
       { timeoutMs?: number } | undefined,
     ];
     expect(options?.timeoutMs).toBe(BLOCKING_LIST_TIMEOUT_MS);
+  });
+});
+
+describe('AgentMcpService.recheckServer', () => {
+  it('dials ONE server and leaves the rest of the folder alone', async () => {
+    // The narrow counterpart to `refresh`. A refresh re-dials every server the
+    // folder loads — ~1.1s each, so ~30s on a 47-server profile — which is the
+    // wrong price for re-checking one row after a browser sign-in. REPORTED as
+    // "I should not click reconnect… we dont need to update all list of mcps".
+    const cwd = realDir();
+    const { service, listMcpServers, readMcpServerHealth } = harness(() =>
+      Promise.resolve([server('gmail'), server('slack')]),
+    );
+    await service.list(AgentKind.Claude, cwd);
+    const listedBefore = listMcpServers.mock.calls.length;
+
+    await service.recheckServer(AgentKind.Claude, cwd, 'gmail');
+
+    expect(readMcpServerHealth).toHaveBeenCalled();
+    // The folder was NOT re-dialled: the whole point of the route.
+    expect(listMcpServers.mock.calls.length).toBe(listedBefore);
+  });
+
+  it('answers with the PROBE’s reading, not a stale one', async () => {
+    // With a cold entry there is nothing for the cache patch to write onto, so
+    // the read behind it falls through to the harvest paint and the freshly
+    // dialled row comes back wearing the status the LAST TURN reported.
+    // Measured exactly that way against a real profile: a re-check of a server
+    // the CLI had just called `✔ Connected` answered `unknown`, which the
+    // sign-in watcher reads as "not authorized yet" and polls against forever.
+    const cwd = realDir();
+    const harvest = emptyHarvest();
+    harvest.record('claude', cwd, null, [
+      { ...server('gmail'), status: 'unknown' },
+    ]);
+    const { service } = harness(
+      () => new Promise<AgentMcpServer[]>(() => undefined),
+      { harvest, probeHealth: { status: 'connected', detail: null } },
+    );
+
+    const listing = await service.recheckServer(AgentKind.Claude, cwd, 'gmail');
+
+    expect(listing.servers.find((row) => row.name === 'gmail')?.status).toBe(
+      'connected',
+    );
   });
 });

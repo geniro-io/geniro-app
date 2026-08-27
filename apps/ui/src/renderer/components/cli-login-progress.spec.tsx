@@ -176,6 +176,44 @@ describe('CliLoginProgress', () => {
     expect(onDismiss).toHaveBeenCalled();
   });
 
+  it('does not call a SERVER sign-in finished when the command merely exited', () => {
+    // `claude mcp login <name>` hands the authorization to the browser and
+    // exits 0 at once — probe-verified on 2.1.237, under a second, with nothing
+    // authorized and the CLI's own closing line saying the connector arrives
+    // "the next time you start Claude Code". The daemon's `succeeded` is a
+    // claim about the COMMAND, and rendering it as "Sign-in finished" put that
+    // sentence directly above a row still offering a Sign in button. REPORTED
+    // as "I can see sign in finished, but its still asking to sign in".
+    render(
+      <CliLoginProgress
+        session={session({ status: 'succeeded' })}
+        error={null}
+        {...noop}
+        scope="server"
+      />,
+    );
+
+    expect(container.textContent).not.toContain('Sign-in finished');
+    expect(container.textContent).toContain(
+      'Finish signing in in your browser, then press Reconnect',
+    );
+  });
+
+  it('still calls an ACCOUNT sign-in finished, which genuinely is', () => {
+    // The other half of the same switch: an account sign-in ends here — the
+    // CLI takes the pasted code, checks it and exits — so weakening its wording
+    // too would trade one wrong sentence for another.
+    render(
+      <CliLoginProgress
+        session={session({ status: 'succeeded' })}
+        error={null}
+        {...noop}
+      />,
+    );
+
+    expect(container.textContent).toContain('Sign-in finished');
+  });
+
   it('states a failure instead of leaving a spinner turning', () => {
     render(
       <CliLoginProgress

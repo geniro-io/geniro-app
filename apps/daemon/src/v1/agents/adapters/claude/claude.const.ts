@@ -399,6 +399,18 @@ export const CLAUDE_DISABLED_MCP_SERVERS_KEY = 'disabledMcpjsonServers';
 export const CLAUDE_PROJECT_MCP_FILE = '.mcp.json';
 
 /**
+ * The key a server DEFINITION sits under, in every file that carries one — the
+ * home config's own (user scope), a project entry inside it (local scope) and
+ * {@link CLAUDE_PROJECT_MCP_FILE} (project scope).
+ *
+ * One name because three readers spell it, and a fourth is a `mcp_servers` away
+ * from silently reporting a folder as having none. It is NOT
+ * {@link CLAUDE_MCP_STATUS_ROWS_KEY}, which happens to be the same word for the
+ * rows of a `mcp_status` REPLY — a wire shape, not a config file.
+ */
+export const CLAUDE_MCP_SERVERS_KEY = 'mcpServers';
+
+/**
  * The lock geniro takes before editing the CLI's home config.
  *
  * `proper-lockfile`'s default artifact for a path is `<path>.lock`, and the CLI
@@ -430,6 +442,18 @@ export const CLAUDE_PROJECT_SETTINGS_FILES = [
 
 /** The same, in the user's home directory. */
 export const CLAUDE_HOME_SETTINGS_FILE = '.claude/settings.json';
+
+/**
+ * The same file inside a PROFILE, where it sits one level higher.
+ *
+ * `CLAUDE_CONFIG_DIR` names the directory that `~/.claude` otherwise is, so the
+ * `.claude/` segment is already spent — measured on a real profile, which holds
+ * `settings.json` at its root beside its own `.claude.json`, and has no
+ * `.claude/` directory at all. Joining {@link CLAUDE_HOME_SETTINGS_FILE} onto a
+ * profile therefore reads a path that never exists, which is indistinguishable
+ * from a user who has disabled nothing.
+ */
+export const CLAUDE_PROFILE_SETTINGS_FILE = 'settings.json';
 
 // ── Models ────────────────────────────────────────────────────────────────
 
@@ -676,6 +700,95 @@ export const CLAUDE_MCP_READY_MAX_WAIT_MS = 60_000;
  */
 export const CLAUDE_MCP_NOT_READY_MESSAGE =
   'these MCP servers were still starting when this turn began, so their tools are missing from it: %s. They will be available from your next message.';
+
+// ── MCP repair on a LIVE session (PROBE EVIDENCE) ─────────────────────────
+//
+// A server that is dialled and DEAD is a different failure from one still
+// dialling, and it is the one the readiness gate above cannot help with: the
+// gate waits for `pending` to clear, and a server that failed has cleared it.
+// From then on every tool call on that server answers
+// `MCP server "<name>" is not connected` for the rest of the PROCESS, and
+// claude keeps one process per chat — so a chat that loses a server loses it
+// until something retires that process. REPORTED with a screenshot: four calls
+// on `claude.ai Manifest OS Google Workspace` over 23 seconds, every one of
+// them that sentence, in a chat whose profile had been switched five minutes
+// earlier (a switch closes the session, so the failure was that new process's
+// opening dial).
+//
+// WHAT THE PANEL SAID AT THE SAME MOMENT: `✔ Connected`. `claude mcp get
+// <name>` reports a claude.ai connector as connected without dialling it, so
+// the one command behind geniro's MCP panel cannot see this class of failure
+// at all. The live session can, and says why.
+//
+// THE MECHANISM. `mcp_reconnect` is a client-initiated control request on the
+// same stdin dialogue as `mcp_status`, found the same way (enumerating the
+// shipped binary's subtypes) and then DRIVEN LIVE against 2.1.247, twice, on
+// two profiles of one account:
+//
+//     --> {"type":"control_request","request_id":"…",
+//          "request":{"subtype":"mcp_reconnect","serverName":"…"}}
+//     <-- {"type":"control_response","response":{"subtype":"success",
+//          "request_id":"…"}}
+//
+// On the working profile that reply came in 1.8s and the following
+// `mcp_status` row went `pending` → `connected` with all 34 of the server's
+// tools listed. On the broken one the SAME request answered
+// `{"subtype":"error","error":"Error POSTing to endpoint: …
+// \"not_found_error\" … \"Server not found\""}` — the connector's own host
+// answering 404 for that account's server id. That error text is the whole
+// value of asking: it is the difference between "a tool is missing" and "this
+// account's connector record points at a server that no longer exists".
+//
+// It is host-sendable, which had to be checked rather than assumed: the
+// binary's own reject list for host-sent subtypes names `can_use_tool`,
+// `hook_callback`, `elicitation`, `request_user_dialog`, `oauth_token_refresh`,
+// `host_auth_token_refresh` and the three remote-tool subtypes, and
+// `mcp_reconnect` is on none of them.
+//
+// Same expiry warning as every probe block in this file: one build's
+// observation, not a contract. A renamed subtype or reply leaves the reply
+// unmatched, which costs the repair and the diagnosis and never the turn.
+
+/** The control subtype that re-dials ONE MCP server on a live session. */
+export const CLAUDE_MCP_RECONNECT_SUBTYPE = 'mcp_reconnect';
+
+/**
+ * The CLI's own sentence for a tool call on a server that is not connected.
+ *
+ * Transcribed from the 2.1.247 bundle, where it is the literal
+ * `` `MCP server "${e.name}" is not connected` `` — so the name is captured
+ * from the one place it is stated rather than guessed from the tool prefix,
+ * which is MANGLED (`claude.ai X` is exposed to the model as
+ * `mcp__claude_ai_X__…`, and that mapping is not invertible).
+ *
+ * Anchored at both ends and matched against the WHOLE trimmed leaf, never
+ * searched within it. `isPermissionChannelFailure` learned this the expensive
+ * way — a substring match fired on geniro's own source being read back, three
+ * times in one run — and this file now quotes the sentence itself, so a loose
+ * matcher would fire on every `Read` of it.
+ */
+export const CLAUDE_MCP_NOT_CONNECTED_PATTERN =
+  /^MCP server "(.+)" is not connected$/;
+
+/**
+ * Said when a dead server was re-dialled successfully: `%s` is its name.
+ *
+ * The turn is told nothing — the CLI's tool surface simply works again — so
+ * this row is the only account of why a call that just failed now succeeds.
+ */
+export const CLAUDE_MCP_RECONNECTED_MESSAGE =
+  'MCP server %s had dropped out of this chat and has been reconnected — the agent can use its tools again.';
+
+/**
+ * Said when the re-dial FAILED: `%s` is the server, `%r` the CLI's own reason.
+ *
+ * A `warning`, and the reason is quoted verbatim: it is the CLI's diagnosis of
+ * somebody else's server, and paraphrasing the one actionable sentence in it
+ * (`Server not found`, a 401, a refused connection) would leave the user with
+ * the bare "not connected" this exists to improve on.
+ */
+export const CLAUDE_MCP_RECONNECT_FAILED_MESSAGE =
+  'MCP server %s is not connected to this chat and could not be reconnected: %r';
 
 // ── MCP server listing (PROBE EVIDENCE — human-readable output) ───────────
 //

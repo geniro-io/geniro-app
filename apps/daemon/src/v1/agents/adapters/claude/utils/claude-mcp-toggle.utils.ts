@@ -1,12 +1,14 @@
 import {
   CLAUDE_DISABLED_MCP_SERVERS_KEY,
   CLAUDE_HOME_DISABLED_MCP_KEY,
+  CLAUDE_MCP_SERVERS_KEY,
 } from '../claude.const';
 
 /** One project's entry in the CLI's home config, as far as this file cares. */
 interface ProjectEntry {
   [CLAUDE_HOME_DISABLED_MCP_KEY]?: unknown;
   [CLAUDE_DISABLED_MCP_SERVERS_KEY]?: unknown;
+  [CLAUDE_MCP_SERVERS_KEY]?: unknown;
 }
 
 /** The CLI's home config, as far as this file cares. */
@@ -62,6 +64,32 @@ export function readDisabledServers(
   cwd: string,
 ): string[] {
   return stringList(projectOf(config, cwd)?.[CLAUDE_HOME_DISABLED_MCP_KEY]);
+}
+
+/** The keys of a `mcpServers` map, or `[]` for anything that is not one. */
+function serverNames(value: unknown): string[] {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? Object.keys(value)
+    : [];
+}
+
+/**
+ * The servers this home config DEFINES for a folder: the user's own, plus the
+ * folder's own entry.
+ *
+ * Names only — enough to draw a row, and knowable without starting anything,
+ * which is the whole reason this is read (see `AgentMcpFolderFacts.configured`).
+ * The project-scope `.mcp.json` is a separate FILE and so is read separately;
+ * this one takes the two scopes that live in here.
+ */
+export function readConfiguredServers(
+  config: ClaudeHomeConfig,
+  cwd: string,
+): string[] {
+  return [
+    ...serverNames(config[CLAUDE_MCP_SERVERS_KEY]),
+    ...serverNames(projectOf(config, cwd)?.[CLAUDE_MCP_SERVERS_KEY]),
+  ];
 }
 
 /**

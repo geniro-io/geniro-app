@@ -1515,7 +1515,7 @@ describe('CursorAcpAdapter misuse', () => {
       await new CursorAcpAdapter({
         vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
-      }).listModels();
+      }).listModels({ configDir: null });
 
       expect(captured.args).toEqual(['acp']);
     });
@@ -1526,7 +1526,7 @@ describe('CursorAcpAdapter misuse', () => {
       await new CursorAcpAdapter({
         vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
-      }).listModels();
+      }).listModels({ configDir: null });
 
       const methods = captured
         .stdin()
@@ -1544,7 +1544,7 @@ describe('CursorAcpAdapter misuse', () => {
         new CursorAcpAdapter({
           vocabularyStore: freshVocabularyStore(),
           groupSpawnFn,
-        }).listModels(),
+        }).listModels({ configDir: null }),
       ).resolves.toEqual([
         { id: 'composer-2.5', label: 'Composer 2.5', source: 'cli' },
         { id: 'claude-opus-5', label: 'Opus 5', source: 'cli' },
@@ -1563,7 +1563,7 @@ describe('CursorAcpAdapter misuse', () => {
         new CursorAcpAdapter({
           vocabularyStore: freshVocabularyStore(),
           groupSpawnFn,
-        }).listModels(),
+        }).listModels({ configDir: null }),
       ).resolves.toEqual([]);
     });
   });

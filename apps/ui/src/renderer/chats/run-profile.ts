@@ -9,27 +9,34 @@ export interface RunProfile {
 }
 
 /**
- * The config directory this run's turns ACTUALLY run under.
+ * The config directory this run's turns ACTUALLY run under — which is the one
+ * the chat asked for, because nothing overrides it.
  *
- * A chat's `configDir` is a REQUEST: geniro hands it to the CLI as an
- * environment variable, and a CLI that reads per-project settings can carry an
- * `env` block of its own and overwrite it — so the folder has the last word.
- * See `ConfigDirPin` in the daemon's `adapters/adapter.types.ts` for the
- * measurement.
+ * THE PIN DOES NOT WIN, and that is a measurement rather than a reading of the
+ * docs. On claude 2.1.247, in a folder whose `.claude/settings.local.json`
+ * carries `env.CLAUDE_CONFIG_DIR`, three launches from the same cwd:
+ * `CLAUDE_CONFIG_DIR=<A>` loaded profile A's 17 MCP servers, `<B>` loaded
+ * profile B's 51, and NO variable at all loaded the default `~/.claude`'s 12 —
+ * the pinned profile never once won, not even against silence. It cannot: that
+ * variable decides where the CLI reads its configuration FROM, and a project
+ * settings file is read after that decision has been made, so its `env` block
+ * reaches the tools the agent runs rather than the CLI's own resolution.
  *
- * ONE function because two surfaces ask the same question and the report is
- * what happens when they answer it differently: the header named the requested
- * profile while the agent ran on the pinned one, and the MCP panel listed the
- * requested profile's servers while the agent loaded the pinned profile's.
- * REPORTED as "Chat cn see datadog, but i cant see it in the list" — measured
- * on the reporter's own folder at 15 servers against 50, with the row they were
- * looking for only in the second.
+ * The evidence this function was WRITTEN on is real and belonged to a different
+ * cause. "Chat cn see datadog, but i cant see it in the list", 15 servers
+ * against 50, is the harvest store having been keyed `configDir: null` — so
+ * the panel asked under the DEFAULT profile while the chat ran under the one it
+ * was configured with. That is fixed in `ChatService`, and it is the whole of
+ * that report; the pin was a second explanation layered onto an already-fixed
+ * defect.
  *
- * Anything that asks the DAEMON what this run's CLI can see — its MCP servers,
- * its skills, where its conversation is — asks with this. What the user PICKED
- * is a separate question with a separate field, and only the header, which
- * states both, has any business reading it.
+ * The function survives its own premise on purpose: it is the ONE seam every
+ * surface asks through, so this correction is one line rather than five, and
+ * re-introducing an override — should a CLI ever really have one — is one line
+ * too. `RunProfile.configDirPin` is now read by nothing; deleting
+ * `ConfigDirPin` from the daemon, the wire and this type is the cleanup that
+ * belongs with this.
  */
 export function effectiveConfigDir(run: RunProfile): string | null {
-  return run.configDirPin?.effective ?? run.configDir;
+  return run.configDir;
 }

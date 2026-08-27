@@ -2026,6 +2026,39 @@ export type ProbeStatus = typeof ProbeStatus[keyof typeof ProbeStatus];
 /**
  * 
  * @export
+ * @interface RecheckMcpServerDto
+ */
+export interface RecheckMcpServerDto {
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof RecheckMcpServerDto
+     */
+    agent: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof RecheckMcpServerDto
+     */
+    cwd: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RecheckMcpServerDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RecheckMcpServerDto
+     */
+    server: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface RenameRunDto
  */
 export interface RenameRunDto {

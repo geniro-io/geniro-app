@@ -1,3 +1,5 @@
+import { basename } from 'node:path';
+
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import {
@@ -527,6 +529,7 @@ export class ChatService implements OnModuleInit {
       input.agentKind,
       input.effort ?? null,
       input.model ?? null,
+      input.configDir ?? null,
     );
     // Canonicalized HERE, at the one moment the value is chosen, so the row
     // holds the path that was actually checked — the same contract `cwd` above
@@ -721,6 +724,10 @@ export class ChatService implements OnModuleInit {
         run.agentKind,
         patch.effort,
         patch.model !== undefined ? patch.model : run.model,
+        // The profile this patch LEAVES the run on, for the reason the model
+        // beside it takes its own: a switch in the same patch has already been
+        // applied above, so `moved` is the newer answer where there is one.
+        profileMove?.configDir ?? run.configDir,
       );
     }
     const changes = {
@@ -919,24 +926,34 @@ export class ChatService implements OnModuleInit {
             to: next,
           });
     this.sessions.close(runId);
-    const profile = next === null ? 'the CLI’s default profile' : next;
+    // Every reading this run is holding was taken from the OLD account, and a
+    // profile is a whole different subscription: the kept metrics reading
+    // carries that account's PLAN LIMITS, so serving it here reports one
+    // account's plan under another's name — the same "different account plan"
+    // this switch's own notice exists to prevent, reached from the other side.
+    // Measured on the two profiles in front of me: `max` against `team`.
+    await this.runDao.rememberMetricsReading(runId, null, em);
+    if (!carried.carried) {
+      // Only when the conversation did NOT come along. The count measures a
+      // CONVERSATION, so it survives a move that brought one and is meaningless
+      // after one that did not — exactly the rule `forgetContext` already
+      // states for a compaction, which is the same event seen from inside.
+      await this.runDao.forgetContext(runId, em);
+    }
+    const profile = next === null ? 'the default profile' : basename(next);
     const moved = carried.carried
-      ? `This chat now runs as ${profile}. Its conversation came with it.`
-      : `This chat now runs as ${profile}. The agent starts a fresh conversation from here — ${carried.reason}.`;
-    // The switch can be OVERRULED by the folder, and saying so here is the only
-    // honest ending: the run row really does change, the conversation really
-    // does move, and the turn still runs under whatever the folder pins. Left
-    // unsaid, the user reads the switch as having worked and every account-level
-    // reading afterwards as geniro getting the account wrong — which is exactly
-    // the report `ConfigDirPin` records.
-    const pin = this.configDirPins.forRun(run.agentKind, run.cwd);
-    return {
-      configDir: next,
-      notice:
-        pin === null
-          ? moved
-          : `${moved} Note that this folder pins ${pin.effective} in ${pin.source}, and this CLI applies that over the profile geniro passes it — so its turns run under that account until the pin is removed.`,
-    };
+      ? `Now running as ${profile} — its conversation came too.`
+      : `Now running as ${profile} — fresh conversation from here (${carried.reason}).`;
+    // NO override clause. This used to append "Overridden — this folder pins
+    // <profile> in <file>", and the override it announced does not exist:
+    // measured on claude 2.1.247 from a folder whose `.claude/settings.local
+    // .json` carries `env.CLAUDE_CONFIG_DIR`, the variable geniro sets decided
+    // the profile every time, and setting none loaded the CLI's default rather
+    // than the folder's. So the sentence told a user their switch had not taken
+    // effect when it had — the worst shape a notice can have, since it is
+    // unfalsifiable from inside the app. Short on purpose besides: this is a
+    // centred one-line transcript note.
+    return { configDir: next, notice: moved };
   }
 
   /**
@@ -1025,11 +1042,18 @@ export class ChatService implements OnModuleInit {
      * listing already held so this stays off the request's critical path.
      */
     model: string | null = null,
+    /**
+     * And the ACCOUNT, for the same reason: the levels a model offers belong to
+     * the subscription, so the listing this consults is now held per profile.
+     * Passing the run's own is what keeps the check exact instead of silently
+     * reading another account's answer.
+     */
+    configDir: string | null = null,
   ): void {
     if (effort === null || agentKind === null) {
       return;
     }
-    if (!this.efforts.accepts(agentKind, effort, model)) {
+    if (!this.efforts.accepts(agentKind, effort, model, configDir)) {
       throw new BadRequestException(
         'EFFORT_UNSUPPORTED',
         `${agentKind} does not accept the reasoning effort '${effort}'`,
@@ -1380,6 +1404,8 @@ export class ChatService implements OnModuleInit {
     runId: string,
     agent: AgentKind,
     cwd: string,
+    /** The profile the turn ran under — see the `mcp_servers` arm below. */
+    configDir: string | null,
     event: AgentEvent,
   ): Promise<void> {
     // Live-only signals: no row, no seq, no replay — the same treatment the
@@ -1423,11 +1449,18 @@ export class ChatService implements OnModuleInit {
     // What the CLI reports about ITSELF is true whether or not a turn of ours
     // is open, and each of these feeds a panel rather than the transcript.
     if (event.type === 'slash_commands') {
-      this.skillHarvest.record(agent, cwd, event.commands);
+      // The turn's own profile, exactly as the MCP arm below takes it: a CLI
+      // answers for the plugins installed in the config directory it is
+      // running under, so a chat on a profile reports a different set.
+      this.skillHarvest.record(agent, cwd, configDir, event.commands);
       return;
     }
     if (event.type === 'mcp_servers') {
-      this.mcpHarvest.record(agent, cwd, null, event.servers);
+      // The turn's own profile, for the reason spelled out at the in-turn twin
+      // of this arm: a chat carries one now, and filing it under the default
+      // account's key both starves the profile's panel and poisons the default
+      // one with another subscription's servers.
+      this.mcpHarvest.record(agent, cwd, configDir, event.servers);
       return;
     }
     if (event.type === 'session') {
@@ -2547,6 +2580,7 @@ export class ChatService implements OnModuleInit {
               this.skillHarvest.record(
                 adapter.getConfig().kind,
                 cwd,
+                configDir ?? null,
                 event.commands,
               );
               return;
@@ -2554,12 +2588,23 @@ export class ChatService implements OnModuleInit {
             if (event.type === 'mcp_servers') {
               // What this turn actually loaded here — feeds the MCP panel so
               // it need not re-dial every server to answer, never the
-              // transcript. A chat turn carries no config directory (only a
-              // graph node does), which is the null.
+              // transcript.
+              //
+              // Filed under the turn's OWN profile. This passed `null` on the
+              // reasoning that "a chat turn carries no config directory (only a
+              // graph node does)", which stopped being true when chats gained
+              // the profile chip — and a profile is a separate ACCOUNT with a
+              // different set of servers, so the null was wrong in both
+              // directions: the profile's own panel found no harvest and paid
+              // the full cold dial, while the DEFAULT profile's panel was
+              // painted with another account's servers. Measured on this
+              // machine — a panel listing 15 servers belonging to
+              // `.claude-manifest-lab-personal` where the default profile's own
+              // dial found 10.
               this.mcpHarvest.record(
                 adapter.getConfig().kind,
                 cwd,
-                null,
+                configDir ?? null,
                 event.servers,
               );
               return;
@@ -2977,6 +3022,7 @@ export class ChatService implements OnModuleInit {
             runId,
             adapter.getConfig().kind,
             cwd,
+            configDir ?? null,
             event,
           );
         },

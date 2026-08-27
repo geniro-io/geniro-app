@@ -173,6 +173,44 @@ function enrich(
   });
 }
 
+/**
+ * Every server either source names, in order, first occurrence winning.
+ *
+ * For PAINTING only — what to show while a dial runs — so the bar is "does
+ * anything we hold believe this server exists", not "is this the current
+ * truth", which is the dial's answer and overwrites this wholesale. A lapsed
+ * listing and a harvest know different sets (one is what the last dial reached,
+ * the other what the last turn loaded, and neither contains the other), so
+ * taking one and discarding the other paints the smaller of the two and the
+ * list then GROWS when the dial lands — the shape that was reported.
+ *
+ * Ordered `preferred` first because its rows are richer: a cached listing
+ * carries `target`/`transport`, which `system/init` never reports.
+ *
+ * Returns null rather than an empty array when neither knows anything, since
+ * the caller distinguishes "nothing to paint" from "painted nothing".
+ */
+function mergeKnown(
+  preferred: readonly AgentMcpServer[] | undefined,
+  fallback: readonly AgentMcpServer[] | null,
+): AgentMcpServer[] | null {
+  if (!preferred?.length) {
+    return fallback?.length ? [...fallback] : null;
+  }
+  if (!fallback?.length) {
+    return [...preferred];
+  }
+  const merged = [...preferred];
+  const seen = new Set(merged.map((server) => server.name));
+  for (const server of fallback) {
+    if (!seen.has(server.name)) {
+      seen.add(server.name);
+      merged.push(server);
+    }
+  }
+  return merged;
+}
+
 /** Constructor options — test seams, not user config. */
 export interface AgentMcpServiceOptions {
   /** How long a cached listing stays fresh. */
@@ -287,16 +325,27 @@ export class AgentMcpService {
     cwd: string | null,
     options: { configDir?: string | null; refresh?: boolean } = {},
   ): Promise<AgentMcpListingWire> {
+    // Resolved HERE and handed to both halves, because the FACTS read needs the
+    // profile as much as the listing does — it decides which account's config
+    // file is opened, and the two must not disagree about that. Canonicalizing
+    // an already-canonical path is a no-op, so passing it on to `readServers`
+    // costs nothing and keeps one resolution for the whole request.
+    const profile =
+      options.configDir === undefined || options.configDir === null
+        ? null
+        : resolveValidConfigDir(options.configDir);
     const { projectDir, adapter, result, pending } = await this.readServers(
       agent,
       cwd,
-      options,
+      { ...options, configDir: profile },
     );
     const listing = await this.composeListing(
       adapter,
       agent,
       projectDir,
+      profile,
       result,
+      pending,
     );
     return { ...listing, pending };
   }
@@ -382,7 +431,32 @@ export class AgentMcpService {
      * what `pending` says — and the alternative was never fresher information,
      * only none.
      */
-    const previous = cached?.servers ?? null;
+    // The HARVEST backs the cache here, and it is what makes a cold panel show
+    // the whole set rather than the handful the config happens to name. A turn's
+    // `system/init` lists every server the CLI actually loaded — the account's
+    // claude.ai connectors and its plugins included, neither of which is written
+    // to any file this daemon can read (the only local trace is
+    // `claudeAiMcpEverConnected`, a historical list that still names connectors
+    // the user has since removed). Measured on a real profile: the config
+    // declares 6 where a turn loads 47.
+    //
+    // It PAINTS a refresh without ANSWERING one — the same split the cache
+    // already gets one branch down, and for the same reason. Answering would
+    // make Reconnect inert (init reports the state at TURN START, so a server
+    // still connecting stays `pending` in the harvest for as long as it lives);
+    // painting only decides what is on screen while the re-dial runs, which
+    // used to be nothing at all for the whole ~30s.
+    // UNION rather than first-non-null, because the two sources know different
+    // servers and picking one shows the smaller answer: a lapsed listing holds
+    // whatever the last dial reached, a harvest holds whatever the last TURN
+    // loaded, and neither is a superset. Reported as the panel showing a short
+    // list that then grows — "сначала он показывает не полный список MCP… можем
+    // ли мы с самого начала показывать все". Growing is the one shape to avoid,
+    // since a user reads a settled-looking list and acts on it.
+    const previous = mergeKnown(
+      cached?.servers,
+      this.harvest.getStale(agent, projectDir, profile),
+    );
     // Single-flight is checked BEFORE the cache on purpose: a double-clicked
     // Refresh should join the re-read already running, not start a second one.
     const running = this.inFlight.get(key);
@@ -618,7 +692,10 @@ export class AgentMcpService {
         `${agent} cannot be told which MCP servers to load: ${toggleUnavailable}`,
       );
     }
-    const facts = await adapter.readMcpFolderFacts(projectDir);
+    // No profile on this route: the toggle DTO names none, so the write and
+    // this read describe the CLI's default account — the state this route has
+    // always acted on.
+    const facts = await adapter.readMcpFolderFacts(projectDir, null);
     if (enabled && facts.lockedOff.includes(server)) {
       throw new BadRequestException(
         'MCP_SERVER_DISABLED_BY_USER',
@@ -719,7 +796,11 @@ export class AgentMcpService {
       read.adapter,
       agent,
       read.projectDir,
+      null,
       read.result,
+      // This read BLOCKED, so its emptiness is settled: filling it from the
+      // config here would put rows back that the CLI has just reported gone.
+      false,
     );
     return { ...listing, pending: false };
   }
@@ -747,6 +828,122 @@ export class AgentMcpService {
    * (folder, server), so each profile's reading of it is now equally stale — the
    * same fact the renderer's own re-read of its other scopes is built on.
    */
+  /**
+   * Re-dial ONE server and answer with the listing that results.
+   *
+   * The narrow counterpart to `refresh`, and the difference is the whole point:
+   * a refresh re-dials every server the folder loads — measured at ~1.1s each,
+   * so ~30s on a 47-server profile — while this dials the one the caller names,
+   * at 1.2–3.7s, and leaves every other row exactly as it was.
+   *
+   * It exists for the sign-in flow. A server is authorized in a BROWSER, so
+   * nothing in this process learns that it happened; the panel used to say
+   * "press Reconnect", which made the user pay a full re-dial to re-check one
+   * row — REPORTED as "I should not click reconnect… we dont need to update all
+   * list of mcps". Polling this instead is what lets a row move to connected on
+   * its own.
+   *
+   * The cache is PATCHED rather than dropped, so the answer costs one dial and
+   * every later read of that folder agrees with it. `disabled` is untouched:
+   * this asks about health, and whether the next turn loads the server is a
+   * different question with its own writer.
+   */
+  async recheckServer(
+    agent: AgentKind,
+    cwd: string,
+    server: string,
+    options: { configDir?: string | null } = {},
+  ): Promise<AgentMcpListingWire> {
+    const projectDir = resolveValidCwd(cwd);
+    const profile =
+      options.configDir === undefined || options.configDir === null
+        ? null
+        : resolveValidConfigDir(options.configDir);
+    const adapter = this.adapters.for(agent);
+    const probed = await adapter
+      .readMcpServerHealth(
+        { cwd: projectDir, server, configDir: profile },
+        {
+          onSpawn: (child, spawnInfo) =>
+            this.processes.register(
+              `mcp:recheck:${randomUUID()}`,
+              childProcessHandle(child, spawnInfo),
+            ),
+        },
+      )
+      .catch((err: unknown) => {
+        // Never fatal: this feeds a poll behind a panel, and a CLI that is
+        // missing or hung costs one row's freshness rather than the answer.
+        this.logger.warn(
+          `re-checking ${server} for ${agent} failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      });
+    if (probed !== null) {
+      this.patchCachedHealth(agent, projectDir, server, probed);
+    }
+    // A PLAIN read afterwards, never a refresh: the dial that mattered has just
+    // happened, and this is the cache hit that re-composes the folder facts
+    // over it. (In the flow this exists for the panel is already open, so a
+    // listing read has happened and the entry is warm.)
+    const listing = await this.list(agent, cwd, {
+      configDir: options.configDir ?? null,
+    });
+    if (probed === null) {
+      return listing;
+    }
+    // The probe is applied to the ANSWER as well as to the cache, and that is
+    // not belt-and-braces: with a cold entry there is nothing for
+    // `patchCachedHealth` to write onto, so the read below falls through to the
+    // harvest paint and the freshly dialled row comes back wearing the status
+    // the LAST TURN reported. Measured exactly that way — a re-check of a
+    // server the CLI had just called `✔ Connected` answered `unknown`, which
+    // the sign-in watcher would have read as "not authorized yet" and polled
+    // against forever.
+    return {
+      ...listing,
+      servers: listing.servers.map((row) =>
+        row.name === server
+          ? { ...row, status: probed.status, detail: probed.detail }
+          : row,
+      ),
+    };
+  }
+
+  /**
+   * Write one probed health onto every cached listing of one (agent, folder).
+   *
+   * Split out of {@link patchCachedStatus}, which answers the TOGGLE's question
+   * — it decides the row's status from `enabled` and only consults the probe
+   * when switching on. Health alone has no such branch, and folding it in as a
+   * third mode is how the toggle's own rules would come to apply to a read.
+   */
+  private patchCachedHealth(
+    agent: AgentKind,
+    cwd: string,
+    server: string,
+    health: AgentMcpServerHealth,
+  ): void {
+    const prefix = keyPrefixOf(agent, cwd);
+    for (const [key, entry] of this.cache) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      let touched = false;
+      const servers = entry.servers.map((row) => {
+        if (row.name !== server) {
+          return row;
+        }
+        touched = true;
+        // `detail` travels WITH the status, on the rule its twin states.
+        return { ...row, status: health.status, detail: health.detail };
+      });
+      if (touched) {
+        this.cache.set(key, { ...entry, servers });
+      }
+    }
+  }
+
   private patchCachedStatus(
     agent: AgentKind,
     cwd: string,
@@ -803,9 +1000,14 @@ export class AgentMcpService {
     adapter: AgentAdapter,
     agent: AgentKind,
     cwd: string,
+    /** The profile this listing was taken under — see `readMcpFolderFacts`. */
+    configDir: string | null,
     result: AgentMcpListingResult,
     // `pending` is the CALLER's fact — whether a dial is still running — not
-    // anything this overlay can see, so each caller adds it.
+    // anything this overlay can see, so each caller adds it. It reaches the
+    // overlay as well because it decides whether an EMPTY listing may be
+    // filled in from the config read below.
+    pending: boolean,
   ): Promise<Omit<AgentMcpListingWire, 'pending'>> {
     // Read once, applied to BOTH exits: the note describes the CLI, not this
     // read, so a refused listing owes it just as much as a successful one —
@@ -824,7 +1026,7 @@ export class AgentMcpService {
     }
     let factsUnavailable = false;
     const facts: AgentMcpFolderFacts = await adapter
-      .readMcpFolderFacts(cwd)
+      .readMcpFolderFacts(cwd, configDir)
       .catch((err: unknown): AgentMcpFolderFacts => {
         // Reading the CLI's own config is best-effort, but the failure is not
         // silent: every row renders read-only, which is the safe direction. A
@@ -835,6 +1037,7 @@ export class AgentMcpService {
         );
         factsUnavailable = true;
         return {
+          configured: [],
           disabled: [],
           lockedOff: [],
           origins: {},
@@ -864,8 +1067,45 @@ export class AgentMcpService {
     // interactive screen.
     const approveUnavailableReason =
       adapter.getConfig().mcp.approveUnavailableReason;
+    // A cold read answers in ~0.4s with nothing, because the dial that fills it
+    // STARTS every server the folder defines — measured at ~1.1s each, so 17s
+    // on a 15-server profile and 27s on a 47-server one. For that whole stretch
+    // the panel had no rows to draw and showed a spinner over an empty box,
+    // which is exactly what a folder with no servers looks like, and what a
+    // read that died looks like. The config already names them (it is read
+    // above for the toggle state, at no extra cost), so they are drawn now and
+    // gain their health when the dial lands.
+    //
+    // ADDED to what is already painted rather than replacing it, and that is
+    // the difference between a list that grows under the reader and one that
+    // does not: the painted rows come from the last dial and the last turn,
+    // which between them miss anything added to the config since — while the
+    // config misses every account connector and plugin, which appear in no file
+    // this daemon can read. Each source is partial; the union is the most this
+    // machine knows before the dial answers.
+    //
+    // Only while `pending`: a settled answer is the CLI's own account of what
+    // it loads, and a name it omitted is one it does not load — putting that
+    // back would be inventing a row. These are also composed HERE rather than
+    // in `readServers`, so nothing synthesized reaches the cache and outlives
+    // the dial it stands in for.
+    const rows = pending
+      ? (mergeKnown(
+          result.servers,
+          facts.configured.map((name) => ({
+            name,
+            // Everything but the name is the DIAL's answer, and it has not
+            // answered. `loading` is the wire's own word for that, so the row
+            // says "being started" rather than claiming a health nobody read.
+            target: null,
+            transport: null,
+            status: 'loading' as const,
+            detail: null,
+          })),
+        ) ?? [])
+      : result.servers;
     return {
-      servers: result.servers.map((server) => {
+      servers: rows.map((server) => {
         if (toggle.toggleUnavailableReason !== null) {
           return {
             ...server,

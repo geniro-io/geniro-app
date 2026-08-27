@@ -429,7 +429,7 @@ describe('CliAuthService — what an account change invalidates', () => {
     // without this the composer would go on offering the previous account's
     // models until the refresh window lapsed.
     const { service, fake, exit, vocabularies, cleanup } = build();
-    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    vocabularies.remember(AgentKind.Claude, null, null, VERSION, MODELS);
     const started = service.startLogin({ agent: AgentKind.Claude });
     fake.stdout.emit('data', 'visit https://x.test/a\n');
     await started;
@@ -438,19 +438,19 @@ describe('CliAuthService — what an account change invalidates', () => {
     await tick();
 
     expect(
-      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows),
+      vocabularies.read(AgentKind.Claude, null, null, VERSION, isModelRows),
     ).toBeNull();
     cleanup();
   });
 
   it('drops them on a completed sign-OUT too', async () => {
     const { service, vocabularies, cleanup } = build();
-    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    vocabularies.remember(AgentKind.Claude, null, null, VERSION, MODELS);
 
     await service.logout({ agent: AgentKind.Claude });
 
     expect(
-      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows),
+      vocabularies.read(AgentKind.Claude, null, null, VERSION, isModelRows),
     ).toBeNull();
     cleanup();
   });
@@ -459,7 +459,7 @@ describe('CliAuthService — what an account change invalidates', () => {
     // A sign-in that failed changed no account, so discarding the vocabulary
     // would buy a cold six-second re-ask and nothing else.
     const { service, fake, exit, vocabularies, cleanup } = build();
-    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    vocabularies.remember(AgentKind.Claude, null, null, VERSION, MODELS);
     const started = service.startLogin({ agent: AgentKind.Claude });
     fake.stdout.emit('data', 'visit https://x.test/a\n');
     await started;
@@ -468,14 +468,15 @@ describe('CliAuthService — what an account change invalidates', () => {
     await tick();
 
     expect(
-      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows)?.value,
+      vocabularies.read(AgentKind.Claude, null, null, VERSION, isModelRows)
+        ?.value,
     ).toEqual(MODELS);
     cleanup();
   });
 
   it('keeps them for a SERVER sign-in, which changes tools and not models', async () => {
     const { service, fake, exit, vocabularies, cleanup } = build();
-    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    vocabularies.remember(AgentKind.Claude, null, null, VERSION, MODELS);
     const started = service.startMcpLogin({
       agent: AgentKind.Claude,
       server: 'linear',
@@ -488,7 +489,8 @@ describe('CliAuthService — what an account change invalidates', () => {
     await tick();
 
     expect(
-      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows)?.value,
+      vocabularies.read(AgentKind.Claude, null, null, VERSION, isModelRows)
+        ?.value,
     ).toEqual(MODELS);
     cleanup();
   });

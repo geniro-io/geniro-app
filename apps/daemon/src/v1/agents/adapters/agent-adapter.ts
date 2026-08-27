@@ -36,6 +36,7 @@ import type {
   AgentMcpServersInput,
   AgentModel,
   AgentModelParameterListing,
+  AgentModelsInput,
   AgentPlanLimits,
   AgentReportedCommand,
   AgentSession,
@@ -580,7 +581,10 @@ export abstract class AgentAdapter {
    * CLI that cannot be asked returns its built-in set, so the picker always
    * offers something.
    */
-  abstract listModels(options?: AgentCommandOptions): Promise<AgentModel[]>;
+  abstract listModels(
+    input: AgentModelsInput,
+    options?: AgentCommandOptions,
+  ): Promise<AgentModel[]>;
 
   /**
    * The MCP servers this CLI loads in a given folder, with the health it
@@ -628,11 +632,24 @@ export abstract class AgentAdapter {
    * which renders every row read-only rather than offering a switch whose
    * effect has never been verified for that CLI.
    *
+   * `configDir` is the PROFILE the listing was taken under, and it is not
+   * decoration: a profile is a whole separate account with its own config file,
+   * so reading the default one describes servers this run never loads. Measured
+   * here — a profile's own `.claude.json` declared 6 servers where the home one
+   * declared 3, and the panel was composed from the 3.
+   *
    * Reads only. The files it consults belong to the user, and nothing in this
    * feature ever writes them.
    */
-  readMcpFolderFacts(_cwd: string): Promise<AgentMcpFolderFacts> {
+  readMcpFolderFacts(
+    _cwd: string,
+    _configDir: string | null,
+  ): Promise<AgentMcpFolderFacts> {
     return Promise.resolve({
+      // An adapter that cannot read its CLI's files cannot name its servers
+      // either, so the panel waits on the dial exactly as it did before this
+      // field existed. Empty means "nothing to show yet", never "none".
+      configured: [],
       disabled: [],
       lockedOff: [],
       // Empty, not a guess: an adapter that cannot read its CLI's config files
@@ -921,6 +938,46 @@ export abstract class AgentAdapter {
   }
 
   /**
+   * Where this CLI's USER-scope configuration lives for a given run: the run's
+   * own profile, or the home dir when it names none.
+   *
+   * `strip` is what makes one set of declared segments serve both. A CLI states
+   * its roots relative to a HOME dir (`.claude/skills`), and a config directory
+   * is precisely what those first segments name — so a profile root is the same
+   * declaration with that anchor removed (`<configDir>/skills`), and nothing has
+   * to be written down twice. A CLI whose account is not a directory declares no
+   * anchor and keeps the home root whatever a run asks for.
+   */
+  private profileRoot(
+    configDir: string | null,
+    homeDir: string,
+  ): { source: 'user'; dir: string; strip: readonly string[] | null } {
+    const anchor = this.getConfig().skillRoots.profileAnchor;
+    return configDir !== null && anchor !== null
+      ? { source: 'user', dir: configDir, strip: anchor }
+      : { source: 'user', dir: homeDir, strip: null };
+  }
+
+  /**
+   * The profile an ACCOUNT-level answer belongs to — or null when this CLI's
+   * account is not decided by a directory at all.
+   *
+   * Every vocabulary this app caches (models, efforts, context windows, model
+   * parameters, the reported command list) is a fact about a SUBSCRIPTION, so
+   * the config directory belongs in its key. For a CLI where it decides
+   * nothing, keying by it would split one answer into a copy per profile and
+   * pay that CLI's cold handshake — measured at 6–7s on cursor — for each.
+   *
+   * Read from `configDir.unavailableReason`, which is that CLI's own
+   * declaration, so no caller branches on which agent it is talking to.
+   */
+  vocabularyProfile(configDir: string | null): string | null {
+    return this.getConfig().configDir.unavailableReason === null
+      ? configDir
+      : null;
+  }
+
+  /**
    * The skills / slash commands this CLI can be invoked with in a folder, as
    * found on disk — each CLI keeps them under its own roots
    * (`config.skillRoots`: `.claude/skills`, `.claude/commands`,
@@ -936,18 +993,32 @@ export abstract class AgentAdapter {
   async listSkills({
     cwd,
     homeDir,
+    configDir,
   }: AgentSkillsInput): Promise<AgentSkillEntry[]> {
-    const roots = [
-      { source: 'project' as const, dir: cwd },
-      { source: 'user' as const, dir: homeDir },
-    ];
+    // The USER root is the run's own profile when it has one, and the home dir
+    // otherwise — a REPLACEMENT, never an addition, because that is what the
+    // mechanism does: a config directory takes the place of the CLI's home
+    // configuration rather than sitting beside it, so a chat on a profile does
+    // not load `~`'s skills at all. Without this the `/` list was the DEFAULT
+    // profile's for every chat, whatever account it ran as; measured on the
+    // reporter's machine, `~/.claude` holds 10 plugins and 2 skills while each
+    // of their two profiles holds 7 plugins and a command of its own, none of
+    // which the composer could offer.
+    const user = this.profileRoot(configDir, homeDir);
+    const roots = [{ source: 'project' as const, dir: cwd, strip: null }, user];
     const found: AgentSkillEntry[] = [];
-    for (const { source, dir } of roots) {
+    for (const root of roots) {
       for (const segments of this.getConfig().skillRoots.skills) {
-        found.push(...(await scanSkillDirs(join(dir, ...segments), source)));
+        const dir = rootPath(root, segments);
+        if (dir !== null) {
+          found.push(...(await scanSkillDirs(dir, root.source)));
+        }
       }
       for (const segments of this.getConfig().skillRoots.commands) {
-        found.push(...(await scanCommandFiles(join(dir, ...segments), source)));
+        const dir = rootPath(root, segments);
+        if (dir !== null) {
+          found.push(...(await scanCommandFiles(dir, root.source)));
+        }
       }
     }
     // Installed PLUGINS, last: a plugin's skill is the widest-scoped thing a
@@ -956,10 +1027,13 @@ export abstract class AgentAdapter {
     // the scope a plugin is installed at — `geniro` is reserved for geniro's
     // OWN commands, which are a different thing wearing a similar name.
     for (const host of this.getConfig().skillRoots.plugins) {
-      const pluginDirs = await discoverPluginDirs(
-        join(homeDir, ...host.cacheDir),
-        host.manifests,
-      );
+      // Under the SAME user root the skills above took, so a profile's own
+      // installed plugins are the ones offered — see that root's own note.
+      const cacheDir = rootPath(user, host.cacheDir);
+      if (cacheDir === null) {
+        continue;
+      }
+      const pluginDirs = await discoverPluginDirs(cacheDir, host.manifests);
       for (const pluginDir of pluginDirs) {
         for (const segments of host.skillDirs) {
           const rows = await scanSkillDirs(
@@ -2167,4 +2241,29 @@ export abstract class AgentAdapter {
       );
     }
   }
+}
+
+/**
+ * One declared root's path under `root`, or null when it does not apply there.
+ *
+ * A root that STRIPS an anchor only answers for segment lists that actually
+ * begin with it: a CLI reading several homes (cursor scans `.cursor`, `.agents`,
+ * `.claude` and `.codex`) has roots that belong to other tools, and joining
+ * those onto a config directory would invent a path nothing writes.
+ */
+function rootPath(
+  root: { dir: string; strip: readonly string[] | null },
+  segments: readonly string[],
+): string | null {
+  if (root.strip === null) {
+    return join(root.dir, ...segments);
+  }
+  const anchor = root.strip;
+  if (
+    segments.length <= anchor.length ||
+    anchor.some((part, i) => segments[i] !== part)
+  ) {
+    return null;
+  }
+  return join(root.dir, ...segments.slice(anchor.length));
 }

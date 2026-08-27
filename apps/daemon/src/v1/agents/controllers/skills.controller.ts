@@ -59,14 +59,18 @@ export class SkillsController {
   @ApiOperation({ operationId: 'listAgentSkills' })
   @ZodResponse({ status: 200, type: [AgentSkillDto] })
   listSkills(@Query() query: ListSkillsQueryDto): Promise<AgentSkillWire[]> {
-    return this.skillsService.list(query.agent, query.cwd);
+    return this.skillsService.list(
+      query.agent,
+      query.cwd,
+      query.configDir ?? null,
+    );
   }
 
   @Get('models')
   @ApiOperation({ operationId: 'listAgentModels' })
   @ZodResponse({ status: 200, type: [AgentModelDto] })
   listModels(@Query() query: ListModelsQueryDto): Promise<AgentModelWire[]> {
-    return this.modelsService.list(query.agent);
+    return this.modelsService.list(query.agent, query.configDir ?? null);
   }
 
   /**
@@ -97,7 +101,11 @@ export class SkillsController {
   listEfforts(
     @Query() query: ListEffortsQueryDto,
   ): Promise<AgentEffortListingWire> {
-    return this.effortsService.list(query.agent, query.model ?? null);
+    return this.effortsService.list(
+      query.agent,
+      query.model ?? null,
+      query.configDir ?? null,
+    );
   }
 
   /**
@@ -114,6 +122,7 @@ export class SkillsController {
     return this.contextWindowsService.listWire(
       query.agent,
       query.model ?? null,
+      query.configDir ?? null,
     );
   }
 
@@ -131,6 +140,7 @@ export class SkillsController {
     return this.modelParametersService.listWire(
       query.agent,
       query.model ?? null,
+      query.configDir ?? null,
     );
   }
 

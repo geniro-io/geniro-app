@@ -30,6 +30,7 @@ export function ConfigDirSelect({
   disabled = false,
   ariaLabel = 'Agent config directory for new chats',
   hint = "Optional: the config directory (account / profile) new chats run as — the CLI's own by default",
+  note = null,
   onChange,
   onBrowse,
   className,
@@ -49,8 +50,24 @@ export function ConfigDirSelect({
    * control, and the only thing about it that differs is who it is about.
    */
   ariaLabel?: string;
-  /** Hover text while no directory is chosen; the path itself once one is. */
+  /**
+   * Hover text while no directory is chosen; the path itself once one is.
+   *
+   * {@link note} is what survives BOTH states — see it for why.
+   */
   hint?: string;
+  /**
+   * A fact about this value the user could not otherwise learn, shown whether
+   * or not a directory is chosen.
+   *
+   * Separate from {@link hint} because the hint is displaced by the path the
+   * moment one exists: the chip's own tooltip is the path, which is exactly
+   * when a caller most needs to say something ABOUT it. The open-thread chip
+   * uses it to name the folder file that pinned a profile over the one the
+   * chat asked for — without it the chip shows an account the user never
+   * picked and offers no way to find out why.
+   */
+  note?: string | null;
   /** A pick, or null from the "Default profile" row. */
   onChange: (configDir: string | null) => void;
   /** Open the native directory dialog. */
@@ -73,7 +90,7 @@ export function ConfigDirSelect({
       clearLabel="Default profile"
       icon={<IdCard />}
       aria-label={ariaLabel}
-      title={configDir ?? hint}
+      title={[configDir ?? hint, note].filter(Boolean).join(' — ')}
       disabled={disabled}
       className={className}
       onChange={onChange}

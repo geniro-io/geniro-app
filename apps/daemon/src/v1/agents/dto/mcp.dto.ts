@@ -55,6 +55,27 @@ export class SetMcpServerEnabledDto extends createZodDto(
   setMcpServerEnabledSchema,
 ) {}
 
+/**
+ * Body for re-dialling ONE server and answering with the listing that results.
+ *
+ * Deliberately not a flag on {@link listMcpServersQuerySchema}: `refresh` there
+ * re-dials EVERY server the folder loads (~30s on a 47-server profile), and
+ * this exists precisely because that is the wrong price for re-checking one row
+ * after a browser sign-in. Same shape as the toggle body minus `enabled` —
+ * `server` takes the shared {@link cliPositionalArgSchema} for the same reason
+ * it does there.
+ *
+ * A POST rather than a GET because it DIALS: asking costs a spawned process
+ * that starts the user's own server, which is not what a GET promises.
+ */
+export const recheckMcpServerSchema = z.object({
+  agent: AgentKindSchema,
+  cwd: z.string().min(1),
+  configDir: z.string().min(1).optional(),
+  server: cliPositionalArgSchema,
+});
+export class RecheckMcpServerDto extends createZodDto(recheckMcpServerSchema) {}
+
 /** One agent's MCP servers in a working directory, or why it cannot be asked. */
 export class AgentMcpListingDto extends createZodDto(
   AgentMcpListingWireSchema,

@@ -7,6 +7,8 @@ import {
   CLAUDE_MCP_READY_POLL_MS,
   CLAUDE_MCP_READY_REPLY_TIMEOUT_MS,
   CLAUDE_MCP_READY_STALL_MS,
+  CLAUDE_MCP_RECONNECT_FAILED_MESSAGE,
+  CLAUDE_MCP_RECONNECTED_MESSAGE,
 } from './claude.const';
 import {
   type ClaudeMcpStatusRow,
@@ -15,6 +17,11 @@ import {
   pendingMcpServers,
   readMcpStatusReply,
 } from './utils/claude-mcp-ready.utils';
+import {
+  mcpReconnectRequestLine,
+  notConnectedMcpServer,
+  readMcpReconnectReply,
+} from './utils/claude-mcp-reconnect.utils';
 import { isClaudeApiErrorLine } from './utils/claude-message.utils';
 
 /** What the driver needs from the adapter, injected so a spec needs no process. */
@@ -93,6 +100,7 @@ export class ClaudeTurnDriver implements TurnDriver {
    * failure than the one it is fixing.
    */
   async awaitPromptReady(io: TurnIo): Promise<void> {
+    this.io = io;
     const now = this.deps.now ?? Date.now;
     const startedAt = now();
     const ceiling = startedAt + CLAUDE_MCP_READY_MAX_WAIT_MS;
@@ -166,6 +174,26 @@ export class ClaudeTurnDriver implements TurnDriver {
     }
   }
 
+  /**
+   * The session's stdin, kept so a repair can be sent from {@link onMessage}.
+   *
+   * Both opening hooks are FIRST-turn only, which is enough because this object
+   * is not per turn at all: `createTurnDriver` runs once per `start()`, and a
+   * claude session then serves every later message of the chat through the same
+   * driver and the same open pipe (`sessionWrite` in `spawn-cli.ts` re-reads
+   * `child.stdin` per call, so the captured writer does not go stale).
+   *
+   * Set from both rather than from the gate alone: the gate is skipped for
+   * whole classes of turn (`waitsForMcpServers`), and a repair that silently
+   * stopped working because a condition elsewhere changed is exactly the kind
+   * of coupling that does not announce itself.
+   */
+  private io: TurnIo | null = null;
+
+  onStdinReady(io: TurnIo): void {
+    this.io = io;
+  }
+
   onMessage(obj: unknown): AgentEvent[] {
     const open = this.openPoll;
     if (open) {
@@ -177,12 +205,118 @@ export class ClaudeTurnDriver implements TurnDriver {
         return [];
       }
     }
+    const repaired = this.readRepairReply(obj);
+    if (repaired !== null) {
+      // This driver's own traffic too, and consumed for the same reason.
+      return repaired;
+    }
     this.rememberApiFailure(obj);
     const mapped = this.deps
       .mapMessage(obj)
       .flatMap((event) => this.trackWindow(event))
       .map((event) => this.withFailureDetail(event));
-    return this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj));
+    return [
+      ...this.reconcileApiNotice(mapped, isClaudeApiErrorLine(obj)),
+      // AFTER the mapped events, so the failed tool row lands before anything
+      // said about it — and it says nothing yet: the attempt is silent and only
+      // its REPLY speaks, since the reply is the half that knows whether the
+      // server came back and, when it did not, why (see `readRepairReply`).
+      ...this.repairDeadServer(obj),
+    ];
+  }
+
+  /** In-flight reconnect attempts, request id → the server each is repairing. */
+  private readonly repairs = new Map<string, string>();
+
+  /**
+   * Servers with a repair in flight right now.
+   *
+   * A model told a tool is unavailable RETRIES it — four calls in 23 seconds on
+   * the reported run — and each retry re-raises the same failure while the
+   * first reconnect is still being answered. Without this, one dead server
+   * would earn a reconnect request per retry.
+   */
+  private readonly repairing = new Set<string>();
+
+  /**
+   * Servers the CLI has already said it could not reconnect.
+   *
+   * Never asked again for the life of this session: the reasons measured here
+   * are properties of somebody else's server (a 404 for the account's connector
+   * record), so a second identical request costs a round trip and produces the
+   * same sentence. A repair that SUCCEEDED leaves no mark, so a server that
+   * drops again later in the same chat is repaired again — that is a new
+   * incident rather than a retry of this one.
+   */
+  private readonly unrepairable = new Set<string>();
+  private repairsSent = 0;
+
+  /**
+   * Re-dial a server this line just reported as not connected.
+   *
+   * Returns no events by design — see the call site. A session with no stdin
+   * channel simply cannot ask, and says nothing, which is the behaviour that
+   * shipped before this existed.
+   */
+  private repairDeadServer(obj: unknown): AgentEvent[] {
+    const server = notConnectedMcpServer(obj);
+    if (
+      server === null ||
+      this.repairing.has(server) ||
+      this.unrepairable.has(server)
+    ) {
+      return [];
+    }
+    const io = this.io;
+    if (io === null) {
+      return [];
+    }
+    const id = `${CLAUDE_CONTROL_REQUEST_ID_PREFIX}mcp-repair-${++this.repairsSent}`;
+    if (io.write(mcpReconnectRequestLine(id, server))) {
+      this.repairs.set(id, server);
+      this.repairing.add(server);
+    }
+    return [];
+  }
+
+  /**
+   * Turn one reconnect reply into the row that explains it, or null when this
+   * line answers no attempt of ours.
+   *
+   * A reply that never arrives — a CLI that renamed the subtype, a process that
+   * ended first — leaves its entry in {@link repairs} for the life of this
+   * per-turn object and says nothing, which is the same degrade the readiness
+   * gate takes and costs the diagnosis rather than the turn.
+   */
+  private readRepairReply(obj: unknown): AgentEvent[] | null {
+    for (const [id, server] of this.repairs) {
+      const reply = readMcpReconnectReply(obj, id);
+      if (reply === null) {
+        continue;
+      }
+      this.repairs.delete(id);
+      this.repairing.delete(server);
+      if (reply.error !== null) {
+        this.unrepairable.add(server);
+      }
+      return [
+        reply.error === null
+          ? {
+              type: 'notice',
+              severity: 'info',
+              message: CLAUDE_MCP_RECONNECTED_MESSAGE.replace('%s', server),
+            }
+          : {
+              type: 'notice',
+              severity: 'warning',
+              message: CLAUDE_MCP_RECONNECT_FAILED_MESSAGE.replace(
+                '%s',
+                server,
+              ).replace('%r', reply.error),
+            },
+      ];
+    }
+    return null;
   }
 
   /**

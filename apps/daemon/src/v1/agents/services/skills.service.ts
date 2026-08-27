@@ -110,12 +110,21 @@ export class SkillsService {
       ((kind, opts) => versions.resolve(kind, opts));
   }
 
-  async list(agent: AgentKind, cwd: string): Promise<AgentSkillWire[]> {
+  async list(
+    agent: AgentKind,
+    cwd: string,
+    configDir: string | null = null,
+  ): Promise<AgentSkillWire[]> {
     const projectDir = resolveValidCwd(cwd);
     const adapter = this.adapterFor(agent);
+    // The run's own PROFILE, which is where that account's skills, commands and
+    // installed plugins live — the scan took the home dir for every chat, so a
+    // chat on a profile was offered the default account's list and none of its
+    // own. See `AgentAdapter.listSkills`.
     const scanned = await adapter.listSkills({
       cwd: projectDir,
       homeDir: this.homeDir,
+      configDir,
     });
     const byName = new Map<string, AgentSkillEntry>();
     // FIRST, ahead of the disk scan, because these names are reserved rather
@@ -138,7 +147,7 @@ export class SkillsService {
     // This cwd's own harvest leads the catalog, being the authoritative report
     // for THIS folder; the catalog is the cwd-independent floor beneath it.
     const reported = [
-      ...(this.harvest.get(agent, projectDir) ?? []),
+      ...(this.harvest.get(agent, projectDir, configDir) ?? []),
       ...(await this.reportedCommands(agent)),
     ];
     for (const command of reported) {

@@ -69,6 +69,7 @@ export class EffortsService {
   async list(
     kind: AgentKind,
     model: string | null = null,
+    configDir: string | null = null,
   ): Promise<AgentEffortListing> {
     const version = await this.versions.resolve(kind, {
       onSpawn: (child, spawnInfo) =>
@@ -77,7 +78,10 @@ export class EffortsService {
           childProcessHandle(child, spawnInfo),
         ),
     });
-    return this.cache.read(kind, model, version, (previous) =>
+    // Keyed by the PROFILE as well, because this is an account fact — the
+    // adapter says whether its own account is a directory at all.
+    const profile = this.adapters.for(kind).vocabularyProfile(configDir);
+    return this.cache.read(kind, model, profile, version, (previous) =>
       this.fetch(kind, model, previous),
     );
   }
@@ -121,6 +125,7 @@ export class EffortsService {
     kind: AgentKind,
     effort: string,
     model: string | null = null,
+    configDir: string | null = null,
   ): boolean {
     const adapter = this.adapterFor(kind);
     const levels = adapter.listEfforts();
@@ -134,7 +139,7 @@ export class EffortsService {
     if (model === null) {
       return true;
     }
-    const known = this.freshCachedListing(kind, model);
+    const known = this.freshCachedListing(kind, model, configDir);
     // Nothing held, a listing standing in for the model's own answer, or a
     // model with no effort axis at all — none is evidence that the level is
     // wrong, only that nothing here can say so.
@@ -155,8 +160,15 @@ export class EffortsService {
   private freshCachedListing(
     kind: AgentKind,
     model: string,
+    configDir: string | null,
   ): AgentEffortListing | null {
-    return this.cache.fresh(kind, model) ?? null;
+    return (
+      this.cache.fresh(
+        kind,
+        model,
+        this.adapters.for(kind).vocabularyProfile(configDir),
+      ) ?? null
+    );
   }
 
   private async fetch(

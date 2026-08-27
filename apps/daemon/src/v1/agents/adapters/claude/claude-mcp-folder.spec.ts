@@ -36,7 +36,7 @@ function write(rel: string, content: string): void {
 
 describe('ClaudeAdapter.readMcpFolderFacts', () => {
   it('reports nothing off for a folder with no config at all', async () => {
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.disabled).toEqual([]);
     expect(facts.lockedOff).toEqual([]);
@@ -48,7 +48,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['sentry'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('sentry');
   });
@@ -59,7 +59,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['docs'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('docs');
   });
@@ -77,7 +77,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['from-local'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toEqual(
       expect.arrayContaining(['from-shared', 'from-local']),
@@ -94,7 +94,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['sentry'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff.filter((n) => n === 'sentry')).toHaveLength(1);
   });
@@ -106,7 +106,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['docs'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('docs');
   });
@@ -122,7 +122,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       'utf8',
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('from-home');
   });
@@ -139,7 +139,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['from-project'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toEqual(
       expect.arrayContaining(['from-home', 'from-project']),
@@ -169,9 +169,43 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
     );
     write('.mcp.json', JSON.stringify({ mcpServers: { sentry: {} } }));
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('sentry');
+  });
+
+  it('reads a PROFILE’s own config rather than the home one', async () => {
+    // A config directory is a separate ACCOUNT, with its own `.claude.json` and
+    // its own servers — measured on a real pair, 6 declared in the profile
+    // against 3 at home, and the panel was composed from home's 3. The two
+    // files also sit at different depths: `CLAUDE_CONFIG_DIR` names the
+    // directory `~/.claude` otherwise IS, so a profile keeps `settings.json` at
+    // its root where home keeps `.claude/settings.json`.
+    const profile = mkdtempSync(join(tmpdir(), 'claude-folder-profile-'));
+    writeFileSync(
+      join(profile, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'profile-only': {} } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(profile, 'settings.json'),
+      JSON.stringify({ disabledMcpjsonServers: ['off-in-profile'] }),
+      'utf8',
+    );
+    // The home account declares a DIFFERENT server, so a read that fell back
+    // here would be visible rather than merely wrong-looking.
+    writeFileSync(
+      join(homeDir, '.claude.json'),
+      JSON.stringify({ mcpServers: { 'home-only': {} } }),
+      'utf8',
+    );
+
+    const facts = await adapter().readMcpFolderFacts(cwd, profile);
+    rmSync(profile, { recursive: true, force: true });
+
+    expect(facts.configured).toContain('profile-only');
+    expect(facts.configured).not.toContain('home-only');
+    expect(facts.lockedOff).toContain('off-in-profile');
   });
 
   it('reads a rejected name alongside the rest', async () => {
@@ -184,7 +218,7 @@ describe('ClaudeAdapter.readMcpFolderFacts', () => {
       JSON.stringify({ disabledMcpjsonServers: ['docs'] }),
     );
 
-    const facts = await adapter().readMcpFolderFacts(cwd);
+    const facts = await adapter().readMcpFolderFacts(cwd, null);
 
     expect(facts.lockedOff).toContain('docs');
   });
@@ -211,8 +245,11 @@ describe('AgentAdapter.readMcpFolderFacts default', () => {
     }
 
     await expect(
-      new Unverified().readMcpFolderFacts('/anywhere'),
+      new Unverified().readMcpFolderFacts('/anywhere', null),
     ).resolves.toEqual({
+      // Same rule again: an adapter that cannot read its CLI's files cannot
+      // name its servers either, so the panel waits on the dial as before.
+      configured: [],
       disabled: [],
       lockedOff: [],
       // Unstated rather than guessed, on the same rule as the two lists above:

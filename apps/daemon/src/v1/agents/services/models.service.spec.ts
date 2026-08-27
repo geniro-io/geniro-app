@@ -110,3 +110,37 @@ describe('ModelsService — the memory mirror over the durable store', () => {
     expect(a).toEqual(b);
   });
 });
+
+describe('ModelsService — one list per ACCOUNT', () => {
+  it("asks per profile, and never serves one account's models to another", async () => {
+    // The composer's own reader, and the defect from its end: the memory cache
+    // was keyed by AGENT alone, so the first chat to open its picker filed its
+    // subscription's models under the CLI's name and every other account was
+    // served that. Which models exist is decided by the subscription, and the
+    // subscription is the config directory.
+    const { models } = service();
+    const listed = vi
+      .spyOn(ClaudeAdapter.prototype, 'listModels')
+      .mockImplementation(({ configDir }) =>
+        Promise.resolve([
+          {
+            id: `model-for-${configDir ?? 'default'}`,
+            label: 'Whatever this account offers',
+            source: 'cli' as const,
+          },
+        ]),
+      );
+
+    const team = await models.list('claude', '/profiles/team');
+    const max = await models.list('claude', '/profiles/max');
+    // Served from cache the second time round, so the key SPLITS rather than
+    // merely defeating the cache.
+    const teamAgain = await models.list('claude', '/profiles/team');
+
+    expect(team.map((m) => m.id)).toEqual(['model-for-/profiles/team']);
+    expect(max.map((m) => m.id)).toEqual(['model-for-/profiles/max']);
+    expect(teamAgain).toEqual(team);
+    expect(listed).toHaveBeenCalledTimes(2);
+    listed.mockRestore();
+  });
+});

@@ -1,6 +1,5 @@
 import {
   Bot,
-  FileWarning,
   FolderOpen,
   IdCard,
   Timer,
@@ -14,7 +13,6 @@ import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import { folderName } from './directory-select';
 import { formatRelativeTime } from './relative-time';
-import { effectiveConfigDir } from './run-profile';
 import {
   isWorkingRunStatus,
   RUN_STATUS_META,
@@ -190,12 +188,13 @@ function ThreadIdentity({
   agentKind,
   cwd,
   configDir,
-  configDirPin,
 }: {
   agentKind: string | null;
   cwd: string | null;
   configDir: string | null;
-  configDirPin: ConfigDirPin | null;
+  // Still on the props, still unread: `Chats` passes it and the daemon still
+  // sends it, and both go when `ConfigDirPin` is deleted end to end.
+  configDirPin?: ConfigDirPin | null;
 }): React.JSX.Element | null {
   // The folder leads, and the agent stands in for it on a run that has none —
   // a workflow, whose agents are per node, has neither and draws nothing.
@@ -241,36 +240,30 @@ function ThreadIdentity({
         <IdentityRow
           icon={<IdCard aria-hidden="true" className="size-3.5 shrink-0" />}
           name="Profile"
-          // The FOLDER's pin outranks the chat's own pick, because the CLI
-          // applies it over the environment geniro sets — so this row states
-          // what the agent is actually on, and the row below says who decided.
-          // REPORTED the other way round ("it's showing my limits for another
-          // account"): the limits were the honest reading and this row was the
-          // one making a claim the turn did not support.
-          value={effectiveConfigDir({ configDir, configDirPin })}
+          // The chat's OWN profile, which is what the turn runs as — MEASURED,
+          // after this row spent a release claiming otherwise. A folder's
+          // `.claude/settings.local.json` `env.CLAUDE_CONFIG_DIR` does NOT
+          // outrank it, and does not apply in its absence either: in the
+          // reporter's own pinned folder on 2.1.247, `CLAUDE_CONFIG_DIR=…
+          // -personal` loaded the personal profile's 17 servers, `…-lab` the
+          // team profile's 51, and NO variable loaded the default `~/.claude`'s
+          // 12 — the pinned profile never once won. It cannot: that variable
+          // decides where the CLI reads its config FROM, and a project settings
+          // file is read after that decision is made, so its `env` block
+          // reaches the tools the agent runs and not the CLI's own resolution.
+          value={configDir}
           // A run on the CLI's own profile is not a run with no profile, and
           // the chips said nothing at all about it — the row that vanished was
           // the commonest case.
           fallback="The CLI’s default"
         />
-        {configDirPin === null ? null : (
-          <IdentityRow
-            icon={
-              <FileWarning aria-hidden="true" className="size-3.5 shrink-0" />
-            }
-            name="Pinned by"
-            // The file, not a sentence about it: the way out of an override is
-            // to edit that file, and a path is the shortest thing that says so.
-            // The chat's own pick is named beside it, or the row would read as
-            // if the profile had never been chosen at all.
-            value={
-              configDir === null || configDir === configDirPin.effective
-                ? configDirPin.source
-                : `${configDirPin.source} — over this chat’s ${configDir}`
-            }
-            fallback={null}
-          />
-        )}
+        {/* The `Pinned by` row is GONE with the override it described. It
+            reported a folder file as having decided this chat's account, and
+            the measurement above says no such thing happens — so it named a
+            real file next to a claim that was never true, which is worse than
+            saying nothing. `configDirPin` is still on the wire and is now read
+            by nothing; see the daemon's `ConfigDirPinService` for the removal
+            that belongs with this. */}
       </ul>
     </HoverPopover>
   );

@@ -25,6 +25,7 @@ import type {
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelsInput,
   AgentPlanLimits,
   AgentSessionHistory,
   AgentSessionImportInput,
@@ -88,6 +89,8 @@ import {
   CLAUDE_PERMISSION_PROMPT_TOOL_FLAG,
   CLAUDE_PERMISSION_PROMPT_TOOL_STDIO,
   CLAUDE_PLAN_LIMITS_TIMEOUT_MS,
+  CLAUDE_PROFILE_SETTINGS_FILE,
+  CLAUDE_PROJECT_MCP_FILE,
   CLAUDE_PROJECT_SETTINGS_FILES,
   CLAUDE_RELOAD_COMMANDS_REQUEST_ID,
   CLAUDE_RESUME_FLAG,
@@ -118,11 +121,13 @@ import {
 import {
   parseDisabledServerNames,
   parseHomeDisabledServerNames,
+  parseProjectServerNames,
 } from './utils/claude-mcp-folder.utils';
 import { parseMcpGetHealth, parseMcpList } from './utils/claude-mcp-list.utils';
 import type { ClaudeHomeConfig } from './utils/claude-mcp-toggle.utils';
 import {
   parseHomeConfig,
+  readConfiguredServers,
   readDisabledServers,
   withDisabledServer,
 } from './utils/claude-mcp-toggle.utils';
@@ -303,6 +308,14 @@ export class ClaudeAdapter extends AgentAdapter {
         { id: 'haiku', label: 'haiku', source: 'builtin' },
       ],
       skillRoots: {
+        /**
+         * What `CLAUDE_CONFIG_DIR` replaces: this CLI's home configuration
+         * lives at `~/.claude`, and a profile IS that directory somewhere
+         * else — so a run's own skills and commands are `<configDir>/skills`
+         * and `<configDir>/commands`, derived from the two roots below rather
+         * than spelled a second time.
+         */
+        profileAnchor: ['.claude'],
         /** `<root>/.claude/skills/<name>/SKILL.md`. */
         skills: [['.claude', 'skills']],
         /** `<root>/.claude/commands/**.md`. */
@@ -768,10 +781,36 @@ export class ClaudeAdapter extends AgentAdapter {
    * surface — never from the const behind it, so config stays the one place a
    * CLI's static values are read.
    */
-  override listModels(): Promise<AgentModel[]> {
+  override listModels({ configDir }: AgentModelsInput): Promise<AgentModel[]> {
+    // The RUN's profile, not the home dir. The extra models an account offers
+    // are cached by the CLI in the config directory's own `.claude.json`, so
+    // reading the home copy answered with the DEFAULT profile's account for
+    // every chat, whatever subscription it actually ran on. Measured on the
+    // reporter's own machine, the two profiles of one login report different
+    // subscriptions (`max` against `team`) — the same CLI binary, so no version
+    // check could ever have caught it. Their cached lists happen to coincide
+    // today, which is precisely why this had to be found by reading rather than
+    // by looking at a screen.
     return Promise.resolve(
-      claudeModels(this.getConfig().builtinModels, this.claudeOptions.homeDir),
+      claudeModels(
+        this.getConfig().builtinModels,
+        this.modelCacheDir(configDir),
+      ),
     );
+  }
+
+  /**
+   * Where {@link CLAUDE_MODEL_CACHE_FILE} sits for a profile.
+   *
+   * NOT {@link profileDir}, and the difference is measured: a config directory
+   * holds `.claude.json` at its ROOT (`<configDir>/.claude.json`) while the
+   * home copy sits beside the `.claude` directory rather than inside it
+   * (`~/.claude.json`) — the same split `CLAUDE_PROFILE_SETTINGS_FILE` records
+   * for the settings file. So the home case wants the home dir itself, and the
+   * profile case wants the profile.
+   */
+  private modelCacheDir(configDir: string | null): string {
+    return configDir ?? this.claudeOptions.homeDir ?? homedir();
   }
 
   /**
@@ -925,18 +964,43 @@ export class ClaudeAdapter extends AgentAdapter {
    * writes anything — see `utils/claude-mcp-folder.utils.ts` for the probe
    * evidence behind the two questions.
    */
-  override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
+  override async readMcpFolderFacts(
+    cwd: string,
+    configDir: string | null,
+  ): Promise<AgentMcpFolderFacts> {
+    // The PROFILE's own root when the run names one: a profile is a separate
+    // ACCOUNT with its own config, so reading the home one describes servers
+    // this run never loads (measured on a real pair — 6 declared in the profile
+    // against 3 at home, and the panel was composed from the 3).
+    //
+    // The two files do NOT move together, which is why this is two expressions
+    // rather than one root. `.claude.json` sits at the root of either, while
+    // the settings file is `~/.claude/settings.json` at home and
+    // `<profile>/settings.json` in a profile — `CLAUDE_CONFIG_DIR` names the
+    // directory `~/.claude` otherwise IS, so the segment is already spent.
     const home = this.claudeOptions.homeDir ?? homedir();
+    const configRoot = configDir ?? home;
+    const homeSettingsPath =
+      configDir === null
+        ? join(home, CLAUDE_HOME_SETTINGS_FILE)
+        : join(configDir, CLAUDE_PROFILE_SETTINGS_FILE);
     const settingsSources = await Promise.all([
       ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) =>
         readFileSafe(join(cwd, rel)),
       ),
-      readFileSafe(join(home, CLAUDE_HOME_SETTINGS_FILE)),
+      readFileSafe(homeSettingsPath),
     ]);
     // Where answering "No" to the CLI's own trust prompt lands — a different
     // file and a different shape from the settings ones, but the same
     // question, and the ordinary way a user switches a project server off.
-    const homeConfig = await readFileSafe(join(home, CLAUDE_MODEL_CACHE_FILE));
+    const homeConfig = await readFileSafe(
+      join(configRoot, CLAUDE_MODEL_CACHE_FILE),
+    );
+    // The third scope's own file. Read HERE rather than folded into the
+    // settings batch above because it answers a different question: those
+    // carry rejection lists, this carries definitions.
+    const projectMcp = await readFileSafe(join(cwd, CLAUDE_PROJECT_MCP_FILE));
+    const parsedHome = homeConfig === null ? null : parseHomeConfig(homeConfig);
     // Union, because that is how the CLI itself combines them: a name in ANY
     // of these is one geniro cannot pull back out.
     const userDisabled = new Set<string>();
@@ -953,12 +1017,20 @@ export class ClaudeAdapter extends AgentAdapter {
       }
     }
     return {
+      // All three scopes, deduped BY NAME because that is how the CLI merges
+      // them: `claude mcp list` prints one row per name whichever scope won,
+      // so a name defined twice must not become two rows here either.
+      configured: [
+        ...new Set([
+          ...(parsedHome === null
+            ? []
+            : readConfiguredServers(parsedHome, cwd)),
+          ...(projectMcp === null ? [] : parseProjectServerNames(projectMcp)),
+        ]),
+      ],
       // The CLI's OWN per-folder list — the state its `/mcp` panel shows and
       // the one `setMcpServerEnabled` writes. Servers of every scope.
-      disabled:
-        homeConfig === null
-          ? []
-          : readDisabledServers(parseHomeConfig(homeConfig), cwd),
+      disabled: parsedHome === null ? [] : readDisabledServers(parsedHome, cwd),
       // A `.mcp.json` REJECTION, which is a different question and one geniro
       // cannot undo: the CLI unions every source's copy of that list.
       lockedOff: [...userDisabled],

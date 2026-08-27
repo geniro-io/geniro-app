@@ -66,12 +66,14 @@ describe('ModelVocabularyStore — what it serves', () => {
     // 6.1–8.0s handshake again for a model the user had already opened, which
     // is what "должно быть практически мгновенно" was said about.
     const took = new ModelVocabularyStore({ file, now: () => 1_000 });
-    took.remember(AGENT, MODEL, VERSION, REPLY);
+    took.remember(AGENT, MODEL, null, VERSION, REPLY);
     await waitForFile();
 
     const nextLaunch = new ModelVocabularyStore({ file, now: () => 2_000 });
 
-    expect(nextLaunch.read(AGENT, MODEL, VERSION, isText)?.value).toBe(REPLY);
+    expect(nextLaunch.read(AGENT, MODEL, null, VERSION, isText)?.value).toBe(
+      REPLY,
+    );
   });
 
   it('keeps the CLI-wide answer apart from any one model’s', async () => {
@@ -79,25 +81,48 @@ describe('ModelVocabularyStore — what it serves', () => {
     // at all" is a real question, and folding it into the first model's entry
     // would file that model's list as the CLI's.
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
-    store.remember(AGENT, null, VERSION, 'the whole listing');
-    store.remember(AGENT, MODEL, VERSION, REPLY);
+    store.remember(AGENT, null, null, VERSION, 'the whole listing');
+    store.remember(AGENT, MODEL, null, VERSION, REPLY);
     await waitForFile();
 
-    expect(store.read(AGENT, null, VERSION, isText)?.value).toBe(
+    expect(store.read(AGENT, null, null, VERSION, isText)?.value).toBe(
       'the whole listing',
     );
-    expect(store.read(AGENT, MODEL, VERSION, isText)?.value).toBe(REPLY);
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)?.value).toBe(REPLY);
+  });
+
+  it("keeps one ACCOUNT's answer apart from another's", async () => {
+    // The config directory is the account, and a vocabulary is an account fact
+    // — measured, one login's two profiles report `max` and `team` from the
+    // SAME binary, so the version already in the entry cannot tell them apart.
+    // Drop the profile from the key and the second read serves the first
+    // profile's answer.
+    const store = new ModelVocabularyStore({ file, now: () => 1_000 });
+    store.remember(AGENT, MODEL, '/profiles/team', VERSION, 'the team list');
+    store.remember(AGENT, MODEL, '/profiles/max', VERSION, 'the max list');
+    await waitForFile();
+
+    expect(
+      store.read(AGENT, MODEL, '/profiles/team', VERSION, isText)?.value,
+    ).toBe('the team list');
+    expect(
+      store.read(AGENT, MODEL, '/profiles/max', VERSION, isText)?.value,
+    ).toBe('the max list');
+    // And the CLI's own profile is a third answer, not a missing one.
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
   });
 
   it('refuses an entry taken under ANOTHER version of the CLI', async () => {
     // The version is the freshness signal a TTL cannot be: a model's settings
     // change when the CLI does, and an upgrade must not be answered with its
     // predecessor's list.
-    seed({ [modelVocabularyKey(AGENT, MODEL)]: record() });
+    seed({ [modelVocabularyKey(AGENT, MODEL, null)]: record() });
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
 
-    expect(store.read(AGENT, MODEL, VERSION, isText)?.value).toBe(REPLY);
-    expect(store.read(AGENT, MODEL, '2026.09.01-newer', isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)?.value).toBe(REPLY);
+    expect(
+      store.read(AGENT, MODEL, null, '2026.09.01-newer', isText),
+    ).toBeNull();
     await settle();
   });
 
@@ -105,25 +130,27 @@ describe('ModelVocabularyStore — what it serves', () => {
     // A null version is the one case that check cannot be performed, so both
     // directions are closed: serving would hand an upgraded CLI the old answer,
     // and storing would only ever occupy a slot nothing can match.
-    seed({ [modelVocabularyKey(AGENT, MODEL)]: record() });
+    seed({ [modelVocabularyKey(AGENT, MODEL, null)]: record() });
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
 
-    expect(store.read(AGENT, MODEL, null, isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, null, isText)).toBeNull();
 
-    store.remember(AGENT, 'gpt-5.4', null, REPLY);
+    store.remember(AGENT, 'gpt-5.4', null, null, REPLY);
     await settle();
 
-    expect(store.read(AGENT, 'gpt-5.4', VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, 'gpt-5.4', null, VERSION, isText)).toBeNull();
   });
 
   it('refuses a value whose SHAPE has changed under it', async () => {
     // The file outlives the build that wrote it, so a row whose shape has since
     // moved is exactly what a durable cache hands back. The guard is what turns
     // that into a re-ask instead of a picker full of rows it cannot render.
-    seed({ [modelVocabularyKey(AGENT, MODEL)]: record({ value: { old: 1 } }) });
+    seed({
+      [modelVocabularyKey(AGENT, MODEL, null)]: record({ value: { old: 1 } }),
+    });
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
 
-    expect(store.read(AGENT, MODEL, VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
     await settle();
   });
 });
@@ -133,17 +160,19 @@ describe('ModelVocabularyStore — when it stops being trusted', () => {
     // The mechanism for every cause this app cannot observe — a plan change, a
     // `cursor-agent login` in the user's own terminal. The user waits for
     // nothing and the answer is at most one interaction behind.
-    seed({ [modelVocabularyKey(AGENT, MODEL)]: record() });
+    seed({ [modelVocabularyKey(AGENT, MODEL, null)]: record() });
 
     const young = new ModelVocabularyStore({ file, now: () => HOUR - 1 }).read(
       AGENT,
       MODEL,
+      null,
       VERSION,
       isText,
     );
     const aged = new ModelVocabularyStore({ file, now: () => HOUR }).read(
       AGENT,
       MODEL,
+      null,
       VERSION,
       isText,
     );
@@ -157,12 +186,13 @@ describe('ModelVocabularyStore — when it stops being trusted', () => {
   });
 
   it('stops serving entirely once the backstop is reached', async () => {
-    seed({ [modelVocabularyKey(AGENT, MODEL)]: record() });
+    seed({ [modelVocabularyKey(AGENT, MODEL, null)]: record() });
 
     expect(
       new ModelVocabularyStore({ file, now: () => WEEK - 1 }).read(
         AGENT,
         MODEL,
+        null,
         VERSION,
         isText,
       )?.value,
@@ -171,6 +201,7 @@ describe('ModelVocabularyStore — when it stops being trusted', () => {
       new ModelVocabularyStore({ file, now: () => WEEK }).read(
         AGENT,
         MODEL,
+        null,
         VERSION,
         isText,
       ),
@@ -182,30 +213,30 @@ describe('ModelVocabularyStore — when it stops being trusted', () => {
     // What a sign-in triggers. A new account is a different set of models —
     // for THAT CLI; the other one signed in to nothing.
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
-    store.remember(AGENT, null, VERSION, 'cursor listing');
-    store.remember(AGENT, MODEL, VERSION, REPLY);
-    store.remember('claude', null, VERSION, 'claude listing');
+    store.remember(AGENT, null, null, VERSION, 'cursor listing');
+    store.remember(AGENT, MODEL, null, VERSION, REPLY);
+    store.remember('claude', null, null, VERSION, 'claude listing');
     await waitForFile();
 
     expect(store.forget(AGENT)).toBe(2);
 
-    expect(store.read(AGENT, null, VERSION, isText)).toBeNull();
-    expect(store.read(AGENT, MODEL, VERSION, isText)).toBeNull();
-    expect(store.read('claude', null, VERSION, isText)?.value).toBe(
+    expect(store.read(AGENT, null, null, VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
+    expect(store.read('claude', null, null, VERSION, isText)?.value).toBe(
       'claude listing',
     );
   });
 
   it('forgets across launches, not just in memory', async () => {
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
-    store.remember(AGENT, MODEL, VERSION, REPLY);
+    store.remember(AGENT, MODEL, null, VERSION, REPLY);
     await waitForFile();
     store.forget(AGENT);
     await settle();
 
     const nextLaunch = new ModelVocabularyStore({ file, now: () => 1_000 });
 
-    expect(nextLaunch.read(AGENT, MODEL, VERSION, isText)).toBeNull();
+    expect(nextLaunch.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
   });
 });
 
@@ -214,13 +245,13 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
     // Validated per entry rather than per file: one bad row must not cost every
     // other model its answer and six seconds each to take again.
     seed({
-      [modelVocabularyKey(AGENT, 'broken')]: { version: VERSION },
-      [modelVocabularyKey(AGENT, MODEL)]: record(),
+      [modelVocabularyKey(AGENT, 'broken', null)]: { version: VERSION },
+      [modelVocabularyKey(AGENT, MODEL, null)]: record(),
     });
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
 
-    expect(store.read(AGENT, 'broken', VERSION, isText)).toBeNull();
-    expect(store.read(AGENT, MODEL, VERSION, isText)?.value).toBe(REPLY);
+    expect(store.read(AGENT, 'broken', null, VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)?.value).toBe(REPLY);
     await settle();
   });
 
@@ -228,27 +259,29 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
     // The file cap alone is reached too late: one implausible reply would fill
     // it and evict every model the user actually works with.
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
-    store.remember(AGENT, MODEL, VERSION, 'x'.repeat(256 * 1024 + 1));
+    store.remember(AGENT, MODEL, null, VERSION, 'x'.repeat(256 * 1024 + 1));
     await settle();
 
     expect(existsSync(file)).toBe(false);
-    expect(store.read(AGENT, MODEL, VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, MODEL, null, VERSION, isText)).toBeNull();
   });
 
   it('stops growing at the entry cap while every entry is still fresh', async () => {
     const store = new ModelVocabularyStore({ file, now: () => 1_000 });
     for (let i = 0; i < 60; i += 1) {
-      store.remember(AGENT, `model-${i}`, VERSION, REPLY);
+      store.remember(AGENT, `model-${i}`, null, VERSION, REPLY);
     }
     await waitForFile();
-    store.remember(AGENT, 'one-too-many', VERSION, REPLY);
+    store.remember(AGENT, 'one-too-many', null, VERSION, REPLY);
     await settle();
 
-    expect(store.read(AGENT, 'one-too-many', VERSION, isText)).toBeNull();
+    expect(store.read(AGENT, 'one-too-many', null, VERSION, isText)).toBeNull();
     // …and the sixty already there are untouched, which is the point of
     // refusing rather than evicting: the oldest may be the model in use. Only
     // a DEAD row is reclaimed — see the case below.
-    expect(store.read(AGENT, 'model-0', VERSION, isText)?.value).toBe(REPLY);
+    expect(store.read(AGENT, 'model-0', null, VERSION, isText)?.value).toBe(
+      REPLY,
+    );
   });
 
   it('reclaims entries past the freshness backstop before admitting a new one', async () => {
@@ -258,19 +291,19 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
     // the one cold probe the design intends.
     const seeded: Record<string, unknown> = {};
     for (let i = 0; i < 60; i += 1) {
-      seeded[modelVocabularyKey(AGENT, `model-${i}`)] = record({
+      seeded[modelVocabularyKey(AGENT, `model-${i}`, null)] = record({
         fetchedAt: 0,
       });
     }
     seed(seeded);
 
     const store = new ModelVocabularyStore({ file, now: () => WEEK });
-    store.remember(AGENT, 'freshly-released', VERSION, REPLY);
+    store.remember(AGENT, 'freshly-released', null, VERSION, REPLY);
     await settle();
 
-    expect(store.read(AGENT, 'freshly-released', VERSION, isText)?.value).toBe(
-      REPLY,
-    );
+    expect(
+      store.read(AGENT, 'freshly-released', null, VERSION, isText)?.value,
+    ).toBe(REPLY);
     // …and the dead rows are GONE, which is the half the title claims. Without
     // it, an implementation that merely skipped the cap check whenever any row
     // was stale would pass here while the file grew without bound.
@@ -279,6 +312,6 @@ describe('ModelVocabularyStore — what it refuses to hold', () => {
       unknown
     >;
     expect(Object.keys(onDisk)).toHaveLength(1);
-    expect(onDisk[modelVocabularyKey(AGENT, 'model-0')]).toBeUndefined();
+    expect(onDisk[modelVocabularyKey(AGENT, 'model-0', null)]).toBeUndefined();
   });
 });

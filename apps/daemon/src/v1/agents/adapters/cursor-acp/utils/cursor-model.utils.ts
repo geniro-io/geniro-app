@@ -2,6 +2,7 @@ import {
   CURSOR_CONTEXT_WINDOW_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_ID,
   CURSOR_EFFORT_PARAMETER_IDS,
+  CURSOR_OWNED_PARAMETER_IDS,
 } from '../cursor-acp.const';
 
 /**
@@ -139,11 +140,52 @@ export function cursorModelSelection(
   modelId: string | null | undefined,
   effort: string | null | undefined,
   contextWindow?: string | null,
+  modelParameters?: Record<string, string> | null,
 ): CursorModelSelection {
-  return withContextWindow(
-    withEffort(splitCursorModelId(modelId), effort),
-    contextWindow,
+  return withModelParameters(
+    withContextWindow(
+      withEffort(splitCursorModelId(modelId), effort),
+      contextWindow,
+    ),
+    modelParameters,
   );
+}
+
+/**
+ * The turn's OTHER model settings, layered last.
+ *
+ * Last because it is the only layer geniro holds no vocabulary for: the ids
+ * come from the CLI's own handshake (`ModelParametersService`) and are sent
+ * back verbatim. Anything the two layers above already own is dropped rather
+ * than trusted — they are the axes with their own control, and letting one
+ * through here would set the same option twice, once from the chip the user
+ * pressed and once from a map that happened to carry the same key.
+ *
+ * Not `applyBeforePrompt`: nothing has measured any of these to bind at turn
+ * start the way `context` does, and paying a round trip per parameter on a
+ * guess would cost every turn.
+ */
+function withModelParameters(
+  selection: CursorModelSelection,
+  modelParameters: Record<string, string> | null | undefined,
+): CursorModelSelection {
+  const entries = Object.entries(modelParameters ?? {}).filter(
+    ([id, value]) =>
+      id.trim() !== '' &&
+      value.trim() !== '' &&
+      !CURSOR_OWNED_PARAMETER_IDS.includes(id),
+  );
+  if (entries.length === 0) {
+    return selection;
+  }
+  const added = new Set(entries.map(([id]) => id));
+  return {
+    model: selection.model,
+    parameters: [
+      ...selection.parameters.filter((parameter) => !added.has(parameter.id)),
+      ...entries.map(([id, value]) => ({ id, value: value.trim() })),
+    ],
+  };
 }
 
 /**

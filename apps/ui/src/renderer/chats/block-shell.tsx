@@ -4,11 +4,20 @@ import { useState } from 'react';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { MarkdownContent } from './markdown-content';
-import { RunStatusIcon, type RunStatusKind } from './run-status';
+import {
+  RUN_STATUS_META,
+  RunStatusIcon,
+  type RunStatusKind,
+} from './run-status';
 
-/** Block lifecycle in geniro web's vocabulary (see {@link StatusBadge}). */
+/**
+ * Block LIFECYCLE — how a piece of nested work ends, in the transcript fold's
+ * own terms. It is a model, never a word on screen: {@link RUN_STATUS_OF}
+ * translates it before anything is drawn.
+ */
 export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
 
+/** The pill's tint per translated status — presentation, not vocabulary. */
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   running: 'bg-primary/10 text-primary',
   done: 'bg-success/15 text-success',
@@ -20,9 +29,9 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
  * The block vocabulary said in the RUN vocabulary's words.
  *
  * The two exist because they answer different questions — a block is a piece of
- * nested work, a run is a conversation — but they share every glyph, so the
- * translation lives here once rather than as a second icon table that drifts
- * from `RUN_STATUS_META`. `stopped → cancelled` is the same reading
+ * nested work, a run is a conversation — but they share every glyph AND every
+ * word, so the translation lives here once rather than as a second table that
+ * drifts from `RUN_STATUS_META`. `stopped → cancelled` is the same reading
  * `subagentThreadsByAgent` makes: work that ended without finishing.
  */
 const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
@@ -66,7 +75,12 @@ export function StatusBadge({
         'rounded px-1.5 py-0.5 text-[10px] font-medium',
         STATUS_BADGE_CLASS[status],
       )}>
-      {status}
+      {/* The RUN vocabulary's word, never this type's own key. A delegate cut
+          off by Stop wore a red `error` pill three lines under a header, a
+          sidebar row and an agent card all reading `cancelled` — one event
+          spelled two ways on one screen, which is what "давай стандартизируем
+          статусы" was reported against. */}
+      {RUN_STATUS_META[RUN_STATUS_OF[status]].label}
     </span>
   );
 }
@@ -101,8 +115,12 @@ function BlockStatusMark({
       )}
       {/* Both marks are `aria-hidden` glyphs, so the word has to be said
           somewhere: dropping the pill must not take the status off the page for
-          anyone reading it through a screen reader. */}
-      <span className="sr-only">{status}</span>
+          anyone reading it through a screen reader. The RUN vocabulary's word,
+          for the reason the pill uses it — a reader listening to `done` under a
+          header that says `completed` is the same divergence, unseen. */}
+      <span className="sr-only">
+        {RUN_STATUS_META[RUN_STATUS_OF[status]].label}
+      </span>
     </span>
   );
 }

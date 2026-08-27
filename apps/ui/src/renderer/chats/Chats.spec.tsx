@@ -203,6 +203,7 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  modelParameters: {},
   contextTokens: null,
   contextWindowTokens: null,
   configDir: null,
@@ -338,20 +339,21 @@ function composerButton(
 }
 
 /** The composer's target picker. The menu is OURS, so its rows are real DOM. */
-/** The composer's model chip (new-run and open-chat alike). */
+/**
+ * The composer's model chip (new-run and open-chat alike) — ONE control now,
+ * carrying the model AND every setting that model can be run with.
+ *
+ * There is no longer a chip per axis: they are labelled BLOCKS inside this
+ * one panel (`ModelSettingsSelect`), so a test that used to look for a second
+ * trigger now asks {@link menuBlock} what the open panel offers.
+ */
 function modelTrigger(container: HTMLElement): HTMLButtonElement {
   return [
     ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-  ].find((trigger) => trigger.getAttribute('aria-label') === 'Model')!;
-}
-
-/** Undefined when the chip is absent — which is the point for cursor. */
-function effortTrigger(container: HTMLElement): HTMLButtonElement | undefined {
-  return [
-    ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
   ].find(
-    (trigger) => trigger.getAttribute('aria-label') === 'Reasoning effort',
-  );
+    (trigger) =>
+      trigger.getAttribute('aria-label') === 'Model and its settings',
+  )!;
 }
 
 function targetTrigger(container: HTMLElement): HTMLButtonElement {
@@ -403,6 +405,99 @@ async function menuRows(
   );
   await toggle();
   return rows;
+}
+
+/**
+ * The rows of ONE axis of the model panel, read without committing.
+ *
+ * The panel is TWO levels: a first-level row per axis (its name and where it
+ * stands), and that axis's values behind it. Undefined when the panel carries
+ * no such row, which is how "this model offers no effort axis" now reads —
+ * where it once was a missing chip, then a missing block.
+ */
+async function settingRows(
+  container: HTMLElement,
+  axis: string,
+): Promise<string[] | undefined> {
+  await act(async () => {
+    modelTrigger(container).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+  });
+  const row = axisRow(container, axis);
+  if (!row) {
+    await act(async () => {
+      modelTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    return undefined;
+  }
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  const rows = submenuRows(container).map(
+    (o) => o.querySelector('span')?.textContent ?? '',
+  );
+  await act(async () => {
+    modelTrigger(container).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+  });
+  return rows;
+}
+
+/** A first-level row of the open model panel, by its axis name. */
+function axisRow(
+  container: HTMLElement,
+  axis: string,
+): HTMLElement | undefined {
+  const panel = container.querySelector<HTMLElement>('[role="listbox"]');
+  return panel
+    ? [...panel.querySelectorAll<HTMLElement>('[role="option"]')].find(
+        (o) => o.querySelector('span')?.textContent === axis,
+      )
+    : undefined;
+}
+
+/** The rows of the SECOND panel — the one an axis row opened. */
+function submenuRows(container: HTMLElement): HTMLElement[] {
+  const panels = [
+    ...container.querySelectorAll<HTMLElement>('[role="listbox"]'),
+  ];
+  const child = panels[1];
+  return child
+    ? [...child.querySelectorAll<HTMLElement>('[role="option"]')]
+    : [];
+}
+
+/** Pick one value of one axis: open the panel, open the axis, take the row. */
+async function pickSetting(
+  container: HTMLElement,
+  axis: string,
+  rowText: string,
+): Promise<void> {
+  await act(async () => {
+    modelTrigger(container).dispatchEvent(
+      new MouseEvent('click', { bubbles: true }),
+    );
+  });
+  const row = axisRow(container, axis);
+  if (!row) {
+    throw new Error(`no "${axis}" row in the model panel`);
+  }
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+  const target = submenuRows(container).find(
+    (o) => o.querySelector('span')?.textContent === rowText,
+  );
+  if (!target) {
+    throw new Error(`no "${rowText}" row under "${axis}"`);
+  }
+  await act(async () => {
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
 }
 
 /** The system-notification channel — asserted on by the notification tests. */
@@ -1068,6 +1163,76 @@ describe('Chats transcript auto-scroll', () => {
         .querySelector('[data-slot="context-meter"] button[aria-expanded]')
         ?.getAttribute('aria-label'),
     ).toBe('Context 46% full — 462.3k of 1M');
+  });
+
+  it('takes the ring DOWN once a compaction has replaced the conversation', async () => {
+    // REPORTED as "после компакта кружочек не обновляется. Он все еще так же
+    // заполнен с контекстом". On a CLI whose compaction geniro performs itself,
+    // the conversation is discarded and nothing measures its replacement until
+    // the next turn — so every source went on serving the old figure, including
+    // the run row this window holds. Reproduced in the dev app at `10% full —
+    // 101.5k of 1M` directly under the row saying everything above it was gone.
+    const settled: ChatItem = {
+      id: 'pre-compaction-turn',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: {
+          contextTokens: 101_500,
+          contextWindowTokens: 1_000_000,
+          costUsd: null,
+        },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    };
+    const compacted: ChatItem = {
+      id: 'compaction-row',
+      runId: 'r1',
+      nodeId: null,
+      seq: 2,
+      kind: 'system',
+      role: null,
+      payload: {
+        message: 'Conversation compacted.',
+        severity: 'info',
+        conversationReplaced: true,
+      },
+      createdAt: 'now',
+    };
+    // The run row carries the pre-compaction figure too — the daemon clears its
+    // own copy, and a window opened before that landed still holds this one.
+    api.listChats.mockResolvedValue([
+      { ...run1, contextTokens: 101_500, contextWindowTokens: 1_000_000 },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', '/compact'), settled]);
+
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(
+      container
+        .querySelector('[data-slot="context-meter"] button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Context 10% full \u2014 101.5k of 1M');
+
+    await act(async () => {
+      emitItem(compacted);
+    });
+
+    // The ring STAYS — reported against the first cut of this fix, which hid it
+    // ("я на втором скриншоте у тебя сейчас вообще кружочку не вижу!") — and it
+    // is empty, saying why rather than claiming a window nobody has measured.
+    expect(
+      container
+        .querySelector('[data-slot="context-meter"] button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe(
+      'Conversation compacted — its new size is measured on the next message',
+    );
   });
 
   it('keeps a chat’s context ring through a switch, with its OWN figure', async () => {
@@ -2780,6 +2945,7 @@ describe('Chats workflow runs', () => {
     approval: null,
     effort: null,
     contextWindow: null,
+    modelParameters: {},
     contextTokens: null,
     contextWindowTokens: null,
     configDir: null,
@@ -3333,6 +3499,7 @@ describe('Chats — handing a conversation to the user', () => {
       approval: null,
       effort: null,
       contextWindow: null,
+      modelParameters: {},
       contextTokens: null,
       contextWindowTokens: null,
       configDir: null,
@@ -3570,7 +3737,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(container, modelTrigger(container), 'opus');
+    await pickSetting(container, 'Model', 'opus');
     await sendTask(container);
 
     expect(api.createChat).toHaveBeenCalledWith({
@@ -3597,13 +3764,35 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(container, modelTrigger(container), 'opus');
+    await pickSetting(container, 'Model', 'opus');
 
     // The map WITHOUT claude's entry — not merely "some write happened": the
     // stored word is what reaches the next run, so an unchanged `{claude:'1m'}`
     // is exactly the defect.
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastContextWindows: {},
+    });
+  });
+
+  it('forgets the remembered model parameters when the model chip changes model', async () => {
+    // Sharper than the window above: WHICH parameter ids exist at all is the
+    // model's own answer, so a value kept across a model change names an axis
+    // the new model never enumerated. The panel stops drawing that row, so
+    // nothing on screen says the run is still being created with it.
+    stubSettings({
+      lastModels: { claude: 'sonnet' },
+      lastModelParameters: { claude: { optimize_for: 'cost' } },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickSetting(container, 'Model', 'opus');
+
+    // The map WITHOUT claude's entry, for the same reason as the window test:
+    // the stored value is what reaches the next run, so an unchanged
+    // `{claude: {optimize_for: 'cost'}}` is exactly the defect.
+    expect(window.geniro.updateSettings).toHaveBeenCalledWith({
+      lastModelParameters: {},
     });
   });
 
@@ -3846,10 +4035,17 @@ describe('Chats composer memory & suggestions', () => {
 
     await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
 
-    const trigger = effortTrigger(container);
-    expect(trigger).not.toBeUndefined();
-    await pickMenuRow(container, trigger!, 'xhigh');
-    expect(trigger!.textContent).toContain('xhigh');
+    expect(await settingRows(container, 'Effort')).not.toBeUndefined();
+    await pickSetting(container, 'Effort', 'xhigh');
+    // The pick shows on the AXIS ROW itself — the first level states where each
+    // axis stands, which is the whole reason it is a level rather than a
+    // heading. The chip keeps naming the model.
+    await act(async () => {
+      modelTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(axisRow(container, 'Effort')?.textContent).toContain('xhigh');
   });
 
   it('asks for the effort levels of the MODEL that is chosen, and re-asks on a switch', async () => {
@@ -3885,25 +4081,23 @@ describe('Chats composer memory & suggestions', () => {
     const container = await mount(client);
     await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
 
-    await pickMenuRow(container, modelTrigger(container)!, 'Cursor Grok 4.6');
+    await pickSetting(container, 'Model', 'Cursor Grok 4.6');
     // The model rode the query — without it the daemon answers with the union.
     expect(agentsApi.listAgentEfforts).toHaveBeenCalledWith(
       expect.objectContaining({ model: 'grok-4.6' }),
     );
     // …and `max` is not on offer, which is the whole report.
-    expect(await menuRows(container, effortTrigger(container)!)).toEqual([
+    expect(await settingRows(container, 'Effort')).toEqual([
       'high',
       'xhigh',
       'default effort',
     ]);
 
-    await pickMenuRow(container, modelTrigger(container)!, 'Claude Opus 5');
+    await pickSetting(container, 'Model', 'Claude Opus 5');
 
     // A different model is a different question: the cached Grok answer must
     // not be served for it, or the map is only ever one model deep.
-    expect(await menuRows(container, effortTrigger(container)!)).toContain(
-      'max',
-    );
+    expect(await settingRows(container, 'Effort')).toContain('max');
   });
 
   it('lists what the DAEMON reports for whichever CLI is selected', async () => {
@@ -3926,8 +4120,10 @@ describe('Chats composer memory & suggestions', () => {
     const container = await mount(client);
 
     // The account-specific model the CLI reported, which no hardcoded list
-    // could know, plus the alias — and always the no-flag row.
-    expect(await menuRows(container, modelTrigger(container))).toEqual([
+    // could know, plus the alias — and always the no-flag row. Read as the
+    // panel's MODEL block, since the panel now carries the model's settings in
+    // blocks of their own above it.
+    expect(await settingRows(container, 'Model')).toEqual([
       'Fable',
       'opus',
       'default model',
@@ -3935,7 +4131,7 @@ describe('Chats composer memory & suggestions', () => {
 
     await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
 
-    expect(await menuRows(container, modelTrigger(container))).toEqual([
+    expect(await settingRows(container, 'Model')).toEqual([
       'gpt-5.2-high',
       'default model',
     ]);
@@ -3980,7 +4176,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(container, modelTrigger(container), 'default model');
+    await pickSetting(container, 'Model', 'default model');
     await sendTask(container);
 
     expect(api.createChat).toHaveBeenCalled();
@@ -3991,27 +4187,28 @@ describe('Chats composer memory & suggestions', () => {
     }
   });
 
-  it('offers the effort chip for claude, drops it entirely for cursor, and remembers the pick per CLI', async () => {
+  it('offers the effort BLOCK for claude, drops it entirely for cursor, and remembers the pick per CLI', async () => {
     // The vocabulary comes from the daemon (which asks the adapter), and the
-    // chip's very PRESENCE is that answer too: cursor-agent reports no levels
-    // because it folds effort into its model ids, so the row must show no
-    // control at all rather than a disabled one.
+    // block's very PRESENCE is that answer too: a CLI or model reporting no
+    // levels must show no control at all rather than a disabled one. It used
+    // to be a chip of its own and is now a labelled block of the model panel;
+    // what is pinned here is unchanged either way.
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(await menuRows(container, effortTrigger(container)!)).toEqual([
+    expect(await settingRows(container, 'Effort')).toEqual([
       'low',
       'high',
       'ultracode',
       'default effort',
     ]);
-    await pickMenuRow(container, effortTrigger(container)!, 'ultracode');
+    await pickSetting(container, 'Effort', 'ultracode');
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastEfforts: { claude: 'ultracode' },
     });
 
     await pickMenuRow(container, targetTrigger(container), 'cursor-agent');
-    expect(effortTrigger(container)).toBeUndefined();
+    expect(await settingRows(container, 'Effort')).toBeUndefined();
   });
 
   it('starts a chat with the remembered effort', async () => {
@@ -4036,7 +4233,7 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(container, effortTrigger(container)!, 'default effort');
+    await pickSetting(container, 'Effort', 'default effort');
     await sendTask(container);
 
     expect(api.createChat).toHaveBeenCalled();
@@ -4047,15 +4244,23 @@ describe('Chats composer memory & suggestions', () => {
     }
   });
 
-  it('hides the effort chip for a workflow target', async () => {
+  it('hides the whole model panel for a workflow target', async () => {
     // A workflow's nodes carry their own settings in its YAML — a composer
     // effort would silently apply to none of them, exactly like the model.
+    // They are ONE control now, so this is one absence rather than several.
     stubSettings({ lastChatTarget: 'wf:review-team' });
     workflowApi.listWorkflows.mockResolvedValue([reviewTeamSummary]);
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(effortTrigger(container)).toBeUndefined();
+    expect(
+      [
+        ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+      ].find(
+        (trigger) =>
+          trigger.getAttribute('aria-label') === 'Model and its settings',
+      ),
+    ).toBeUndefined();
   });
 
   it('hides the model chip for a workflow target', async () => {
@@ -4067,6 +4272,31 @@ describe('Chats composer memory & suggestions', () => {
     const container = await mount(client);
 
     expect(modelTrigger(container)).toBeUndefined();
+  });
+
+  it('opens the landing card’s pickers against the WINDOW, not inside its scroller', async () => {
+    // The card sits in a section that scrolls, and a box that scrolls
+    // vertically cannot keep `overflow-x: visible` — CSS forces both axes
+    // non-visible together — so an absolutely-placed panel is cut on both
+    // edges. Reported as "окошко заходит за края аппликэйшена, оно срезается"
+    // and measured at 1000×640: the branch panel at `left: 447, top: 8` inside
+    // a section whose own box starts at `left: 480, top: 41`, so every branch
+    // name lost its opening characters. `position: fixed` is the only way out
+    // of a clipping ancestor, and it comes from the container declaring the
+    // anchor rather than from each chip.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await act(async () => {
+      targetTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(
+      container.querySelector<HTMLElement>('[data-slot="menu-panel"]')?.style
+        .position,
+    ).toBe('fixed');
   });
 
   it('the folder menu lists the recents INCLUDING the current one, and picking one re-persists recency order', async () => {
@@ -4321,6 +4551,43 @@ describe('Chats queued messages', () => {
     });
   });
 
+  it('pastes a NON-image file into the composer as its full path', async () => {
+    // Reported as "должен вставляться его полный путь… хотя вставляется только
+    // название файла": macOS puts the file's NAME on the pasteboard beside the
+    // file itself, and the default paste writes that — `CLAUDE.md`, which
+    // names nothing the agent can open.
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    (
+      window as unknown as {
+        geniro: { filePath: (file: File) => string | null };
+      }
+    ).geniro.filePath = () => '/Users/me/proj/apps/daemon/CLAUDE.md';
+    const insert = vi.fn(() => true);
+    document.execCommand = insert as unknown as typeof document.execCommand;
+
+    const textarea = container.querySelector('textarea')!;
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: {
+        files: [new File(['x'], 'CLAUDE.md', { type: 'text/markdown' })],
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+
+    expect(insert).toHaveBeenCalledWith(
+      'insertText',
+      false,
+      '/Users/me/proj/apps/daemon/CLAUDE.md',
+    );
+    // ...and the browser's own paste is swallowed, or the name lands beside it.
+    expect(event.defaultPrevented).toBe(true);
+  });
+
   it('can send a message that is ONLY an image', async () => {
     // An image alone is a complete message. Gating the send button on typed
     // text left a pasted screenshot staged with no way out of the composer.
@@ -4381,7 +4648,7 @@ describe('Chats queued messages', () => {
       );
     expect(labelsIn(topRow)).toContain('Folder for new chats');
     expect(labelsIn(topRow)).toContain('Tool-approval mode');
-    expect(labelsIn(bottomRow)).toContain('Model');
+    expect(labelsIn(bottomRow)).toContain('Model and its settings');
     expect(labelsIn(bottomRow)).not.toContain('Folder for new chats');
 
     // OUTSIDE the card, and before it. Pinned as its own claim: putting the
@@ -4471,7 +4738,9 @@ describe('Chats queued messages', () => {
     expect(chipBox.contains(meter)).toBe(true);
     expect(actions.contains(meter)).toBe(false);
     // AFTER the effort chip specifically — model, then effort, then how full.
-    const effort = chipBox.querySelector('[aria-label="Reasoning effort"]');
+    const effort = chipBox.querySelector(
+      '[aria-label="Model and its settings"]',
+    );
     expect(effort).not.toBeNull();
     expect(
       effort!.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -4853,7 +5122,7 @@ describe('Chats queued messages', () => {
       emitRunStatus({
         runId: 'r1',
         status: null,
-        activity: 'waiting on 1 background task',
+        activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
       });
     });
@@ -4872,6 +5141,196 @@ describe('Chats queued messages', () => {
     expect(
       container.querySelector('[aria-label="Queued messages"]'),
     ).toBeNull();
+  });
+
+  it('QUEUES a geniro command instead of refusing it mid-turn', async () => {
+    // Reported against the composer's own red line, `/compact needs the agent
+    // to be idle — wait for this turn to finish.`: "Компакт должно вставаться в
+    // очередь, как и до этого. Это должно работать." The command DOES need an
+    // idle run — the daemon refuses one mid-turn with the RUN_BUSY this queue
+    // is built on — but the composer pre-empting that refusal meant the command
+    // went nowhere at all, where queueing delivers it the moment the turn ends.
+    agentsApi.listAgentSkills.mockResolvedValue([
+      {
+        name: 'compact',
+        description: 'Compact the conversation',
+        kind: 'command' as const,
+        source: 'geniro' as const,
+      },
+    ]);
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', '/compact'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(composerButton(container, 'Stop')).not.toBeNull();
+    // The listing has ARRIVED — without it the refusal being pinned here could
+    // not fire either (it reads the same list), and this would pass with the
+    // defect restored.
+    await type(container, '/');
+    expect(container.querySelector('[role="listbox"]')?.textContent).toContain(
+      '/compact',
+    );
+
+    await type(container, '/compact');
+    await clickButton(container, 'Queue');
+
+    expect(container.textContent).not.toContain('needs the agent to be idle');
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('/compact');
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: '/compact' },
+    });
+  });
+
+  it('keeps the command at the head when the retry ladder runs out, and re-drains on the NEXT terminal item', async () => {
+    // The composer's own RUN_BUSY refusal was deleted in favour of queueing,
+    // and the replacement rests on the turn-end grace window fitting inside the
+    // retry backoff. Past it there is no error and no further trigger from THIS
+    // drain — the give-up branch's own comment says "that turn's terminal item
+    // fires this drain again", and the terminal item is what fired this one. So
+    // what has to hold is that the message survives at the head and a LATER
+    // ending still delivers it.
+    vi.useFakeTimers();
+    try {
+      agentsApi.listAgentSkills.mockResolvedValue([
+        {
+          name: 'compact',
+          description: 'Compact the conversation',
+          kind: 'command' as const,
+          source: 'geniro' as const,
+        },
+      ]);
+      api.sendChatMessage.mockRejectedValue(
+        new Error('daemon POST failed (409): RUN_BUSY'),
+      );
+      const { client, emitItem } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'My chat');
+      await type(container, '/compact');
+      await clickButton(container, 'Queue');
+
+      await act(async () => {
+        emitItem(terminal(5));
+      });
+      // The whole ladder — 300 + 600 + 1200 + 2400 — and well past it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      const spent = api.sendChatMessage.mock.calls.length;
+      // The initial attempt plus every rung, and then it stops rather than
+      // retrying for ever.
+      expect(spent).toBe(5);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(spent);
+
+      // Given up on, and deliberately NOT an error: a turn is by definition
+      // still running, so no banner and the message is still queued.
+      expect(container.textContent).not.toContain('RUN_BUSY');
+      expect(
+        container.querySelector('[aria-label="Queued messages"]')?.textContent,
+      ).toContain('/compact');
+
+      api.sendChatMessage.mockResolvedValueOnce(msg(11, 'user', '/compact'));
+      await act(async () => {
+        emitItem(terminal(6));
+      });
+      expect(api.sendChatMessage).toHaveBeenCalledTimes(spent + 1);
+      expect(
+        container.querySelector('[aria-label="Queued messages"]'),
+      ).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the RUN_BUSY fallback DELIVERS the message it queued, without waiting for another item', async () => {
+    // The composer believed no turn was running and the daemon disagreed — the
+    // window where a turn's teardown outlives its terminal item. There is no
+    // further item coming, so the kick beside that enqueue is the only thing
+    // that can deliver it. It read the queue off a ref the enqueue had not
+    // reached yet (it syncs in an effect), found the map empty — which on this
+    // path it always is, the message having just failed to send rather than
+    // been queued behind anything — and returned at once.
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // Settle the run first, so the composer takes the SEND path rather than the
+    // queue-it-because-busy branch above.
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    api.sendChatMessage
+      .mockRejectedValueOnce(new Error('daemon POST failed (409): RUN_BUSY'))
+      .mockResolvedValueOnce(msg(11, 'user', 'squeezed in'));
+    await type(container, 'squeezed in');
+    await clickButton(container, 'Send');
+
+    // Twice: the refused send, then the kicked drain that actually delivers.
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('RUN_BUSY');
+    expect(
+      container.querySelector('[aria-label="Queued messages"]'),
+    ).toBeNull();
+  });
+
+  it('sends what the user wrote FIRST first, never the message typed last', async () => {
+    // Reported as "если у меня два сообщения, в кью первым будет доставлено то,
+    // которое я написал последним, но должно быть, наоборот, фифа". Stop is the
+    // reachable case: it deliberately leaves the queue standing while the
+    // composer goes idle, and the composer decided to queue by `streaming`
+    // alone — so the next thing typed went STRAIGHT to the CLI past messages
+    // written before it, and the two arrived reversed. Same window wherever the
+    // composer is idle with a queue behind it (a failed drain, a drain whose
+    // POST is in flight, a run reopened before its drain ran).
+    api.sendChatMessage
+      .mockResolvedValueOnce(msg(10, 'user', 'first'))
+      .mockResolvedValueOnce(msg(11, 'user', 'second'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first');
+    await clickButton(container, 'Queue');
+    await act(async () => {
+      emitItem(cancelled(5));
+    });
+    // Stop left it queued, and the composer is idle again.
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    expect(composerButton(container, 'Stop')).toBeNull();
+
+    await type(container, 'second');
+    await clickButton(container, 'Send');
+
+    // The OLDER message is what reaches the daemon, and it reaches it NOW
+    // rather than whenever the user next reopens the chat: queueing behind an
+    // idle run kicks the drain, since there is no turn whose ending would.
+    expect(api.sendChatMessage).toHaveBeenNthCalledWith(1, {
+      runId: 'r1',
+      sendMessageDto: { text: 'first' },
+    });
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('second');
+
+    // ...and the one that used to jump the queue goes out on the next settle,
+    // in the order it was written.
+    await act(async () => {
+      emitItem(terminal(6));
+    });
+    expect(api.sendChatMessage).toHaveBeenNthCalledWith(2, {
+      runId: 'r1',
+      sendMessageDto: { text: 'second' },
+    });
   });
 
   it('stops the BADGE saying running once the turn is only held', async () => {
@@ -4894,7 +5353,7 @@ describe('Chats queued messages', () => {
       emitRunStatus({
         runId: 'r1',
         status: null,
-        activity: 'waiting on 2 background tasks',
+        activity: 'waiting on 2 sub-agents',
         holdingFor: 2,
       });
     });
@@ -4910,7 +5369,7 @@ describe('Chats queued messages', () => {
     // And the sentence stays: the badge says nobody is being waited for, the
     // line under it says what the process is still waiting on. Neither alone
     // is the answer.
-    expect(container.textContent).toContain('waiting on 2 background tasks');
+    expect(container.textContent).toContain('waiting on 2 sub-agents');
   });
 
   it('goes back to queueing once the hold is over and the agent works again', async () => {
@@ -4925,7 +5384,7 @@ describe('Chats queued messages', () => {
       emitRunStatus({
         runId: 'r1',
         status: null,
-        activity: 'waiting on 1 background task',
+        activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
       });
     });
@@ -5925,7 +6384,7 @@ describe('Chats run composer chips', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    await pickMenuRow(container, modelTrigger(container), 'opus');
+    await pickSetting(container, 'Model', 'opus');
 
     expect(api.updateChatSettings).toHaveBeenCalledWith({
       runId: 'r1',
@@ -5951,7 +6410,7 @@ describe('Chats run composer chips', () => {
     await clickRun(container, 'My chat');
     expect(modelTrigger(container).textContent).toContain('opus');
 
-    await pickMenuRow(container, modelTrigger(container), 'default model');
+    await pickSetting(container, 'Model', 'default model');
 
     expect(api.updateChatSettings).toHaveBeenCalledWith({
       runId: 'r1',
@@ -6944,7 +7403,7 @@ describe('Chats — signing a server in', () => {
   const waitingSession = {
     id: 'login-1',
     agent: 'claude' as const,
-    status: 'waiting' as const,
+    status: 'held' as const,
     url: 'https://linear.app/oauth/authorize?client_id=x',
     message: 'Waiting for authorization…',
   };
@@ -6996,6 +7455,55 @@ describe('Chats — signing a server in', () => {
     expect(
       container.querySelector('[data-slot="cli-login-progress"]'),
     ).not.toBeNull();
+  });
+
+  it('re-reads the listing when the window comes back mid sign-in', async () => {
+    // The BACKSTOP for the other half of the report — "the status only updated
+    // after 30 seconds, probably". The settle is the primary mechanism and it
+    // fires when the CLI PROCESS EXITS, so a CLI that lingers after the browser
+    // round-trip leaves the row stale for as long as it lingers. Coming back to
+    // the window is exactly the moment the answer may have changed, because
+    // leaving for a browser tab and returning IS the shape of this flow.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    cliAuthApi.startMcpLogin.mockResolvedValue(waitingSession);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    const signIn = await reachSignIn(container);
+    await act(async () => {
+      signIn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const before = agentsApi.listAgentMcpServers.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve();
+    });
+
+    expect(agentsApi.listAgentMcpServers.mock.calls.length).toBeGreaterThan(
+      before,
+    );
+  });
+
+  it('does NOT re-dial every server just because the window was clicked', async () => {
+    // The bound that makes the backstop safe. Reading a folder's listing starts
+    // each of its servers and is measured in seconds, so it is armed only while
+    // a sign-in is actually in flight — never on every focus.
+    api.listChats.mockResolvedValue([chatIn('r1', 'First chat', '/proj-a')]);
+    agentsApi.listAgentMcpServers.mockResolvedValue(needsAuth);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'First chat');
+    await reachSignIn(container);
+
+    const before = agentsApi.listAgentMcpServers.mock.calls.length;
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      await Promise.resolve();
+    });
+
+    expect(agentsApi.listAgentMcpServers.mock.calls.length).toBe(before);
   });
 
   it('surfaces a refused sign-in rather than pressing on', async () => {
@@ -7053,7 +7561,7 @@ describe('Chats — signing the CLI itself back in from a failed turn', () => {
   const waitingSession = {
     id: 'login-9',
     agent: 'claude' as const,
-    status: 'waiting' as const,
+    status: 'held' as const,
     url: 'https://claude.com/cai/oauth/authorize?x=1',
     message: 'Waiting for you to finish in the browser…',
   };
@@ -7267,10 +7775,10 @@ describe('Chats — the open thread lays its composer out differently', () => {
       });
     });
 
-    const effort = effortTrigger(container);
+    const effort = modelTrigger(container);
     const approval = approvalTrigger(container);
     const ring = contextRing(container);
-    expect(effort, 'effort chip').toBeDefined();
+    expect(effort, 'model-and-settings chip').toBeDefined();
     expect(approval, 'approval chip').toBeDefined();
     expect(ring, 'context ring').not.toBeNull();
 
@@ -9612,6 +10120,10 @@ describe('Chats — starting from a saved configuration', () => {
     target: 'cursor-agent',
     model: 'auto-smart',
     effort: 'low',
+    contextWindow: null,
+    // Present because `runConfigSchema` defaults it — a stored configuration
+    // always carries the map, and the apply path writes it WHOLE.
+    modelParameters: { optimize_for: 'cost' },
     approval: 'acceptEdits',
     configDir: null,
   };

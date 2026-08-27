@@ -116,6 +116,51 @@ export function App(): React.JSX.Element {
     [handle],
   );
 
+  /**
+   * The menu bar's Clear Agent Cache: forget, then RELOAD.
+   *
+   * The reload is the whole of the renderer's half. `useAgentVocabulary`
+   * caches per hook INSTANCE — the composer holds three, the graph inspector
+   * three more — so the daemon forgetting is only half a press, and a reload
+   * drops every one of them along with the rest of this window's state. It
+   * also replaced the confirmation line this first shipped with, on the
+   * report: "нам не нужно вот это добавлять… просто должен перезагружать".
+   * A reload is its own confirmation, and it costs the composer's unsent text,
+   * which is the trade the row is understood to make.
+   *
+   * ONLY after the daemon has answered, and never on a failure: reloading
+   * first would refill the caches from the daemon that has not cleared them
+   * yet, and reloading after one would hide the failure behind a window that
+   * looks like it worked. A failure goes to the daemon's log instead, which is
+   * where every other renderer failure goes.
+   */
+  const clearAgentCaches = useCallback((): void => {
+    if (!apis) {
+      // No daemon, so no cache to clear — and the connection banner is already
+      // on screen saying so.
+      return;
+    }
+    void apis.agents
+      .clearAgentCaches()
+      .then(() => window.location.reload())
+      .catch((err: unknown) => {
+        void apis.diagnostics
+          .recordUiLog({
+            uiLogDto: {
+              level: 'error',
+              message: `clearing the agent cache failed: ${err instanceof Error ? err.message : String(err)}`,
+              context: { kind: 'clear-agent-cache' },
+            },
+          })
+          .catch(() => undefined);
+      });
+  }, [apis]);
+
+  useEffect(
+    () => window.geniro.onClearAgentCaches(clearAgentCaches),
+    [clearAgentCaches],
+  );
+
   const attachDaemon = useCallback((daemonHandle: DaemonHandle): void => {
     // Published for the DevTools extension's Geniro panel, which runs in an
     // extension origin with no preload and no module graph of ours — its only
@@ -233,9 +278,12 @@ export function App(): React.JSX.Element {
     [],
   );
 
-  // ⌥⌘L for the debug drawer. A shortcut and not only a button because the
-  // moment you want it is usually the moment something is already misbehaving,
-  // and reaching for a control with the pointer is what you do afterwards.
+  // ⌥⌘L opens the debug drawer, and since the title bar's trigger was removed
+  // it is the only thing that does — which is the point rather than a gap: the
+  // panel is a developer's answer to "what just happened", and it had been
+  // occupying a slot in the one band every user sees. Settings' Diagnostics
+  // section names the chord, so it is documented where somebody looking for it
+  // would go.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
       // `event.code`, not `event.key`: with Alt held, macOS rewrites the key
@@ -287,8 +335,6 @@ export function App(): React.JSX.Element {
           void update.install();
         }}
         onRelaunchUpdate={() => void update.relaunch()}
-        debugOpen={debugOpen}
-        onToggleDebug={() => setDebugOpen((open) => !open)}
       />
       <div className="flex min-h-0 flex-1">
         <NavRail

@@ -1,4 +1,9 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
+import {
+  contextBridge,
+  ipcRenderer,
+  type IpcRendererEvent,
+  webUtils,
+} from 'electron';
 
 import { type GeniroApi, IPC } from '../shared/contracts';
 
@@ -21,6 +26,11 @@ const api: GeniroApi = {
     };
     ipcRenderer.on(IPC.onDaemonRestarted, handler);
     return () => ipcRenderer.removeListener(IPC.onDaemonRestarted, handler);
+  },
+  onClearAgentCaches: (listener) => {
+    const handler = (): void => listener();
+    ipcRenderer.on(IPC.onClearAgentCaches, handler);
+    return () => ipcRenderer.removeListener(IPC.onClearAgentCaches, handler);
   },
   pickProjectFolder: () =>
     ipcRenderer.invoke(IPC.pickProjectFolder) as ReturnType<
@@ -117,6 +127,10 @@ const api: GeniroApi = {
     return () =>
       ipcRenderer.removeListener(IPC.onNotificationActivated, handler);
   },
+  // No `ipcRenderer.invoke` here: `webUtils` is a RENDERER-side module, and a
+  // `File` could not cross to main anyway. Electron returns '' for a file with
+  // no path on disk; the renderer wants that as an absence.
+  filePath: (file) => webUtils.getPathForFile(file) || null,
 };
 
 contextBridge.exposeInMainWorld('geniro', api);

@@ -248,7 +248,7 @@ describe('SubagentBlock', () => {
       root.render(<TranscriptEntryView entry={makeBlock()} soloAgent />),
     );
     expect(container.querySelector('svg.animate-spin')).toBeNull();
-    expect(container.textContent).toContain('done');
+    expect(container.textContent).toContain('completed');
   });
 
   it('stops spinning once the run itself has stopped, not only once its turn ended', () => {
@@ -382,7 +382,7 @@ describe('SubagentBlock', () => {
       ),
     );
 
-    expect(badge()?.textContent).toBe('stopped');
+    expect(badge()?.textContent).toBe('cancelled');
     expect(container.querySelector('svg.animate-spin')).toBeNull();
 
     act(() =>
@@ -390,7 +390,7 @@ describe('SubagentBlock', () => {
     );
     // Opening the thread neither adds a second reading of the status nor
     // changes the one on the header.
-    expect(badge()?.textContent).toBe('stopped');
+    expect(badge()?.textContent).toBe('cancelled');
     expect(container.textContent).not.toContain('is working...');
   });
 
@@ -440,8 +440,8 @@ describe('SubagentBlock', () => {
       ),
     );
 
-    expect(container.textContent).toContain('error');
-    expect(container.textContent).not.toContain('done');
+    expect(container.textContent).toContain('failed');
+    expect(container.textContent).not.toContain('completed');
   });
 
   it('offers the detail control only where something can host the dialog', () => {

@@ -12,15 +12,18 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../../__tests__/fake-child';
+import { AgentVersionService } from '../../services/agent-version.service';
 import { GENIRO_UI_PREAMBLE } from '../../utils/agent-instructions';
 import type { SpawnedProcess, SpawnFn } from '../../utils/spawn-cli';
 import { fakeGroupChild } from '../__tests__/fake-group-child';
+import { freshVocabularyStore } from '../__tests__/fresh-vocabulary-store';
 import type { AcpToolCall } from '../acp/acp.types';
+import { HOST_CONTEXT_NOTE, HOST_CONTEXT_TAG } from '../acp/acp-driver';
 import type {
   AdapterConfig,
   AgentEvent,
@@ -89,6 +92,11 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
 /** Per-turn profile dirs this spec created, removed after each case. */
 const dirs: string[] = [];
 
+/** The turn's instructions as the prompt actually carries them. */
+function hostBlock(instructions: string): string {
+  return `<${HOST_CONTEXT_TAG}>\n\n${HOST_CONTEXT_NOTE}\n\n${instructions}\n\n</${HOST_CONTEXT_TAG}>`;
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -144,7 +152,10 @@ function fakeListing(stdout: string | null): {
 describe('CursorAcpAdapter spawn', () => {
   it('runs the ACP server and keeps every turn parameter out of argv', () => {
     const { spawn, captured } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(
       {
         ...BASE,
         model: 'sonnet',
@@ -169,7 +180,10 @@ describe('CursorAcpAdapter spawn', () => {
   it('honours the Settings cliPaths override per turn', () => {
     const { spawn, captured } = fakeSpawn();
     process.env.GENIRO_CURSOR_BIN = '/opt/cursor-agent';
-    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
     expect(captured.command).toBe('/opt/cursor-agent');
   });
 
@@ -179,7 +193,10 @@ describe('CursorAcpAdapter spawn', () => {
     // now, so setting it must have no effect on the child.
     process.env.GENIRO_CURSOR_API_KEY = 'ck-from-geniro';
     delete process.env.CURSOR_API_KEY;
-    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
     expect(captured.env?.CURSOR_API_KEY).toBeUndefined();
     expect(captured.env?.GENIRO_CURSOR_API_KEY).toBeUndefined();
   });
@@ -190,17 +207,20 @@ describe('CursorAcpAdapter spawn', () => {
     // for the one child entitled to it. Delete the override and this fails.
     const { spawn, captured } = fakeSpawn();
     process.env.CURSOR_API_KEY = 'ck-user-own';
-    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
     expect(captured.env?.CURSOR_API_KEY).toBe('ck-user-own');
   });
 
   it('lets a per-call env override win over the inherited key', () => {
     const { spawn, captured } = fakeSpawn();
     process.env.CURSOR_API_KEY = 'ck-user-own';
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, env: { CURSOR_API_KEY: 'ck-explicit' } },
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, env: { CURSOR_API_KEY: 'ck-explicit' } }, () => {});
     expect(captured.env?.CURSOR_API_KEY).toBe('ck-explicit');
   });
 
@@ -209,7 +229,10 @@ describe('CursorAcpAdapter spawn', () => {
     // session/new answers -32000 'Authentication required', which the ACP
     // driver renders as `acp session failed: <message>`. Empty the adapter's
     // expiredMarkers and this returns null — no Sign-in control on the row.
-    const adapter = new CursorAcpAdapter({ spawn: fakeSpawn().spawn });
+    const adapter = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn: fakeSpawn().spawn,
+    });
     expect(
       adapter.errorRecovery('acp session failed: Authentication required'),
     ).toBe('cli-login');
@@ -223,7 +246,10 @@ describe('CursorAcpAdapter spawn', () => {
     // re-authenticate an account that was never the problem, which is why the
     // marker is anchored to the driver's own rendering. Widen it back to the
     // bare phrase and this fails.
-    const adapter = new CursorAcpAdapter({ spawn: fakeSpawn().spawn });
+    const adapter = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn: fakeSpawn().spawn,
+    });
     expect(
       adapter.errorRecovery(
         'cursor-agent exited with code 1: mcp server foo: Authentication required',
@@ -236,6 +262,7 @@ describe('CursorAcpAdapter spawn', () => {
     // injects". That injection is gone, so the sentence would have been a
     // falsehood shown to the user. The verdict stands on the re-probed reason.
     const reason = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
       spawn: fakeSpawn().spawn,
     }).getConfig().configDir.unavailableReason;
     expect(reason).not.toBeNull();
@@ -245,10 +272,11 @@ describe('CursorAcpAdapter spawn', () => {
 
   it('opens the handshake on stdin and holds stdin open for the dialogue', () => {
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn, clientVersion: '9.9.9' }).start(
-      BASE,
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      clientVersion: '9.9.9',
+    }).start(BASE, () => {});
     const [first] = framesOn(child);
     expect(first).toMatchObject({
       jsonrpc: '2.0',
@@ -266,9 +294,10 @@ describe('CursorAcpAdapter spawn', () => {
   it('drives a turn end to end through the ACP handshake', async () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new CursorAcpAdapter({ spawn }).start(BASE, (event) =>
-      events.push(event),
-    );
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, (event) => events.push(event));
 
     child.stdout.emitData(
       `${JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: 1, agentCapabilities: {} } })}\n`,
@@ -328,7 +357,9 @@ describe('CursorAcpAdapter spawn', () => {
       sessionId: 'sess-9',
       // ACP carries no system-prompt field, so the host preamble rides the
       // prompt text itself — ahead of the user's message, on every turn.
-      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nship it` }],
+      prompt: [
+        { type: 'text', text: `ship it\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
+      ],
     });
   });
 });
@@ -355,7 +386,9 @@ describe('CursorAcpAdapter self-reported commands', () => {
    * against a name nothing uses.
    */
   function shippedProbe(): NonNullable<AdapterConfig['reportedCommands']> {
-    const probe = new CursorAcpAdapter().getConfig().reportedCommands;
+    const probe = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig().reportedCommands;
     if (!probe) {
       throw new Error(
         'cursor-agent must ship a reportedCommands probe — without it a folder ' +
@@ -375,6 +408,7 @@ describe('CursorAcpAdapter self-reported commands', () => {
     const child = new KillableAcpChild(4242);
     const { spawn } = fakeSpawn(child);
     const reported = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
       spawn,
       probeRootDir: mkdtempSync(join(tmpdir(), 'cursor-probe-root-')),
     }).listReportedCommands();
@@ -413,6 +447,7 @@ describe('CursorAcpAdapter self-reported commands', () => {
     const child = new KillableAcpChild(4243);
     const { spawn } = fakeSpawn(child);
     const reported = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
       spawn,
       probeRootDir: mkdtempSync(join(tmpdir(), 'cursor-probe-root-')),
     }).listReportedCommands();
@@ -447,7 +482,10 @@ describe('CursorAcpAdapter serves one turn per process', () => {
     // readability choice (declaring the fact where a reader of this adapter
     // will look for it) and deleting it changes nothing observable here.
     const { spawn } = fakeSpawn();
-    const session = new CursorAcpAdapter({ spawn }).startSession(BASE, {
+    const session = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).startSession(BASE, {
       runScoped: true,
     });
 
@@ -458,12 +496,12 @@ describe('CursorAcpAdapter serves one turn per process', () => {
 });
 
 describe('CursorAcpAdapter turn shaping', () => {
-  it('inlines a graph node role into the prompt, as the legacy adapter does', () => {
+  it('carries a graph node role in the prompt, ACP having no system-prompt field', () => {
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, systemPrompt: 'You are a reviewer.' },
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, systemPrompt: 'You are a reviewer.' }, () => {});
     child.stdout.emitData(
       `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
     );
@@ -477,7 +515,7 @@ describe('CursorAcpAdapter turn shaping', () => {
     // The node role still leads the user's message; the host preamble sits
     // ahead of both, per composeTurnInstructions' general → specific order.
     expect(prompt.prompt[0]?.text).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nYou are a reviewer.\n\nship it`,
+      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nYou are a reviewer.`)}`,
     );
   });
 
@@ -487,7 +525,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     // — one seam, both transports, which is what stops the two drifting into
     // separate delivery rules.
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(
       { ...BASE, customInstructions: 'Always answer in British English.' },
       () => {},
     );
@@ -502,7 +543,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     expect(prompt.prompt[0]?.text).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nship it`,
+      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.`)}`,
     );
   });
 
@@ -511,7 +552,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     // field that reaches one transport and not the other is the drift both
     // these tests exist to catch.
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(
       {
         ...BASE,
         customInstructions: 'Always answer in British English.',
@@ -531,7 +575,7 @@ describe('CursorAcpAdapter turn shaping', () => {
       (frame) => frame.method === 'session/prompt',
     )?.params as { prompt: { text: string }[] };
     expect(prompt.prompt[0]?.text).toBe(
-      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are a reviewer.\n\nship it`,
+      `ship it\n\n${hostBlock(`${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nPrefer short sentences.\n\nYou are a reviewer.`)}`,
     );
   });
 
@@ -541,9 +585,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     // 2026.08.04-aaa8809), so the frame is sent and no such notice fires.
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, model: 'claude-opus-5[thinking=true]' },
-      (event) => events.push(event),
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, model: 'claude-opus-5[thinking=true]' }, (event) =>
+      events.push(event),
     );
     child.stdout.emitData(
       `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
@@ -583,7 +629,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     // `model` is "Unknown model config option".
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(
       {
         ...BASE,
         model:
@@ -640,7 +689,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     // apply, and the effort must still go out. An early return on "no model"
     // makes the picker inert for exactly those runs.
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start({ ...BASE, effort: 'max' }, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, effort: 'max' }, () => {});
     child.stdout.emitData(
       `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
     );
@@ -665,7 +717,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     dirs.push(profileDir);
 
-    new CursorAcpAdapter({ spawn, profileDir }).start(BASE, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start(BASE, () => {});
 
     const dir = captured.env?.CURSOR_CONFIG_DIR;
     expect(dir).toBeDefined();
@@ -684,10 +740,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     dirs.push(profileDir);
 
-    new CursorAcpAdapter({ spawn, profileDir }).start(
-      { ...BASE, model: 'grok-4.6' },
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start({ ...BASE, model: 'grok-4.6' }, () => {});
 
     const config = JSON.parse(
       readFileSync(
@@ -709,10 +766,11 @@ describe('CursorAcpAdapter turn shaping', () => {
       const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
       dirs.push(profileDir);
 
-      new CursorAcpAdapter({ spawn, profileDir }).start(
-        { ...BASE, model: 'kimi-k3', cursorMaxMode: choice },
-        () => {},
-      );
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+        profileDir,
+      }).start({ ...BASE, model: 'kimi-k3', cursorMaxMode: choice }, () => {});
 
       const config = JSON.parse(
         readFileSync(
@@ -737,10 +795,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     dirs.push(profileDir);
 
-    new CursorAcpAdapter({ spawn, profileDir }).start(
-      { ...BASE, model: 'kimi-k3' },
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start({ ...BASE, model: 'kimi-k3' }, () => {});
 
     const config = JSON.parse(
       readFileSync(
@@ -760,7 +819,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     dirs.push(profileDir);
 
-    new CursorAcpAdapter({ spawn, profileDir }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start(
       { ...BASE, model: 'claude-opus-5[thinking=true,effort=high]' },
       () => {},
     );
@@ -786,10 +849,12 @@ describe('CursorAcpAdapter turn shaping', () => {
     const sessionStoreDir = join(storeParent, 'cursor-sessions');
     dirs.push(profileDir, storeParent);
 
-    new CursorAcpAdapter({ spawn, profileDir, sessionStoreDir }).start(
-      BASE,
-      () => {},
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+      sessionStoreDir,
+    }).start(BASE, () => {});
 
     const dir = captured.env?.CURSOR_CONFIG_DIR;
     const link = join(dir!, 'acp-sessions');
@@ -806,7 +871,11 @@ describe('CursorAcpAdapter turn shaping', () => {
     const profileDir = mkdtempSync(join(tmpdir(), 'cursor-profiles-spec-'));
     dirs.push(profileDir);
 
-    new CursorAcpAdapter({ spawn, profileDir }).start(
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+      profileDir,
+    }).start(
       { ...BASE, env: { CURSOR_CONFIG_DIR: '/explicit/profile' } },
       () => {},
     );
@@ -821,7 +890,10 @@ describe('CursorAcpAdapter turn shaping', () => {
     // effort picker silently stops working while every test above still passes,
     // because the frames would look identical.
     const { spawn, child } = fakeSpawn();
-    new CursorAcpAdapter({ spawn }).start(BASE, () => {});
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, () => {});
 
     const init = framesOn(child).find((frame) => frame.method === 'initialize')
       ?.params as { clientCapabilities?: { _meta?: unknown } } | undefined;
@@ -833,10 +905,10 @@ describe('CursorAcpAdapter turn shaping', () => {
   it('says so when the agent does not offer the requested model', () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, model: 'gpt-5' },
-      (event) => events.push(event),
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, model: 'gpt-5' }, (event) => events.push(event));
     child.stdout.emitData(
       `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
     );
@@ -868,7 +940,10 @@ describe('CursorAcpAdapter turn shaping', () => {
   it('stays silent when every turn parameter has an ACP home', () => {
     const { spawn } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(BASE, (event) => events.push(event));
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start(BASE, (event) => events.push(event));
     expect(events).toEqual([]);
   });
 
@@ -879,10 +954,10 @@ describe('CursorAcpAdapter turn shaping', () => {
       ['auto', undefined],
     ] as const) {
       const { spawn, child } = fakeSpawn();
-      new CursorAcpAdapter({ spawn }).start(
-        { ...BASE, approvalMode: mode },
-        () => {},
-      );
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).start({ ...BASE, approvalMode: mode }, () => {});
       child.stdout.emitData(
         `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
       );
@@ -949,9 +1024,11 @@ describe('CursorAcpAdapter permission round-trip', () => {
   it('auto-approves an edit whose permission request omits the tool kind', () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, approvalMode: 'acceptEdits' },
-      (event) => events.push(event),
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'acceptEdits' }, (event) =>
+      events.push(event),
     );
     handshake(child);
     // The agent states the call's kind once, on the tool_call update…
@@ -992,10 +1069,10 @@ describe('CursorAcpAdapter permission round-trip', () => {
   it('delivers an ask-mode verdict to the running agent as a selected option', () => {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    const handle = new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, approvalMode: 'ask' },
-      (event) => events.push(event),
-    );
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, approvalMode: 'ask' }, (event) => events.push(event));
     handshake(child);
     child.stdout.emitData(
       stdoutLine({
@@ -1041,10 +1118,10 @@ describe('CursorAcpAdapter — no mid-turn user message', () => {
     // caller checking which CLI it is talking to.
     const child = new FakeChild();
     const spawn: SpawnFn = () => child as unknown as SpawnedProcess;
-    const handle = new CursorAcpAdapter({ spawn }).start(
-      { ...BASE, prompt: 'go' },
-      () => {},
-    );
+    const handle = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE, prompt: 'go' }, () => {});
 
     expect(handle.sendUserMessage({ text: 'and also this' })).toBe(false);
   });
@@ -1063,15 +1140,22 @@ describe('CursorAcpAdapter — cannot reopen a conversation', () => {
     // not just that some string exists. A generic "no interactive terminal
     // session" (which the capability route used to compose) would pass a
     // non-empty check and fail this one.
-    const reason = new CursorAcpAdapter().handoffUnavailableReason();
+    const reason = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).handoffUnavailableReason();
 
     expect(reason).toEqual(expect.any(String));
-    expect(reason).toContain('chat store');
+    // The mechanism in the user's terms: the two sets of conversations are
+    // kept apart. A generic "no interactive terminal session" carries no such
+    // word, which is what this pin is for.
+    expect(reason).toContain('separately');
     // And the refusal itself still holds for a real-looking session id — the
     // danger being that `--resume` ACCEPTS an unknown one and silently opens an
     // EMPTY chat, so a wired button would look like it worked.
     expect(
-      new CursorAcpAdapter().handoffTarget({
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).handoffTarget({
         sessionId: 'fa6e9302-6ae4-4ea7-ba35-536fc8cc1e29',
         model: null,
       }),
@@ -1103,15 +1187,18 @@ describe('CursorAcpAdapter — background sub-agents', () => {
   function driveTurn(): { child: FakeChild; events: AgentEvent[] } {
     const { spawn, child } = fakeSpawn();
     const events: AgentEvent[] = [];
-    new CursorAcpAdapter({ spawn }).start({ ...BASE }, (event) =>
-      events.push(event),
-    );
+    new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).start({ ...BASE }, (event) => events.push(event));
     handshake(child);
     return { child, events };
   }
 
   it('declares that it reports delegates, but not the work inside them', () => {
-    const config = new CursorAcpAdapter().getConfig();
+    const config = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig();
     expect(config.subagents.reports).toBe(true);
     expect(config.subagents.unavailableReason).toBeNull();
     // The one asymmetry with claude, and the reason a second field exists: the
@@ -1145,6 +1232,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
           'not the work inside it',
         ),
         backgroundOpen: null,
+        backgroundOutcome: null,
       },
     ]);
     // AFTER the tool call it anchors to, so a consumer replaying in seq order
@@ -1211,6 +1299,7 @@ describe('CursorAcpAdapter — background sub-agents', () => {
       toolUses: null,
       stepsUnavailableReason: expect.stringContaining('not the work inside it'),
       backgroundOpen: null,
+      backgroundOutcome: null,
     });
     // Answered, not declined. The refusal is what this whole feature was lost
     // behind: the agent discards the outcome either way, so a `-32601` cost the
@@ -1295,6 +1384,13 @@ describe('CursorAcpAdapter misuse', () => {
     // turns), so a future refactor that drops createTurnDriver must not
     // silently fall back to a mapper that cannot work.
     class Exposed extends CursorAcpAdapter {
+      // The store is a REQUIRED dependency of the real adapter, and a spec
+      // subclass has to satisfy it like any other caller — see
+      // `freshVocabularyStore`.
+      constructor() {
+        super({ vocabularyStore: freshVocabularyStore() });
+      }
+
       callMapMessage(): unknown {
         return this['mapMessage']();
       }
@@ -1314,7 +1410,10 @@ describe('CursorAcpAdapter misuse', () => {
     const childB = new FakeChild();
     const queued = [childA, childB];
     const spawn: SpawnFn = () => queued.shift() as unknown as SpawnedProcess;
-    const adapter = new CursorAcpAdapter({ spawn });
+    const adapter = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    });
     const eventsA: AgentEvent[] = [];
     const eventsB: AgentEvent[] = [];
     adapter.start({ ...BASE, prompt: 'turn A' }, (e) => eventsA.push(e));
@@ -1346,14 +1445,18 @@ describe('CursorAcpAdapter misuse', () => {
         ?.params,
     ).toEqual({
       sessionId: 'sess-a',
-      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nturn A` }],
+      prompt: [
+        { type: 'text', text: `turn A\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
+      ],
     });
     expect(
       framesOn(childB).find((frame) => frame.method === 'session/prompt')
         ?.params,
     ).toEqual({
       sessionId: 'sess-b',
-      prompt: [{ type: 'text', text: `${GENIRO_UI_PREAMBLE}\n\nturn B` }],
+      prompt: [
+        { type: 'text', text: `turn B\n\n${hostBlock(GENIRO_UI_PREAMBLE)}` },
+      ],
     });
   });
   describe('listModels', () => {
@@ -1409,7 +1512,10 @@ describe('CursorAcpAdapter misuse', () => {
       // from it would refuse every choice the user made.
       const { groupSpawnFn, captured } = fakeAcpProbe(SESSION_REPLY);
 
-      await new CursorAcpAdapter({ groupSpawnFn }).listModels();
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+      }).listModels();
 
       expect(captured.args).toEqual(['acp']);
     });
@@ -1417,7 +1523,10 @@ describe('CursorAcpAdapter misuse', () => {
     it('writes the handshake frames the answer depends on', async () => {
       const { groupSpawnFn, captured } = fakeAcpProbe(SESSION_REPLY);
 
-      await new CursorAcpAdapter({ groupSpawnFn }).listModels();
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+      }).listModels();
 
       const methods = captured
         .stdin()
@@ -1432,7 +1541,10 @@ describe('CursorAcpAdapter misuse', () => {
       const { groupSpawnFn } = fakeAcpProbe(SESSION_REPLY);
 
       await expect(
-        new CursorAcpAdapter({ groupSpawnFn }).listModels(),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listModels(),
       ).resolves.toEqual([
         { id: 'composer-2.5', label: 'Composer 2.5', source: 'cli' },
         { id: 'claude-opus-5', label: 'Opus 5', source: 'cli' },
@@ -1448,7 +1560,10 @@ describe('CursorAcpAdapter misuse', () => {
       }) as unknown as typeof spawn;
 
       await expect(
-        new CursorAcpAdapter({ groupSpawnFn }).listModels(),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listModels(),
       ).resolves.toEqual([]);
     });
   });
@@ -1532,9 +1647,203 @@ describe('CursorAcpAdapter misuse', () => {
       }) as unknown as typeof execFile;
     }
 
+    it('lists every OTHER config option, minus the ones geniro already drives', async () => {
+      // The subtraction, which is the whole of this listing. The reply below
+      // carries the four axes this app has controls for — the session `mode`,
+      // the `model` picker itself, `effort` and `context` — beside the two it
+      // does not. Only the second pair may come back: a chip beside the effort
+      // chip that ALSO sets the effort is two controls for one setting.
+      const REPLY = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's1',
+          configOptions: [
+            {
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              currentValue: 'agent',
+              options: [
+                { value: 'agent', name: 'agent' },
+                { value: 'plan', name: 'plan' },
+              ],
+            },
+            {
+              id: 'model',
+              name: 'Model',
+              category: 'model',
+              currentValue: 'auto-smart',
+              options: [{ value: 'auto-smart', name: 'Auto' }],
+            },
+            {
+              id: 'effort',
+              name: 'Effort',
+              category: 'model_config',
+              currentValue: 'high',
+              options: [{ value: 'high', name: 'high' }],
+            },
+            {
+              id: 'context',
+              name: 'Context',
+              category: 'model_config',
+              currentValue: '300k',
+              options: [{ value: '300k', name: '300k' }],
+            },
+            {
+              id: 'optimize_for',
+              name: 'Optimize For',
+              category: 'model_config',
+              currentValue: 'balanced',
+              options: [
+                { value: 'intelligence', name: 'Intelligence' },
+                { value: 'balanced', name: 'Balance' },
+                { value: 'cost', name: 'Cost' },
+              ],
+            },
+            // Named with NO values: an axis the agent mentioned and did not
+            // enumerate, which is a picker with nothing to pick.
+            { id: 'thinking', name: 'Thinking', category: 'thought_level' },
+          ],
+        },
+      })}\n`;
+      const { groupSpawnFn } = fakeAcpConfigProbe(REPLY);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => '2026.08.11-e8db854'),
+      });
+
+      expect(await adapter.listModelParameters('auto-smart')).toEqual({
+        parameters: [
+          {
+            id: 'optimize_for',
+            // The AGENT's own name, never a prettified id.
+            label: 'Optimize For',
+            values: [
+              { id: 'intelligence', label: 'Intelligence' },
+              { id: 'balanced', label: 'Balance' },
+              { id: 'cost', label: 'Cost' },
+            ],
+            current: 'balanced',
+          },
+        ],
+        unavailableReason: null,
+        exact: true,
+      });
+    });
+
+    it('reads the --version ONCE across several listings, through the daemon memo', async () => {
+      // The version is the key every vocabulary cache is checked against, so it
+      // is read BEFORE any of them can answer — which meant a cache HIT still
+      // paid for a process fork. Measured at 0.54s each, three times over as
+      // the settings panel asks for its three listings.
+      const REPLY = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's1',
+          configOptions: [
+            {
+              id: 'optimize_for',
+              name: 'Optimize For',
+              category: 'model_config',
+              currentValue: 'balanced',
+              options: [{ value: 'balanced', name: 'Balance' }],
+            },
+          ],
+        },
+      })}\n`;
+      let forks = 0;
+      const { groupSpawnFn } = fakeAcpConfigProbe(REPLY, REPLY, REPLY);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => {
+          forks += 1;
+          return '2026.08.11-e8db854';
+        }),
+        versions: new AgentVersionService(),
+      });
+
+      // Three DIFFERENT models, so each listing genuinely re-probes and the
+      // count cannot be explained by the handshake cache answering instead.
+      await adapter.listModelParameters('auto-smart');
+      await adapter.listModelParameters('claude-opus-5');
+      await adapter.listModelParameters('gpt-5.6-sol');
+
+      expect(forks).toBe(1);
+    });
+
+    it('still forks directly when no version service is supplied', async () => {
+      // The collaborator is optional so a standalone construction works, and
+      // this is the arm that keeps that honest: without it the fallback could
+      // rot into a null-reference and nothing here would notice.
+      const REPLY = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: { sessionId: 's1', configOptions: [] },
+      })}\n`;
+      let forks = 0;
+      const { groupSpawnFn } = fakeAcpConfigProbe(REPLY, REPLY);
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+        execFileFn: fakeVersion(() => {
+          forks += 1;
+          return '2026.08.11-e8db854';
+        }),
+      });
+
+      await adapter.listModelParameters('auto-smart');
+      await adapter.listModelParameters('claude-opus-5');
+
+      expect(forks).toBe(2);
+    });
+
+    it('says a model offers nothing further, distinctly from not being asked', async () => {
+      // Two empties that must not read alike: a reply that ENUMERATED options
+      // and had none left after the subtraction is an answer about the model
+      // (`exact`), while a probe that never settled is this CLI failing to be
+      // asked. A caller that cannot tell them apart cannot decide whether to
+      // re-ask.
+      const ONLY_OWNED = `${JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        result: {
+          sessionId: 's1',
+          configOptions: [
+            {
+              id: 'effort',
+              name: 'Effort',
+              category: 'model_config',
+              currentValue: 'high',
+              options: [{ value: 'high', name: 'high' }],
+            },
+          ],
+        },
+      })}\n`;
+      const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn: fakeAcpConfigProbe(ONLY_OWNED).groupSpawnFn,
+        execFileFn: fakeVersion(() => '2026.08.11-e8db854'),
+      });
+
+      const answered = await adapter.listModelParameters('claude-opus-5');
+      expect(answered.parameters).toEqual([]);
+      expect(answered.exact).toBe(true);
+
+      // …and with NO model named there is nothing to ask about at all.
+      const unasked = await adapter.listModelParameters(null);
+      expect(unasked.parameters).toEqual([]);
+      expect(unasked.exact).toBe(false);
+      expect(unasked.unavailableReason).toContain('pick a model');
+    });
+
     it('performs exactly ONE handshake probe for a cold model asked both ways', async () => {
       const { groupSpawnFn, calls } = fakeAcpConfigProbe(CONFIG_REPLY);
       const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
         execFileFn: fakeVersion(() => '2026.08.11-e8db854'),
       });
@@ -1592,6 +1901,7 @@ describe('CursorAcpAdapter misuse', () => {
       );
       let version = '2026.08.11-e8db854';
       const adapter = new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
         execFileFn: fakeVersion(() => version),
       });
@@ -1649,11 +1959,10 @@ describe('CursorAcpAdapter misuse', () => {
       // every toggle would land on whatever directory the daemon was started in.
       const { execFileFn, captured } = fakeToggle(true);
 
-      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
-        '/proj',
-        'figma',
-        false,
-      );
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        execFileFn,
+      }).setMcpServerEnabled('/proj', 'figma', false);
 
       expect(captured.args).toEqual(['mcp', 'disable', 'figma']);
       expect(captured.cwd).toBe('/proj');
@@ -1666,11 +1975,10 @@ describe('CursorAcpAdapter misuse', () => {
       // what makes the switch mean the same thing here as in the user's Cursor.
       const { execFileFn, captured } = fakeToggle(true);
 
-      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
-        '/proj',
-        'figma',
-        true,
-      );
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        execFileFn,
+      }).setMcpServerEnabled('/proj', 'figma', true);
 
       expect(captured.args).toEqual(['mcp', 'enable', 'figma']);
     });
@@ -1682,11 +1990,10 @@ describe('CursorAcpAdapter misuse', () => {
       const { execFileFn } = fakeToggle(false);
 
       await expect(
-        new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
-          '/proj',
-          'nope',
-          true,
-        ),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          execFileFn,
+        }).setMcpServerEnabled('/proj', 'nope', true),
       ).rejects.toThrow(/refused to switch/);
     });
 
@@ -1696,12 +2003,12 @@ describe('CursorAcpAdapter misuse', () => {
       let handed = 0;
       const { execFileFn } = fakeToggle(true);
 
-      await new CursorAcpAdapter({ execFileFn }).setMcpServerEnabled(
-        '/proj',
-        'figma',
-        false,
-        { onSpawn: () => (handed += 1) },
-      );
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        execFileFn,
+      }).setMcpServerEnabled('/proj', 'figma', false, {
+        onSpawn: () => (handed += 1),
+      });
 
       expect(handed).toBe(1);
     });
@@ -1711,7 +2018,10 @@ describe('CursorAcpAdapter misuse', () => {
     it('asks the CLI in the folder it was given, in its own process group', async () => {
       const { groupSpawnFn, captured } = fakeListing('probe: ready\n');
 
-      await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+      }).listMcpServers({
         cwd: '/proj',
       });
 
@@ -1733,7 +2043,10 @@ describe('CursorAcpAdapter misuse', () => {
       process.env.CURSOR_API_KEY = 'ck-user-own';
       const { groupSpawnFn, captured } = fakeListing('probe: ready\n');
 
-      await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        groupSpawnFn,
+      }).listMcpServers({
         cwd: '/proj',
       });
 
@@ -1746,7 +2059,10 @@ describe('CursorAcpAdapter misuse', () => {
       );
 
       await expect(
-        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({
         ok: true,
         servers: [
@@ -1774,7 +2090,10 @@ describe('CursorAcpAdapter misuse', () => {
       );
 
       await expect(
-        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({ ok: true, servers: [] });
     });
 
@@ -1794,7 +2113,10 @@ describe('CursorAcpAdapter misuse', () => {
         const { groupSpawnFn } = fakeListing(null);
 
         await expect(
-          new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+          new CursorAcpAdapter({
+            vocabularyStore: freshVocabularyStore(),
+            groupSpawnFn,
+          }).listMcpServers({
             cwd: '/proj',
           }),
         ).resolves.toEqual({
@@ -1814,7 +2136,10 @@ describe('CursorAcpAdapter misuse', () => {
       const { groupSpawnFn } = fakeListing('something went sideways\n');
 
       await expect(
-        new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({ cwd: '/proj' }),
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listMcpServers({ cwd: '/proj' }),
       ).resolves.toEqual({
         ok: false,
         reason: expect.stringContaining('format may have changed'),
@@ -1831,6 +2156,7 @@ describe('CursorAcpAdapter misuse', () => {
       );
 
       const result = await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
       }).listMcpServers({
         cwd: '/proj',
@@ -1855,7 +2181,10 @@ describe('CursorAcpAdapter misuse', () => {
       try {
         const { groupSpawnFn } = fakeListing('probe: ready\n');
 
-        await new CursorAcpAdapter({ groupSpawnFn }).listMcpServers({
+        await new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          groupSpawnFn,
+        }).listMcpServers({
           cwd: '/proj',
         });
 
@@ -1879,6 +2208,7 @@ describe('CursorAcpAdapter misuse', () => {
       );
 
       const result = await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
         groupSpawnFn,
       }).listMcpServers({
         cwd: '/proj',
@@ -1913,6 +2243,7 @@ describe('CursorAcpAdapter misuse', () => {
 
     function importSession(home: string, store: string): Promise<void> {
       return new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
         homeDir: home,
         sessionStoreDir: store,
       }).prepareSessionImport({
@@ -2008,7 +2339,11 @@ describe('CursorAcpAdapter misuse', () => {
       mkdirSync(stray, { recursive: true });
       writeFileSync(join(stray, 'private'), 'never asked to be copied');
 
-      await new CursorAcpAdapter({ homeDir: home, sessionStoreDir: store })
+      await new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        homeDir: home,
+        sessionStoreDir: store,
+      })
         .prepareSessionImport({
           sessionId: '../not-a-session',
           configDir: null,
@@ -2062,6 +2397,7 @@ describe('CursorAcpAdapter session title', () => {
     );
 
     const title = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
       spawn,
       sessionStoreDir,
     }).readSessionTitle(sessionId);
@@ -2079,7 +2415,10 @@ describe('CursorAcpAdapter session title', () => {
     );
 
     await expect(
-      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(sessionId),
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        sessionStoreDir,
+      }).readSessionTitle(sessionId),
     ).resolves.toBeNull();
   });
 
@@ -2087,9 +2426,10 @@ describe('CursorAcpAdapter session title', () => {
     const { sessionStoreDir } = seedSession(null);
 
     await expect(
-      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(
-        'a1b2c3d4-0000-4000-8000-00000000dead',
-      ),
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        sessionStoreDir,
+      }).readSessionTitle('a1b2c3d4-0000-4000-8000-00000000dead'),
     ).resolves.toBeNull();
   });
 
@@ -2108,7 +2448,10 @@ describe('CursorAcpAdapter session title', () => {
     );
 
     await expect(
-      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle('..'),
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        sessionStoreDir,
+      }).readSessionTitle('..'),
     ).resolves.toBeNull();
   });
 
@@ -2129,9 +2472,99 @@ describe('CursorAcpAdapter session title', () => {
     );
 
     await expect(
-      new CursorAcpAdapter({ sessionStoreDir }).readSessionTitle(
-        join('..', 'outside'),
-      ),
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        sessionStoreDir,
+      }).readSessionTitle(join('..', 'outside')),
     ).resolves.toBeNull();
+  });
+});
+
+describe('CursorAcpAdapter — plugin servers the app loads and a turn does not', () => {
+  /** One plugin under `~/.cursor/plugins`, carrying the manifest shape given. */
+  function plugin(
+    home: string,
+    name: string,
+    manifest: readonly string[],
+    server: string,
+  ): void {
+    const dir = join(
+      home,
+      CURSOR_HOME_DIR_NAME,
+      'plugins',
+      'cache',
+      'publisher',
+      name,
+      'v1',
+    );
+    const manifestPath = join(dir, ...manifest);
+    mkdirSync(dirname(manifestPath), { recursive: true });
+    writeFileSync(manifestPath, JSON.stringify({ mcpServers: './mcp.json' }));
+    // The pointer is written relative to the PLUGIN, not to the manifest — so
+    // this sits at the plugin root whichever shape the manifest took.
+    writeFileSync(
+      join(dir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { [server]: {} } }),
+    );
+  }
+
+  it('names a plugin whatever manifest shape it ships', async () => {
+    // The walk read `.cursor-plugin/plugin.json` alone while the skills walk
+    // accepted three shapes, so a plugin carrying either of the other two
+    // contributed skills and NO server — and the note omitted servers the user
+    // can see working in Cursor, which is the one thing it exists to prevent.
+    // The geniro plugin itself ships two of the three.
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-'));
+    dirs.push(home);
+    plugin(home, 'cursor-shaped', ['.cursor-plugin', 'plugin.json'], 'alpha');
+    plugin(home, 'claude-shaped', ['.claude-plugin', 'plugin.json'], 'beta');
+    plugin(home, 'bare-shaped', ['plugin.json'], 'gamma');
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toContain('alpha');
+    expect(facts.interactiveOnlyNote).toContain('beta');
+    expect(facts.interactiveOnlyNote).toContain('gamma');
+  });
+
+  it('still reaches a plugin outside the cache directory', async () => {
+    // Why this walk keeps the broader `plugins/` root rather than adopting the
+    // skills walk's `plugins/cache`: `plugins/local` is a real install location
+    // the narrower root cannot see, and narrowing it was the half of this
+    // finding that was correctly declined.
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-local-'));
+    dirs.push(home);
+    const dir = join(home, CURSOR_HOME_DIR_NAME, 'plugins', 'local', 'mine');
+    mkdirSync(join(dir, '.cursor-plugin'), { recursive: true });
+    writeFileSync(
+      join(dir, '.cursor-plugin', 'plugin.json'),
+      JSON.stringify({ mcpServers: './mcp.json' }),
+    );
+    writeFileSync(
+      join(dir, 'mcp.json'),
+      JSON.stringify({ mcpServers: { homegrown: {} } }),
+    );
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toContain('homegrown');
+  });
+
+  it('says nothing at all when no plugin declares a server', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cursor-plugins-none-'));
+    dirs.push(home);
+
+    const facts = await new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      homeDir: home,
+    }).readMcpFolderFacts(home);
+
+    expect(facts.interactiveOnlyNote).toBeNull();
   });
 });

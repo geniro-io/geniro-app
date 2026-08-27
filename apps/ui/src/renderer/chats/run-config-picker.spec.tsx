@@ -44,6 +44,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     model: null,
     effort: null,
     contextWindow: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
     ...over,
@@ -271,6 +272,7 @@ describe('RunConfigPicker — editor', () => {
       model: null,
       effort: null,
       contextWindow: null,
+      modelParameters: {},
       approval: null,
       configDir: null,
     };
@@ -349,6 +351,7 @@ describe('RunConfigPicker — which surface an open lands on', () => {
         model: null,
         effort: null,
         contextWindow: null,
+        modelParameters: {},
         approval: null,
         configDir: null,
       }),
@@ -454,6 +457,7 @@ describe('RunConfigPicker — editor guards', () => {
         model: null,
         effort: null,
         contextWindow: null,
+        modelParameters: {},
         approval: null,
         configDir: null,
       }),
@@ -511,6 +515,77 @@ describe('RunConfigPicker — editor guards', () => {
 
     expect(onSave).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/Users/dev/other', branch: null }),
+      'rc-1',
+    );
+  });
+
+  /** Open the Model chip and take the row whose text matches. */
+  function pickModel(rowText: string): void {
+    click(button('Model'));
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((o) => o.textContent?.trim() === rowText);
+    if (!row) {
+      throw new Error(`no "${rowText}" row under Model`);
+    }
+    click(row);
+  }
+
+  it('choosing a different model clears the parameters the old one enumerated', () => {
+    // Which parameter ids exist at all is the MODEL's answer, so a value
+    // carried across names an axis the new model never offered — its chip
+    // stops being drawn while the saved configuration still sends it, on every
+    // turn, for as long as the configuration is used.
+    const { onSave } = render({
+      configs: [
+        config({ model: 'opus', modelParameters: { optimize_for: 'cost' } }),
+      ],
+    });
+    click(button('Edit Geniro app'));
+
+    pickModel('default model');
+    click(button('Save'));
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({ model: null, modelParameters: {} }),
+      'rc-1',
+    );
+  });
+
+  it('switching to a workflow drops the model parameters with the other CLI-only choices', () => {
+    // A workflow has no CLI of its own, so every per-CLI row disappears from
+    // the editor. A value the user can neither see nor edit must not stay in
+    // the saved configuration — the same reasoning the model/effort/window
+    // fields beside it already followed.
+    const { onSave } = render({
+      configs: [
+        config({ model: 'opus', modelParameters: { optimize_for: 'cost' } }),
+      ],
+      workflows: [
+        {
+          slug: 'review-team',
+          name: 'Review team',
+        },
+      ],
+    });
+    click(button('Edit Geniro app'));
+
+    click(button('Agent or workflow this configuration starts'));
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((o) => o.textContent?.includes('Review team'));
+    if (!row) {
+      throw new Error('no "Review team" row in the target picker');
+    }
+    click(row);
+    click(button('Save'));
+
+    expect(onSave).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: 'wf:review-team',
+        model: null,
+        modelParameters: {},
+      }),
       'rc-1',
     );
   });

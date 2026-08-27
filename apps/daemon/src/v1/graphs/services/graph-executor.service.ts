@@ -39,6 +39,7 @@ import {
   mapEventToItem,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
+import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
@@ -272,6 +273,16 @@ function withResolvedNodeSettings(
         });
         resolved = { ...resolved, effort: undefined };
       }
+    }
+    if (resolved.modelParameters) {
+      // Bounded in count and value length through the SAME sanitizer the chat
+      // path applies to a run's stored settings — an imported workflow arrives
+      // as YAML the user could have hand-edited, and without this its node
+      // parameters reached the turn with no cap at all.
+      resolved = {
+        ...resolved,
+        modelParameters: sanitizeModelParameters(resolved.modelParameters),
+      };
     }
     return resolved;
   });
@@ -1177,6 +1188,7 @@ export class GraphExecutorService {
         // so there is no list here to check against — the turn's own driver
         // reports a size the model does not offer, against the live agent.
         contextWindow: node.contextWindow ?? null,
+        modelParameters: node.modelParameters ?? null,
         resumeSessionId: callContext?.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
         // A PEER of the role rather than something joined into it: the two are

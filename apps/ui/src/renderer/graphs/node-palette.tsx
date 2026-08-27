@@ -95,7 +95,7 @@ const AGENT_META: Record<CliKind, TileMeta> = {
     command: 'claude',
     blurb: 'Anthropic Claude, driven headlessly via the claude CLI.',
     details: [
-      'Runs one turn per node via `claude -p` (headless stream-json).',
+      'Runs one turn per node, headlessly through the claude CLI.',
       'Tool approvals are per-node — set the node to auto or ask.',
       'Model is configurable per node (empty = the CLI default).',
     ],
@@ -106,9 +106,9 @@ const AGENT_META: Record<CliKind, TileMeta> = {
     command: 'cursor-agent',
     blurb: 'cursor-agent CLI — honours per-node tool approvals.',
     details: [
-      'Runs one turn per node via `cursor-agent acp` (Agent Client Protocol).',
+      'Runs one turn per node, headlessly through the cursor-agent CLI.',
       'Tool approvals are per-node — set the node to auto, ask, or accept edits.',
-      'Model is chosen per node — ACP carries the choice in its session handshake.',
+      'Model is chosen per node (empty = the CLI default).',
       'Signs itself in — Settings offers the sign-in; no API key to enter.',
     ],
     icon: <SquareTerminal aria-hidden="true" className="size-4" />,

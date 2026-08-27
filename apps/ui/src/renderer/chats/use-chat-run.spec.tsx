@@ -34,6 +34,7 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  modelParameters: {},
   contextTokens: null,
   contextWindowTokens: null,
   configDir: null,
@@ -596,6 +597,69 @@ describe('useChatRun', () => {
     const row = harness.state().runs.find((run) => run.id === 'r1');
     expect(row?.contextTokens).toBe(740_515);
     expect(row?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('clears the live reading on a SYSTEM compaction row, and on nothing else carrying the key', async () => {
+    // Twin-parser pair: `compaction-payload.ts`'s `endsContextHistory` requires
+    // `kind === 'system'`, and this reader did not — so a future item kind
+    // carrying the marker would empty the ring here and not in the transcript
+    // fold, giving one compaction two answers about whether the readings above
+    // it still stand.
+    const { client, emitLiveText, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    const reading = {
+      runId: 'r1',
+      nodeId: null,
+      text: 'working',
+      thinkingTokens: null,
+      thinkingText: null,
+      thinkingSince: null,
+      thinkingStretch: null,
+      contextTokens: 740_515,
+      contextWindowTokens: 1_000_000,
+    };
+    const contextNow = (): number | null | undefined =>
+      [...harness.state().liveText.values()][0]?.contextTokens;
+
+    await act(async () => {
+      emitLiveText(reading);
+    });
+    expect(contextNow()).toBe(740_515);
+
+    // A row of another kind carrying the same key changes nothing.
+    await act(async () => {
+      emitItem({
+        id: 'r1-i9',
+        runId: 'r1',
+        nodeId: null,
+        seq: 9,
+        kind: 'message',
+        role: 'assistant',
+        payload: { text: 'still here', conversationReplaced: true },
+        createdAt: 'now',
+      });
+    });
+    expect(contextNow()).toBe(740_515);
+
+    // The real marker does.
+    await act(async () => {
+      emitItem({
+        id: 'r1-i10',
+        runId: 'r1',
+        nodeId: null,
+        seq: 10,
+        kind: 'system',
+        role: null,
+        payload: {
+          message: 'Conversation compacted.',
+          conversationReplaced: true,
+        },
+        createdAt: 'now',
+      });
+    });
+    expect(contextNow()).toBeNull();
   });
 
   it('records an EXPIRED verdict for the open run, and only that', async () => {

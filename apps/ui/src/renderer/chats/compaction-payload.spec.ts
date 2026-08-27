@@ -5,6 +5,7 @@ import {
   compactionDetail,
   compactionFacts,
   compactionOnlyTurnEnds,
+  endsContextHistory,
 } from './compaction-payload';
 
 describe('compactionFacts', () => {
@@ -66,6 +67,57 @@ describe('compactionDetail', () => {
     expect(
       compactionDetail({ preTokens: null, postTokens: null }),
     ).toBeUndefined();
+  });
+});
+
+describe('endsContextHistory', () => {
+  const row = (kind: ChatItem['kind'], payload: unknown): ChatItem => ({
+    id: 'i1',
+    runId: 'r1',
+    nodeId: null,
+    seq: 1,
+    kind,
+    role: null,
+    payload,
+    createdAt: 'now',
+  });
+
+  it('ends the stretch for EITHER kind of compaction, which is what the doc block claims', () => {
+    // Only the `conversationReplaced` half was asserted, so a regression
+    // narrowing this to geniro's own compaction would ship green — and the
+    // context ring would stay full after a CLI's native `/compact`, which is
+    // the louder of the two failures.
+    expect(
+      endsContextHistory(
+        row('system', {
+          compaction: { preTokens: 539_800, postTokens: 16_500 },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      endsContextHistory(row('system', { conversationReplaced: true })),
+    ).toBe(true);
+  });
+
+  it('is false for a system row that is neither', () => {
+    expect(endsContextHistory(row('system', { message: 'a notice' }))).toBe(
+      false,
+    );
+  });
+
+  it('requires the row to be a SYSTEM row, whichever marker it carries', () => {
+    // The kind guard is half of a twin-parser pair — `use-chat-run.ts` reads
+    // `conversationReplaced` off the live plane and must apply the same one, or
+    // one compaction gets two answers about whether the readings above it
+    // still stand.
+    expect(
+      endsContextHistory(
+        row('message', { compaction: { preTokens: 100, postTokens: 10 } }),
+      ),
+    ).toBe(false);
+    expect(
+      endsContextHistory(row('message', { conversationReplaced: true })),
+    ).toBe(false);
   });
 });
 

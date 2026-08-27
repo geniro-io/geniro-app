@@ -1,8 +1,13 @@
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AgentSpawnInfo } from '../../agents/adapters/adapter.types';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
 import { AgentKind } from '../../runs/runs.types';
 import { CliAuthService } from './cli-auth.service';
 
@@ -77,8 +82,25 @@ function build(
     },
   );
   const adapter = {
-    getConfig: () => ({ auth }),
+    getConfig: () => ({
+      auth,
+      // The SERVER half of the same block. Present so `startMcpLogin` is
+      // reachable from these specs at all — the double stands in for the whole
+      // adapter, and the service reads both halves.
+      mcp: { loginArgs: ['mcp', 'login'], loginUnavailableReason: null },
+    }),
     runLogout,
+    runMcpLogin: (options: {
+      onSpawn: (child: unknown, info: AgentSpawnInfo) => void;
+    }) => {
+      options.onSpawn(fake.child, GROUP);
+      return new Promise<string | null>((resolve) => {
+        settle = resolve;
+      });
+    },
+    // A CLI that declares no failure wording, which is cursor's real shape —
+    // so a clean exit is the whole verdict.
+    mcpLoginFailed: () => false,
     runLogin: (options: {
       onSpawn: (child: unknown, info: AgentSpawnInfo) => void;
     }) => {
@@ -103,12 +125,26 @@ function build(
       return registered.delete(id);
     },
   };
+  // Real, not a double: a completed SERVER sign-in retires that folder's agent
+  // sessions, and the count it marks is what the tests below observe.
+  const sessions = new AgentSessionRegistry();
+  // Real too, over a temp file: what the sign-in flows must DROP is what this
+  // store holds, and a double would only pin that a method was called.
+  const storeDir = mkdtempSync(join(tmpdir(), 'cli-auth-vocab-'));
+  const vocabularies = new ModelVocabularyStore({
+    file: join(storeDir, 'model-vocabularies.json'),
+  });
   const service = new CliAuthService(
     { for: () => adapter } as never,
     processes as never,
+    sessions,
+    vocabularies,
   );
   return {
     service,
+    sessions,
+    vocabularies,
+    cleanup: () => rmSync(storeDir, { recursive: true, force: true }),
     fake,
     registered,
     runLogout,
@@ -318,3 +354,147 @@ describe('CliAuthService — sign-in', () => {
     expect(() => service.status('nope')).toThrow(/no sign-in/);
   });
 });
+
+describe('CliAuthService — a server sign-in that landed', () => {
+  it('retires that folder’s agent sessions, so the next turn sees the connector', async () => {
+    // THE REPORTED DEFECT, from the sign-in side: the user connected Linear and
+    // the chat's next turn still had only the servers its CLI process read at
+    // spawn. The agent itself wrote "the connector may need the session
+    // restarted" — this is that restart, deferred to the next turn.
+    const { service, fake, exit, sessions } = build();
+    const marked = vi.spyOn(sessions, 'markStale');
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    expect(marked).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      // The CANONICAL path, which is what a turn records — a raw one would
+      // match nothing on a machine whose tmp dir is behind a symlink.
+      realpathSync(process.cwd()),
+      expect.stringContaining('linear'),
+    );
+  });
+
+  it('retires nothing when the sign-in did NOT complete', async () => {
+    // A failed sign-in changed nothing, and respawning a working chat's CLI
+    // over it costs the user their warm process for no gain.
+    const { service, fake, exit, sessions } = build();
+    const marked = vi.spyOn(sessions, 'markStale');
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit(null);
+    await tick();
+
+    expect(marked).not.toHaveBeenCalled();
+  });
+
+  it('retires nothing for an ACCOUNT sign-in, which is not folder-scoped', async () => {
+    // `cwd` is null there, and marking every folder would respawn chats whose
+    // MCP configuration did not move.
+    const { service, fake, exit, sessions } = build();
+    const marked = vi.spyOn(sessions, 'markStale');
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    expect(marked).not.toHaveBeenCalled();
+  });
+});
+
+describe('CliAuthService — what an account change invalidates', () => {
+  const VERSION = '2.1.237';
+  const MODELS = [{ id: 'opus', label: 'Opus' }];
+
+  it('drops that CLI’s cached vocabularies when an ACCOUNT sign-in lands', async () => {
+    // The exact half of the staleness story. A subscription decides which
+    // models exist and what each offers, and none of that moves the CLI's
+    // `--version` — the only other check a stored answer is held to — so
+    // without this the composer would go on offering the previous account's
+    // models until the refresh window lapsed.
+    const { service, fake, exit, vocabularies, cleanup } = build();
+    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    expect(
+      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows),
+    ).toBeNull();
+    cleanup();
+  });
+
+  it('drops them on a completed sign-OUT too', async () => {
+    const { service, vocabularies, cleanup } = build();
+    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+
+    await service.logout({ agent: AgentKind.Claude });
+
+    expect(
+      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows),
+    ).toBeNull();
+    cleanup();
+  });
+
+  it('keeps them when the sign-in did NOT complete', async () => {
+    // A sign-in that failed changed no account, so discarding the vocabulary
+    // would buy a cold six-second re-ask and nothing else.
+    const { service, fake, exit, vocabularies, cleanup } = build();
+    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    const started = service.startLogin({ agent: AgentKind.Claude });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit(null);
+    await tick();
+
+    expect(
+      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows)?.value,
+    ).toEqual(MODELS);
+    cleanup();
+  });
+
+  it('keeps them for a SERVER sign-in, which changes tools and not models', async () => {
+    const { service, fake, exit, vocabularies, cleanup } = build();
+    vocabularies.remember(AgentKind.Claude, null, VERSION, MODELS);
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    exit('done');
+    await tick();
+
+    expect(
+      vocabularies.read(AgentKind.Claude, null, VERSION, isModelRows)?.value,
+    ).toEqual(MODELS);
+    cleanup();
+  });
+});
+
+/** The shape guard the store takes — the models listing's, in miniature. */
+function isModelRows(value: unknown): value is { id: string; label: string }[] {
+  return Array.isArray(value);
+}

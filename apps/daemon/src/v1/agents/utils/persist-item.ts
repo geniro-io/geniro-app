@@ -5,6 +5,7 @@ import type { ItemKind } from '../../runs/runs.types';
 import type { ItemWire, RunAwaiting, RunWire } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
+import { readModelParameters } from './model-parameters';
 
 /**
  * The one persist-then-emit implementation both execution paths (single-agent
@@ -91,6 +92,7 @@ export function runToWire(
     approval: run.approval,
     effort: run.effort,
     contextWindow: run.contextWindow,
+    modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,
     configDir: run.configDir,

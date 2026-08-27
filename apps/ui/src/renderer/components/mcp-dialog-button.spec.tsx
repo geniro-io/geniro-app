@@ -43,6 +43,8 @@ const listing = (names: string[]): AgentMcpListing => ({
     scope: 'unknown',
     toggleUnavailableReason: null,
     signInUnavailableReason: null,
+    approveUnavailableReason: null,
+    shadowsUser: false,
   })),
   unavailableReason: null,
   interactiveOnlyNote: null,

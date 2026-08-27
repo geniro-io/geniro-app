@@ -17,6 +17,10 @@ import { ContextWindowSelect } from './context-window-select';
 import { shortenPath } from './directory-select';
 import { EffortSelect } from './effort-select';
 import { FolderSelect } from './folder-select';
+import {
+  ModelParameterSelect,
+  withModelParameter,
+} from './model-parameter-select';
 import { ModelSelect } from './model-select';
 import type { RunConfigDraft } from './run-config';
 import {
@@ -28,6 +32,7 @@ import type { TargetWorkflow } from './target-select';
 import { TargetSelect } from './target-select';
 import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
+import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useGitInfo } from './use-git-info';
 
@@ -54,6 +59,7 @@ const EMPTY_DRAFT: RunConfigDraft = {
   model: null,
   effort: null,
   contextWindow: null,
+  modelParameters: {},
   approval: null,
   configDir: null,
 };
@@ -479,6 +485,13 @@ function RunConfigEditor({
     vocabularyKind,
     draft.model,
   );
+  // Asked about the CONFIGURATION's agent and model like its two neighbours —
+  // here it decides which rows exist at all, not only what they contain.
+  const modelParameters = useAgentModelParameters(
+    agentsApi,
+    vocabularyKind,
+    draft.model,
+  );
   // Branches of the folder the DRAFT points at, not the composer's.
   const git = useGitInfo(draft.cwd === '' ? null : draft.cwd);
   const approvalModes = approvalModesFor(kind);
@@ -538,6 +551,7 @@ function RunConfigEditor({
                       model: null,
                       effort: null,
                       contextWindow: null,
+                      modelParameters: {},
                       approval: null,
                       configDir: null,
                     })
@@ -596,33 +610,61 @@ function RunConfigEditor({
                   models={models}
                   loading={modelsLoading}
                   value={draft.model}
-                  // The window belongs to the model that offered it, so a
-                  // model change clears it rather than carrying a size the new
-                  // model may not have — the same rule the daemon's settings
-                  // patch holds for an open chat.
-                  onChange={(model) => set({ model, contextWindow: null })}
+                  // The window and the other parameters belong to the model
+                  // that offered them, so a model change clears both rather
+                  // than carrying values the new model may not have — the same
+                  // rule the daemon's settings patch holds for an open chat.
+                  onChange={(model) =>
+                    set({ model, contextWindow: null, modelParameters: {} })
+                  }
                 />
               </SettingRow>
-              <SettingRow label="Effort">
-                <EffortSelect
-                  efforts={efforts.efforts}
-                  // The listing carries its own reason for having no levels,
-                  // and it is the better one — it can name THIS model, where
-                  // the per-CLI capability sentence only ever names the CLI.
-                  unavailableReason={efforts.unavailableReason}
-                  value={draft.effort}
-                  onChange={(effort) => set({ effort })}
-                />
-              </SettingRow>
-              <SettingRow label="Context window">
-                <ContextWindowSelect
-                  windows={contextWindows.windows}
-                  unavailableReason={contextWindows.unavailableReason}
-                  unavailableKind={contextWindows.unavailableKind}
-                  value={draft.contextWindow}
-                  onChange={(contextWindow) => set({ contextWindow })}
-                />
-              </SettingRow>
+              {/* The ROW goes with the control, here and below. Both chips
+                  render nothing when the model offers no choice, and a labelled
+                  row around nothing is a label with a hole in it — which in a
+                  fixed label column is louder than the chip ever was. */}
+              {efforts.efforts.length === 0 ? null : (
+                <SettingRow label="Effort">
+                  <EffortSelect
+                    efforts={efforts.efforts}
+                    value={draft.effort}
+                    onChange={(effort) => set({ effort })}
+                  />
+                </SettingRow>
+              )}
+              {contextWindows.windows.length === 0 ? null : (
+                <SettingRow label="Context window">
+                  <ContextWindowSelect
+                    windows={contextWindows.windows}
+                    value={draft.contextWindow}
+                    onChange={(contextWindow) => set({ contextWindow })}
+                  />
+                </SettingRow>
+              )}
+              {/* One labelled row per OTHER setting this model enumerates. A row
+                  per parameter rather than one row of chips, because the
+                  editor's whole shape is a fixed label column — a setting with
+                  no address of its own is the wrapping chip row this screen was
+                  built to replace. */}
+              {modelParameters.parameters.map((parameter) => (
+                <SettingRow key={parameter.id} label={parameter.label}>
+                  <ModelParameterSelect
+                    parameter={parameter}
+                    // The row's label column already names it.
+                    showAxisName={false}
+                    value={draft.modelParameters[parameter.id] ?? null}
+                    onChange={(next) =>
+                      set({
+                        modelParameters: withModelParameter(
+                          draft.modelParameters,
+                          parameter.id,
+                          next,
+                        ),
+                      })
+                    }
+                  />
+                </SettingRow>
+              ))}
             </>
           )}
         </div>

@@ -28,8 +28,36 @@ export interface CliLoginState {
   server: string | null;
 }
 
+/**
+ * Which sign-in a press has ASKED for, before the daemon has answered.
+ *
+ * `server` is null for the CLI's own account, matching {@link CliLoginState} —
+ * the two describe the same flow either side of the daemon's first reply, and a
+ * caller telling rows apart uses the same field on both.
+ */
+export interface CliLoginTarget {
+  kind: CliKind;
+  server: string | null;
+}
+
 export interface CliLoginController {
   login: CliLoginState | null;
+  /**
+   * The sign-in a press has started and the daemon has not answered yet, or
+   * null.
+   *
+   * THE REPORTED DEFECT lives in this window: `start` sets `login` only once
+   * `POST /v1/auth/login` returns, and that request is held open by the daemon
+   * until the CLI prints its URL — measured at 4001ms in the running app, which
+   * is exactly the daemon's own `URL_WAIT_MS` ceiling. For those four seconds a
+   * browser tab opens somewhere behind the window and nothing in the app moves:
+   * the button still reads "Sign in", still enabled, with no panel anywhere.
+   * Reported as "I press Sign In and there is no loader, nothing".
+   *
+   * Set SYNCHRONOUSLY, before the await, which is the whole point — anything
+   * derived after it would land in the same window it exists to fill.
+   */
+  starting: CliLoginTarget | null;
   /**
    * Start one. Resolves when the daemon has answered, not when it finishes.
    *
@@ -87,6 +115,7 @@ export function useCliLogin(
   onSettled: (settled: CliLoginState) => void,
 ): CliLoginController {
   const [login, setLogin] = useState<CliLoginState | null>(null);
+  const [starting, setStarting] = useState<CliLoginTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Read inside the interval, so a re-rendered caller passing a fresh closure
   // does not restart the poll — and the poll always calls the current one.
@@ -140,6 +169,9 @@ export function useCliLogin(
         return;
       }
       setError(null);
+      // Before the await, never after: the wait IS the window the flag exists
+      // to cover.
+      setStarting({ kind, server: null });
       try {
         const session = await apis.cliAuth.startCliLogin({
           agent: kind as AgentKind,
@@ -151,6 +183,10 @@ export function useCliLogin(
         }
       } catch (err) {
         setError(String(err));
+      } finally {
+        // In a `finally` so a REFUSED start clears it too — otherwise a failed
+        // press leaves a spinner running over a sign-in that never began.
+        setStarting(null);
       }
     },
     [apis],
@@ -167,6 +203,7 @@ export function useCliLogin(
         return;
       }
       setError(null);
+      setStarting({ kind: input.kind, server: input.server });
       try {
         const session = await apis.cliAuth.startMcpLogin({
           agent: input.kind as AgentKind,
@@ -184,6 +221,8 @@ export function useCliLogin(
         }
       } catch (err) {
         setError(String(err));
+      } finally {
+        setStarting(null);
       }
     },
     [apis],
@@ -231,5 +270,14 @@ export function useCliLogin(
     setError(null);
   }, []);
 
-  return { login, start, startMcp, submitCode, cancel, dismiss, error };
+  return {
+    login,
+    starting,
+    start,
+    startMcp,
+    submitCode,
+    cancel,
+    dismiss,
+    error,
+  };
 }

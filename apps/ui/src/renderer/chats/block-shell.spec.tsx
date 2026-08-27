@@ -74,9 +74,9 @@ describe('BlockShell', () => {
     expect(button?.getAttribute('aria-expanded')).toBe('false');
     // Closed: the identity line and status still read, the thread does not.
     expect(container.textContent).toContain('code-reviewer');
-    expect(container.textContent).toContain('done');
+    expect(container.textContent).toContain('completed');
     expect(container.textContent).not.toContain('inner thread');
-    // And `done` reads as the CHECK, not as a pill: a settled block is the
+    // And a settled block reads as the CHECK, not as a pill: it is the
     // common case, so a green chip on every one of them was the loudest thing
     // in a run of asides. The word survives for a screen reader only, which is
     // why the assertion above cannot tell the two apart and this one can.
@@ -157,11 +157,19 @@ describe('BlockShell', () => {
     expect(container.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('keeps the WORD for the two statuses a glyph cannot carry', () => {
+  it('keeps the WORD for the two statuses a glyph cannot carry, in the RUN vocabulary', () => {
     // The pill did not go away, it narrowed to where it earns its ink: a
     // failed or abandoned block is what a reader scans a long transcript for,
     // and a red or grey glyph among a column of green checks is not enough to
     // stop on.
+    //
+    // What it says is `RUN_STATUS_META`'s word, never this component's own
+    // lifecycle key — a delegate cut off by Stop showed a red `error` pill on
+    // a screen whose header, sidebar row and agent card all read `cancelled`.
+    const word: Record<string, string> = {
+      error: 'failed',
+      stopped: 'cancelled',
+    };
     for (const status of ['error', 'stopped'] as const) {
       act(() =>
         root.render(
@@ -177,7 +185,7 @@ describe('BlockShell', () => {
         ),
       );
       const pill = container.querySelector('[data-slot="block-status-badge"]');
-      expect(pill?.textContent).toBe(status);
+      expect(pill?.textContent).toBe(word[status]);
     }
   });
 

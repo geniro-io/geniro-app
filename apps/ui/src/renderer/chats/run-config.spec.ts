@@ -20,6 +20,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     model: null,
     effort: null,
     contextWindow: null,
+    modelParameters: {},
     approval: null,
     configDir: null,
     ...over,
@@ -69,6 +70,7 @@ describe('captureRunConfig', () => {
       models: { claude: 'claude-opus-5', 'cursor-agent': 'auto-smart' },
       efforts: { claude: 'high', 'cursor-agent': 'low' },
       contextWindows: { claude: '1m', 'cursor-agent': '300k' },
+      modelParameters: {},
       approval: 'acceptEdits',
     });
 
@@ -87,6 +89,7 @@ describe('captureRunConfig', () => {
         models: {},
         efforts: {},
         contextWindows: {},
+        modelParameters: {},
         approval: null,
       }).name,
     ).toBe('Padded');
@@ -105,6 +108,7 @@ describe('captureRunConfig', () => {
       models: { claude: 'claude-opus-5' },
       efforts: { claude: 'high' },
       contextWindows: { claude: '1m' },
+      modelParameters: {},
       approval: 'acceptEdits',
     });
 
@@ -112,6 +116,7 @@ describe('captureRunConfig', () => {
       model: null,
       effort: null,
       contextWindow: null,
+      modelParameters: {},
       approval: null,
       configDir: null,
     });
@@ -126,6 +131,7 @@ describe('applyRunConfig', () => {
         model: 'auto-smart',
         effort: 'low',
         contextWindow: '1m',
+        modelParameters: { optimize_for: 'cost' },
         approval: ChatApprovalMode.AcceptEdits,
         configDir: '/Users/dev/.config/work',
         branch: 'feat/x',
@@ -141,6 +147,7 @@ describe('applyRunConfig', () => {
       model: 'auto-smart',
       effort: 'low',
       contextWindow: '1m',
+      modelParameters: { optimize_for: 'cost' },
       approval: ChatApprovalMode.AcceptEdits,
       branch: 'feat/x',
     });
@@ -186,6 +193,7 @@ describe('applyRunConfig', () => {
       model: null,
       effort: null,
       contextWindow: null,
+      modelParameters: {},
       approval: null,
       configDir: null,
     });

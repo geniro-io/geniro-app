@@ -15,11 +15,13 @@
 
 import * as runtime from '../runtime';
 import type {
+  AgentCacheResetDto,
   AgentContextWindowListingDto,
   AgentEffortListingDto,
   AgentKind,
   AgentMcpListingDto,
   AgentModelDto,
+  AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
   SetMcpServerEnabledDto,
@@ -40,6 +42,11 @@ export interface AgentsApiListAgentMcpServersRequest {
     cwd?: string;
     configDir?: string;
     refresh?: string;
+}
+
+export interface AgentsApiListAgentModelParametersRequest {
+    agent: AgentKind;
+    model?: string;
 }
 
 export interface AgentsApiListAgentModelsRequest {
@@ -66,6 +73,43 @@ export interface AgentsApiSetAgentMcpServerEnabledRequest {
  * 
  */
 export class AgentsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async clearAgentCachesRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentCacheResetDto>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/caches/clear`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async clearAgentCaches(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentCacheResetDto> {
+        const response = await this.clearAgentCachesRaw(initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -228,6 +272,58 @@ export class AgentsApi extends runtime.BaseAPI {
      */
     async listAgentMcpServers(requestParameters: AgentsApiListAgentMcpServersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentMcpListingDto> {
         const response = await this.listAgentMcpServersRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listAgentModelParametersRaw(requestParameters: AgentsApiListAgentModelParametersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<AgentModelParameterListingDto>> {
+        if (requestParameters['agent'] == null) {
+            throw new runtime.RequiredError(
+                'agent',
+                'Required parameter "agent" was null or undefined when calling listAgentModelParameters().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['agent'] != null) {
+            queryParameters['agent'] = requestParameters['agent'];
+        }
+
+        if (requestParameters['model'] != null) {
+            queryParameters['model'] = requestParameters['model'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/agents/model-parameters`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listAgentModelParameters(requestParameters: AgentsApiListAgentModelParametersRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<AgentModelParameterListingDto> {
+        const response = await this.listAgentModelParametersRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

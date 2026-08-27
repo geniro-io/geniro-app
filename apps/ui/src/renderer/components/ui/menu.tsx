@@ -1,4 +1,4 @@
-import { Check } from 'lucide-react';
+import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import { popoverSurface } from './popover';
@@ -26,6 +26,36 @@ export interface MenuItem {
    * decision, and every menu that has one should read the same.
    */
   tone?: 'destructive';
+  /**
+   * Whether this row carries the checkmark, overriding the menu's own
+   * `item.value === value` rule.
+   *
+   * A menu normally holds ONE choice, so the selected row is the one matching
+   * the menu's value. It exists for the menu that holds SEVERAL independent
+   * choices at once — a model plus each of that model's own settings, in one
+   * panel (`chats/model-settings-select.tsx`) — where a single value can only
+   * ever check one of them and every other block would open showing nothing
+   * chosen. Left undefined, the old rule applies unchanged.
+   */
+  checked?: boolean;
+  /**
+   * The rows this one OPENS instead of committing — a second level.
+   *
+   * A row carrying one is a heading with a value on it: the label names the
+   * choice, {@link hint} states where it currently stands, and a chevron says
+   * there is more behind it. Nothing about it is a checkbox, so it never takes
+   * the checkmark.
+   *
+   * It exists because one panel could not hold a model AND everything that
+   * model can be run with: measured on cursor's `claude-opus-5`, five blocks
+   * plus thirty-four model rows is a scroller nobody reads to the end of, and
+   * a flat list is what got reported ("сейчас у нас один огромный большой
+   * список. У нас должно быть двух-уровневое меню"), with Cursor's own picker
+   * as the reference — one compact list of axes, each opening its values.
+   */
+  submenu?: MenuGroup[];
+  /** Gives {@link submenu} a filter field — for a level with many rows. */
+  submenuSearchPlaceholder?: string;
   /**
    * Visible but not choosable — an option that exists and cannot be taken.
    *
@@ -116,7 +146,9 @@ export function Menu({
   triggerRef,
   onSelect,
   onClose,
+  onCloseSubmenu,
   labelledBy,
+  id,
   className,
 }: {
   open: boolean;
@@ -127,7 +159,13 @@ export function Menu({
   searchPlaceholder?: string;
   emptyLabel?: string;
   align?: 'start' | 'end';
-  side?: 'top' | 'bottom';
+  /**
+   * Where the panel sits relative to its trigger. `right` is the SUBMENU
+   * placement — beside the row that opened it rather than above or below —
+   * and is floating-only, since a second level inside a scrolling list has to
+   * escape it.
+   */
+  side?: 'top' | 'bottom' | 'right';
   /**
    * What the panel is positioned against. Omitted, it takes
    * {@link MenuAnchorContext} — so a clipping container decides for every menu
@@ -148,7 +186,18 @@ export function Menu({
   triggerRef?: React.RefObject<HTMLElement | null>;
   onSelect: (value: string) => void;
   onClose: () => void;
+  /**
+   * Dismiss just THIS level, leaving the one that opened it standing.
+   *
+   * Only a second level is given one, and it is what `ArrowLeft` runs: without
+   * it the sole way out of a submenu is `Escape`, which closes the whole picker
+   * — so a keyboard user who opened the wrong axis had to reopen the panel and
+   * navigate back to where they were.
+   */
+  onCloseSubmenu?: () => void;
   labelledBy?: string;
+  /** Ties this panel to the row that opened it, via that row's `aria-controls`. */
+  id?: string;
   /**
    * Panel overrides — in practice its WIDTH, for a menu that opens inside a
    * container narrower than the default.
@@ -190,6 +239,18 @@ export function Menu({
    */
   const [maxHeight, setMaxHeight] = React.useState<number | null>(null);
   /**
+   * The value of the row whose second level is open, or null.
+   *
+   * The row that opened it is remembered as a plain ref rather than one ref per
+   * row: only one submenu is open at a time, and the child needs its trigger's
+   * rect for placement. Set from the event's own `currentTarget` at the moment
+   * of opening, so it is already there when the child mounts.
+   */
+  const [submenuFor, setSubmenuFor] = React.useState<string | null>(null);
+  const submenuTriggerRef = React.useRef<HTMLElement | null>(null);
+  /** What the open row's `aria-controls` points at — one panel at a time. */
+  const submenuPanelId = React.useId();
+  /**
    * The `fixed` box for `anchor="viewport"`, measured off the trigger — null in
    * ancestor mode, where the placement is a class rather than a measurement.
    */
@@ -216,15 +277,25 @@ export function Menu({
         return;
       }
       const rect = trigger.getBoundingClientRect();
-      setBox({
-        position: 'fixed',
-        ...(side === 'top'
-          ? { bottom: window.innerHeight - rect.top + TRIGGER_GAP }
-          : { top: rect.bottom + TRIGGER_GAP }),
-        ...(align === 'end'
-          ? { right: window.innerWidth - rect.right }
-          : { left: rect.left }),
-      });
+      setBox(
+        side === 'right'
+          ? {
+              position: 'fixed',
+              // Aligned with the row's own top edge, nudged by the panel's
+              // padding so the first child row lines up with its parent.
+              top: Math.max(VIEWPORT_MARGIN, rect.top - 5),
+              left: rect.right + TRIGGER_GAP,
+            }
+          : {
+              position: 'fixed',
+              ...(side === 'top'
+                ? { bottom: window.innerHeight - rect.top + TRIGGER_GAP }
+                : { top: rect.bottom + TRIGGER_GAP }),
+              ...(align === 'end'
+                ? { right: window.innerWidth - rect.right }
+                : { left: rect.left }),
+            },
+      );
     };
     measure();
     window.addEventListener('resize', measure);
@@ -251,19 +322,23 @@ export function Menu({
       // one — pulled back by exactly its overflow. The class-based flip below
       // only reaches the ancestor mode, where `right-0` is a real placement.
       if (floating) {
-        setBox((current) =>
-          current === null || current.left === undefined
+        setBox((current) => {
+          if (current === null || current.left === undefined) {
+            return current;
+          }
+          const corrected = Math.max(
+            VIEWPORT_MARGIN,
+            rect.left - (rect.right - window.innerWidth) - VIEWPORT_MARGIN,
+          );
+          // The SAME object when nothing moves, which is what bounds this now
+          // that the effect re-runs on `box`: React bails out of an identical
+          // reference, so a panel that cannot be pulled back any further (a
+          // measurement that does not change with the offset) settles instead
+          // of correcting itself for ever.
+          return corrected === current.left
             ? current
-            : {
-                ...current,
-                left: Math.max(
-                  VIEWPORT_MARGIN,
-                  rect.left -
-                    (rect.right - window.innerWidth) -
-                    VIEWPORT_MARGIN,
-                ),
-              },
-        );
+            : { ...current, left: corrected };
+        });
       } else {
         setFlipped(true);
       }
@@ -283,7 +358,18 @@ export function Menu({
         Math.max(MIN_MENU_HEIGHT, rect.height - overflow - VIEWPORT_MARGIN),
       );
     }
-  }, [open, side, floating]);
+    // `box` is in here, and without it this whole effect measured the wrong
+    // panel. A floating menu is placed in TWO commits — the effect above reads
+    // the trigger and sets `box`, and only the render after that moves the
+    // panel — so on the first pass this measured it where the ancestor
+    // placement had put it, found no overflow, and never looked again.
+    // Measured at 1000×640 on the landing card's branch picker, which is what
+    // sent it off the right edge (`right: 1036` in a 1000px window) the moment
+    // that card started anchoring to the viewport. Re-running on `box` also
+    // keeps the correction true through the scroll and resize re-measurements,
+    // which reset the offset this may have pulled back; it settles because a
+    // corrected panel overflows nothing, so the next pass changes nothing.
+  }, [open, side, floating, box]);
 
   // A fresh open is a fresh search — a stale filter would hide the very rows
   // the user just reopened the menu to see. Focus moves into the menu either
@@ -294,6 +380,8 @@ export function Menu({
       setQuery('');
       setHighlight(0);
       (searchRef.current ?? panelRef.current)?.focus();
+    } else {
+      setSubmenuFor(null);
     }
   }, [open]);
 
@@ -378,18 +466,66 @@ export function Menu({
     if (item.disabled) {
       return;
     }
+    // A row with a second level OPENS rather than chooses — it has no value of
+    // its own to commit.
+    if (item.submenu) {
+      setSubmenuFor(item.value);
+      return;
+    }
     onSelect(item.value);
     onClose();
   };
 
+  /** The row whose second level is open, looked up across every group. */
+  const submenuItem =
+    submenuFor === null
+      ? null
+      : (groups
+          .flatMap((group) => group.items)
+          .find((item) => item.value === submenuFor && item.submenu) ?? null);
+
   const onKeyDown = (event: React.KeyboardEvent): void => {
-    if (event.key === 'Escape') {
+    /**
+     * Consume this key here and nowhere above.
+     *
+     * Scoped to the keys the panel actually handles, never the whole event
+     * stream: the second level renders INSIDE the first, so an arrow press that
+     * bubbled moved BOTH highlights — but this panel is also inside whatever
+     * opened it, and stopping every key there costs the ancestors their own.
+     * `Dialog` traps Tab on its card and closes on Escape from a `document`
+     * listener, and `App` binds ⌥⌘L on `window`; React's `stopPropagation`
+     * stops the NATIVE event at its root container, which is below all three.
+     * So a blanket stop let Tab escape the modal focus trap for as long as any
+     * picker was open.
+     */
+    const consume = (): void => {
       event.preventDefault();
+      event.stopPropagation();
+    };
+    // Back out of this level, keeping the one that opened it — the second level
+    // is the only one placed to the `right`, so that placement is what says
+    // there is a level to go back to.
+    //
+    // Not while the caret is in the search field: Left and Right are caret keys
+    // there, and the one submenu that HAS a field is the model list, whose 34
+    // rows are what the field exists for — so backing out on ArrowLeft would
+    // discard a half-typed query instead of moving the caret one character.
+    if (
+      event.key === 'ArrowLeft' &&
+      onCloseSubmenu &&
+      !(event.target instanceof HTMLInputElement)
+    ) {
+      consume();
+      onCloseSubmenu();
+      return;
+    }
+    if (event.key === 'Escape') {
+      consume();
       onClose();
       return;
     }
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault();
+      consume();
       const step = event.key === 'ArrowDown' ? 1 : -1;
       setHighlight((current) => {
         if (selectable.length === 0) {
@@ -400,7 +536,7 @@ export function Menu({
       return;
     }
     if (event.key === 'Enter') {
-      event.preventDefault();
+      consume();
       const item = selectable[highlight];
       if (item) {
         commit(item);
@@ -411,8 +547,11 @@ export function Menu({
   return (
     <div
       ref={panelRef}
-      role="listbox"
-      aria-labelledby={labelledBy}
+      id={id}
+      // The panel and its listbox are two elements (see the rows container
+      // below), so what carries the surface and the placement needs a hook of
+      // its own — `[role="listbox"]` now finds the rows, which have neither.
+      data-slot="menu-panel"
       tabIndex={-1}
       onKeyDown={onKeyDown}
       // Both are MEASUREMENTS, so both are inline: the height cap when the
@@ -454,11 +593,19 @@ export function Menu({
           />
         </div>
       ) : null}
-      {/* `min-h-0` is what lets a flex CHILD shrink below its content height —
+      {/* The LISTBOX is this rows container, not the panel around it: a
+          `listbox` may own only `option`/`group` children, and the panel also
+          holds the search field and — the case that broke it — the second
+          level, itself a listbox. Nested, a screen reader computes the wrong
+          set size for the outer list and may not expose the inner one at all.
+          `min-h-0` is what lets a flex CHILD shrink below its content height —
           without it the list keeps its full size and the capped panel clips
           instead of scrolling. `max-h-80` stays as the cap for a panel that
           fits: a menu is a picker, not a page. */}
-      <div className="max-h-80 min-h-0 flex-1 overflow-y-auto p-1">
+      <div
+        role="listbox"
+        aria-labelledby={labelledBy}
+        className="max-h-80 min-h-0 flex-1 overflow-y-auto p-1">
         {selectable.length === 0 ? (
           <p className="px-2.5 py-2 text-sm text-muted-foreground">
             {emptyLabel}
@@ -511,14 +658,26 @@ export function Menu({
                 {group.items.map((item, itemIndex) => {
                   const index = offset + itemIndex;
                   const active = index === highlight;
-                  const selected = !item.action && item.value === value;
+                  const selected =
+                    item.checked ?? (!item.action && item.value === value);
                   return (
                     <button
                       key={item.value}
                       type="button"
                       role="option"
                       title={item.title}
-                      aria-selected={selected}
+                      // A row that OPENS a level is not a choice, so it carries
+                      // no `aria-selected` — it advertises the panel behind it
+                      // instead.
+                      {...(item.submenu
+                        ? {
+                            'aria-haspopup': 'listbox' as const,
+                            'aria-expanded': submenuFor === item.value,
+                            ...(submenuFor === item.value
+                              ? { 'aria-controls': submenuPanelId }
+                              : {}),
+                          }
+                        : { 'aria-selected': selected })}
                       disabled={item.disabled}
                       className={cn(
                         // `rounded-lg`, which is the panel's own 12px radius
@@ -538,8 +697,23 @@ export function Menu({
                         item.disabled &&
                           'cursor-not-allowed text-muted-foreground opacity-60',
                       )}
-                      onMouseEnter={() => setHighlight(index)}
-                      onClick={() => commit(item)}>
+                      onMouseEnter={(event) => {
+                        setHighlight(index);
+                        // Hovering ANY row decides the second level: onto a row
+                        // that has one it opens, onto one that has not it
+                        // closes. Without the second half the panel would stay
+                        // open over the rows the pointer moved on to.
+                        if (item.submenu) {
+                          submenuTriggerRef.current = event.currentTarget;
+                          setSubmenuFor(item.value);
+                        } else {
+                          setSubmenuFor(null);
+                        }
+                      }}
+                      onClick={(event) => {
+                        submenuTriggerRef.current = event.currentTarget;
+                        commit(item);
+                      }}>
                       {item.icon}
                       <span className="min-w-0 flex-1 truncate">
                         {item.label}
@@ -549,7 +723,12 @@ export function Menu({
                           {item.hint}
                         </span>
                       ) : null}
-                      {selected ? (
+                      {item.submenu ? (
+                        <ChevronRight
+                          aria-hidden="true"
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                      ) : selected ? (
                         <Check className="size-4 shrink-0 text-primary" />
                       ) : null}
                     </button>
@@ -560,6 +739,34 @@ export function Menu({
           })
         )}
       </div>
+      {/* The second level, rendered INSIDE this panel's DOM and OUTSIDE its
+          listbox. Inside the panel because the outside-click guard above asks
+          `panel.contains(target)`, so a click in the child must be a descendant
+          or choosing a value would close the menu under itself; outside the
+          listbox because that role admits no listbox child. `position: fixed`
+          still escapes this panel's own scroller, so being a descendant costs
+          no clipping. */}
+      {submenuItem ? (
+        <Menu
+          open
+          id={submenuPanelId}
+          groups={submenuItem.submenu ?? []}
+          searchPlaceholder={submenuItem.submenuSearchPlaceholder}
+          side="right"
+          anchor="viewport"
+          triggerRef={submenuTriggerRef}
+          // Straight through to the root's caller: a value chosen two levels
+          // down is still the one value this menu was opened to pick.
+          onSelect={onSelect}
+          onClose={onClose}
+          onCloseSubmenu={() => {
+            setSubmenuFor(null);
+            // The child held focus, so without this the arrow keys would have
+            // nothing listening once it unmounts.
+            panelRef.current?.focus();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

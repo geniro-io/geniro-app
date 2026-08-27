@@ -132,7 +132,9 @@ describe('SessionPicker', () => {
     act(() => {
       trigger.click();
     });
-    const panel = container.querySelector('[role="listbox"]') as HTMLElement;
+    const panel = container.querySelector(
+      '[data-slot="menu-panel"]',
+    ) as HTMLElement;
     // Asked in whichever way this menu is placed, since that is a separate
     // decision from the side: a viewport-anchored panel carries a measured
     // `top`, an ancestor-anchored one the `top-full` offset. Either way the

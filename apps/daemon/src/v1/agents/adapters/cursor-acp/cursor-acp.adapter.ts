@@ -4,6 +4,8 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { AgentKind } from '../../../runs/runs.types';
+import type { AgentVersionService } from '../../services/agent-version.service';
+import { ModelVocabularyStore } from '../../services/model-vocabulary.store';
 import { resolveAgentBinary } from '../../utils/agent-binary';
 import { spawnAgentVersion } from '../../utils/agent-version';
 import { ModelVocabularyCache } from '../../utils/model-vocabulary-cache';
@@ -14,10 +16,12 @@ import {
 import type { AcpToolCall } from '../acp/acp.types';
 import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
 import {
+  ACP_MODEL_CONFIG_CATEGORY,
   acpModelProbeFrames,
   acpModelProbeSettled,
   acpProbeEnumeratedConfigOptions,
   readAcpConfigOptionProbe,
+  readAcpConfigOptionsProbe,
   readAcpModelProbe,
 } from '../acp/acp-models';
 import {
@@ -35,11 +39,13 @@ import type {
   AgentContextUsage,
   AgentContextWindowListing,
   AgentEffortListing,
+  AgentMcpFolderFacts,
   AgentMcpListingResult,
   AgentMcpServerHealth,
   AgentMcpServerHealthInput,
   AgentMcpServersInput,
   AgentModel,
+  AgentModelParameterListing,
   AgentSessionHistory,
   AgentSessionImportInput,
   AgentSessionListing,
@@ -49,6 +55,7 @@ import type {
   TurnDriver,
 } from '../adapter.types';
 import { AgentAdapter, type AgentAdapterOptions } from '../agent-adapter';
+import { readFileSafe } from '../utils/fs-safe.utils';
 import { matchSessions } from '../utils/session-search.utils';
 import {
   CURSOR_ACP_ARGS,
@@ -61,6 +68,7 @@ import {
   CURSOR_EFFORT_PARAMETER_IDS,
   CURSOR_HOME_DIR_NAME,
   CURSOR_MAX_MODE,
+  CURSOR_MCP_CONFIG_NAME,
   CURSOR_MCP_DISABLE_ARGS,
   CURSOR_MCP_EMPTY_MARKER,
   CURSOR_MCP_ENABLE_ARGS,
@@ -73,6 +81,10 @@ import {
   CURSOR_MCP_TOOLS_TIMEOUT_MS,
   CURSOR_MCP_USER_DISABLED_REASON,
   CURSOR_MODEL_PROBE_TIMEOUT_MS,
+  CURSOR_OWNED_PARAMETER_IDS,
+  CURSOR_PLUGIN_MANIFEST_PATHS,
+  CURSOR_PLUGIN_SCAN_DEPTH,
+  CURSOR_PLUGINS_DIR_NAME,
   CURSOR_PROFILE_DIR_NAME,
   CURSOR_SESSION_LIST_TIMEOUT_MS,
   CURSOR_SESSION_LOAD_TIMEOUT_MS,
@@ -89,6 +101,14 @@ import {
 import { readCursorAgentFailure } from './utils/cursor-agent-failure.utils';
 import { readCursorContextUsage } from './utils/cursor-context-store.utils';
 import { parseCursorMcpList } from './utils/cursor-mcp-list.utils';
+import {
+  cursorProjectRoot,
+  descendants,
+  mcpOrigins,
+  parseMcpServerNames,
+  parsePluginMcpPath,
+  pluginOnlyNote,
+} from './utils/cursor-mcp-scope.utils';
 import { parseCursorToolsProbe } from './utils/cursor-mcp-tools.utils';
 import {
   cursorModelSelection,
@@ -131,8 +151,30 @@ export interface CursorAcpAdapterOptions extends AgentAdapterOptions {
    * — see `CURSOR_SESSION_STORE_DIR_NAME`.
    */
   sessionStoreDir?: string;
+  /**
+   * The daemon's memoized `--version` reader, when one is provided.
+   *
+   * Optional so a standalone or test construction still works — it falls back
+   * to forking directly — but the module always supplies it, because this
+   * version is read BEFORE every vocabulary cache's key can be computed, so a
+   * cache HIT still paid for a process fork. See {@link
+   * CursorAcpAdapter.resolveBinaryVersion}.
+   */
+  versions?: AgentVersionService;
   /** The user's home, for reading their `cli-config.json` (test seam). */
   homeDir?: string;
+  /**
+   * Where handshake replies survive a daemon restart — see
+   * {@link ModelVocabularyStore} and {@link probeModelConfigOptionsShared}.
+   *
+   * REQUIRED, and deliberately so. It began as an optional field defaulting to
+   * a store over `<userData>/model-vocabularies.json`, which made every adapter
+   * built without one share a single global file — the specs then leaked
+   * probes into each other through the developer's own home directory, and two
+   * of them failed for it. A dependency that is wrong when it is implicit
+   * should not have a default.
+   */
+  vocabularyStore: ModelVocabularyStore;
 }
 
 /**
@@ -372,6 +414,36 @@ export class CursorAcpAdapter extends AgentAdapter {
           ['.cursor', 'commands'],
           ['.claude', 'commands'],
         ],
+        /**
+         * This CLI has a full plugin system, and it reads BOTH hosts' caches —
+         * which is why the composer listed none of them. It reports no command
+         * list of its own (its ACP `session/new` reply carries an empty
+         * `availableCommands`, measured), so unlike claude the disk scan is the
+         * only way a plugin's skills can reach the `/` autocomplete: without
+         * this, a skill the agent would happily run could not be offered, and
+         * the send was refused as a command this agent does not have.
+         *
+         * The manifest list and its order are the CLI's own
+         * (`[".cursor-plugin/plugin.json", ".claude-plugin/plugin.json",
+         * "plugin.json"]`, read out of the shipped 2026.08.11-e8db854 bundle) —
+         * which is also what makes reading claude's cache correct rather than
+         * opportunistic: this CLI accepts a Claude plugin manifest by design.
+         */
+        plugins: [
+          ['.cursor', 'plugins', 'cache'],
+          ['.claude', 'plugins', 'cache'],
+        ].map((cacheDir) => ({
+          cacheDir,
+          manifests: CURSOR_PLUGIN_MANIFEST_PATHS,
+          /**
+           * A plugin's cursor-specific build first. Verified on the geniro
+           * plugin, which ships both: `cursor/skills/` names its skills
+           * `geniro-implement` (what this CLI resolves and runs) while
+           * `skills/` names the same skill `implement`, so taking both would
+           * offer one skill twice under two names.
+           */
+          skillDirs: [['cursor', 'skills'], ['skills']],
+        })),
       },
       /**
        * ACP streams natively: `session/update` carries `agent_message_chunk`
@@ -522,6 +594,28 @@ export class CursorAcpAdapter extends AgentAdapter {
          * — still shows the server unauthenticated on the re-read that follows.
          */
         loginFailureMarkers: [],
+        /**
+         * Null: `cursor-agent mcp enable <name>` IS the approval, and the CLI
+         * says so in both its help ("Add an MCP server to the local approved
+         * list") and its own answer. Measured end to end on 2026.08.11-e8db854
+         * against a git project whose `.cursor/mcp.json` defined one server:
+         *
+         * ```
+         * $ cursor-agent mcp list
+         * probe-echo: not loaded (needs approval)
+         * $ cursor-agent mcp enable probe-echo
+         * ✓ Enabled and approved MCP server: probe-echo
+         * $ cursor-agent mcp list
+         * probe-echo: ready
+         * ```
+         *
+         * Its bundle agrees: `mcp list` reports `unapproved` for a server the
+         * PROJECT file defines whose key is missing from that project's
+         * `mcp-approvals.json`, and the `enable` path calls `addApproval` for
+         * exactly that key. So the approval is per project and the cwd is the
+         * whole of the scoping, as it is for the toggle beside it.
+         */
+        approveUnavailableReason: null,
       },
       auth: {
         /**
@@ -639,7 +733,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          * terminal, which is the handoff button and not this picker.
          */
         listingPartialReason:
-          'only sessions started over ACP are listed — the chats you started with the interactive `cursor-agent` are kept in a separate store its ACP server reports no sessions for, and answers "not found" when asked to load one',
+          'only the conversations started in geniro are listed — cursor-agent keeps the ones you started in your terminal separately, and cannot reopen those from here',
         // `session/load` streams the whole prior conversation back before the
         // turn's prompt can be sent, so the history arrives on the first turn
         // via `AgentTurnInput.importSessionHistory` rather than off disk.
@@ -745,7 +839,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          * three pixels away was showing one.
          */
         unavailableReason:
-          'cursor-agent reports no spend over ACP — it sends no usage_update and its prompt reply carries no usage, so a cost for this conversation cannot be shown',
+          'cursor-agent does not report what a conversation costs, so no cost can be shown for this chat',
         /**
          * No breakdown either — RE-MEASURED 2026-08-15 on 2026.08.11-e8db854,
          * because "the CLI shows a percentage, so it must send one" is a
@@ -790,7 +884,7 @@ export class CursorAcpAdapter extends AgentAdapter {
          * and `readContextUsage` below reads it from there. See that method
          * and `utils/cursor-context-store.utils.ts`.
          */
-        breakdownUnavailableReason: null,
+        breakdown: { kind: 'reads', channel: 'session-store' },
         /**
          * Nothing on this transport says anything about the ACCOUNT. ACP has
          * no such method, cursor advertises no vendor extension for one, and
@@ -801,8 +895,11 @@ export class CursorAcpAdapter extends AgentAdapter {
          * and nothing about limits), so the honest answer is a sentence rather
          * than an empty section a user would read as "no limits".
          */
-        planLimitsUnavailableReason:
-          'cursor-agent does not report its plan limits — neither ACP nor its own commands expose a usage allowance',
+        planLimits: {
+          kind: 'unavailable',
+          reason:
+            'cursor-agent does not report your plan limits, so there is no remaining allowance to show here',
+        },
       },
       /**
        * Probe-verified on 2026.07.23-e383d2b, and the reason is worse than a
@@ -879,7 +976,7 @@ export class CursorAcpAdapter extends AgentAdapter {
       handoff: {
         kind: 'unavailable',
         reason:
-          'cursor-agent cannot reopen this conversation: sessions started over ACP are not in its chat store, and resuming one would silently open an empty chat',
+          'cursor-agent cannot reopen a geniro conversation in your terminal — it keeps those separately from its own chats, and would open an empty one instead',
       },
     };
   }
@@ -1065,6 +1162,94 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * Every OTHER setting this model enumerates — the same handshake reply again,
+   * read as a SUBTRACTION instead of a lookup.
+   *
+   * The two listings above each ask the reply for one id they were written
+   * knowing. This one asks for everything and removes what geniro already
+   * drives ({@link CURSOR_OWNED_PARAMETER_IDS}, plus the model option by its
+   * protocol category), so a setting nobody here has heard of still reaches the
+   * user. Measured 2026-08-26 on 2026.08.11-e8db854, one seeded handshake per
+   * model — three axes were invisible before this existed: `optimize_for`
+   * (`auto-smart` only: intelligence | balanced | cost), `thinking`
+   * (`claude-opus-5`) and `fast` (`claude-opus-5`, `gpt-5.6-sol`).
+   *
+   * An option the reply named with NO values is dropped rather than offered: a
+   * picker with nothing to pick is the dead control this app keeps removing.
+   */
+  override async listModelParameters(
+    model: string | null,
+    options: AgentCommandOptions = {},
+  ): Promise<AgentModelParameterListing> {
+    const wanted = (model ?? '').trim();
+    // No model chosen yet. Like the context listing and unlike the effort one
+    // there is no union to fall back on — these axes exist per model, and
+    // `optimize_for` exists on exactly one of the thirty-four.
+    if (wanted === '') {
+      return {
+        parameters: [],
+        unavailableReason: 'pick a model to see the settings it offers',
+        exact: false,
+      };
+    }
+    const stdout = await this.probeModelConfigOptionsShared(
+      wanted,
+      'parameters',
+      options,
+    );
+    return this.readModelParameterProbe(stdout ?? null, wanted);
+  }
+
+  /**
+   * The subtraction itself.
+   *
+   * Same three-way split the effort reader documents, with one difference that
+   * matters: a probe that could not be taken answers EMPTY rather than standing
+   * in with anything, because there is nothing to stand in with. It is marked
+   * `exact: false` so a caller can tell "this model has no further settings"
+   * from "nobody could ask".
+   */
+  private readModelParameterProbe(
+    stdout: string | null,
+    model: string,
+  ): AgentModelParameterListing {
+    if (stdout === null || !acpProbeEnumeratedConfigOptions(stdout)) {
+      return {
+        parameters: [],
+        unavailableReason: `cursor-agent could not be asked which settings ${model} offers`,
+        exact: false,
+      };
+    }
+    const parameters = readAcpConfigOptionsProbe(stdout)
+      .filter(
+        (option) =>
+          option.category !== ACP_MODEL_CONFIG_CATEGORY &&
+          !CURSOR_OWNED_PARAMETER_IDS.includes(option.id) &&
+          option.options.length > 0,
+      )
+      .map((option) => ({
+        id: option.id,
+        // The agent's own word, never a prettified id: `Optimize For` is what
+        // cursor calls `optimize_for`, and inventing that string here would be
+        // this app naming another product's setting.
+        label: option.name ?? option.id,
+        values: option.options.map(({ value, name }) => ({
+          id: value,
+          label: name,
+        })),
+        current: option.currentValue,
+      }));
+    return {
+      parameters,
+      unavailableReason:
+        parameters.length === 0
+          ? `${model} offers no settings beyond the ones already on screen`
+          : null,
+      exact: true,
+    };
+  }
+
+  /**
    * {@link probeModelConfigOptions}, joined through {@link handshakeProbeCache}
    * so `listModelEfforts` and `listModelContextWindows` share ONE handshake
    * for the same (model, binary version) instead of each spawning its own.
@@ -1080,6 +1265,13 @@ export class CursorAcpAdapter extends AgentAdapter {
    * `label` still reaches the underlying probe on a cache MISS, so the
    * throwaway profile root it names is unaffected; a HIT answers with no
    * spawn at all, so which label the joining caller asked under is moot.
+   *
+   * {@link ModelProbeStore} sits INSIDE that cache's fetch rather than beside
+   * it, which is what makes the two one mechanism: the single-flight, the
+   * version check and the TTL still decide, and the disk is consulted only on
+   * the path that would otherwise spawn. That ordering is also the reason the
+   * read is synchronous — an await here would let a second caller past the
+   * check the cache just made.
    */
   private async probeModelConfigOptionsShared(
     model: string,
@@ -1087,31 +1279,83 @@ export class CursorAcpAdapter extends AgentAdapter {
     options: AgentCommandOptions,
   ): Promise<string | null | undefined> {
     const version = await this.resolveBinaryVersion(options);
-    return this.handshakeProbeCache.read(
-      this.getConfig().kind,
+    const kind = this.getConfig().kind;
+    const stored = this.vocabularyStore.read(
+      kind,
       model,
       version,
-      () => this.probeModelConfigOptions(model, label, options),
+      isProbeReply,
     );
+    if (stored !== null) {
+      if (stored.stale) {
+        // BEHIND the answer, never in front of it: the stored reply is still
+        // the best anyone has, so making the user wait for a re-ask would spend
+        // the six seconds this store exists to remove.
+        void this.takeModelConfigOptions(kind, model, version, label, options);
+      }
+      return stored.value;
+    }
+    return this.takeModelConfigOptions(kind, model, version, label, options);
   }
 
   /**
-   * This CLI's own `--version` line — resolved FRESH on every raw-probe read
-   * rather than memoized here, because it IS the freshness key
-   * {@link handshakeProbeCache} checks: a memoized version would leave a
-   * stale key outliving the very upgrade this exists to catch.
+   * The ask itself, joined through {@link handshakeProbeCache} so a cold read
+   * and a background refresh cannot spawn two process groups for one answer.
    *
-   * Cheap next to what it gates: a plain `--version` fork against the ~2s ACP
-   * handshake it decides whether to repeat, so paying it once per listing (up
-   * to two per cold model) costs nothing next to the spawn it can save.
+   * Never rejects — every caller is either serving a picker or running behind
+   * an answer already given, and neither has anywhere to put a rejection.
+   */
+  private takeModelConfigOptions(
+    kind: AgentKind,
+    model: string,
+    version: string | null,
+    label: string,
+    options: AgentCommandOptions,
+  ): Promise<string | null | undefined> {
+    return this.handshakeProbeCache
+      .read(kind, model, version, async () => {
+        const fresh = await this.probeModelConfigOptions(model, label, options);
+        // Only a reply that ENUMERATED options is worth keeping. The two it
+        // excludes are the ones that would be served back as a fact: a probe
+        // that could not be taken at all is `undefined`, and a reply nothing
+        // can read would be re-served as "cursor-agent could not be asked" long
+        // after whatever broke it was fixed.
+        if (
+          typeof fresh === 'string' &&
+          acpProbeEnumeratedConfigOptions(fresh)
+        ) {
+          this.vocabularyStore.remember(kind, model, version, fresh);
+        }
+        return fresh;
+      })
+      .catch(() => undefined);
+  }
+
+  /**
+   * This CLI's own `--version` line — the freshness key
+   * {@link handshakeProbeCache} and {@link vocabularyStore} are both checked
+   * against.
+   *
+   * Read through `AgentVersionService`'s 60s memo rather than forked here. The
+   * fork is 0.54s and three listings key off this version, so a cache HIT would
+   * otherwise pay for a process before it could read a cached byte; the memo's
+   * own TTL is short precisely so an upgrade is still noticed while somebody is
+   * wondering why. `onSpawn` is not called on a memo hit — no child, nothing to
+   * register.
    */
   private resolveBinaryVersion(
     options: AgentCommandOptions,
   ): Promise<string | null> {
-    return spawnAgentVersion(this.command, {
+    const forkOptions = {
       execFileFn: this.options.execFileFn,
       onSpawn: options.onSpawn,
-    });
+    };
+    return (
+      this.cursorOptions.versions?.resolve(
+        AgentKind.CursorAgent,
+        forkOptions,
+      ) ?? spawnAgentVersion(this.command, forkOptions)
+    );
   }
 
   /**
@@ -1380,6 +1624,87 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * Where this folder's servers were defined, and what cursor's own app loads
+   * on top of them.
+   *
+   * The two lists this method is named for stay EMPTY here, and that is
+   * unchanged: cursor reports a switched-off server as `disabled` in the
+   * listing itself, and `mcp enable` undoes the only state its switch writes,
+   * so there is no disabled set to read and nothing locked off. What the
+   * listing genuinely cannot say is which SCOPE a row came from — it merges the
+   * two files by name and prints one row each — which is the whole reason this
+   * override now exists.
+   *
+   * Read-only and best-effort throughout: every file here belongs to the user,
+   * and an unreadable one costs a label rather than the listing.
+   */
+  override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
+    const home = this.cursorOptions.homeDir ?? homedir();
+    const cursorHome = join(home, CURSOR_HOME_DIR_NAME);
+    const [user, workspace] = await Promise.all([
+      readFileSafe(join(cursorHome, CURSOR_MCP_CONFIG_NAME)),
+      readFileSafe(
+        join(
+          cursorProjectRoot(cwd),
+          CURSOR_HOME_DIR_NAME,
+          CURSOR_MCP_CONFIG_NAME,
+        ),
+      ),
+    ]);
+    return {
+      disabled: [],
+      lockedOff: [],
+      origins: mcpOrigins(
+        parseMcpServerNames(user),
+        parseMcpServerNames(workspace),
+      ),
+      interactiveOnlyNote: pluginOnlyNote(
+        await this.readPluginServerNames(cursorHome),
+      ),
+    };
+  }
+
+  /**
+   * The servers this machine's installed plugins declare, by name.
+   *
+   * Two files per plugin, because the manifest only POINTS at its MCP config
+   * (`"mcpServers": "./.dd_cursor_mcp.json"`). The scan is depth-bounded (see
+   * {@link CURSOR_PLUGIN_SCAN_DEPTH}) — the plugin cache holds a checkout per
+   * plugin, and this runs on a listing the panel waits for.
+   *
+   * Every manifest shape the skills walk accepts
+   * ({@link CURSOR_PLUGIN_MANIFEST_PATHS}), not just cursor's own: a plugin
+   * carrying one of the other two contributed skills and no servers, so the
+   * note omitted servers the user can see working in Cursor. This still walks
+   * the broader `plugins/` root rather than the skills walk's `plugins/cache`,
+   * which is deliberate — `descendants` reaches the same version directories
+   * AND `plugins/local`, which that narrower root does not.
+   */
+  private async readPluginServerNames(cursorHome: string): Promise<string[]> {
+    const names: string[] = [];
+    const root = join(cursorHome, CURSOR_PLUGINS_DIR_NAME);
+    for (const dir of await descendants(root, CURSOR_PLUGIN_SCAN_DEPTH)) {
+      for (const manifest of CURSOR_PLUGIN_MANIFEST_PATHS) {
+        const relative = parsePluginMcpPath(
+          await readFileSafe(join(dir, ...manifest)),
+        );
+        if (relative === null) {
+          continue;
+        }
+        // Resolved against the PLUGIN's own directory, which is `dir` itself —
+        // a pointer like `./.dd_cursor_mcp.json` is written relative to the
+        // plugin, not to the manifest beside it. Taking the manifest's
+        // grandparent instead would land one level too high for the bare
+        // `plugin.json` shape, which sits AT the plugin root.
+        names.push(
+          ...parseMcpServerNames(await readFileSafe(join(dir, relative))),
+        );
+      }
+    }
+    return names;
+  }
+
+  /**
    * Switch one server for one folder by driving the CLI's own subcommand.
    *
    * `cursor-agent mcp enable|disable <name>`, run IN that folder — the CLI
@@ -1431,8 +1756,16 @@ export class CursorAcpAdapter extends AgentAdapter {
     string | null | undefined
   >({ ttlMs: CURSOR_HANDSHAKE_PROBE_TTL_MS, now: Date.now });
 
-  constructor(private readonly cursorOptions: CursorAcpAdapterOptions = {}) {
+  /** The durable half of that cache — see {@link probeModelConfigOptionsShared}. */
+  private readonly vocabularyStore: ModelVocabularyStore;
+
+  constructor(private readonly cursorOptions: CursorAcpAdapterOptions) {
     super(cursorOptions);
+    // Assigned in the BODY rather than as a field initializer: an initializer
+    // reading `cursorOptions` depends on when the parameter property is
+    // assigned relative to it, which is a compiler detail rather than a
+    // guarantee.
+    this.vocabularyStore = cursorOptions.vocabularyStore;
   }
 
   // Resolved per turn so the Settings cliPaths override (GENIRO_CURSOR_BIN on
@@ -1557,6 +1890,16 @@ export class CursorAcpAdapter extends AgentAdapter {
   /**
    * The title this agent gave the conversation, off the same store the
    * breakdown comes from.
+   *
+   * TRUSTWORTHY BECAUSE THE PROMPT SAYS WHAT IT IS, which it did not always.
+   * This CLI names a session from its first prompt, and on ACP that prompt also
+   * carries geniro's own host instructions — read as the user speaking, they
+   * became what the name described: a chat opened with `Hello!` was called
+   * `Geniro Markdown Display`. Wrapping them as host context
+   * (`AcpTurnDriver.composePrompt`) fixed that at its source, so this read is
+   * worth having again rather than replaced by a spawn. Measured after, on
+   * three openings the bare concatenation had ruined: `Bloom Filter Explained`,
+   * `Hello Chat`, `Hello There`.
    *
    * Read from geniro's OWN session directory rather than asked over ACP
    * `session/list`: the agent writes the title into `meta.json` as it goes, and
@@ -1993,6 +2336,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         input.model,
         input.effort,
         input.contextWindow,
+        input.modelParameters,
       ),
       autoDecide: (toolCall) =>
         cursorAutoDecision(input.approvalMode, toolCall),
@@ -2059,6 +2403,19 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
+   * This adapter's own memory of the handshake — the one cache no service can
+   * reach, since three listings share it through
+   * {@link probeModelConfigOptionsShared}.
+   *
+   * The DURABLE half is `ModelVocabularyStore`'s and is cleared by the same
+   * service, not from here: this adapter holds one of two references to that
+   * store, and clearing it here would leave the models listing's copy standing.
+   */
+  override clearCaches(): number {
+    return this.handshakeProbeCache.clear();
+  }
+
+  /**
    * The card projection for a parked `cursor/ask_question`. Reached only for
    * a payload `accepts()` already read, so the null arm is the base class's
    * contract rather than a case that happens.
@@ -2075,4 +2432,17 @@ export class CursorAcpAdapter extends AgentAdapter {
   override withAnswer(input: unknown, answer: string): unknown {
     return withCursorAnswer(input, answer);
   }
+}
+
+/**
+ * What a stored handshake reply has to look like to be served back.
+ *
+ * `ModelVocabularyStore` holds JSON and cannot know what any of it means, so
+ * the shape check belongs to whoever filed the value. Deliberately weak — this
+ * is the CLI's raw stdout, so the only thing knowable about it here is that it
+ * is text somebody wrote; whether it PARSES is the readers' question, and they
+ * each already answer it with their own three-way split.
+ */
+function isProbeReply(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
 }

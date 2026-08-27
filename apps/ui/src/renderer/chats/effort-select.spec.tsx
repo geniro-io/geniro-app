@@ -66,36 +66,22 @@ describe('EffortSelect', () => {
     ]);
   });
 
-  it('renders NO PICKER when the CLI reported no levels', () => {
-    // Never a DISABLED picker: a dead dropdown states a choice the user does not
-    // have. With no reason to show either, nothing renders at all — a chip whose
-    // only explanation is still in flight reads as broken.
+  it('renders NOTHING when the CLI reported no levels', () => {
+    // Never a DISABLED picker and never an explaining word: a control with
+    // nothing to choose is not drawn. It used to be an inert `no effort
+    // control` chip carrying the daemon's sentence on hover, and that word sat
+    // in the composer of every cursor model without an effort axis — which is
+    // most of them — until it was REPORTED ("мы не должны показывать No Effort
+    // Control — мы полностью должны удалить, если у нас нет эффорта").
     const el = render(
       <EffortSelect efforts={[]} value={null} onChange={() => {}} />,
     );
+
     expect(trigger(el)).toBeNull();
     expect(el.textContent).toBe('');
-  });
-
-  it('states the daemon’s reason on an inert chip when there are no levels', () => {
-    // The absence has to explain itself: "I cannot change the effort of a Cursor
-    // model" was reported against a picker that had silently vanished. The
-    // sentence is the DAEMON's (`modelEfforts[]`), never composed here, and it is
-    // hover-only so it costs a working composer nothing.
-    const el = render(
-      <EffortSelect
-        efforts={[]}
-        value={null}
-        unavailableReason="this CLI takes no effort flag — set it in its own settings"
-        onChange={() => {}}
-      />,
-    );
-
-    expect(trigger(el)).toBeNull();
-    expect(el.textContent).toContain('no effort control');
-    expect(el.querySelector('[title]')?.getAttribute('title')).toBe(
-      'this CLI takes no effort flag — set it in its own settings',
-    );
+    // Nothing to hover either — the sentence lived on a `title` and is gone
+    // with the element that carried it.
+    expect(el.querySelector('[title]')).toBeNull();
   });
 
   it('reports the picked level, and null for the default row', () => {
@@ -180,23 +166,19 @@ describe('EffortSelect', () => {
     expect(trigger(el)!.textContent).not.toContain('max');
   });
 
-  it('names the MODEL when it is the model that has no effort axis', () => {
-    // `auto-smart` and `composer-2.5` enumerate no `effort` option at all, so
-    // the picker has nothing to offer — and must say which model, since a
-    // control that simply disappears is indistinguishable from a broken one.
+  it('draws nothing for a MODEL with no effort axis either', () => {
+    // `auto-smart` and `composer-2.5` enumerate no `effort` option at all, and
+    // the reason being about the model rather than the CLI changes nothing on
+    // screen: empty is empty.
     const el = render(
       <EffortSelect
         efforts={[]}
         value={null}
         levelsAreModelSpecific
-        unavailableReason="auto-smart has no reasoning-effort setting"
         onChange={() => {}}
       />,
     );
 
-    expect(el.textContent).toContain('no effort control');
-    expect(el.querySelector('[title]')?.getAttribute('title')).toContain(
-      'auto-smart',
-    );
+    expect(el.textContent).toBe('');
   });
 });

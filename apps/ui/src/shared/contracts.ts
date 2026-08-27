@@ -88,6 +88,11 @@ export interface RunConfig {
   effort: string | null;
   /** Which of the model's context-window sizes; null = the model's own. */
   contextWindow: string | null;
+  /**
+   * The OTHER model settings, keyed by the CLI's own parameter id; `{}` = the
+   * model's own defaults. Opaque here for the reason every CLI vocabulary is.
+   */
+  modelParameters: Record<string, string>;
   /** The daemon's `ChatApprovalMode`. */
   approval: string | null;
   /** Plugin/profile directory, or null for the CLI's own account. */
@@ -153,6 +158,17 @@ export interface Settings {
    * own list and draws the stored value as unavailable rather than sending it.
    */
   lastContextWindows: Partial<Record<CliKind, string>>;
+  /**
+   * The OTHER model settings for the next chat on each CLI, as
+   * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
+   *
+   * Remembered per CLI on the same terms as the window above, and opaque on
+   * this side for the reason every daemon vocabulary is: the ids and the values
+   * belong to the CLI (`shared/contracts.ts` holds no daemon shapes), so this
+   * process stores strings and the renderer checks them against the model's own
+   * listing before they reach a run.
+   */
+  lastModelParameters: Partial<Record<CliKind, Record<string, string>>>;
   /** Explicit overrides for CLI binary locations (else resolved on PATH). */
   cliPaths: Partial<Record<CliKind, string>>;
   /** Whether to check for app updates on launch (wired in M4). */
@@ -326,6 +342,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastModels: {},
   lastEfforts: {},
   lastContextWindows: {},
+  lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,
   sidebarCollapsed: false,
@@ -724,6 +741,15 @@ export interface GeniroApi {
   getDaemonHandle(): Promise<DaemonHandle | null>;
   /** Subscribe to daemon restarts that rotate the loopback handle/token. */
   onDaemonRestarted(listener: (handle: DaemonHandle) => void): () => void;
+  /**
+   * Subscribe to the menu bar's Clear Agent Cache.
+   *
+   * A PUSH from the main process rather than a renderer control, because the
+   * menu bar is where it was asked for — and the work is the renderer's: it
+   * holds the daemon client, and it holds vocabulary caches of its own that the
+   * daemon cannot reach.
+   */
+  onClearAgentCaches(listener: () => void): () => void;
   /** Open the native folder picker; returns the chosen absolute path or null. */
   pickProjectFolder(): Promise<string | null>;
   /** Open the native file picker for an agent binary; returns the path or null. */
@@ -864,13 +890,35 @@ export interface GeniroApi {
    * the thread the banner named.
    */
   onNotificationActivated(listener: (runId: string) => void): () => void;
+  /**
+   * The absolute path of a file the OS handed the renderer — a paste, a drop.
+   *
+   * The one member here that is NOT an IPC channel, and it cannot be one: a
+   * `File` is a renderer object with no representation main could be sent, and
+   * Electron answers this from the renderer side (`webUtils.getPathForFile`,
+   * which replaced the `File.path` property removed in Electron 32). So the
+   * preload answers it itself, and it is SYNCHRONOUS — a paste handler has to
+   * decide whether to swallow the event before it returns.
+   *
+   * Null when the file has no path on disk: one built in JS, or a paste that
+   * carried bytes rather than a file.
+   */
+  filePath(file: File): string | null;
 }
+
+/**
+ * The one {@link GeniroApi} member the preload answers itself — see
+ * {@link GeniroApi.filePath}. Named so the exhaustiveness check below stays
+ * exhaustive over everything that IS a channel.
+ */
+type PreloadLocalMethod = 'filePath';
 
 /** IPC channel names — single source of truth for main ⇄ preload wiring. */
 export const IPC = {
   getStatus: 'geniro:getStatus',
   getDaemonHandle: 'geniro:getDaemonHandle',
   onDaemonRestarted: 'geniro:onDaemonRestarted',
+  onClearAgentCaches: 'geniro:onClearAgentCaches',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
   getSettings: 'geniro:getSettings',
@@ -894,4 +942,7 @@ export const IPC = {
   testNotification: 'geniro:testNotification',
   openNotificationSettings: 'geniro:openNotificationSettings',
   onNotificationActivated: 'geniro:onNotificationActivated',
-} as const satisfies Record<keyof GeniroApi, string>;
+} as const satisfies Record<
+  Exclude<keyof GeniroApi, PreloadLocalMethod>,
+  string
+>;

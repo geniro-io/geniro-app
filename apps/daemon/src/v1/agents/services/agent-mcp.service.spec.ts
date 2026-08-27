@@ -13,6 +13,7 @@ import { isAbsolute, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentMcpFolderFacts,
   AgentMcpServer,
@@ -22,6 +23,7 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentMcpService, BLOCKING_LIST_TIMEOUT_MS } from './agent-mcp.service';
+import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { ProcessRegistry } from './process-registry';
@@ -92,6 +94,7 @@ function server(name: string): AgentMcpServer {
 
 interface Harness {
   service: AgentMcpService;
+  sessions: AgentSessionRegistry;
   harvest: McpHarvestStore;
   listMcpServers: ReturnType<typeof vi.fn>;
   readMcpFolderFacts: ReturnType<typeof vi.fn>;
@@ -102,13 +105,24 @@ interface Harness {
 
 interface HarnessOptions {
   version?: string | null;
-  /** What the CLI's own config files say — defaults to knowing nothing. */
-  facts?: AgentMcpFolderFacts;
+  /**
+   * What the CLI's own config files say — defaults to knowing nothing.
+   *
+   * PARTIAL: most cases care about one of its lists, and spelling the whole
+   * shape in every fixture is how a field added later gets a meaningless value
+   * in thirty places rather than in the one that is about it.
+   */
+  facts?: Partial<AgentMcpFolderFacts>;
   /**
    * A blanket "this CLI cannot be switched at all" reason. Defaults to null —
    * the toggleable CLI. Set it to reach the other branch of `composeListing`.
    */
   toggleUnavailableReason?: string | null;
+  /**
+   * Why an unapproved server cannot be approved from here. Defaults to null —
+   * the CLI that CAN, since that is the arm the panel draws a button for.
+   */
+  approveUnavailableReason?: string | null;
   /**
    * A harvest store already holding a turn's report. Defaults to empty, which
    * is what sends every other test down the ask-the-adapter path.
@@ -142,6 +156,7 @@ function harness(
     version = '2.1.220',
     facts,
     toggleUnavailableReason = null,
+    approveUnavailableReason = null,
     harvest = emptyHarvest(),
     recordsFacts = true,
     probeHealth = null,
@@ -161,6 +176,8 @@ function harness(
     Promise.resolve({
       disabled: [...off],
       lockedOff: facts?.lockedOff ?? [],
+      origins: facts?.origins ?? {},
+      interactiveOnlyNote: facts?.interactiveOnlyNote ?? null,
     }),
   );
   const setMcpServerEnabled = vi.fn(
@@ -191,6 +208,7 @@ function harness(
       mcp: {
         listingUnavailableReason: null,
         toggleUnavailableReason,
+        approveUnavailableReason,
         userDisabledReason: 'you switched it off yourself',
       },
     }),
@@ -201,11 +219,15 @@ function harness(
     for: () => adapter,
   } as unknown as AgentAdapterRegistry;
   let now = 1_000;
+  // Real, not a double: the toggle marks a folder's sessions stale, and the
+  // count it gets back is what the tests below observe.
+  const sessions = new AgentSessionRegistry();
   const service = new AgentMcpService(
     registry,
     new ProcessRegistry(),
     new AgentVersionService(),
     harvest,
+    sessions,
     {
       now: () => now,
       resolveVersionFn: () => Promise.resolve(version),
@@ -217,6 +239,7 @@ function harness(
   );
   return {
     service,
+    sessions,
     harvest,
     listMcpServers,
     readMcpFolderFacts,
@@ -382,7 +405,12 @@ describe('AgentMcpService.list', () => {
             },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ disabled: [], lockedOff: [] }),
+            Promise.resolve({
+              disabled: [],
+              lockedOff: [],
+              origins: {},
+              interactiveOnlyNote: null,
+            }),
         } as unknown as AgentAdapter;
       },
     } as unknown as AgentAdapterRegistry;
@@ -391,6 +419,7 @@ describe('AgentMcpService.list', () => {
       new ProcessRegistry(),
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       {
         resolveVersionFn: () => Promise.resolve('1'),
       },
@@ -423,7 +452,12 @@ describe('AgentMcpService.list', () => {
             },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ disabled: [], lockedOff: [] }),
+            Promise.resolve({
+              disabled: [],
+              lockedOff: [],
+              origins: {},
+              interactiveOnlyNote: null,
+            }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     let version = '2.1.220';
@@ -432,6 +466,7 @@ describe('AgentMcpService.list', () => {
       new ProcessRegistry(),
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       {
         resolveVersionFn: () => Promise.resolve(version),
       },
@@ -778,6 +813,7 @@ describe('AgentMcpService.list', () => {
       new ProcessRegistry(),
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -811,11 +847,125 @@ describe('AgentMcpService.list', () => {
 
     for (const mcp of [
       new ClaudeAdapter().getConfig().mcp,
-      new CursorAcpAdapter().getConfig().mcp,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().mcp,
     ]) {
       expect(mcp.listingUnavailableReason).toBeNull();
       expect(mcp.toggleUnavailableReason).toBeNull();
     }
+  });
+
+  it('lets the two CLIs disagree about approving, where they agree about switching', async () => {
+    // The whole reason `approveUnavailableReason` is its own field. Cursor
+    // approves with the SAME subcommand its toggle runs (`mcp enable <name>`
+    // answers "Enabled and approved", measured on 2026.08.11-e8db854), so a
+    // reader could easily conclude the toggle already answers this. claude is
+    // the counter-example that makes it false: its switch works — the loop
+    // above pins that — and it approves nothing, because `claude mcp` has no
+    // approve command at all (2.1.237: add / add-from-claude-desktop /
+    // add-json / get / list / login / logout / remove / reset-project-choices
+    // / serve). Deriving the button from the toggle would put one on claude's
+    // unapproved rows that moves a control and changes nothing.
+    const { ClaudeAdapter } = await import('../adapters/claude/claude.adapter');
+    const { CursorAcpAdapter } =
+      await import('../adapters/cursor-acp/cursor-acp.adapter');
+
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().mcp.approveUnavailableReason,
+    ).toBeNull();
+    expect(
+      new ClaudeAdapter().getConfig().mcp.approveUnavailableReason,
+    ).not.toBeNull();
+  });
+
+  it('carries each row’s scope, and names the user server a folder displaced', async () => {
+    // The listing is one row per NAME because the CLI merges its scopes that
+    // way, so without this the panel could only ever say "codegraph needs
+    // approval" about a server the reader has working at user level — with
+    // nothing on screen to say the two are different servers.
+    const cwd = realDir();
+    const { service } = harness(
+      () => Promise.resolve([server('linear'), server('codegraph')]),
+      {
+        facts: {
+          origins: {
+            linear: { scope: 'user', shadowsUser: false },
+            codegraph: { scope: 'workspace', shadowsUser: true },
+          },
+        },
+      },
+    );
+
+    const listing = await service.list(AgentKind.CursorAgent, cwd);
+
+    expect(
+      listing.servers.map((row) => [row.name, row.scope, row.shadowsUser]),
+    ).toEqual([
+      ['linear', 'user', false],
+      ['codegraph', 'workspace', true],
+    ]);
+  });
+
+  it('leaves a row the adapter could not place UNSTATED, never guessed', async () => {
+    // claude's case today: four scopes, none of them printed by its listing.
+    // A guessed label is worse than none, because the label's whole job is to
+    // explain a surprise and a wrong one manufactures another.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('mystery')]));
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.servers[0]?.scope).toBe('unknown');
+    expect(listing.servers[0]?.shadowsUser).toBe(false);
+  });
+
+  it('prefers the FOLDER’s interactive-only note over the config’s static one', async () => {
+    // cursor's own-app-only servers are its installed PLUGINS, a set that
+    // varies per machine, so no string in `getConfig()` could name them. A CLI
+    // whose gap is two fixed built-ins keeps its static sentence — which is
+    // what the null case below leaves standing.
+    const cwd = realDir();
+    const { service } = harness(() => Promise.resolve([server('a')]), {
+      facts: { interactiveOnlyNote: 'cursor also loads datadog from plugins' },
+    });
+
+    const listing = await service.list(AgentKind.CursorAgent, cwd);
+
+    expect(listing.interactiveOnlyNote).toBe(
+      'cursor also loads datadog from plugins',
+    );
+  });
+
+  it('answers the approve question on EVERY row, not just the unapproved ones', async () => {
+    // The rule `signInUnavailableReason` already follows, and it exists so the
+    // renderer never infers a capability from a status: a row that gains
+    // `pending` on the next read must not be the first row to learn whether
+    // this CLI can approve.
+    const cwd = realDir();
+    const { service } = harness(
+      () =>
+        Promise.resolve([
+          server('healthy'),
+          {
+            name: 'unapproved',
+            target: null,
+            transport: null,
+            status: 'pending' as const,
+            detail: '(needs approval)',
+          },
+        ]),
+      { approveUnavailableReason: 'claude approves in its own /mcp screen' },
+    );
+
+    const listing = await service.list(AgentKind.Claude, cwd);
+
+    expect(listing.servers.map((row) => row.approveUnavailableReason)).toEqual([
+      'claude approves in its own /mcp screen',
+      'claude approves in its own /mcp screen',
+    ]);
   });
 
   it('marks a row the CLI itself reported as switched off, even where geniro cannot switch', async () => {
@@ -844,6 +994,44 @@ describe('AgentMcpService.list', () => {
     expect(listing.servers[0]?.toggleUnavailableReason).toBe(
       'cursor-agent cannot switch these',
     );
+  });
+
+  it('retires that folder’s agent sessions, so the next turn re-reads MCP', async () => {
+    // THE REPORTED DEFECT: a CLI reads its MCP configuration at spawn and
+    // geniro keeps the process across a chat's turns, so a switch flipped here
+    // reached the config and never reached the running agent — the agent's own
+    // words in the transcript were "the connector may need the session
+    // restarted". Marked, never closed: see `AgentSessionRegistry.markStale`.
+    const cwd = realDir();
+    const { service, sessions } = harness(() => Promise.resolve([server('a')]));
+    const marked = vi.spyOn(sessions, 'markStale');
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'a', false);
+
+    expect(marked).toHaveBeenCalledWith(
+      AgentKind.Claude,
+      cwd,
+      expect.stringContaining('MCP'),
+    );
+  });
+
+  it('does NOT retire them when the toggle was refused', async () => {
+    // A write that never landed changed nothing, and respawning a working
+    // chat's CLI over it costs the user their warm process for no gain.
+    const cwd = realDir();
+    const { service, sessions } = harness(
+      () => Promise.resolve([server('a')]),
+      {
+        facts: { lockedOff: ['a'] },
+      },
+    );
+    const marked = vi.spyOn(sessions, 'markStale');
+
+    await expect(
+      service.setEnabled(AgentKind.Claude, cwd, 'a', true),
+    ).rejects.toThrow();
+
+    expect(marked).not.toHaveBeenCalled();
   });
 
   it('rejects a cwd that is not an absolute existing directory', async () => {
@@ -877,6 +1065,7 @@ describe('AgentMcpService.list', () => {
       new ProcessRegistry(),
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -915,14 +1104,23 @@ describe('AgentMcpService.list', () => {
         );
         return Promise.resolve({ ok: true as const, servers: [server('a')] });
       },
+      // The real shape. It carried `{projectServers, userDisabled}` — fields
+      // `AgentMcpFolderFacts` has not had for two milestones — and stayed green
+      // because nothing this test asserts on ever read them.
       readMcpFolderFacts: () =>
-        Promise.resolve({ projectServers: [], userDisabled: [] }),
+        Promise.resolve({
+          disabled: [],
+          lockedOff: [],
+          origins: {},
+          interactiveOnlyNote: null,
+        }),
     } as unknown as AgentAdapter;
     const service = new AgentMcpService(
       { for: () => adapter } as unknown as AgentAdapterRegistry,
       processes,
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -949,7 +1147,10 @@ describe('AgentMcpService.list', () => {
 });
 
 describe('AgentMcpService scope + disabled overlay', () => {
-  const nothingOff: AgentMcpFolderFacts = { disabled: [], lockedOff: [] };
+  const nothingOff: Partial<AgentMcpFolderFacts> = {
+    disabled: [],
+    lockedOff: [],
+  };
 
   it('lets a server be switched, whatever scope defined it', async () => {
     const cwd = realDir();
@@ -1036,7 +1237,10 @@ describe('AgentMcpService scope + disabled overlay', () => {
 });
 
 describe('AgentMcpService.setEnabled', () => {
-  const nothingOff: AgentMcpFolderFacts = { disabled: [], lockedOff: [] };
+  const nothingOff: Partial<AgentMcpFolderFacts> = {
+    disabled: [],
+    lockedOff: [],
+  };
 
   it('switches a server off and reports it back as disabled', async () => {
     const cwd = realDir();
@@ -1159,7 +1363,12 @@ describe('AgentMcpService.setEnabled', () => {
             mcp: { listingUnavailableReason: 'no listing on this CLI yet' },
           }),
           readMcpFolderFacts: () =>
-            Promise.resolve({ disabled: [], lockedOff: [] }),
+            Promise.resolve({
+              disabled: [],
+              lockedOff: [],
+              origins: {},
+              interactiveOnlyNote: null,
+            }),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry;
     const service = new AgentMcpService(
@@ -1167,6 +1376,7 @@ describe('AgentMcpService.setEnabled', () => {
       new ProcessRegistry(),
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       { resolveVersionFn: () => Promise.resolve('1') },
     );
 
@@ -1407,7 +1617,12 @@ describe('AgentMcpService.setEnabled', () => {
         },
       }),
       readMcpFolderFacts: () =>
-        Promise.resolve({ disabled: [], lockedOff: [] }),
+        Promise.resolve({
+          disabled: [],
+          lockedOff: [],
+          origins: {},
+          interactiveOnlyNote: null,
+        }),
       setMcpServerEnabled,
     } as unknown as AgentAdapter;
     const service = new AgentMcpService(
@@ -1415,6 +1630,7 @@ describe('AgentMcpService.setEnabled', () => {
       processes,
       new AgentVersionService(),
       emptyHarvest(),
+      new AgentSessionRegistry(),
       {
         resolveVersionFn: () => Promise.resolve('1.0.0'),
         folderlessDir: join(realDir(), 'folderless'),

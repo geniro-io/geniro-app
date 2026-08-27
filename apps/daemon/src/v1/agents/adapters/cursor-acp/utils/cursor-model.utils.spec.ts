@@ -255,3 +255,47 @@ describe('cursorModelSelection', () => {
     });
   });
 });
+
+describe('cursorModelSelection — the other model parameters', () => {
+  it('sends every parameter the run carries, verbatim, after the axes with chips', () => {
+    // Verbatim in both halves: geniro holds no vocabulary for these, so the id
+    // and the value are the CLI's own words round-tripped. Ordering matters
+    // only in that the model frame goes first — these ride behind it like the
+    // effort and the window, since a parameter's very existence depends on
+    // which model is current.
+    const selection = cursorModelSelection('auto-smart', null, null, {
+      optimize_for: 'intelligence',
+    });
+
+    expect(selection.model).toBe('auto-smart');
+    expect(selection.parameters).toEqual([
+      { id: 'optimize_for', value: 'intelligence' },
+    ]);
+  });
+
+  it('refuses to set an axis that already has a control of its own', () => {
+    // The map is stored per run and could carry an id that later gained a chip
+    // — or one written by a build where it had not yet. Letting it through
+    // would set the same option twice: once from the chip the user pressed and
+    // once from the map, with the map winning by arriving last.
+    const selection = cursorModelSelection('claude-opus-5', 'high', '1m', {
+      effort: 'low',
+      reasoning: 'low',
+      context: '300k',
+      mode: 'plan',
+      optimize_for: 'cost',
+    });
+
+    expect(selection.parameters.map((p) => [p.id, p.value])).toEqual([
+      ['effort', 'high'],
+      ['context', '1m'],
+      ['optimize_for', 'cost'],
+    ]);
+  });
+
+  it('leaves the selection untouched when the run names none', () => {
+    const bare = cursorModelSelection('auto-smart', null, null);
+    expect(cursorModelSelection('auto-smart', null, null, {})).toEqual(bare);
+    expect(cursorModelSelection('auto-smart', null, null, null)).toEqual(bare);
+  });
+});

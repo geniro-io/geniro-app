@@ -112,7 +112,9 @@ describe('Dialog — pickers inside the scrolling body', () => {
         .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
 
-    const panel = document.querySelector<HTMLElement>('[role="listbox"]')!;
+    const panel = document.querySelector<HTMLElement>(
+      '[data-slot="menu-panel"]',
+    )!;
     expect(panel.style.position).toBe('fixed');
   });
 });

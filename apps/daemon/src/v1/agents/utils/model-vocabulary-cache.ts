@@ -166,6 +166,21 @@ export class ModelVocabularyCache<T> {
     }
     return entry.value;
   }
+
+  /**
+   * Forget every answer, and say how many went — the user pressed "Clear Agent
+   * Cache" (`CacheResetService`).
+   *
+   * `inFlight` is deliberately NOT cleared. An ask already running is a FRESH
+   * ask, so its answer is exactly what the reset wants; dropping the entry
+   * would only make a joined caller spawn a second process group for the same
+   * question.
+   */
+  clear(): number {
+    const dropped = this.entries.size;
+    this.entries.clear();
+    return dropped;
+  }
 }
 
 /**

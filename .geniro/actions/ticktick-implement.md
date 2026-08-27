@@ -2,7 +2,7 @@
 name: ticktick-implement
 description: "Use when a TickTick task URL's items should be implemented in this repo one at a time, each verified in the real Electron dev app with before/after screenshots and an approval gate between items."
 model: inherit
-allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion]
+allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, mcp__ticktick__get_task_by_id, mcp__ticktick__get_comment, mcp__claude-in-chrome__*]
 argument-hint: "[ticktick_task_url]"
 risk_class: low
 created: 2026-08-25
@@ -33,12 +33,31 @@ Both are shown to the user, and the run does not move to the next item without t
 1. Resolve the task URL. If `[ticktick_task_url]` was passed positionally, use it; otherwise ask
    for it with the `AskUserQuestion` tool. Parse `#p/<projectId>/tasks/<taskId>` out of it — both
    ids are needed. Abort if the URL does not match that shape.
-2. Open the task in the browser and read it, INCLUDING its images. Browser work is always the
-   `agent-browser` CLI (never a built-in web tool): first `agent-browser skills get core`, then
-   `export AGENT_BROWSER_SESSION="$(agent-browser session id --scope worktree --prefix ticktick)"`,
-   then `agent-browser open "<ticktick_task_url>"` and `agent-browser snapshot -i`. Save every
-   screenshot attached to the task under `.geniro/state/ticktick/<taskId>/ref-<n>.png` and read
-   each one with the `Read` tool — the images define the expected result and the text alone does not.
+2. Read the task, then fetch its screenshots.
+   a. **Text — TickTick MCP, no browser.** Call `mcp__ticktick__get_task_by_id` with `<taskId>` for
+      the title and content, and `mcp__ticktick__get_comment` with `<projectId>` + `<taskId>` for the
+      discussion. Abort if the task has no content. Never open a browser for the text: MCP returns
+      it directly and a browser round-trip only adds a login the text does not need.
+   b. **Screenshots — the user's OWN Chrome, via Claude's browser tools.** The content embeds them
+      as `![image](<attachmentId>/<uuid>.png)`; MCP returns no image bytes and the attachment URLs
+      404 unauthenticated, so this half does need a browser — and it must be the user's personal
+      Chrome, where they are already signed into TickTick. Use `mcp__claude-in-chrome__*`, NOT
+      `agent-browser` and NOT playwright: those launch their own profile, which is signed out.
+      (This is a deliberate exception to the repo-wide "browser automation is always agent-browser"
+      rule in `.geniro/instructions/global.md` — that rule assumes a throwaway browser, and here the
+      whole point is the user's existing session. The Electron half of this action, steps 5 and 6,
+      still uses `agent-browser`: Claude's Chrome tools drive Chrome tabs, not an Electron binary.)
+      Call `mcp__claude-in-chrome__tabs_context_mcp` first, open a NEW tab with
+      `mcp__claude-in-chrome__tabs_create_mcp`, navigate it to `<ticktick_task_url>`, and confirm the
+      session is live — the app renders the task, rather than the marketing page with a "Sign In"
+      link. If it is signed out, that is the ONLY case that involves the user: ask with
+      `AskUserQuestion` to sign in to TickTick in that tab, wait for their confirmation, then
+      re-check. Never attempt to log in on their behalf and never ask before the check has failed.
+      Close the tab when the screenshots are saved.
+   c. Save every screenshot under `.geniro/state/ticktick/<taskId>/ref-<n>.png` and read each one
+      with the `Read` tool — the images define the expected result and the text alone does not. If a
+      screenshot still cannot be retrieved, say which item is missing its evidence rather than
+      guessing what it showed.
 3. Decompose the task into a numbered item list (one deliverable per item, in the order the task
    states them). Show the list and ask the user with `AskUserQuestion` to confirm the items and
    their order before ANY code changes. Abort if the task yields no actionable items.

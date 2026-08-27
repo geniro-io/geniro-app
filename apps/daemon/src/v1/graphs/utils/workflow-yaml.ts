@@ -77,6 +77,7 @@ const KIND_ONLY_FIELDS = {
     'model',
     'effort',
     'contextWindow',
+    'modelParameters',
     'description',
     'role',
     'approval',

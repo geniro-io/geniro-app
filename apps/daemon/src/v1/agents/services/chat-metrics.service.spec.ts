@@ -3,8 +3,12 @@ import { NotFoundException } from '@packages/common';
 import { describe, expect, it, vi } from 'vitest';
 
 import { AgentKind } from '../../runs/runs.types';
-import type { AgentContextUsage } from '../adapters/adapter.types';
+import type {
+  AgentContextUsage,
+  UsageReading,
+} from '../adapters/adapter.types';
 import type { AgentAdapter } from '../adapters/agent-adapter';
+import type { PlanLimitsWire } from '../chat.types';
 import { ChatMetricsWireSchema } from '../chat.types';
 import type { ItemDao } from '../dao/item.dao';
 import type { NodeStateDao } from '../dao/node-state.dao';
@@ -48,7 +52,13 @@ function build(opts: {
   runExists?: boolean;
   payloads?: string[];
   breakdown?: AgentContextUsage | null;
-  breakdownUnavailableReason?: string | null;
+  /**
+   * What this CLI says about the breakdown — whether it can be asked at all,
+   * and through WHICH channel. Defaults to the on-disk channel, which is the
+   * shape every case written before the channel existed assumed: a recorded
+   * session id was enough to ask through.
+   */
+  breakdownReading?: UsageReading;
   readContextUsage?: () => Promise<AgentContextUsage | null>;
   /**
    * What the run holds to be asked THROUGH. Defaults to a recorded session id,
@@ -57,13 +67,22 @@ function build(opts: {
    */
   agentSessionId?: string | null;
   liveSession?: unknown;
+  /** What the run row holds as its last farewell reading, verbatim JSON. */
+  lastMetricsReading?: string | null;
+  /** Where the transcript stands NOW — what a stored `atSeq` is checked against. */
+  maxSeq?: number;
+  readPlanLimits?: () => Promise<PlanLimitsWire | null>;
+  planReading?: UsageReading;
 }) {
+  const remembered = vi.fn().mockResolvedValue(undefined);
+  let farewell: ((runId: string) => Promise<void>) | null = null;
   const readContextUsage =
     opts.readContextUsage ??
     vi.fn().mockResolvedValue('breakdown' in opts ? opts.breakdown : BREAKDOWN);
   const service = new ChatMetricsService(
     { fork: () => ({}) } as unknown as EntityManager,
     {
+      rememberMetricsReading: remembered,
       getById: () =>
         Promise.resolve(
           opts.runExists === false
@@ -71,11 +90,13 @@ function build(opts: {
             : {
                 agentKind:
                   'agentKind' in opts ? opts.agentKind : AgentKind.Claude,
+                lastMetricsReading: opts.lastMetricsReading ?? null,
               },
         ),
     } as unknown as RunDao,
     {
       turnCompletePayloads: () => Promise.resolve(opts.payloads ?? []),
+      maxSeq: () => Promise.resolve(opts.maxSeq ?? 7),
     } as unknown as ItemDao,
     {
       getByRunNode: () =>
@@ -84,22 +105,43 @@ function build(opts: {
             'agentSessionId' in opts ? opts.agentSessionId : 'sess-1',
         }),
     } as unknown as NodeStateDao,
-    { peek: () => opts.liveSession ?? null } as unknown as AgentSessionRegistry,
+    {
+      peek: () => opts.liveSession ?? null,
+      onIdleFarewell: (listener: (runId: string) => Promise<void>) => {
+        farewell = listener;
+      },
+    } as unknown as AgentSessionRegistry,
     {
       for: () =>
         ({
           getConfig: () => ({
             usage: {
               unavailableReason: null,
-              breakdownUnavailableReason:
-                opts.breakdownUnavailableReason ?? null,
+              breakdown: opts.breakdownReading ?? {
+                kind: 'reads',
+                channel: 'session-store',
+              },
+              // Out of the way of every breakdown case: this fake CLI has no
+              // plan channel, so nothing here asks for one.
+              planLimits: opts.planReading ?? {
+                kind: 'unavailable',
+                reason: 'this fake CLI reports no plan limits',
+              },
             },
           }),
           readContextUsage,
+          readPlanLimits: opts.readPlanLimits ?? (() => Promise.resolve(null)),
         }) as unknown as AgentAdapter,
     } as unknown as AgentAdapterRegistry,
   );
-  return { service, readContextUsage };
+  service.onModuleInit();
+  return {
+    service,
+    readContextUsage,
+    remembered,
+    /** Fire what the session registry would fire on an idle close. */
+    farewell: () => farewell!('run-1'),
+  };
 }
 
 describe('ChatMetricsService', () => {
@@ -155,7 +197,10 @@ describe('ChatMetricsService', () => {
     // differently from one whose process has simply been reaped.
     const { service, readContextUsage } = build({
       agentKind: AgentKind.CursorAgent,
-      breakdownUnavailableReason: 'cursor-agent has no channel for one',
+      breakdownReading: {
+        kind: 'unavailable',
+        reason: 'cursor-agent has no channel for one',
+      },
     });
 
     const metrics = await service.read('run-1');
@@ -179,6 +224,143 @@ describe('ChatMetricsService', () => {
     expect(metrics.breakdownReason).toContain('send a message');
     // And it was not asked, because there was nobody to ask.
     expect(readContextUsage).not.toHaveBeenCalled();
+  });
+
+  describe('the last reading of a process that has since been closed', () => {
+    const STORED = JSON.stringify({
+      takenAt: '2026-08-26T13:18:49.000Z',
+      atSeq: 7,
+      context: BREAKDOWN,
+      plan: null,
+    });
+
+    it('shows it when there is no agent left to ask, stamped with when it was taken', async () => {
+      // The other half of the reported "wrong popup withoput data": correcting
+      // the sentence stopped the panel lying, and left it empty. claude answers
+      // both figures from its running process alone, so a chat whose session
+      // was reaped had nothing to show until the user spent a turn reviving it.
+      const { service, readContextUsage } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        lastMetricsReading: STORED,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(readContextUsage).not.toHaveBeenCalled();
+      expect(metrics.context).toEqual(BREAKDOWN);
+      expect(metrics.breakdownReason).toBeNull();
+      // The stamp is not decoration: these figures are the state a
+      // conversation was left in, and undated they read as current.
+      expect(metrics.takenAt).toBe('2026-08-26T13:18:49.000Z');
+    });
+
+    it('drops it once the transcript has MOVED past what it describes', async () => {
+      // A session closed some other way — evicted for the ceiling, or a daemon
+      // restart — takes no farewell reading, so the run keeps an older one
+      // while its conversation goes on growing. Figures from before those turns
+      // describe a window that no longer exists, and a timestamp does not make
+      // them true.
+      const { service } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        lastMetricsReading: STORED,
+        maxSeq: 12,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(metrics.context).toBeNull();
+      expect(metrics.takenAt).toBeNull();
+      expect(metrics.breakdownReason).toContain('send a message');
+    });
+
+    it('drops a reading whose SHAPE it can no longer read', async () => {
+      // Stored JSON outlives the code that wrote it. Half a breakdown drawn
+      // from a shape that has moved is worse than the sentence saying there is
+      // none, so it is discarded rather than coerced.
+      const { service } = build({
+        breakdownReading: { kind: 'reads', channel: 'live-process' },
+        lastMetricsReading: JSON.stringify({
+          takenAt: '2026-08-26T13:18:49.000Z',
+          atSeq: 7,
+          context: { categories: 'all of them' },
+          plan: null,
+        }),
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(metrics.context).toBeNull();
+      expect(metrics.breakdownReason).toContain('send a message');
+    });
+
+    it('never dates a LIVE answer with an older reading’s moment', async () => {
+      // `takenAt` says "these figures are from then". A CLI that answered now
+      // must not wear it, or the panel reports a current reading as stale.
+      const { service } = build({
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        lastMetricsReading: STORED,
+      });
+
+      const metrics = await service.read('run-1');
+
+      expect(metrics.context).toEqual(BREAKDOWN);
+      expect(metrics.takenAt).toBeNull();
+    });
+
+    it('takes one on the way out, against the transcript position it describes', async () => {
+      // The registry's idle close awaits this — the last moment the process can
+      // be asked anything at all.
+      const { farewell, remembered, readContextUsage } = build({
+        liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
+        maxSeq: 9,
+      });
+
+      await farewell();
+
+      expect(readContextUsage).toHaveBeenCalled();
+      const [runId, json] = remembered.mock.calls[0] ?? [];
+      expect(runId).toBe('run-1');
+      expect(JSON.parse(String(json))).toMatchObject({
+        atSeq: 9,
+        context: BREAKDOWN,
+      });
+    });
+
+    it('files nothing when the agent answered neither question', async () => {
+      // A row of nulls would be indistinguishable from a reading that was
+      // taken and found the window empty — and it would OVERWRITE a good
+      // earlier one with an empty one.
+      const { farewell, remembered } = build({
+        breakdown: null,
+        liveSession: { ask: () => Promise.resolve(null) },
+      });
+
+      await farewell();
+
+      expect(remembered).not.toHaveBeenCalled();
+    });
+  });
+
+  it('says the same when the CLI reads from a PROCESS and the session id is all that is left', async () => {
+    // The reported "wrong popup without data", reproduced from the author's own
+    // daemon log: claude reads both figures from the running process, that
+    // process was reaped as unused at 13:18:49, and the readout opened at
+    // 13:37:07 — with no warning in between, because nothing had been asked.
+    // A recorded session id is no channel here, and treating "either channel
+    // exists" as "there was something to ask" made this chat report that the
+    // agent "did not answer in time … the reading is taken again while this
+    // stays open" — a promise nothing could keep.
+    const { service, readContextUsage } = build({
+      breakdownReading: { kind: 'reads', channel: 'live-process' },
+      agentSessionId: 'sess-1',
+    });
+
+    const metrics = await service.read('run-1');
+
+    expect(readContextUsage).not.toHaveBeenCalled();
+    expect(metrics.context).toBeNull();
+    expect(metrics.breakdownReason).toContain('send a message');
+    expect(metrics.breakdownReason).not.toContain('did not answer');
   });
 
   it('does NOT tell the user to send a message when the agent was there and stayed silent', async () => {

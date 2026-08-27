@@ -41,6 +41,7 @@ import type {
 } from '../adapter.types';
 import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
+import { readFileSafe } from '../utils/fs-safe.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
 import {
   CLAUDE_APPEND_SYSTEM_PROMPT_FLAG,
@@ -301,6 +302,16 @@ export class ClaudeAdapter extends AgentAdapter {
         skills: [['.claude', 'skills']],
         /** `<root>/.claude/commands/**.md`. */
         commands: [['.claude', 'commands']],
+        /**
+         * None — not for want of a plugin mechanism (this CLI owns the cache
+         * the OTHER one reads), but because it already ANSWERS for its
+         * plugins: `listReportedCommands` returns them as the CLI's own slash
+         * commands, under the `<plugin>:<skill>` names it actually accepts.
+         * Scanning the same directories would file a second row per skill
+         * named after the FILE (`implement` beside `geniro:implement`), and
+         * only one of the two spellings can be sent.
+         */
+        plugins: [],
       },
       liveStream: {
         /** Utility argv whose stdout is searched for {@link CLAUDE_PARTIAL_MESSAGES_FLAG}. */
@@ -396,6 +407,25 @@ export class ClaudeAdapter extends AgentAdapter {
          * "Starting authentication for", which shares no substring with this.
          */
         loginFailureMarkers: CLAUDE_MCP_LOGIN_FAILURE_MARKERS,
+        /**
+         * Non-null: this CLI has no approve command, so there is nothing for a
+         * button to run. Read from `claude mcp --help` on 2.1.237, whose whole
+         * command list is add / add-from-claude-desktop / add-json / get /
+         * list / login / logout / remove / reset-project-choices / serve. The
+         * near miss is the last one — `reset-project-choices` "Reset all
+         * approved and rejected project-scoped (.mcp.json) servers within this
+         * project", which CLEARS the choices rather than granting one, and
+         * would take every other server's approval with it.
+         *
+         * The toggle beside it is deliberately not read as an answer here: it
+         * writes `disabledMcpServers`, which decides whether an APPROVED server
+         * is loaded and never approves anything, so enabling an unapproved row
+         * would move a switch and leave it exactly as `⏸ Pending approval` —
+         * the silent no-op {@link AdapterConfig.mcp.approveUnavailableReason}
+         * exists to prevent.
+         */
+        approveUnavailableReason:
+          'claude approves a project server in its own /mcp screen, which a headless turn cannot open',
       },
       auth: {
         /** `claude auth login` — read from `claude auth --help` on 2.1.227. */
@@ -496,14 +526,23 @@ export class ClaudeAdapter extends AgentAdapter {
          * Answers the breakdown too, over `get_context_usage` — see
          * {@link ClaudeAdapter.buildContextUsageAsk} and the probe block at
          * `CLAUDE_CONTEXT_USAGE_SUBTYPE` in `claude.const.ts`.
+         *
+         * From the LIVE process and from nothing else: the request is a
+         * question on the running CLI's stdin dialogue, and this CLI publishes
+         * no reading of its own conversation anywhere on disk. So a chat whose
+         * session has been reaped for idleness has nobody to ask — which is a
+         * different sentence from one that was asked and stayed silent.
          */
-        breakdownUnavailableReason: null,
+        breakdown: { kind: 'reads', channel: 'live-process' },
         /**
          * Answers the account's plan limits too, over `get_usage` — see
          * {@link ClaudeAdapter.readPlanLimits} and the probe block at
-         * `CLAUDE_PLAN_LIMITS_SUBTYPE` in `claude.const.ts`.
+         * `CLAUDE_PLAN_LIMITS_SUBTYPE` in `claude.const.ts`. Same channel as
+         * the breakdown above, for the same reason: the account is not a
+         * property of the conversation, but the only way to ask about it here
+         * is through the conversation's own process.
          */
-        planLimitsUnavailableReason: null,
+        planLimits: { kind: 'reads', channel: 'live-process' },
       },
       handoff: {
         kind: 'resume-command',
@@ -840,24 +879,17 @@ export class ClaudeAdapter extends AgentAdapter {
    * evidence behind the two questions.
    */
   override async readMcpFolderFacts(cwd: string): Promise<AgentMcpFolderFacts> {
-    const read = async (path: string): Promise<string | null> => {
-      try {
-        return await readFile(path, 'utf8');
-      } catch {
-        // Absent, unreadable, or a directory — all mean "this file says
-        // nothing", never a failure the user should see.
-        return null;
-      }
-    };
     const home = this.claudeOptions.homeDir ?? homedir();
     const settingsSources = await Promise.all([
-      ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) => read(join(cwd, rel))),
-      read(join(home, CLAUDE_HOME_SETTINGS_FILE)),
+      ...CLAUDE_PROJECT_SETTINGS_FILES.map((rel) =>
+        readFileSafe(join(cwd, rel)),
+      ),
+      readFileSafe(join(home, CLAUDE_HOME_SETTINGS_FILE)),
     ]);
     // Where answering "No" to the CLI's own trust prompt lands — a different
     // file and a different shape from the settings ones, but the same
     // question, and the ordinary way a user switches a project server off.
-    const homeConfig = await read(join(home, CLAUDE_MODEL_CACHE_FILE));
+    const homeConfig = await readFileSafe(join(home, CLAUDE_MODEL_CACHE_FILE));
     // Union, because that is how the CLI itself combines them: a name in ANY
     // of these is one geniro cannot pull back out.
     const userDisabled = new Set<string>();
@@ -883,6 +915,20 @@ export class ClaudeAdapter extends AgentAdapter {
       // A `.mcp.json` REJECTION, which is a different question and one geniro
       // cannot undo: the CLI unions every source's copy of that list.
       lockedOff: [...userDisabled],
+      // UNSTATED for this CLI, and that is a gap rather than a claim — worth
+      // recording what was and was not checked. claude has FOUR scopes (user,
+      // project, local, dynamic) against cursor's two, and `claude mcp list`
+      // prints none of them (probe-verified on 2.1.220, which is why this
+      // method exists at all). Placing a row would mean re-deriving the CLI's
+      // own precedence across four sources, and a wrong answer here is worse
+      // than none: the label's whole job is to explain a surprise, so one that
+      // named the wrong scope would manufacture a new one. Cursor's two-file
+      // merge was measured end to end, so it answers; this waits for the same
+      // treatment.
+      origins: {},
+      // The static sentence in `getConfig()` stands: claude's own-app-only
+      // servers are two fixed built-ins, not a set that varies per machine.
+      interactiveOnlyNote: null,
     };
   }
 

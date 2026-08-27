@@ -1,29 +1,36 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type {
+  AgentCacheResetWire,
   AgentContextWindowListingWire,
   AgentEffortListingWire,
+  AgentModelParameterListingWire,
   AgentModelWire,
   AgentSessionListingWire,
   AgentSkillWire,
 } from '../chat.types';
 import {
+  AgentCacheResetDto,
   AgentContextWindowListingDto,
   AgentEffortListingDto,
   AgentModelDto,
+  AgentModelParameterListingDto,
   AgentSessionListingDto,
   AgentSkillDto,
   ListAgentSessionsQueryDto,
   ListContextWindowsQueryDto,
   ListEffortsQueryDto,
+  ListModelParametersQueryDto,
   ListModelsQueryDto,
   ListSkillsQueryDto,
 } from '../dto/skills.dto';
+import { CacheResetService } from '../services/cache-reset.service';
 import { CliSessionsService } from '../services/cli-sessions.service';
 import { ContextWindowsService } from '../services/context-windows.service';
 import { EffortsService } from '../services/efforts.service';
+import { ModelParametersService } from '../services/model-parameters.service';
 import { ModelsService } from '../services/models.service';
 import { SkillsService } from '../services/skills.service';
 
@@ -43,7 +50,9 @@ export class SkillsController {
     private readonly modelsService: ModelsService,
     private readonly effortsService: EffortsService,
     private readonly contextWindowsService: ContextWindowsService,
+    private readonly modelParametersService: ModelParametersService,
     private readonly cliSessionsService: CliSessionsService,
+    private readonly cacheResetService: CacheResetService,
   ) {}
 
   @Get('skills')
@@ -106,5 +115,34 @@ export class SkillsController {
       query.agent,
       query.model ?? null,
     );
+  }
+
+  /**
+   * Every OTHER setting one MODEL offers — whatever the CLI enumerates beyond
+   * the model, its effort and its context window, each of which already has a
+   * control of its own. See `AgentModelParameter`.
+   */
+  @Get('model-parameters')
+  @ApiOperation({ operationId: 'listAgentModelParameters' })
+  @ZodResponse({ status: 200, type: AgentModelParameterListingDto })
+  listModelParameters(
+    @Query() query: ListModelParametersQueryDto,
+  ): Promise<AgentModelParameterListingWire> {
+    return this.modelParametersService.listWire(
+      query.agent,
+      query.model ?? null,
+    );
+  }
+
+  /**
+   * Forget every cached answer above, on the user's own instruction — the menu
+   * bar's Clear Agent Cache. A POST because it CHANGES what the daemon holds;
+   * see `CacheResetService` for what is cleared and what deliberately is not.
+   */
+  @Post('caches/clear')
+  @ApiOperation({ operationId: 'clearAgentCaches' })
+  @ZodResponse({ status: 200, type: AgentCacheResetDto })
+  clearCaches(): AgentCacheResetWire {
+    return this.cacheResetService.clearAll();
   }
 }

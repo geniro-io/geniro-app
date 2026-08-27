@@ -173,6 +173,17 @@ export interface AcpSetConfigOptionParams {
  */
 export interface AcpConfigOption {
   id: string;
+  /**
+   * The agent's own display name for the option — `Optimize For` for
+   * `optimize_for`. Null when it sent none.
+   *
+   * Carried because a consumer that does not know the option in advance has
+   * nothing else to put on a control: the id is a wire token
+   * (`optimize_for`), and prettifying it here would be this app inventing a
+   * label for the agent's vocabulary. Measured 2026-08-26 on cursor-agent
+   * 2026.08.11-e8db854 — every enumerated option sends one.
+   */
+  name: string | null;
   category: string | null;
   currentValue: string | null;
   options: { value: string; name: string }[];

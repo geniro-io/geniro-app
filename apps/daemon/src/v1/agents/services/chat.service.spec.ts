@@ -10,6 +10,7 @@ import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
+import { freshVocabularyStore } from '../adapters/__tests__/fresh-vocabulary-store';
 import type {
   AgentApprovalMode,
   AgentEvent,
@@ -81,6 +82,9 @@ class FakeRunDao {
       cwd: null,
       agentKind: null,
       model: null,
+      // The column's own default, spelled out: a fixture that omits it hands
+      // `runToWire` an `undefined` the real entity can never produce.
+      modelParameters: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -119,6 +123,13 @@ class FakeRunDao {
     return [...this.runs.values()].filter(
       (run) => run.status === 'running' && run.workflowId === null,
     );
+  }
+  /** The one write that DOES clear — see `RunDao.forgetContext`. */
+  async forgetContext(id: string): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.contextTokens = null;
+    }
   }
   /** Mirrors the real write: the window is only ever set, never cleared. */
   async rememberContext(
@@ -430,7 +441,11 @@ function fakeAdapter(kind: AgentKind): {
   // field — a hand-mirrored copy is exactly how a config change keeps passing
   // the tests it should have broken.
   const real: AgentAdapter =
-    kind === 'claude' ? new ClaudeAdapter() : new CursorAcpAdapter();
+    kind === 'claude'
+      ? new ClaudeAdapter()
+      : new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+        });
   return {
     adapter: {
       getConfig: () => real.getConfig(),
@@ -935,6 +950,13 @@ describe('ChatService', () => {
       });
       await service.sendMessage(run.id, '/compact');
       cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      // A reading of the conversation about to be discarded — without one the
+      // null below would hold whether or not anything cleared it.
+      cursor.emit({
+        type: 'context_progress',
+        contextTokens: 101_500,
+        contextWindowTokens: 1_000_000,
+      });
       await turn(cursor, 'we agreed on plan B');
 
       expect(nodeDao.cleared).toEqual([
@@ -943,6 +965,12 @@ describe('ChatService', () => {
       expect((await runDao.getById(run.id))?.pendingContext).toBe(
         'we agreed on plan B',
       );
+      // The context READING goes with the conversation it measured. Reported
+      // as "после компакта кружочек не обновляется. Он все еще так же заполнен
+      // с контекстом": nothing measures the replacement until the next turn
+      // runs, so a figure left standing here is the ring's newest source and
+      // it describes a conversation that has been discarded.
+      expect((await runDao.getById(run.id))?.contextTokens).toBeNull();
       // `severity: 'info'` with it: this row reports the thing the user ASKED
       // for having worked, and the renderer reads an absent severity as the
       // loud failure chrome every other daemon notice wears — which drew a
@@ -980,10 +1008,18 @@ describe('ChatService', () => {
         cwd: dir,
       });
       await service.sendMessage(run.id, '/compact');
+      cursor.emit({
+        type: 'context_progress',
+        contextTokens: 101_500,
+        contextWindowTokens: 1_000_000,
+      });
       await turn(cursor, 'half a par', { type: 'turn_cancelled' });
 
       expect(nodeDao.cleared).toEqual([]);
       expect((await runDao.getById(run.id))?.pendingContext).toBeFalsy();
+      // The conversation is intact, so its reading is too — the clear belongs
+      // to the COMMIT, not to the word `/compact`.
+      expect((await runDao.getById(run.id))?.contextTokens).toBe(101_500);
       expect(
         itemDao.items.some(
           (item) =>
@@ -3483,6 +3519,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: true,
+      backgroundOutcome: null,
     });
     await drain();
 
@@ -3523,6 +3560,7 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
+      backgroundOutcome: null,
     });
     await drain();
 
@@ -4895,13 +4933,13 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(statuses.at(-1)).toEqual({
       runId: run.id,
       status: null,
-      activity: 'waiting on 2 background tasks',
+      activity: 'waiting on 2 sub-agents',
       holdingFor: 2,
     });
 
     claude.emit({ type: 'turn_held', open: 1 });
     await drain();
-    expect(statuses.at(-1)?.activity).toBe('waiting on 1 background task');
+    expect(statuses.at(-1)?.activity).toBe('waiting on 1 sub-agent');
 
     claude.emit({ type: 'turn_held', open: 0 });
     await drain();
@@ -5428,6 +5466,7 @@ describe('ChatService — a DELEGATE winding up is not the run working again', (
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
+      backgroundOutcome: null,
     });
     emit?.({
       type: 'text',

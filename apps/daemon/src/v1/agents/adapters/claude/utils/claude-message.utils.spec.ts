@@ -1390,6 +1390,9 @@ describe('mapClaudeMessage — background tasks', () => {
         // 'started' recorded, which is the only line that says what a unit is.
         unit: 'other',
         toolCallId: null,
+        // …but it DOES state the outcome, and translating it here is what keeps
+        // this CLI's two spellings for one ending out of every consumer.
+        outcome: 'completed',
       },
     ]);
     expect(
@@ -1412,6 +1415,7 @@ describe('mapClaudeMessage — background tasks', () => {
         // This channel DOES name the call; the other does not, which is why the
         // consumer never depends on either naming it.
         toolCallId: 'toolu_x',
+        outcome: 'stopped',
       },
     ]);
     expect(
@@ -1431,6 +1435,10 @@ describe('mapClaudeMessage — background tasks', () => {
         phase: 'settled',
         unit: 'other',
         toolCallId: null,
+        // The SAME task the notification above called `stopped`. Both spellings
+        // collapse to one outcome here, which is the whole reason the mapping
+        // lives in this adapter rather than at each consumer.
+        outcome: 'stopped',
       },
     ]);
   });
@@ -1459,6 +1467,7 @@ describe('mapClaudeMessage — background tasks', () => {
         phase: 'settled',
         unit: 'other',
         toolCallId: 'toolu_01J4EGWm9tNfE1hQGUYw7TSj',
+        outcome: 'completed',
         usage: { tokens: 26124, toolUses: 0, durationMs: 2029 },
       },
     ]);

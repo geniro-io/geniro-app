@@ -168,7 +168,7 @@ function build(opts: {
     await drain();
   };
 
-  /** A settled turn of some OTHER kind — nothing should react to it. */
+  /** An item of some other kind — a turn ending, or something nothing reacts to. */
   const settleKind = async (kind: ItemWire['kind']): Promise<void> => {
     items.next({ runId: 'run-a', item: item(null, kind) });
     await drain();
@@ -337,6 +337,45 @@ describe('ChatTitleService', () => {
     expect(statuses).toEqual([
       { runId: 'run-a', status: null, title: 'Fix Conflicts Worktree' },
     ]);
+  });
+
+  it('names a chat whose turn was STOPPED, from the name the CLI already wrote', async () => {
+    // REPORTED as a cursor thread still titled by the first user message. The
+    // naming fired on `turn_complete` alone, so a turn the user pressed Stop on
+    // — or one that failed — left the chat wearing its opening line for good,
+    // even though the CLI had written a name of its own by then.
+    const { settleKind, retitle } = build({
+      run: { title: 'look at the merge conflicts' },
+      nativeTitle: 'Fix Conflicts Worktree',
+      firstUserMessageText: 'look at the merge conflicts',
+    });
+
+    await settleKind('turn_cancelled');
+
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Fix Conflicts Worktree',
+      'look at the merge conflicts',
+      expect.anything(),
+    );
+  });
+
+  it('does not spend a model call on a turn that FAILED', async () => {
+    // The read is a file open and runs on every ending; the ask spawns a
+    // process and bills a model call. A turn that died has nothing to name that
+    // the derived title does not already say, so only the free route runs.
+    const { settleKind, readSessionTitle, generateTitle, retitle } = build({
+      run: { title: 'look at the merge conflicts' },
+      nativeTitle: null,
+      firstUserMessageText: 'look at the merge conflicts',
+      generatedTitle: 'Should Not Be Asked For',
+    });
+
+    await settleKind('error');
+
+    expect(readSessionTitle).toHaveBeenCalled();
+    expect(generateTitle).not.toHaveBeenCalled();
+    expect(retitle).not.toHaveBeenCalled();
   });
 
   it('stops re-asking once the agent has named the chat', async () => {

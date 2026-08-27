@@ -160,7 +160,7 @@ const agents: AgentDisplay[] = [
     name: 'Reviewer',
     agent: 'cursor-agent',
     configDir: null,
-    status: 'idle',
+    status: 'pending',
     activeTurns: 0,
     contextTokens: null,
     contextWindowTokens: null,
@@ -225,7 +225,7 @@ describe('AgentsPanel', () => {
     expect(orchestrator.textContent).not.toContain('/ 200k');
 
     const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
-    expect(reviewer.textContent).toContain('idle');
+    expect(reviewer.textContent).toContain('pending');
     expect(reviewer.textContent).toContain('cursor-agent');
     expect(reviewer.textContent).not.toContain('ctx');
   });
@@ -557,10 +557,12 @@ describe('AgentsPanel', () => {
                     transport: 'stdio' as const,
                     status: 'needs_auth' as const,
                     detail: null,
-                    scope: 'project' as const,
+                    scope: 'workspace' as const,
                     disabled: false,
                     toggleUnavailableReason: null,
                     signInUnavailableReason: null,
+                    approveUnavailableReason: null,
+                    shadowsUser: false,
                   },
                 ],
               },
@@ -611,10 +613,12 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'stdio' as const,
         status: 'connected' as const,
         detail: null,
-        scope: 'project' as const,
+        scope: 'workspace' as const,
         disabled: false,
         toggleUnavailableReason: null,
         signInUnavailableReason: null,
+        approveUnavailableReason: null,
+        shadowsUser: false,
       },
       {
         name: 'linear',
@@ -622,10 +626,12 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'http' as const,
         status: 'failed' as const,
         detail: 'HTTP 502: upstream dial failed',
-        scope: 'project' as const,
+        scope: 'workspace' as const,
         disabled: false,
         toggleUnavailableReason: null,
         signInUnavailableReason: null,
+        approveUnavailableReason: null,
+        shadowsUser: false,
       },
       {
         name: 'unapproved',
@@ -633,11 +639,13 @@ describe('AgentsPanel — MCP servers', () => {
         transport: 'stdio' as const,
         status: 'pending' as const,
         detail: '(run `claude` to approve)',
-        scope: 'other' as const,
+        scope: 'user' as const,
         disabled: false,
         toggleUnavailableReason:
           'only servers defined in this folder\u2019s .mcp.json can be switched off',
         signInUnavailableReason: null,
+        approveUnavailableReason: null,
+        shadowsUser: false,
       },
     ],
   };
@@ -836,7 +844,12 @@ describe('AgentsPanel — MCP servers', () => {
     expect(orchestrator.textContent).not.toContain('connected');
     expect(orchestrator.querySelector('.bg-success')).not.toBeNull();
     expect(orchestrator.textContent).toContain('failed');
-    expect(orchestrator.textContent).toContain('pending');
+    // An UNAPPROVED server keeps no word of its own either, and for the
+    // stronger version of the same reason: it is not a health reading at all
+    // but a choice nobody has made yet, so it is counted under its own heading
+    // rather than badged among the servers that are working.
+    expect(orchestrator.textContent).toContain('Needs approval');
+    expect(orchestrator.textContent).not.toContain('pending');
   });
 
   it('puts the failure reason where the user can read it', () => {
@@ -1033,10 +1046,12 @@ describe('AgentsPanel — per-node MCP scope', () => {
           transport: 'stdio' as const,
           status: 'connected' as const,
           detail: null,
-          scope: 'project' as const,
+          scope: 'workspace' as const,
           disabled: false,
           toggleUnavailableReason: null,
           signInUnavailableReason: null,
+          approveUnavailableReason: null,
+          shadowsUser: false,
         },
       ],
     };
@@ -1115,10 +1130,12 @@ describe('AgentsPanel — MCP toggle', () => {
           transport: 'stdio' as const,
           status: 'connected' as const,
           detail: null,
-          scope: 'project' as const,
+          scope: 'workspace' as const,
           disabled: false,
           toggleUnavailableReason: null,
           signInUnavailableReason: null,
+          approveUnavailableReason: null,
+          shadowsUser: false,
           ...server,
         },
       ],
@@ -1159,7 +1176,7 @@ describe('AgentsPanel — MCP toggle', () => {
               scope('claude'),
               listingOf({
                 name: 'global-one',
-                scope: 'other',
+                scope: 'user',
                 toggleUnavailableReason: 'only project servers can be switched',
               }),
             ],

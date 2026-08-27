@@ -135,6 +135,25 @@ describe('ShellOutputDialog', () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it('says a KILLED command in the run vocabulary’s word, not its own', async () => {
+    // `ShellStatus` is a model, and this dialog printed it verbatim — so a
+    // command the agent stopped read `killed` here while the block beside it,
+    // which already translates through `RUN_STATUS_META`, read `cancelled`.
+    // One event spelled two ways on one screen is the whole of the
+    // standardization report.
+    const load = vi.fn().mockResolvedValue(output('interrupted\n'));
+    const el = await render(
+      <ShellOutputDialog
+        shell={shell({ status: 'killed' })}
+        onClose={vi.fn()}
+        load={load}
+      />,
+    );
+
+    expect(el.textContent).toContain('cancelled');
+    expect(el.textContent).not.toContain('killed');
+  });
+
   it('states the daemon’s reason instead of an empty terminal', async () => {
     const load = vi
       .fn()

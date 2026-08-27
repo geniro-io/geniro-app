@@ -284,10 +284,10 @@ export function ContextMeter({
   contextTokens,
   contextWindowTokens,
   spentUsd = null,
-  unavailableReason = null,
   runId = null,
   side = 'bottom',
   live = false,
+  awaitingReading = null,
   className,
 }: {
   /** Prompt-side tokens of the latest request, or null when unknown. */
@@ -296,18 +296,6 @@ export function ContextMeter({
   contextWindowTokens: number | null;
   /** Total spend across the run's turns, or null to omit. */
   spentUsd?: number | null;
-  /**
-   * Why this CLI never reports usage, from the daemon's own per-adapter report —
-   * or null when it does report it.
-   *
-   * It exists because "no figures" has two causes that look identical and mean
-   * opposite things: a turn that has not produced any yet, and a CLI that never
-   * will. With no figures and no reason the meter renders nothing, which is
-   * right for the first case and is how the second was reported — a user
-   * pointing at the empty spot on a cursor card and asking why there is no
-   * context there.
-   */
-  unavailableReason?: string | null;
   /**
    * Which chat the expanded readout reports on, or null for a meter that has
    * only the summary to show.
@@ -340,6 +328,23 @@ export function ContextMeter({
    * meters) gets exactly the readout it had.
    */
   live?: boolean;
+  /**
+   * Why there is no reading, when the reason is worth drawing rather than
+   * hiding: a compaction has just discarded the conversation the last figure
+   * described, and nothing measures the replacement until the next message.
+   *
+   * REPORTED against the first cut of that fix, which simply withheld the
+   * meter: "я на втором скриншоте у тебя сейчас вообще кружочку не вижу!". A
+   * control that vanishes is indistinguishable from a broken one — the same
+   * reading the effort and context-window chips are drawn by — and here it is
+   * worse, because the ring is the one thing on the row a user watches climb.
+   * So the ring is drawn EMPTY and says why.
+   *
+   * Null everywhere else: a chat that has simply not run a turn yet keeps the
+   * absent meter, since "not measured" there is a moment rather than an event
+   * anybody needs explained.
+   */
+  awaitingReading?: string | null;
   className?: string;
 }): React.JSX.Element | null {
   // The model's OWN window, or NOTHING. A window of 0 is rejected here, not
@@ -355,36 +360,62 @@ export function ContextMeter({
     contextWindowTokens !== null && contextWindowTokens > 0
       ? contextWindowTokens
       : null;
-  if (contextTokens === null && spentUsd === null) {
-    // Nothing to say AND nothing said about why: a turn that has yet to report
-    // anything, which is a moment rather than a fact. The meter stays absent.
-    if (unavailableReason === null) {
-      return null;
-    }
-    // Nothing to say, and a REASON for it. A hollow ring holds the spot the
-    // sibling agent's meter occupies and carries the sentence — no figures
-    // invented, no standing paragraph, and the question is answered exactly
-    // where it gets asked.
+  // An EMPTY ring rather than no ring — see {@link awaitingReading}. It needs
+  // the window: with no denominator there is no gauge to draw, and the branch
+  // below already has the right answer for that (the figures, bare).
+  if (
+    contextTokens === null &&
+    awaitingReading !== null &&
+    windowTokens !== null
+  ) {
     return (
       <MeterReadout
         side={side}
         className={className}
         runId={runId}
         live={live}
-        label={unavailableReason}
+        label={awaitingReading}
         ring={
-          // An EMPTY ring at the same 14px, in the muted tone: it holds the spot
-          // the sibling agent's meter occupies without implying a reading. No
-          // `label`, for the reason the filled ring has none — the button says it.
           <ProgressRing
             fraction={0}
             size={14}
-            className="text-muted-foreground/40"
+            // Muted, unlike every filled state: this is the absence of a
+            // reading, and a green nought would read as an empty window —
+            // which is a claim, and one nobody has measured.
+            className="text-muted-foreground/60"
           />
         }>
-        <p className="text-[11px] text-muted-foreground">{unavailableReason}</p>
+        {/* WRAPS, unlike the reading below it: those are figures and this is a
+            sentence, and held on one line it ran off the panel's edge. */}
+        <span className="flex max-w-64 flex-col gap-0.5 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">
+            {formatTokens(windowTokens)} window
+          </span>
+          <span>{awaitingReading}</span>
+          {spentUsd !== null ? (
+            <span>{formatUsd(spentUsd)} spent across this run</span>
+          ) : null}
+        </span>
       </MeterReadout>
     );
+  }
+  if (contextTokens === null && spentUsd === null) {
+    // Nothing to say: a turn that has yet to report anything, which is a
+    // moment rather than a fact. The meter stays absent until it does.
+    //
+    // A second arm used to live here — a hollow ring carrying a sentence for
+    // "a CLI that NEVER reports usage", fed from the daemon's per-adapter
+    // usage capability. Its premise stopped being true of either shipped CLI:
+    // claude answers over its control channel and cursor-agent's reading is
+    // read out of that CLI's own session store, so both meters fill as soon as
+    // a turn lands. What the sentence actually described was the absence of a
+    // COST, so a cursor chat with no turns yet explained itself with "no cost
+    // can be shown" while the context reading it was waiting for was simply on
+    // its way — and the panel's own breakdown reason was already saying the
+    // useful half ("send a message to take a fresh reading"). The daemon
+    // capability is still published, so an agent that genuinely reports
+    // neither can have this rebuilt against a true premise.
+    return null;
   }
 
   // No ring to hover means no way to reach a hover-only readout, so the figures

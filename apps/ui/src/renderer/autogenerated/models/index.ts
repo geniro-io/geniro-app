@@ -24,6 +24,19 @@ export interface AgentApprovalCapability {
 /**
  * 
  * @export
+ * @interface AgentCacheResetDto
+ */
+export interface AgentCacheResetDto {
+    /**
+     * How many cached CLI answers were dropped.
+     * @type {number}
+     * @memberof AgentCacheResetDto
+     */
+    cleared: number;
+}
+/**
+ * 
+ * @export
  * @interface AgentConfigDirCapability
  */
 export interface AgentConfigDirCapability {
@@ -254,7 +267,7 @@ export interface AgentMcpServer {
      */
     transport: AgentMcpServerTransportEnum | null;
     /**
-     * Health as the CLI reported it; `pending` is a configured but unapproved server, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet
+     * Health as the CLI reported it; `pending` is a configured but unapproved server, `loading` one the CLI was still dialling when it answered, `disabled` one switched off in the CLI’s own config, `needs_auth` an OAuth server nobody has signed in to yet
      * @type {string}
      * @memberof AgentMcpServer
      */
@@ -266,11 +279,17 @@ export interface AgentMcpServer {
      */
     detail: string | null;
     /**
-     * Where the server is defined; only `project` has any verified disable mechanism
+     * Which of the CLI’s configuration scopes defined this server; `unknown` when the CLI’s files could not place it
      * @type {string}
      * @memberof AgentMcpServer
      */
     scope: AgentMcpServerScopeEnum;
+    /**
+     * True when this WORKSPACE definition overrides a same-named user one, so the user’s own server is not what this folder loads under that name
+     * @type {boolean}
+     * @memberof AgentMcpServer
+     */
+    shadowsUser: boolean;
     /**
      * Whether the next turn will leave this server out, whoever switched it off
      * @type {boolean}
@@ -289,6 +308,12 @@ export interface AgentMcpServer {
      * @memberof AgentMcpServer
      */
     signInUnavailableReason: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentMcpServer
+     */
+    approveUnavailableReason: string | null;
 }
 
 
@@ -309,6 +334,7 @@ export const AgentMcpServerStatusEnum = {
     Connected: 'connected',
     Failed: 'failed',
     Pending: 'pending',
+    Loading: 'loading',
     Disabled: 'disabled',
     NeedsAuth: 'needs_auth',
     Unknown: 'unknown'
@@ -319,8 +345,8 @@ export type AgentMcpServerStatusEnum = typeof AgentMcpServerStatusEnum[keyof typ
  * @export
  */
 export const AgentMcpServerScopeEnum = {
-    Project: 'project',
-    Other: 'other',
+    User: 'user',
+    Workspace: 'workspace',
     Unknown: 'unknown'
 } as const;
 export type AgentMcpServerScopeEnum = typeof AgentMcpServerScopeEnum[keyof typeof AgentMcpServerScopeEnum];
@@ -382,6 +408,75 @@ export interface AgentModelEffortCapability {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface AgentModelParameter
+ */
+export interface AgentModelParameter {
+    /**
+     * The CLI’s own parameter id, sent back verbatim
+     * @type {string}
+     * @memberof AgentModelParameter
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelParameter
+     */
+    label: string;
+    /**
+     * 
+     * @type {Array<AgentModelParameterValue>}
+     * @memberof AgentModelParameter
+     */
+    values: Array<AgentModelParameterValue>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelParameter
+     */
+    current: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface AgentModelParameterListingDto
+ */
+export interface AgentModelParameterListingDto {
+    /**
+     * 
+     * @type {Array<AgentModelParameter>}
+     * @memberof AgentModelParameterListingDto
+     */
+    parameters: Array<AgentModelParameter>;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelParameterListingDto
+     */
+    unavailableReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface AgentModelParameterValue
+ */
+export interface AgentModelParameterValue {
+    /**
+     * Passed verbatim to the CLI as this parameter’s value
+     * @type {string}
+     * @memberof AgentModelParameterValue
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof AgentModelParameterValue
+     */
+    label: string;
+}
 /**
  * 
  * @export
@@ -731,6 +826,12 @@ export interface ChatMetricsDto {
     planReason: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ChatMetricsDto
+     */
+    takenAt: string | null;
+    /**
+     * 
      * @type {ChatTotals}
      * @memberof ChatMetricsDto
      */
@@ -1033,6 +1134,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     contextWindow?: string;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof CreateChatDto
+     */
+    modelParameters?: { [key: string]: string; };
     /**
      * 
      * @type {string}
@@ -2013,6 +2120,12 @@ export interface RunDto {
      */
     contextWindow: string | null;
     /**
+     * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
+     * @type {{ [key: string]: string; }}
+     * @memberof RunDto
+     */
+    modelParameters: { [key: string]: string; };
+    /**
      * 
      * @type {number}
      * @memberof RunDto
@@ -2374,6 +2487,12 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     contextWindow?: string | null;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof UpdateChatSettingsDto
+     */
+    modelParameters?: { [key: string]: string; } | null;
 }
 
 
@@ -2588,6 +2707,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     contextWindow?: string;
+    /**
+     * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
+     * @type {{ [key: string]: string; }}
+     * @memberof WorkflowAgentNode
+     */
+    modelParameters?: { [key: string]: string; };
     /**
      * What this agent does — shown to agents wired to call it
      * @type {string}

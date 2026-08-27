@@ -1,7 +1,6 @@
 import {
   Ban,
   CircleCheck,
-  CircleDashed,
   CircleX,
   Clock,
   Hourglass,
@@ -15,19 +14,31 @@ import { cn } from '../components/ui/utils';
 
 /**
  * Everything a run or a node can be, display-wise: the run statuses, the
- * node-only `skipped`, the "hasn't started yet" `idle`, and the two no daemon
- * row ever carries — `needs-input` and `waiting`. See {@link displayRunStatus}.
+ * node-only `skipped`, and the two no daemon row ever carries — `needs-input`
+ * and `held`. See {@link displayRunStatus}.
+ *
+ * There is no `idle`. It was a NINTH member meaning "has not started yet",
+ * which is what `pending` already means and what the daemon's own `node_state`
+ * row literally says while it holds — so an agent card said `idle` for exactly
+ * as long as no item had been written for that node and `pending` the moment
+ * one was, for one unchanged fact.
+ *
+ * ONE vocabulary for the whole app. Anything drawn in a different one — a
+ * transcript block's `done`/`error`/`stopped` lifecycle — is TRANSLATED into
+ * these before it reaches a glyph or a word (`block-shell.tsx`), because a
+ * screen that spells one state two ways is what "давай стандартизируем
+ * статусы" was reported against: a cancelled turn's delegate wore a red
+ * `error` pill three lines under a header reading `cancelled`.
  */
 export type RunStatusKind =
   | 'pending'
   | 'running'
-  | 'waiting'
+  | 'held'
   | 'needs-input'
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'skipped'
-  | 'idle';
+  | 'skipped';
 
 /**
  * The one status → icon/tone/label mapping, so a run's or agent's state reads
@@ -59,7 +70,13 @@ export const RUN_STATUS_META: Record<
   // no longer `idle`: the row already carries `· waiting on 6 background
   // tasks` beside it ({@link HELD_ACTIVITY}), so the badge's job is to say the
   // thread is not finished, and the phrase's is to say what it is on.
-  waiting: { icon: Hourglass, className: 'text-primary', label: 'working' },
+  //
+  // The KIND is `held` rather than `waiting` for the other half of that: the
+  // word `waiting` was doing three jobs at once — this key, the phrase under a
+  // `needs-input` badge (`waiting for your answer`), and the sign-in flow's own
+  // `CliLoginStatus`. `held` is the daemon's own name for the fact
+  // (`turn_held` → `holdingFor`), so the key now names what produced it.
+  held: { icon: Hourglass, className: 'text-primary', label: 'working' },
   // Warning-toned, not accent: it is the one state that will not advance on
   // its own, so it must read as "you are the blocker" rather than as another
   // shade of busy — and the icon is deliberately not a spinner, for the same
@@ -84,11 +101,6 @@ export const RUN_STATUS_META: Record<
     icon: MinusCircle,
     className: 'text-muted-foreground',
     label: 'skipped',
-  },
-  idle: {
-    icon: CircleDashed,
-    className: 'text-muted-foreground',
-    label: 'idle',
   },
 };
 
@@ -154,18 +166,18 @@ export function displayRunStatus({
    *
    * The reported "done but showing like it's working", and it is a different
    * defect from the one that phrase last named: the sentence under the badge
-   * was fixed to say `waiting on 2 background tasks`, and the BADGE went on
+   * was fixed to say `waiting on 2 sub-agents`, and the BADGE went on
    * spinning `running` above it. A background task with no end — a dev server,
    * a tailed log — holds the turn until the 30-minute silence deadline, so the
    * screenshot that came back showed `running · 20m 18s` under an answer the
    * agent had finished writing twenty minutes earlier.
    *
-   * It answers `waiting`, which was `idle` for one release and should not have
+   * It answers `held`, which was `idle` for one release and should not have
    * been. `idle` is the word the COMPOSER uses to the user ("the agent is idle,
-   * waiting on its background tasks"), where a whole sentence carries it; on a
+   * waiting on its sub-agents"), where a whole sentence carries it; on a
    * badge the word stands alone, and it came straight back reported twice over
    * — `i still see it seems like it finished but not`, over a header reading
-   * `idle · 1h` above a live Stop button and a `waiting on 1 background task`
+   * `idle · 1h` above a live Stop button and a `waiting on 1 sub-agent`
    * line. Neither status is SETTLED, so nothing downstream reads the run as
    * finished either way: what changed is that the badge no longer says the
    * opposite of what the row beneath it says.
@@ -201,7 +213,7 @@ export function displayRunStatus({
   // stale `completed` row — is a turn that is NOT held, so it still falls
   // through to `subagentRunning` below.
   if (heldForBackgroundWork) {
-    return 'waiting';
+    return 'held';
   }
   // A delegate still producing rows is WORK, whatever the run row says.
   if (subagentRunning) {
@@ -262,10 +274,10 @@ export const STANDING_ACTIVITY = 'Working…';
  * stutter under a badge that already says `working`.
  *
  * The daemon names the count while the window is connected (`waiting on 6
- * background tasks`); this is what a window that reconnected mid-hold shows,
+ * sub-agents`); this is what a window that reconnected mid-hold shows,
  * the activity plane being events-only.
  */
-export const HELD_ACTIVITY = 'waiting on background work';
+export const HELD_ACTIVITY = 'waiting on sub-agents';
 
 /**
  * Something is working on this run RIGHT NOW, with nobody being waited for.
@@ -277,7 +289,7 @@ export const HELD_ACTIVITY = 'waiting on background work';
  * already handles separately.
  */
 export function isWorkingRunStatus(status: RunStatusKind): boolean {
-  return status === 'running' || status === 'waiting';
+  return status === 'running' || status === 'held';
 }
 
 /**
@@ -288,8 +300,8 @@ export function isWorkingRunStatus(status: RunStatusKind): boolean {
  * shows. Reading the row directly is how a transcript came to contradict its
  * own header.
  *
- * `pending` and `idle` are NOT settled: they are states a run has yet to leave,
- * not ones it has finished in. Neither are `needs-input` and `waiting` — both
+ * `pending` is NOT settled: it is a state a run has yet to leave, not one it
+ * has finished in. Neither are `needs-input` and `held` — both
  * are open turns, one blocked on a human and the other on background work the
  * run itself launched.
  */

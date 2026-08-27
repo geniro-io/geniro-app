@@ -40,6 +40,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     says?: string;
     /** Whose thread it came from: absent is the main one, a value a delegate's. */
     parent?: string;
+    /** How the settling unit ended, when the fake line states it. */
+    outcome?: 'completed' | 'failed' | 'stopped';
     /** What the settling unit spent, when the fake line states it. */
     spent?: {
       tokens: number | null;
@@ -55,6 +57,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         phase: row.phase,
         unit: row.unit ?? 'other',
         toolCallId: row.call ?? null,
+        outcome: row.outcome,
         usage: row.spent,
       },
     ];
@@ -1245,6 +1248,7 @@ describe('a turn whose background work outlives its result', () => {
         toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: true,
+        backgroundOutcome: null,
       },
       {
         type: 'subagent_info',
@@ -1258,9 +1262,43 @@ describe('a turn whose background work outlives its result', () => {
         toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: false,
+        backgroundOutcome: null,
       },
       COMPLETE,
     ]);
+  });
+
+  it('carries HOW a delegate ended onto the announcement that closes it', async () => {
+    // The join between the settle and the row the transcript reads. Without it
+    // the whole outcome path is revertible with a green suite: every other
+    // assertion in this file settles with no outcome, so `backgroundOutcome`
+    // could be hard-wired to null and nothing here would notice — while a
+    // killed delegate went back to wearing a green check.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    line(child, { work: 'task-1', phase: 'settled', outcome: 'stopped' });
+    line(child, { done: true });
+    await handle?.done;
+
+    const announced = events.filter((e) => e.type === 'subagent_info');
+    // The `started` anchor claims nothing about an ending…
+    expect(announced[0]).toMatchObject({
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    // …and the settle carries the CLI's own verdict through.
+    expect(announced[1]).toMatchObject({
+      backgroundOpen: false,
+      backgroundOutcome: 'stopped',
+    });
   });
 
   it('closes a background SHELL with its own announcement', async () => {
@@ -1413,6 +1451,7 @@ describe('a turn whose background work outlives its result', () => {
       expect.objectContaining({
         type: 'subagent_info',
         backgroundOpen: true,
+        backgroundOutcome: null,
         // The launch measures nothing, and must not: a `started` announcing
         // zeros would be a reading, and the merge prefers the last non-null.
         tokens: null,
@@ -1422,6 +1461,7 @@ describe('a turn whose background work outlives its result', () => {
       expect.objectContaining({
         type: 'subagent_info',
         backgroundOpen: false,
+        backgroundOutcome: null,
         tokens: 26124,
         toolUses: 0,
         durationMs: 2029,
@@ -1611,6 +1651,7 @@ describe('a turn whose background work outlives its result', () => {
         toolUses: null,
         stepsUnavailableReason: null,
         backgroundOpen: true,
+        backgroundOutcome: null,
       },
     ]);
 
@@ -1629,6 +1670,7 @@ describe('a turn whose background work outlives its result', () => {
       toolUses: null,
       stepsUnavailableReason: null,
       backgroundOpen: false,
+      backgroundOutcome: null,
     });
   });
 

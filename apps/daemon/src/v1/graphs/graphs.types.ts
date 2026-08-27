@@ -185,6 +185,21 @@ export const WorkflowAgentNodeSchema = z
       .optional()
       .describe("Context-window size; omitted = the model's own default"),
     /**
+     * Every OTHER model setting this node's turns ask for, keyed by the CLI's
+     * own parameter id (`{optimize_for: 'intelligence'}`).
+     *
+     * Unchecked here for the reason the window above is, taken further: geniro
+     * holds no vocabulary for these at all — the model enumerates them and the
+     * live agent refuses a value it does not accept, per turn, which is the
+     * only check that stays true for a workflow that runs for months.
+     */
+    modelParameters: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe(
+        "Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults",
+      ),
+    /**
      * The node's PUBLIC blurb: what this agent is for, written for the agents
      * wired to call it. It is the only thing a caller is told about a callee
      * (see `calleeSummary`) — it rides the call_agent tool description and the

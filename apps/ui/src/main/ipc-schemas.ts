@@ -92,6 +92,12 @@ const runConfigSchema = z.strictObject({
   // that salvage is entry-by-entry. The default reads an older file as "no
   // size chosen", which is what those entries mean.
   contextWindow: z.string().min(1).max(64).nullable().default(null),
+  // Defaulted, not optional: a configuration saved before this field existed
+  // must salvage rather than fail the entry, which `salvageRunConfigs` grades
+  // one row at a time.
+  modelParameters: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(200))
+    .default({}),
   approval: z.string().min(1).max(32).nullable(),
   configDir: absolutePath.nullable(),
 });
@@ -128,6 +134,15 @@ export const settingsPatchSchema = z.strictObject({
   // per MODEL rather than per CLI — bounded here, never enumerated.
   lastContextWindows: z
     .partialRecord(cliKind, z.string().min(1).max(64))
+    .optional(),
+  // The OTHER model settings, per CLI, as `{parameterId: value}`. Both halves
+  // are the CLI's own words (`optimize_for` → `balanced`), so both are bounded
+  // and neither is enumerated — this app holds no vocabulary for them at all.
+  lastModelParameters: z
+    .partialRecord(
+      cliKind,
+      z.record(z.string().min(1).max(64), z.string().min(1).max(200)),
+    )
     .optional(),
   // partialRecord, not record: in zod v4 z.record over an enum key is
   // exhaustive (would require every CliKind present); cliPaths is sparse.

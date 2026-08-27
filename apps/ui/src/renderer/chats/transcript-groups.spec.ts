@@ -1313,6 +1313,30 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('running');
   });
 
+  it('completes a delegate whose launching call fell outside the loaded window', () => {
+    // The truncation case, and it is the ONLY way a delegate can be running
+    // forever with nothing on screen able to end it. A block is admitted by the
+    // delegate's own rows, while `returned` is read off the launching call — so
+    // once a thread grows past `HISTORY_PAGE` and that call drops below the
+    // window, the block has no launch to answer it and no turn-end after its
+    // last row while the agent works on. Measured on the reporter's own
+    // `geniro.db`, run `d64593d0`: the window held seq ~2570–3570, the two
+    // delegates it drew as running were launched at 2537 and 2551, and the
+    // daemon's `backgroundOpen: false` for them sat at 3213 and 3364 — inside
+    // the window, and discarded.
+    const entries = fold([
+      delegated('message', { text: 'emitting the reaction event' }, 'task-cut'),
+      item('subagent_info', { id: 'task-cut', backgroundOpen: false }),
+    ]);
+
+    const block = onlyBlock(entries);
+    // Neither of the two facts the other readings need: the launch is gone, so
+    // there is no result to have returned and no description to be named by.
+    expect(block.returned).toBe(false);
+    expect(block.label).toBeNull();
+    expect(subagentBlockStatus(block)).toBe('completed');
+  });
+
   it('stops a background delegate that never reported once the RUN itself settles', () => {
     // The latch: an open `background_work` unit used to outrank everything, so
     // a delegate whose CLI died before reporting kept the block — and with it

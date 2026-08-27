@@ -5,6 +5,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
+import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { childProcessHandle } from '../../agents/utils/child-handle';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
@@ -39,6 +41,15 @@ interface LoginRun {
    * nothing about the CLI beneath it.
    */
   server: string | null;
+  /**
+   * The folder a SERVER sign-in was run in, or null for an account sign-in.
+   *
+   * Kept solely to retire that folder's agent sessions once the sign-in lands:
+   * a CLI reads its MCP configuration at spawn, so a connector the user has
+   * just authenticated reaches the config and not the process a chat is
+   * already holding. See `AgentSessionRegistry.markStale`.
+   */
+  cwd: string | null;
 }
 
 /**
@@ -72,7 +83,33 @@ export class CliAuthService {
   constructor(
     private readonly adapters: AgentAdapterRegistry,
     private readonly processes: ProcessRegistry,
+    private readonly sessions: AgentSessionRegistry,
+    private readonly vocabularies: ModelVocabularyStore,
   ) {}
+
+  /**
+   * Drop what this CLI told us about itself, because it is now a different
+   * account.
+   *
+   * The one account change geniro can OBSERVE — it ran the command — and so the
+   * one that needs no clock. A subscription decides which models exist and what
+   * each of them offers, and none of that moves the CLI's `--version`, which is
+   * the only other check a stored answer is held to. Without this, signing in
+   * would leave the composer offering the previous account's models until the
+   * refresh window lapsed.
+   *
+   * Called on the ACCOUNT flows only: an MCP server sign-in changes which tools
+   * a turn has, not which models the CLI sells, and that staleness is already
+   * answered next door by retiring the folder's sessions.
+   */
+  private forgetVocabularies(agent: AgentKind, because: string): void {
+    const dropped = this.vocabularies.forget(agent);
+    if (dropped > 0) {
+      this.logger.log(
+        `dropped ${dropped} cached ${agent} model vocabular${dropped === 1 ? 'y' : 'ies'} — ${because}`,
+      );
+    }
+  }
 
   /**
    * Sign a CLI out, here and now.
@@ -104,6 +141,9 @@ export class CliAuthService {
           childProcessHandle(child, spawnInfo),
         ),
     });
+    if (ok) {
+      this.forgetVocabularies(input.agent, 'signed out');
+    }
     return {
       agent: input.agent,
       ok,
@@ -149,6 +189,7 @@ export class CliAuthService {
       child: null,
       output: '',
       server: null,
+      cwd: null,
     };
     this.runs.set(id, run);
 
@@ -213,6 +254,7 @@ export class CliAuthService {
           `${input.agent} cannot sign in to an MCP server`,
       );
     }
+    const projectDir = resolveValidCwd(input.cwd);
     const id = randomUUID();
     const run: LoginRun = {
       session: {
@@ -225,6 +267,10 @@ export class CliAuthService {
       child: null,
       output: '',
       server: input.server,
+      // Canonicalized ONCE and reused for both the child and the session
+      // retirement below — the registry matches on the string a turn recorded,
+      // which is the resolved one.
+      cwd: projectDir,
     };
     this.runs.set(id, run);
 
@@ -233,7 +279,7 @@ export class CliAuthService {
         server: input.server,
         // Validated here rather than trusted: this becomes a child's cwd, and
         // the CLI resolves the server name against it.
-        cwd: resolveValidCwd(input.cwd),
+        cwd: projectDir,
         configDir: this.resolveConfigDir(input.configDir),
         timeoutMs: LOGIN_TIMEOUT_MS,
         onSpawn: (child, spawnInfo) => {
@@ -368,6 +414,31 @@ export class CliAuthService {
       status: completed ? 'succeeded' : 'failed',
       message: completed ? null : (lastProgressLine(text) ?? null),
     };
+    if (completed && run.server === null) {
+      this.forgetVocabularies(run.session.agent, 'signed in to a new account');
+    }
+    if (completed && run.cwd !== null) {
+      // A CLI reads its MCP configuration when it STARTS, and geniro keeps that
+      // process alive across a chat's turns — so a connector the user has just
+      // authenticated reaches the config and never reaches the agent already
+      // running in that folder. Reported with the agent's own diagnosis in the
+      // transcript: "the connector may need the session restarted". See
+      // `AgentSessionRegistry.markStale` for why this marks rather than closes.
+      //
+      // Only on the arm that COMPLETED: a sign-in that failed changed nothing,
+      // and respawning a working chat's CLI over it would cost the user their
+      // warm process for no gain.
+      const retired = this.sessions.markStale(
+        run.session.agent,
+        run.cwd,
+        `you signed in to ${run.server}`,
+      );
+      if (retired > 0) {
+        this.logger.log(
+          `${retired} ${run.session.agent} session(s) in ${run.cwd} will restart on their next turn — signed in to ${run.server}`,
+        );
+      }
+    }
     if (!completed) {
       // Logged without the output, for the reason `lastProgressLine` exists: a
       // sign-in's stdout is the one stream here that can hold a one-time code.

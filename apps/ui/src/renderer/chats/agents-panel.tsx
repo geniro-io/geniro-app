@@ -275,6 +275,7 @@ export function AgentsPanel({
   onSetMcpEnabled,
   onSignInMcp,
   mcpLoginPanel,
+  mcpSigningIn,
   mcpToggleError = null,
   onDismissMcpToggleError,
   onMcpOpenChange,
@@ -282,7 +283,6 @@ export function AgentsPanel({
   onOpenSubagent,
   onResolveHandoff,
   terminalReasons,
-  usageReasons,
   metricsRunId = null,
 }: {
   agents: AgentDisplay[];
@@ -341,6 +341,14 @@ export function AgentsPanel({
    * (`Chats`), so nothing here has to know what a login session is.
    */
   mcpLoginPanel?: React.ReactNode;
+  /**
+   * The server whose sign-in has been asked for and not yet answered.
+   *
+   * Separate from {@link mcpLoginPanel} because it covers the window BEFORE
+   * that panel can exist: the daemon holds its reply until the CLI prints a
+   * URL, measured at 4001ms, and until then there is no session to render.
+   */
+  mcpSigningIn?: string | null;
   /**
    * Why the last toggle did not land. Shown as a strip rather than swallowed:
    * the daemon refuses a toggle it cannot honour, and its sentence explains
@@ -443,7 +451,6 @@ export function AgentsPanel({
    * "we have not been told", which must render as silence rather than as a
    * refusal — a turn mid-flight has no figures either.
    */
-  usageReasons?: ReadonlyMap<string, string | null>;
 }): React.JSX.Element {
   const { width, minWidth, maxWidth, startResize, resizeTo } = usePanelWidth({
     storageKey: 'chats.agentsPanelWidth',
@@ -743,15 +750,6 @@ export function AgentsPanel({
                         contextTokens={agent.contextTokens}
                         contextWindowTokens={agent.contextWindowTokens}
                         spentUsd={agent.spentUsd}
-                        // Why this card's meter is empty, when it always will be.
-                        // Null for an agent whose kind the panel does not know, and
-                        // for one whose report has not landed — both are "we have
-                        // not been told", which must not print as a refusal.
-                        unavailableReason={
-                          agent.agent === null
-                            ? null
-                            : (usageReasons?.get(agent.agent) ?? null)
-                        }
                         // This card's OWN status, not the run's: the panel lists
                         // several agents and only the working one's readout has
                         // anything to keep current.
@@ -792,6 +790,7 @@ export function AgentsPanel({
                               ? (server) => onSignInMcp(mcpKind, server)
                               : undefined
                           }
+                          signingIn={mcpSigningIn}
                           loginPanel={mcpLoginPanel}
                         />
                       ) : null}

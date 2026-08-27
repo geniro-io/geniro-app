@@ -45,6 +45,20 @@ export const GENIRO_MCP_CALL_TOOLS = [
  *
  * Every field nullable on the usual terms: a CLI reports what it reports.
  */
+/**
+ * How a unit of background work ENDED, in this app's own vocabulary rather than
+ * any CLI's.
+ *
+ * The words are the transcript block's own (`chats/transcript-groups.ts`
+ * `subagentBlockStatus`), so a CLI's spelling is translated once, in its
+ * adapter, and no consumer downstream has to learn another vendor's list.
+ * Claude alone spells the same outcome two ways on its two terminal channels
+ * (`killed` on one, `stopped` on the other, measured for one task in one run),
+ * which is why translating at the read site is the only place it can be done
+ * once.
+ */
+export type BackgroundUnitOutcome = 'completed' | 'failed' | 'stopped';
+
 export interface BackgroundUnitUsage {
   /** Every token the unit spent, prompt and completion together. */
   tokens: number | null;
@@ -161,6 +175,32 @@ export interface AgentUsage {
 // different questions with different sources: usage is read off a turn's own
 // result line, while this is ASKED of a live process (see
 // `AgentSession.readContextUsage`) and so has no turn attached to it at all.
+
+/**
+ * Which of {@link AgentSessionReadInput}'s two channels a CLI's reading comes
+ * from.
+ *
+ * `live-process` is a question put to a RUNNING agent over its own stdin
+ * dialogue, so the reading exists only while the run holds a session (claude).
+ * `session-store` is read off what the CLI wrote to disk, so it survives the
+ * process (cursor). The distinction is not decoration: it is what separates
+ * "there was nobody to ask" from "we asked and got nothing", which are the two
+ * sentences the readout has to choose between.
+ */
+export type UsageReadChannel = 'live-process' | 'session-store';
+
+/**
+ * Whether one of the two window/plan questions can be put to this CLI at all,
+ * and if so where the answer comes from.
+ *
+ * The `unavailable` arm's reason is a SENTENCE rendered verbatim where the
+ * figures would have been, matching `handoff`'s own shape — and the two facts
+ * ride ONE field so a CLI cannot declare a reason beside a channel that
+ * contradicts it.
+ */
+export type UsageReading =
+  | { readonly kind: 'unavailable'; readonly reason: string }
+  | { readonly kind: 'reads'; readonly channel: UsageReadChannel };
 
 /**
  * One line item of the context window, as the CLI itself accounts for it.
@@ -737,6 +777,16 @@ type AgentEventBody =
        */
       stepsUnavailableReason: string | null;
       /**
+       * HOW this delegate ended, when the CLI said — {@link
+       * BackgroundUnitOutcome}, `null` while it is still out or when the CLI
+       * reports only THAT the work is over.
+       *
+       * A settle on its own says only that the work is no longer open, which
+       * is not the same as success — so absent must read as "nothing was
+       * said", never as `completed`.
+       */
+      backgroundOutcome: BackgroundUnitOutcome | null;
+      /**
        * Whether this delegate is still working in the BACKGROUND — `true` while
        * it is out, `false` once the CLI reports it done, `null` when nothing has
        * been said either way.
@@ -863,6 +913,17 @@ type AgentEventBody =
       /** The CLI's own id for this unit of work. */
       id: string;
       phase: 'started' | 'settled';
+      /**
+       * HOW it ended, on a `settled` — {@link BackgroundUnitOutcome}.
+       *
+       * Absent on a `started`, and absent on a settle from a CLI that reports
+       * only that the work is over. The three states matter for the same reason
+       * {@link AgentEvent} `subagent_info`'s `backgroundOpen` has three: absent
+       * must read as "nothing was said", never as success, or a CLI with no
+       * outcome vocabulary would have every delegate reported as having
+       * completed.
+       */
+      outcome?: BackgroundUnitOutcome;
       /**
        * WHAT this unit is, when the CLI says — a delegate (`agent`) or anything
        * else it runs in the background (a shell command, an indexing pass).
@@ -1212,6 +1273,74 @@ export interface AgentContextWindowListing {
 }
 
 /**
+ * One setting of a model that geniro has NO dedicated control for, carried
+ * exactly as the CLI enumerated it.
+ *
+ * The two axes above are the ones geniro gave a control of its own, because
+ * both mean something in every CLI's vocabulary. They are not the only ones a
+ * CLI has. Probed 2026-08-26 on cursor-agent 2026.08.11-e8db854, one seeded
+ * handshake per model, reading every `configOptions` entry rather than the two
+ * this app knew to look for:
+ *
+ * - `auto-smart`    → `optimize_for` = intelligence | balanced | cost
+ * - `claude-opus-5` → `thinking` = false | true, `fast` = false | true
+ * - `gpt-5.6-sol`   → `fast` = false | true
+ * - `kimi-k3`, `gemini-3.1-pro` → none beyond what is already surfaced
+ *
+ * Three axes invisible in the app, and `optimize_for` is the one that was
+ * REPORTED ("у курсора есть дефолтный модуль, и мы можем выбрать тип этого
+ * дефолтного модуля"). Giving each its own end-to-end stack — service, route,
+ * wire type, run column, chip — would have been the third and fourth copies of
+ * one mechanism, and the next parameter the CLI adds would need a fifth. So
+ * nothing here interprets: an id, a label, its values and whatever the CLI says
+ * is current, passed through to a chip that renders whatever it is handed.
+ *
+ * Which parameters reach this list is the ADAPTER's decision, and it is a
+ * subtraction rather than an allowlist — everything the CLI enumerated, minus
+ * what geniro already drives through a control of its own. An allowlist would
+ * mean a parameter Cursor ships next month stays invisible until someone here
+ * notices it, which is the failure this shape exists to end.
+ */
+export interface AgentModelParameter {
+  /** The CLI's own id — what a turn sets, never translated. */
+  id: string;
+  /** The CLI's own display name; falls back to {@link id} when it names none. */
+  label: string;
+  /** The values it accepts, in the CLI's own order. */
+  values: AgentModelParameterValue[];
+  /**
+   * The value the CLI reports the model is currently on, when it says.
+   *
+   * Shown as the chip's own default, so a run that has chosen nothing still
+   * reads as what will actually happen. Null when the reply named none.
+   */
+  current: string | null;
+}
+
+/** One accepted value of an {@link AgentModelParameter}. */
+export interface AgentModelParameterValue {
+  id: string;
+  label: string;
+}
+
+/**
+ * Every {@link AgentModelParameter} of ONE model, and the reason when there are
+ * none.
+ *
+ * `unavailableReason` obeys the contract the two listings above already do — a
+ * SENTENCE whenever the list is empty. The difference is what the consumer does
+ * with it: there is no chip to hang it on, because with no parameters there is
+ * nothing to draw at all, so it exists for the log and for a caller that wants
+ * to say why rather than for a control.
+ */
+export interface AgentModelParameterListing {
+  parameters: AgentModelParameter[];
+  unavailableReason: string | null;
+  /** True when this is the NAMED MODEL's own answer — see {@link AgentEffortListing.exact}. */
+  exact: boolean;
+}
+
+/**
  * One skill / slash command a CLI can be invoked with (`/name …`).
  *
  * `kind` separates a skill directory from a plain command file; `source` says
@@ -1315,7 +1444,21 @@ export interface AgentGeniroCommand {
  * listing may never degrade into a confident "this folder has none".
  *
  * `pending` is a server that is configured but deliberately not connected to —
- * claude's unapproved `.mcp.json`, cursor's `not loaded (needs approval)`.
+ * claude's unapproved `.mcp.json`, cursor's `not loaded (needs approval)`. Read
+ * out of cursor's own bundle on 2026.08.11-e8db854, its condition is exact: the
+ * server is defined in the PROJECT's `.cursor/mcp.json` and its approval key is
+ * not yet in that project's `mcp-approvals.json`, so a user-scope server can
+ * never be `pending` there. It is the second status with an ACTION attached —
+ * see `AdapterConfig.mcp.approveUnavailableReason` — because approving is a
+ * command on one CLI and an interactive screen on the other.
+ *
+ * `loading` is a server the CLI is still connecting to at the moment it
+ * answered. It is a MOMENT, not a state of the configuration: ask again and it
+ * becomes `connected` or `failed`. It has its own arm because without one it
+ * degraded to `unknown`, which reads as "this row's health is unreadable" — a
+ * claim about the parser — where the truth is that the CLI told us plainly and
+ * the answer simply is not in yet.
+ *
  * `disabled` is one the user switched off in the CLI's own configuration, which
  * geniro cannot undo (cursor's `mcp disable`); it is distinct from the wire's
  * `disabled` flag, which also covers servers geniro itself suppressed.
@@ -1330,7 +1473,13 @@ export interface AgentGeniroCommand {
  * at all and offered nothing to do.
  */
 export type AgentMcpServerStatus =
-  'connected' | 'failed' | 'pending' | 'disabled' | 'needs_auth' | 'unknown';
+  | 'connected'
+  | 'failed'
+  | 'pending'
+  | 'loading'
+  | 'disabled'
+  | 'needs_auth'
+  | 'unknown';
 
 /**
  * One MCP server a CLI agent loads in a given working directory.
@@ -1640,6 +1789,47 @@ export interface AgentMcpFolderFacts {
    * silently does nothing, which is exactly what the design forbids.
    */
   readonly lockedOff: readonly string[];
+  /**
+   * Where each server the folder resolves was DEFINED, keyed by name. A name
+   * this CLI cannot place is simply absent, which reads as `unknown`.
+   *
+   * Its whole reason for existing is that a CLI merges its scopes BY NAME, so
+   * a listing is one row per name and cannot say which definition won.
+   * Measured on cursor 2026.08.11-e8db854 in a folder defining `codegraph` at
+   * both scopes: `mcp list` prints one `codegraph` row, the workspace file's
+   * definition is the one in force, and `mcp list-tools codegraph` answers
+   * `MCP server "codegraph" has not been approved` — while the user-scope
+   * server of that name works everywhere else on the machine. With no origin
+   * on the row, the panel showed a server the reader knows to be working and
+   * called it unapproved, with nothing on screen to explain the contradiction.
+   */
+  readonly origins: Readonly<Record<string, AgentMcpOrigin>>;
+  /**
+   * This folder's answer to `AdapterConfig.mcp.interactiveOnlyNote`, when the
+   * CLI's own-app-only servers can only be known by looking at the machine;
+   * null leaves the config's static sentence standing.
+   *
+   * It exists because cursor's are its PLUGINS — a set the user installs and
+   * changes — so no string written here could name them. claude's are two
+   * fixed built-ins and stay in the config.
+   */
+  readonly interactiveOnlyNote: string | null;
+}
+
+/** Which of a CLI's configuration scopes a server was defined in. */
+export type AgentMcpScope = 'user' | 'workspace' | 'unknown';
+
+/** Where one server came from, and what it displaced getting there. */
+export interface AgentMcpOrigin {
+  readonly scope: AgentMcpScope;
+  /**
+   * True when a WORKSPACE definition overrides a same-named user one.
+   *
+   * Reported separately from the scope because the two answer different
+   * questions, and only this one explains a surprise: the user's own server is
+   * fine, and is simply not what this folder loads under that name.
+   */
+  readonly shadowsUser: boolean;
 }
 
 /** Everything an adapter needs to list what it can be invoked with. */
@@ -1899,6 +2089,16 @@ export interface AgentTurnInput {
    * the field.
    */
   contextWindow?: string | null;
+  /**
+   * Every OTHER model setting this turn asks for, keyed by the CLI's own
+   * parameter id (`{optimize_for: 'intelligence'}`).
+   *
+   * A pass-through in the strictest sense: geniro holds no vocabulary for these
+   * (see `AgentModelParameter`), so an adapter either knows how to set a config
+   * option on its CLI or ignores the field entirely — which is what the base
+   * and the claude adapter both do.
+   */
+  modelParameters?: Record<string, string> | null;
   /** Prior CLI session id to resume; null/undefined starts a fresh session. */
   resumeSessionId?: string | null;
   /**
@@ -2604,6 +2804,37 @@ export interface AdapterConfig {
     readonly skills: readonly (readonly string[])[];
     /** `<root>/<…>/**.md` command files; `[]` when the CLI has no commands convention. */
     readonly commands: readonly (readonly string[])[];
+    /**
+     * The plugin HOSTS whose installed plugins this CLI also loads skills from,
+     * discovered rather than enumerated: a cache root under the user's home
+     * whose `<marketplace>/<plugin>/<version>` layout is walked at read time, so
+     * no plugin name, marketplace or version is ever written down here and a
+     * plugin installed after this shipped is found without a release.
+     *
+     * `[]` when the CLI has no plugin mechanism, or — the case worth stating —
+     * when it already REPORTS its plugins' commands itself
+     * (`listReportedCommands`), where scanning would file a second row per
+     * skill under whatever name the files use rather than the name the CLI
+     * answers to.
+     */
+    readonly plugins: readonly {
+      /** Segments of the cache root, under the user's home dir. */
+      readonly cacheDir: readonly string[];
+      /**
+       * The manifest paths (relative to a version dir) that mark it as a
+       * plugin — this CLI's own list, in its own precedence order. Without it
+       * the walk would return every three-deep directory under the root.
+       */
+      readonly manifests: readonly (readonly string[])[];
+      /**
+       * Where INSIDE a plugin this CLI's skills live, best build first. The
+       * FIRST entry that yields any skill wins for that plugin: a plugin
+       * shipping a build for this CLI beside a generic one must contribute the
+       * former alone, or the same skill is offered twice under two spellings
+       * and only one of them can actually be run.
+       */
+      readonly skillDirs: readonly (readonly string[])[];
+    }[];
   };
 
   // ── Live (token-level) streaming ────────────────────────────────────────
@@ -2760,6 +2991,27 @@ export interface AdapterConfig {
      * question.
      */
     readonly loginUnavailableReason: string | null;
+    /**
+     * Why an UNAPPROVED server of this CLI cannot be approved from here, or
+     * null when it can.
+     *
+     * Separate from {@link toggleUnavailableReason} even though cursor answers
+     * both with the same subcommand, because the two capabilities come apart on
+     * the CLI that has one and not the other: claude's toggle writes
+     * `disabledMcpServers` and reaches every scope, and approves nothing — its
+     * `Pending approval` rows are cleared in the CLI's own `/mcp` screen, which
+     * a headless turn cannot open. Reading the toggle to answer this would put
+     * an Approve button on claude's rows with nothing behind it, which is the
+     * silent no-op the whole block exists to prevent.
+     *
+     * There is no `approveArgs` beside it: approving IS enabling for the CLI
+     * that can do it (`cursor-agent mcp enable <name>` answers "✓ Enabled and
+     * approved MCP server", measured on 2026.08.11-e8db854 against a project
+     * whose `.cursor/mcp.json` server listed as `not loaded (needs approval)`),
+     * so `AgentMcpService.setEnabled` is already the whole mechanism and a
+     * second argv would be a second way to spell one command.
+     */
+    readonly approveUnavailableReason: string | null;
   };
 
   // ── Signing the CLI itself in ───────────────────────────────────────────
@@ -3013,20 +3265,27 @@ export interface AdapterConfig {
      */
     readonly unavailableReason: string | null;
     /**
-     * Why this CLI cannot be asked what its window currently HOLDS — the
-     * category breakdown behind `AgentSession.readContextUsage` — or `null`
-     * when it can.
+     * Whether this CLI can be asked what its window currently HOLDS — the
+     * category breakdown behind `AgentSession.readContextUsage` — and if so,
+     * WHICH channel the answer comes from.
      *
      * Its own field beside the one above rather than folded into it, because
      * the two are genuinely independent: a CLI can report a turn's token
      * totals perfectly and still have no channel for "what is in the window
-     * and what put it there", which is exactly where cursor stands.
+     * and what put it there".
+     *
+     * The channel rides the same field as the reason so the two cannot
+     * disagree — and it is here rather than left implicit because the CALLER
+     * has to know whether there was anything to ask before it can say why an
+     * answer is missing. Inferring that from "either channel exists" told
+     * every reaped claude chat that its agent "did not answer in time" when
+     * nothing had been asked at all: claude reads from the live process alone,
+     * and a claude chat that has ever run keeps a session id forever.
      */
-    readonly breakdownUnavailableReason: string | null;
+    readonly breakdown: UsageReading;
     /**
-     * Why this CLI cannot be asked what the ACCOUNT behind it is allowed — the
-     * plan's rate-limit windows behind `AgentAdapter.readPlanLimits` — or
-     * `null` when it can.
+     * The same answer for what the ACCOUNT behind this CLI is allowed — the
+     * plan's rate-limit windows behind `AgentAdapter.readPlanLimits`.
      *
      * A third independent field for the same reason the second one exists: the
      * three questions are answered by three different mechanisms, and a CLI can
@@ -3035,7 +3294,7 @@ export interface AdapterConfig {
      * on — so a CLI reporting a perfect window breakdown may still have no way
      * to say when the user will be cut off.
      */
-    readonly planLimitsUnavailableReason: string | null;
+    readonly planLimits: UsageReading;
   };
 
   // ── Handing the conversation to the user ────────────────────────────────

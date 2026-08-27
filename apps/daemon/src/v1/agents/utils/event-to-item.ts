@@ -67,7 +67,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return null;
     case 'turn_held':
       // Live state, not history: the hold is over by the time anyone replays
-      // this transcript, and a durable "waiting on 2 background tasks" row
+      // this transcript, and a durable "waiting on 2 sub-agents" row
       // wedged between the agent's messages would be a permanent record of a
       // moment. It rides the activity channel instead — see `AgentEvent`.
       return null;
@@ -171,6 +171,7 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           toolUses: event.toolUses,
           stepsUnavailableReason: event.stepsUnavailableReason,
           backgroundOpen: event.backgroundOpen,
+          backgroundOutcome: event.backgroundOutcome,
         },
       };
     case 'shell_info':

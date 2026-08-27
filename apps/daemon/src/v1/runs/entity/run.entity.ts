@@ -79,6 +79,24 @@ export class Run extends TimestampsEntity {
   contextWindow: string | null = null;
 
   /**
+   * Every OTHER model setting this run's next turn asks for, as a JSON object
+   * of `{parameterId: value}` — `{"optimize_for":"intelligence"}`.
+   *
+   * ONE column rather than one per axis, and that is the point of it: the ids
+   * belong to the CLI, not to this app (measured on cursor — `optimize_for`,
+   * `thinking`, `fast`, and whichever it adds next), so a column per axis would
+   * mean a schema change every time another product ships a setting. `effort`
+   * and `contextWindow` keep theirs because those two have a control, a
+   * vocabulary endpoint and a meaning geniro states in its own words.
+   *
+   * TEXT holding JSON rather than a `json` column, for the reason the two above
+   * are TEXT: the `safe: true` schema sync adds it additively, no migration.
+   * Read and written only through `utils/model-parameters.ts`.
+   */
+  @Property({ type: 'text', nullable: true })
+  modelParameters: string | null = null;
+
+  /**
    * How full this conversation's context window was the LAST time the CLI said
    * — the durable half of the composer's ring, and the only half a window that
    * has just loaded has.
@@ -98,6 +116,27 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   contextTokens: number | null = null;
+
+  /**
+   * The last reading taken from this run's own agent process before it was
+   * closed — the context breakdown and the plan limits, as JSON, with the
+   * moment and the transcript position they were taken at.
+   *
+   * Both figures are answerable only by a RUNNING agent (claude asks its live
+   * stdin dialogue), so a chat whose process has been reaped for idleness had
+   * nothing to show at all — which is the reported "wrong popup withoput data".
+   * The reading is taken on the way out (`AgentSessionRegistry.onIdleFarewell`)
+   * and served while no process exists, labelled with when it was taken.
+   *
+   * TEXT and opaque here: the shape belongs to `ChatMetricsService`, which
+   * parses it through the same schemas the wire uses and discards a reading it
+   * can no longer read. `atSeq` is what keeps it honest — a transcript that has
+   * moved since makes the figures describe a conversation that no longer
+   * exists, and they are dropped rather than shown with a timestamp nobody
+   * reads.
+   */
+  @Property({ type: 'text', nullable: true })
+  lastMetricsReading: string | null = null;
 
   /**
    * The window {@link contextTokens} is measured against, as the CLI reported

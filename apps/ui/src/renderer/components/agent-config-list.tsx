@@ -1,4 +1,4 @@
-import { LogIn, LogOut } from 'lucide-react';
+import { Loader2, LogIn, LogOut } from 'lucide-react';
 
 import {
   CLI_KINDS,
@@ -68,6 +68,14 @@ export interface AgentConfigListProps {
    * decided placement for this action is Settings, not first-run setup.
    */
   onSignIn?: (kind: CliKind) => void;
+  /**
+   * The CLI whose sign-in has been asked for and not yet answered, or null.
+   *
+   * The caller's, because the controller is: one sign-in runs at a time across
+   * the screen, so a flag kept in here would let two cards each think they own
+   * it.
+   */
+  signingIn?: CliKind | null;
   /**
    * The CLIs whose ACCOUNT is per-config-directory, so this card's row can say
    * which profile it is reporting on. From the daemon's `configDirs[]`
@@ -146,11 +154,14 @@ export interface AgentConfigListProps {
 function AccountButton({
   kind,
   loggedIn,
+  signingIn,
   onSignIn,
   onSignOut,
 }: {
   kind: CliKind;
   loggedIn: boolean | null;
+  /** True while this card's sign-in has been asked for and not yet answered. */
+  signingIn: boolean;
   onSignIn?: (kind: CliKind) => void;
   onSignOut?: (kind: CliKind) => void;
 }): React.JSX.Element | null {
@@ -172,14 +183,26 @@ function AccountButton({
     ) : null;
   }
   return onSignIn ? (
+    // The press is answered HERE. The panel below only appears once the daemon
+    // has replied, and that reply is held until the CLI prints its URL —
+    // measured at 4001ms — so without this the button sits unchanged while a
+    // browser tab opens behind the window. Disabled as well as spinning: a
+    // second press starts a second browser challenge that invalidates the
+    // first, which is the same reason the panel withholds this button entirely
+    // once it owns the flow.
     <Button
       type="button"
       variant="outline"
       size="sm"
       className="shrink-0"
+      disabled={signingIn}
       onClick={() => onSignIn(kind)}>
-      <LogIn className="size-3.5" />
-      Sign in
+      {signingIn ? (
+        <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+      ) : (
+        <LogIn className="size-3.5" />
+      )}
+      {signingIn ? 'Signing in…' : 'Sign in'}
     </Button>
   ) : null;
 }
@@ -255,6 +278,7 @@ export function AgentConfigList({
   onBrowse,
   onSignIn,
   onSignOut,
+  signingIn = null,
   profileScopedKinds,
   login,
   agentSettings,
@@ -361,6 +385,7 @@ export function AgentConfigList({
                 <AccountButton
                   kind={kind}
                   loggedIn={detection?.loggedIn ?? null}
+                  signingIn={signingIn === kind}
                   onSignIn={onSignIn}
                   onSignOut={onSignOut}
                 />

@@ -12,6 +12,7 @@ import type { ClaudeModesCapability } from '../chat.types';
 import { GROUP_KILL_GRACE_MS } from '../utils/kill-tree';
 import type { SpawnedProcess, SpawnFn } from '../utils/spawn-cli';
 import { fakeGroupChild, spawnAnswering } from './__tests__/fake-group-child';
+import { freshVocabularyStore } from './__tests__/fresh-vocabulary-store';
 import type {
   AdapterConfig,
   AgentApprovalMode,
@@ -33,7 +34,12 @@ import { CursorAcpAdapter } from './cursor-acp/cursor-acp.adapter';
  */
 const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
   { name: 'claude', adapter: new ClaudeAdapter() },
-  { name: 'cursor-agent', adapter: new CursorAcpAdapter() },
+  {
+    name: 'cursor-agent',
+    adapter: new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }),
+  },
 ];
 
 /**
@@ -42,6 +48,13 @@ const ADAPTERS: { name: string; adapter: AgentAdapter }[] = [
  * the only shape that can tell the two orderings apart.
  */
 class SoleModeWithProbeTableAdapter extends CursorAcpAdapter {
+  // The store is a REQUIRED dependency of the real adapter, and a spec
+  // subclass has to satisfy it like any other caller — see
+  // `freshVocabularyStore`.
+  constructor() {
+    super({ vocabularyStore: freshVocabularyStore() });
+  }
+
   override getConfig(): AdapterConfig {
     const base = super.getConfig();
     return {
@@ -147,7 +160,9 @@ describe('AgentAdapter.resolveApprovalMode', () => {
 
   it('keeps the sole mode itself untouched, with nothing to report', () => {
     expect(
-      new CursorAcpAdapter().resolveApprovalMode('auto', {
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).resolveApprovalMode('auto', {
         supported: { acceptEdits: false },
       }),
     ).toEqual({ mode: 'auto', degradeReason: null });
@@ -250,7 +265,9 @@ describe('AgentAdapter.mcp.interactiveOnlyNote', () => {
 
   it('cursor claims no such split, because none was verified', () => {
     expect(
-      new CursorAcpAdapter().getConfig().mcp.interactiveOnlyNote,
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+      }).getConfig().mcp.interactiveOnlyNote,
     ).toBeNull();
   });
 });
@@ -366,7 +383,9 @@ describe('AgentAdapter effort vocabulary and its reason agree', () => {
     // plus a real `effort` option. Every value here was accepted by the agent
     // (`xhigh` and `max` on claude-opus-5, both recorded as rejected before),
     // and `bogus` refused. Empty this list again and the item comes back.
-    const config = new CursorAcpAdapter().getConfig();
+    const config = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig();
 
     expect(config.efforts.map((effort) => effort.id)).toEqual([
       'low',
@@ -392,18 +411,42 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     build: (spawn: SpawnFn) => AgentAdapter;
   }[] = [
     { name: 'claude', build: (spawn) => new ClaudeAdapter({ spawn }) },
-    { name: 'cursor-agent', build: (spawn) => new CursorAcpAdapter({ spawn }) },
+    {
+      name: 'cursor-agent',
+      build: (spawn) =>
+        new CursorAcpAdapter({
+          vocabularyStore: freshVocabularyStore(),
+          spawn,
+        }),
+    },
   ];
 
   for (const { name, build } of BREAKDOWN_ADAPTERS) {
     it(`${name} declares a reason exactly when it cannot answer`, () => {
       const { spawn } = fakeSpawn();
 
-      expect(
-        build(spawn).getConfig().usage.breakdownUnavailableReason,
-      ).toBeNull();
+      expect(build(spawn).getConfig().usage.breakdown.kind).toBe('reads');
     });
   }
+
+  it('names the CHANNEL each reading comes from, not merely that it has one', () => {
+    // What the readout needs before it can explain an absent reading: claude
+    // asks a running process, cursor reads a file the process left behind. A
+    // caller that could not tell them apart said "the agent did not answer in
+    // time" about a reaped claude chat it had asked nothing.
+    const { spawn } = fakeSpawn();
+
+    expect(new ClaudeAdapter({ spawn }).getConfig().usage.breakdown).toEqual({
+      kind: 'reads',
+      channel: 'live-process',
+    });
+    expect(
+      new CursorAcpAdapter({
+        vocabularyStore: freshVocabularyStore(),
+        spawn,
+      }).getConfig().usage.breakdown,
+    ).toEqual({ kind: 'reads', channel: 'session-store' });
+  });
 
   it('claude asks its LIVE process, and answers null when there is none', async () => {
     // Its whole channel is a question on the running stdin dialogue, so a
@@ -445,12 +488,16 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     // string", which pins nothing.
     const { spawn } = fakeSpawn();
 
-    expect(
-      new ClaudeAdapter({ spawn }).getConfig().usage
-        .planLimitsUnavailableReason,
-    ).toBeNull();
-    const cursorReason = new CursorAcpAdapter({ spawn }).getConfig().usage
-      .planLimitsUnavailableReason;
+    expect(new ClaudeAdapter({ spawn }).getConfig().usage.planLimits).toEqual({
+      kind: 'reads',
+      channel: 'live-process',
+    });
+    const cursorLimits = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    }).getConfig().usage.planLimits;
+    const cursorReason =
+      cursorLimits.kind === 'unavailable' ? cursorLimits.reason : null;
     expect(cursorReason).not.toBeNull();
     // A SENTENCE, not a marker: it is rendered verbatim where the limits would
     // have been, so an empty string or a code would reach the user as one.
@@ -481,7 +528,10 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     // pin is that it stays a pure null: an ACP process asked a claude control
     // question would answer an error frame mid-session.
     const { spawn, child } = fakeSpawn();
-    const cursor = new CursorAcpAdapter({ spawn });
+    const cursor = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      spawn,
+    });
     const session = cursor.startSession({ prompt: 'p', cwd: '/proj' });
     const before = child.stdin.written;
 
@@ -499,6 +549,7 @@ describe('AgentAdapter context breakdown — the seam is per adapter', () => {
     // nothing running to ask — and its figures are on disk regardless.
     const { spawn, child } = fakeSpawn();
     const cursor = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
       spawn,
       sessionStoreDir: mkdtempSync(join(tmpdir(), 'cursor-store-')),
     });
@@ -642,7 +693,9 @@ describe('AgentAdapter — the sign-in and sign-out argv each CLI declares', () 
     // for one CLI and put a dead input field (or none at all) in front of the
     // other.
     const claude = new ClaudeAdapter();
-    const cursor = new CursorAcpAdapter();
+    const cursor = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    });
 
     expect(claude.loginWantsCode('Paste code here if prompted > ')).toBe(true);
     // Case- and punctuation-insensitive, since the words are the stable part.
@@ -802,7 +855,10 @@ describe('AgentAdapter.supportsLiveStream', () => {
       cb(null, '  --include-partial-messages\n');
       return {} as ChildProcess;
     }) as unknown as typeof execFile;
-    const adapter = new CursorAcpAdapter({ execFileFn });
+    const adapter = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+      execFileFn,
+    });
 
     await expect(adapter.supportsLiveStream()).resolves.toBe(false);
     expect(spawned).toBe(0);
@@ -829,7 +885,9 @@ class BareAdapter extends AgentAdapter {
   }
 
   getConfig(): AdapterConfig {
-    const base = new CursorAcpAdapter().getConfig();
+    const base = new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig();
     return {
       ...base,
       mcp: { ...base.mcp, listingUnavailableReason: this.listingReason },
@@ -865,7 +923,9 @@ class SessionWithoutModeChangeAdapter extends AgentAdapter {
   }
 
   getConfig(): AdapterConfig {
-    return new CursorAcpAdapter().getConfig();
+    return new CursorAcpAdapter({
+      vocabularyStore: freshVocabularyStore(),
+    }).getConfig();
   }
 
   protected buildArgs(): string[] {
@@ -1770,7 +1830,9 @@ describe('geniroCommandFor', () => {
   // The REAL adapters, because "does this CLI have `/compact`, and what does it
   // send" is exactly the declaration under test.
   const claude = new ClaudeAdapter();
-  const cursor = new CursorAcpAdapter();
+  const cursor = new CursorAcpAdapter({
+    vocabularyStore: freshVocabularyStore(),
+  });
 
   it('matches only the whole bare command', () => {
     expect(claude.geniroCommandFor('/compact')?.name).toBe('compact');

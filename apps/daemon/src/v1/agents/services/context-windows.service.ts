@@ -132,4 +132,11 @@ export class ContextWindowsService {
       return volatile(fallback);
     }
   }
+  /**
+   * Forget every cached window sizes, and say how many went — see
+   * `CacheResetService`.
+   */
+  clearCache(): number {
+    return this.cache.clear();
+  }
 }

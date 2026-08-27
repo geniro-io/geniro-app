@@ -42,6 +42,10 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import {
+  readModelParameters,
+  writeModelParameters,
+} from '../utils/model-parameters';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -494,6 +498,7 @@ export class ChatService implements OnModuleInit {
     approval?: ChatApprovalMode;
     effort?: string;
     contextWindow?: string;
+    modelParameters?: Record<string, string>;
     configDir?: string;
     /**
      * The app's global custom instructions as they stand right now. Snapshotted
@@ -556,6 +561,7 @@ export class ChatService implements OnModuleInit {
         model: input.model ?? null,
         effort: input.effort ?? null,
         contextWindow: input.contextWindow ?? null,
+        modelParameters: writeModelParameters(input.modelParameters),
         configDir,
         // Blank normalizes to null so "typed nothing" and "cleared the box"
         // are one state in the row, and the turn input below cannot hand an
@@ -685,6 +691,7 @@ export class ChatService implements OnModuleInit {
       model?: string | null;
       effort?: string | null;
       contextWindow?: string | null;
+      modelParameters?: Record<string, string> | null;
     },
   ): Promise<RunWire> {
     const em = this.em.fork();
@@ -716,6 +723,16 @@ export class ChatService implements OnModuleInit {
         ? { contextWindow: patch.contextWindow }
         : patch.model !== undefined
           ? { contextWindow: null }
+          : {}),
+      // Cleared by a model change on exactly the window's own reasoning, and
+      // more sharply: these axes belong to the model that enumerated them, and
+      // one of them (`optimize_for`) exists on a single model of thirty-four —
+      // so carrying a pick across a model switch sends a config option the new
+      // model does not have, which is `-32602 Unknown model config option`.
+      ...(patch.modelParameters !== undefined
+        ? { modelParameters: writeModelParameters(patch.modelParameters) }
+        : patch.model !== undefined
+          ? { modelParameters: null }
           : {}),
     };
     // Captured before the write: `updateById` mutates this same
@@ -1445,6 +1462,23 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
+   * Drop the run's context count after a compaction — see
+   * {@link RunDao.forgetContext}. Logged and swallowed like the write beside
+   * it: a stale ring is worth a warning, never a failed turn.
+   */
+  private async forgetContext(runId: string): Promise<void> {
+    try {
+      await this.runDao.forgetContext(runId);
+    } catch (err) {
+      this.logger.warn(
+        `failed to clear the context reading for run ${runId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
    * What a LIVE off-turn signal does to the run's badge.
    *
    * Rows are only half of what a continuation produces. An agent that is
@@ -1807,9 +1841,15 @@ export class ChatService implements OnModuleInit {
       // writes the message into the CLI's own conversation, where `/compact`
       // is either the wrong CLI's word or a rewrite that never happens — and
       // on a CLI whose compaction geniro performs, the turn that would carry
-      // it out is the very turn already in flight. Refused rather than queued
-      // for the same reason: what the user asked to compact is what is being
-      // said right now, so the command should be re-issued once it has been.
+      // it out is the very turn already in flight.
+      //
+      // This refusal is what the renderer QUEUES on, and that is the whole of
+      // its job here: the composer used to pre-empt it with a refusal of its
+      // own ("wait for this turn to finish"), so the command never went
+      // anywhere at all. Reported as "Компакт должно вставаться в очередь, как
+      // и до этого. Это должно работать." The message now waits in the strip
+      // and the drain re-sends it when the turn ends — which is also the first
+      // moment it can compact what that turn just said.
       if (geniroCommand) {
         throw new ConflictException(
           'RUN_BUSY',
@@ -1885,6 +1925,7 @@ export class ChatService implements OnModuleInit {
       const model = settings.model ?? undefined;
       const effort = settings.effort ?? undefined;
       const contextWindow = settings.contextWindow ?? undefined;
+      const modelParameters = readModelParameters(settings.modelParameters);
       // Re-resolved per turn, exactly like `cwd` above: the row holds the
       // canonical path as of creation, and a directory deleted (or a symlink
       // re-pointed) since then would otherwise reach argv, where the CLI
@@ -2144,7 +2185,14 @@ export class ChatService implements OnModuleInit {
         if (count === 0) {
           return null;
         }
-        return `waiting on ${count} background task${count === 1 ? '' : 's'}`;
+        // SUB-AGENTS, which is the only thing this tally holds: `openWork` adds
+        // a unit only for `unit === 'agent'`, a backgrounded command having
+        // been deliberately excluded from the hold. The old wording named a
+        // third thing the screen has no counter for — reported as "it says
+        // waiting for two background tasks, but I only see one terminal and
+        // four agents" — and the app's own word for a delegate, in the panel
+        // and in the transcript block alike, is sub-agent.
+        return `waiting on ${count} sub-agent${count === 1 ? '' : 's'}`;
       };
       const enqueue = (work: () => Promise<void>): void => {
         chain = chain.then(work).catch((err: unknown) => {
@@ -2204,6 +2252,7 @@ export class ChatService implements OnModuleInit {
           model,
           effort,
           contextWindow,
+          modelParameters,
           configDir,
           customInstructions,
           cursorMaxMode,
@@ -2404,6 +2453,15 @@ export class ChatService implements OnModuleInit {
                   preTokens: event.preTokens,
                   postTokens: event.postTokens,
                 };
+                // A compaction that said what it left behind has already
+                // published it (the driver synthesizes a `context_progress`
+                // from `postTokens`, which files itself on the row above). One
+                // that did NOT has emptied the window and told nobody how far
+                // — so the figure on the row now describes a conversation that
+                // no longer exists, and the ring goes on showing it full.
+                if (event.postTokens === null || event.postTokens <= 0) {
+                  void this.forgetContext(runId);
+                }
               }
               // ONE phrase, and it is the present-tense one. A `finished`
               // announce used to word itself by trigger ("compacted the
@@ -3003,6 +3061,14 @@ export class ChatService implements OnModuleInit {
     }
     await this.runDao.setPendingContext(runId, carried, em);
     await this.nodeStateDao.clearSessionId(runId, SINGLE_AGENT_NODE, em);
+    // The conversation this run's context figure was measured on has just been
+    // DISCARDED — the next turn opens a fresh session carrying the summary
+    // above. REPORTED as "после компакта кружочек не обновляется, он всё ещё
+    // так же заполнен": nothing reports a smaller window here, because there
+    // is nothing yet to report on, so the pre-compaction reading stood as the
+    // newest thing the run knew. There is no replacement figure to write —
+    // see {@link RunDao.forgetContext}.
+    await this.runDao.forgetContext(runId, em);
     await this.persist(
       em,
       runId,
@@ -3017,6 +3083,16 @@ export class ChatService implements OnModuleInit {
           'Conversation compacted. The agent starts fresh from the summary ' +
           'above; everything before it is no longer in its context.',
         severity: 'info',
+        // The marker that says the CLI's conversation was REPLACED here, so a
+        // client can stop reading context figures from above this row — the
+        // transcript is the only place those survive once the run row has been
+        // cleared. Its own key rather than the `compaction` one a relayed CLI
+        // summary carries: that one identifies a wall of prose to collapse, and
+        // this row is a sentence geniro wrote.
+        //
+        // TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
+        // `conversationReplaced`.
+        conversationReplaced: true,
       },
     ).catch((err: unknown) => {
       // The compaction ITSELF has already happened — this row only explains

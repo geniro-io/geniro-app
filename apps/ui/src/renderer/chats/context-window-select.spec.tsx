@@ -69,132 +69,37 @@ const REASON_NO_AXIS =
   'claude runs each model at its own context window — pick a different model to change it';
 
 describe('ContextWindowSelect', () => {
-  it('renders NO PICKER and nothing at all when the answer has not landed', () => {
-    // `undefined` means "no report yet" — a chip whose only explanation is
-    // still in flight would read as a control that is simply broken.
+  it('renders NOTHING whenever there is no size to choose', () => {
+    // Every empty case is the same on screen now, whichever of the four it is
+    // — no report yet, no model named, a model with one fixed window, a probe
+    // that failed. They stopped being distinguishable HERE at all: the reason
+    // and its kind are no longer props, so this component sees only "empty".
+    // It has been all three shapes: an inert `one window`, then a live picker
+    // offering `model default` alone, then this. The middle one was REPORTED on
+    // `auto-smart` ("если авто, то мы по идее не должны выбирать Contact Size,
+    // а у нас я все еще вижу активно кнопку Default"), which is what a one-row
+    // picker is: a control with nothing to choose.
     const el = render(
       <ContextWindowSelect windows={[]} value={null} onChange={() => {}} />,
     );
+
     expect(trigger(el)).toBeNull();
     expect(el.textContent).toBe('');
+    // Nothing to hover either — the daemon's sentence lived on a `title` and
+    // is gone with the element that carried it.
+    expect(el.querySelector('[title]')).toBeNull();
   });
 
-  it('labels the no-model case "pick a model", distinct from every other reason', () => {
-    // This is the DEFAULT path, not an edge case: a composer sitting on the
-    // default model with no pick made yet hits exactly this reason.
+  it('drops a stored size with the picker when the model reports none', () => {
+    // The stored word used to be kept on screen so nothing vanished silently.
+    // With no picker there is nowhere to keep it, and no lie either — the run
+    // still carries the value and the daemon still refuses it on the turn if
+    // the model will not take it, which is where a wrong size is reported.
     const el = render(
-      <ContextWindowSelect
-        windows={[]}
-        value={null}
-        unavailableReason={REASON_NO_MODEL}
-        unavailableKind="no-model"
-        onChange={() => {}}
-      />,
+      <ContextWindowSelect windows={[]} value="1m" onChange={() => {}} />,
     );
-    expect(trigger(el)).toBeNull();
-    expect(el.textContent).toContain('pick a model');
-    // The full sentence still rides the hover title, unabridged.
-    expect(el.querySelector('[title]')?.getAttribute('title')).toBe(
-      REASON_NO_MODEL,
-    );
-  });
 
-  it.each([
-    ['a probe that could not be taken', REASON_PROBE_FAILED, 'unreadable'],
-    ['a CLI with no such axis at all', REASON_NO_AXIS, 'no-axis'],
-  ] as const)(
-    'keeps %s on the PICKER at the model’s own default, never an inert word',
-    (_, reason, kind) => {
-      // The reported shape: on claude — no such axis on any model — this was a
-      // dead grey chip reading "one window" on every chat. All three of these
-      // describe a turn that runs at the model's default, which is a thing the
-      // picker can already say, so it says it.
-      const el = render(
-        <ContextWindowSelect
-          windows={[]}
-          value={null}
-          unavailableReason={reason}
-          unavailableKind={kind}
-          onChange={() => {}}
-        />,
-      );
-      const control = trigger(el);
-      expect(control).not.toBeNull();
-      expect(control!.disabled).toBe(false);
-      expect(control!.textContent).toContain('default');
-      // The daemon's sentence is what the label stopped carrying, so it has to
-      // be reachable: it is the chip's own hover title, in place of the plain
-      // "Context window" a chip with rows shows.
-      expect(control!.getAttribute('title')).toBe(reason);
-      // And the menu opens on the one row that is true — no fabricated sizes.
-      expect(optionValues(el)).toEqual(['model default']);
-    },
-  );
-
-  it('keeps a stored size on screen even when the model reports no sizes at all', () => {
-    // A chat moved onto a model with no window axis: the stored word is still
-    // what is on the run, and the chip's own default fallback must not be the
-    // only trace of it. The empty-list path reaches the same disabled
-    // add-back row as a model that offers a choice.
-    const el = render(
-      <ContextWindowSelect
-        windows={[]}
-        value="1m"
-        unavailableReason={REASON_NO_AXIS}
-        unavailableKind="no-axis"
-        onChange={() => {}}
-      />,
-    );
-    const rows = optionValues(el);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toContain('1m');
-    expect(rows[0]).toContain('unavailable');
-    expect(rows[1]).toBe('model default');
-    expect(trigger(el)!.textContent).toContain('default');
-  });
-
-  it('says WHY inside the open menu when it has no sizes to offer, and draws no empty block above the row', () => {
-    // REPORTED as "It didnt load contexts for cursor. CHeck it", over a
-    // composer whose panel correctly had one row. What made it read as a
-    // failed fetch was the rendering: an empty sizes BLOCK above the lone row,
-    // and an explanation that lived only in the trigger's hover title.
-    const el = render(
-      <ContextWindowSelect
-        windows={[]}
-        value={null}
-        unavailableReason={REASON_NO_AXIS}
-        unavailableKind="no-axis"
-        onChange={() => {}}
-      />,
-    );
-    act(() => {
-      trigger(el)!.click();
-    });
-    expect(el.textContent).toContain(REASON_NO_AXIS);
-    // One block, not two: the sizes group is empty, and an empty group renders
-    // as a bare band with the next group's hairline under it.
-    expect(el.querySelectorAll('[data-slot="menu-group"]')).toHaveLength(1);
-  });
-
-  it('follows the KIND, not the wording of the reason', () => {
-    // The one assertion that actually discriminates. The component used to
-    // recognise the no-model case by matching the daemon's sentence, so a
-    // reworded sentence silently reverted the label — and every other test
-    // here would still have passed, because they pair each kind with the
-    // sentence that currently accompanies it. This one deliberately pairs the
-    // kind with prose it does NOT match.
-    const el = render(
-      <ContextWindowSelect
-        windows={[]}
-        value={null}
-        unavailableReason="choose a model first to see the sizes on offer"
-        unavailableKind="no-model"
-        onChange={() => {}}
-      />,
-    );
-    expect(trigger(el)).toBeNull();
-    expect(el.textContent).toContain('pick a model');
-    expect(el.textContent).not.toContain('model default');
+    expect(el.textContent).toBe('');
   });
 
   it('shows the MEASURED window on the chip in place of the word', () => {
@@ -203,13 +108,14 @@ describe('ContextWindowSelect', () => {
     // what this turn runs at, and the agent has already said so — `1M` in two
     // characters where `default window` took fourteen, on a composer row that
     // must never wrap.
+    // Over a REAL list, which is now the only case that renders at all: with a
+    // model offering sizes and none picked, the chip reports the window the
+    // agent measured rather than the word `default`.
     const el = render(
       <ContextWindowSelect
-        windows={[]}
+        windows={CURSOR_WINDOWS}
         value={null}
         windowTokens={1_000_000}
-        unavailableReason={REASON_NO_AXIS}
-        unavailableKind="no-axis"
         onChange={() => {}}
       />,
     );
@@ -219,7 +125,7 @@ describe('ContextWindowSelect', () => {
     // The MENU still states the CHOICE, which is a different sentence: with
     // nothing picked the chip reports the window and the row reports what you
     // would be selecting. One label cannot be both.
-    expect(optionValues(el)).toEqual(['model default']);
+    expect(optionValues(el).at(-1)).toBe('model default');
   });
 
   it('keeps the word when the size is PICKED, not merely measured', () => {

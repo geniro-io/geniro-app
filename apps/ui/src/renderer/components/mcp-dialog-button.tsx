@@ -39,6 +39,7 @@ export function McpDialogButton({
   onSetEnabled,
   onSignIn,
   signingIn,
+  loginServer,
   loginPanel,
   className,
 }: {
@@ -70,9 +71,19 @@ export function McpDialogButton({
    */
   signingIn?: string | null;
   /**
-   * A sign-in in flight, rendered inside the dialog that started it. The CLI's
-   * own browser tab opens behind the app, so without this the Sign in control
+   * Which server {@link loginPanel} is about — null when nothing is signing in.
+   */
+  loginServer?: string | null;
+  /**
+   * A sign-in in flight, rendered UNDER THE ROW that started it. The CLI's own
+   * browser tab opens behind the app, so without this the Sign in control
    * reads as a button that did nothing.
+   *
+   * It used to be a sibling of the whole listing, pinned to the dialog's foot,
+   * and that is the reported "I have broken UI - i wanna this status line from
+   * down to b under item where we actually clicked sign in": on a listing with
+   * three signed-out rows the strip named no server and could have been about
+   * any of them.
    */
   loginPanel?: React.ReactNode;
   className?: string;
@@ -131,12 +142,16 @@ export function McpDialogButton({
           onSetEnabled={onSetEnabled}
           onSignIn={onSignIn}
           signingIn={signingIn}
+          // Handed DOWN rather than rendered after the section, which is where
+          // it used to sit: only the section knows what the rows are, so only
+          // it can put the panel under the one the sign-in was started from.
+          loginServer={loginServer}
+          loginPanel={loginPanel}
           // The dialog IS the section's chrome here, so the card-band edges (a
           // top rule, the card's own padding) would draw a stray line across a
           // panel that is already bounded.
           className="border-t-0"
         />
-        {loginPanel}
       </Dialog>
     </>
   );

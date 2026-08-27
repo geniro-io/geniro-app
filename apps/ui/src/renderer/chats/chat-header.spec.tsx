@@ -38,6 +38,26 @@ const baseProps = {
   lastActivityAt: new Date(Date.now() - 60_000).toISOString(),
 };
 
+/**
+ * The header's ONE figures readout — what the thread worked and what it spent.
+ *
+ * Read through the slot rather than off the whole header, which is what the
+ * redesign made possible and what these assertions are worth more for: before,
+ * every duration test matched `worked 10m 0s` anywhere in the row, so a figure
+ * that had drifted into the wrong element still passed.
+ */
+function metrics(el: HTMLElement): string {
+  return el.querySelector('[data-slot="thread-metrics"]')?.textContent ?? '';
+}
+
+/** The sentence behind that readout — the turn count lives there now. */
+function metricsTitle(el: HTMLElement): string {
+  return (
+    el.querySelector('[data-slot="thread-metrics"]')?.getAttribute('title') ??
+    ''
+  );
+}
+
 describe('ChatHeader', () => {
   it('shows the sidebar identity — label + status — and hides the date while running', () => {
     const el = render(<ChatHeader {...baseProps} />);
@@ -294,10 +314,10 @@ describe('ChatHeader — how long this turn has been running', () => {
       />,
     );
 
-    expect(el.textContent).toContain('worked 21s');
+    expect(metrics(el)).toContain('21s');
     // Exactly one duration on the line — the pair is what was reported.
     expect(el.textContent?.match(/21s/g)).toHaveLength(1);
-    expect(el.querySelector('[data-slot="thread-worked"]')).not.toBeNull();
+    expect(el.querySelector('[data-slot="thread-metrics"]')).not.toBeNull();
   });
 
   it('still says when a SETTLED thread last spoke, beside what it worked', () => {
@@ -317,37 +337,78 @@ describe('ChatHeader — how long this turn has been running', () => {
       />,
     );
 
-    // Two different figures on one line: when it last spoke, and what it
-    // worked. The relative time renders bare (`· 4m`), so asserting both
-    // strings is what shows they are not one value read twice.
-    expect(el.textContent).toContain('· 4m·');
-    expect(el.textContent).toContain('worked 10m 0s');
+    // Two different figures on the header: when it last spoke, and what it
+    // worked. They are now on opposite sides of the row, which is what lets
+    // this assert they are not one value read twice — the relative time is in
+    // the identity half and `10m 0s` is in the figures half.
+    expect(el.textContent).toContain('· 4m');
+    expect(metrics(el)).toContain('10m 0s');
+    expect(metrics(el)).not.toContain('4m·');
   });
 
-  it('names the config directory this run belongs to, leaf on the chip and path on hover', () => {
+  it('names the config directory this run belongs to — on the chip’s label, in full behind it', async () => {
     // A run on a second profile is a different ACCOUNT with different tools —
     // the one fact about a conversation that is invisible everywhere else.
+    //
+    // It used to be a chip of its own, and the reported "we have soo much
+    // information here" is what folded it in: the LEAF is now on one identity
+    // chip's accessible name and the whole path is behind it, which the chip
+    // could never show at all.
     const el = render(
       <ChatHeader
         {...baseProps}
+        agentKind="claude"
+        cwd="/Users/me/Desktop/Projects/Lab"
         configDir="/Users/me/Desktop/Projects/Lab/.claude-lab"
       />,
     );
 
-    expect(el.textContent).toContain('.claude-lab');
-    // The full path is one hover away — the header is an identity line, not a
-    // place to read a deep path.
-    expect(
-      el.querySelector('[title*="/Users/me/Desktop/Projects/Lab/.claude-lab"]'),
-    ).not.toBeNull();
+    const trigger = el
+      .querySelector('[data-slot="thread-identity"]')!
+      .querySelector('button')!;
+    expect(trigger.getAttribute('aria-label')).toContain(
+      '/Users/me/Desktop/Projects/Lab/.claude-lab',
+    );
+    // Closed, the paths are not in the DOM — the line shows the folder leaf.
+    expect(el.textContent).toContain('Lab');
+    expect(el.textContent).not.toContain('.claude-lab');
+
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // All three, each under its own name and each in full.
+    expect(el.textContent).toContain('claude');
+    expect(el.textContent).toContain('/Users/me/Desktop/Projects/Lab');
+    expect(el.textContent).toContain(
+      '/Users/me/Desktop/Projects/Lab/.claude-lab',
+    );
   });
 
-  it('shows NO config chip for a run on the CLI’s own profile', () => {
-    // The default is not news. A chip on every ordinary chat would be a line of
-    // noise stating what is already true everywhere.
-    const el = render(<ChatHeader {...baseProps} configDir={null} />);
+  it('keeps a run on the CLI’s own profile off the LINE, and names the default behind it', async () => {
+    // The default is not news, so it earns no room on a row the title
+    // truncates for. Inside the panel — which is opened deliberately — the
+    // opposite holds: a missing Profile row would leave the commonest case as
+    // the one the header says nothing about at all.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        cwd="/Users/me/Desktop/Projects/Lab"
+        configDir={null}
+      />,
+    );
 
-    expect(el.querySelector('[title*="config directory"]')).toBeNull();
+    const trigger = el
+      .querySelector('[data-slot="thread-identity"]')!
+      .querySelector('button')!;
+    expect(trigger.textContent).toBe('Lab');
+    expect(trigger.getAttribute('aria-label')).not.toContain('Profile');
+
+    await act(async () => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(el.textContent).toContain('The CLI’s default');
   });
 });
 
@@ -365,8 +426,11 @@ describe('ChatHeader — how long this thread WORKED', () => {
       />,
     );
 
-    expect(el.textContent).toContain('worked 4m 12s');
-    expect(el.textContent).toContain('/ 6 turns');
+    expect(metrics(el)).toContain('4m 12s');
+    // The turn count moved onto the readout's own sentence — it is what the
+    // figure is a sum OVER, which is a thing you ask about rather than scan.
+    expect(metricsTitle(el)).toContain('6 turns');
+    expect(metrics(el)).not.toContain('turns');
     // The relative time is still there — this is an addition, not a swap.
     expect(el.textContent).toContain('1m');
   });
@@ -378,12 +442,13 @@ describe('ChatHeader — how long this thread WORKED', () => {
       <ChatHeader {...baseProps} status="completed" workedMs={0} />,
     );
 
-    expect(el.querySelector('[data-slot="thread-worked"]')).toBeNull();
-    expect(el.textContent).not.toContain('worked');
+    expect(el.querySelector('[data-slot="thread-metrics"]')).toBeNull();
+    expect(el.textContent).not.toContain('0s');
   });
 
-  it('drops the turn count for a single-turn thread', () => {
-    // `/ 1 turns` is wrong and `/ 1 turn` is noise — the figure IS that turn.
+  it('says "1 turn" rather than "1 turns" for a single-turn thread', () => {
+    // The figure IS that turn, and `1 turns` is the kind of small wrongness a
+    // reader trusts a number less for.
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -393,8 +458,9 @@ describe('ChatHeader — how long this thread WORKED', () => {
       />,
     );
 
-    expect(el.textContent).toContain('worked 7.6s');
-    expect(el.textContent).not.toContain('turns');
+    expect(metrics(el)).toContain('7.6s');
+    expect(metricsTitle(el)).toContain('across 1 turn ');
+    expect(metricsTitle(el)).not.toContain('turns');
   });
 });
 
@@ -422,12 +488,12 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
     );
 
     // 10m settled + 1m of the turn in flight.
-    expect(el.textContent).toContain('worked 11m 0s');
+    expect(metrics(el)).toContain('11m 0s');
 
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
-    expect(el.textContent).toContain('worked 11m 30s');
+    expect(metrics(el)).toContain('11m 30s');
   });
 
   it('counts the turn in flight in the tally its time is part of', () => {
@@ -448,7 +514,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
       />,
     );
 
-    expect(el.textContent).toContain('/ 6 turns');
+    expect(metricsTitle(el)).toContain('across 6 turns');
   });
 
   it('freezes while the turn waits on the user, and never resumes late', () => {
@@ -471,12 +537,12 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
     );
 
     // 10m settled + the 20s worked before the card opened.
-    expect(el.textContent).toContain('worked 10m 20s');
+    expect(metrics(el)).toContain('10m 20s');
 
     act(() => {
       vi.advanceTimersByTime(120_000);
     });
-    expect(el.textContent).toContain('worked 10m 20s');
+    expect(metrics(el)).toContain('10m 20s');
   });
 
   it('stands still once the run has no turn in flight', () => {
@@ -494,11 +560,11 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
       />,
     );
 
-    expect(el.textContent).toContain('worked 10m 0s');
+    expect(metrics(el)).toContain('10m 0s');
     act(() => {
       vi.advanceTimersByTime(120_000);
     });
-    expect(el.textContent).toContain('worked 10m 0s');
+    expect(metrics(el)).toContain('10m 0s');
   });
 
   it('shows a live figure for a first turn that has settled nothing yet', () => {
@@ -519,9 +585,9 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
       />,
     );
 
-    expect(el.textContent).toContain('worked 45s');
+    expect(metrics(el)).toContain('45s');
     // One turn, so no tally — the figure IS that turn.
-    expect(el.textContent).not.toContain('turns');
+    expect(metricsTitle(el)).not.toContain('turns');
   });
 });
 
@@ -539,9 +605,10 @@ describe('ChatHeader — what this thread SPENT', () => {
       />,
     );
 
-    expect(el.textContent).toContain('$12.35');
-    // An addition, not a swap: the worked figure is still there.
-    expect(el.textContent).toContain('worked 4m 12s');
+    expect(metrics(el)).toContain('$12.35');
+    // An addition, not a swap: the worked figure is still there, and the two
+    // are one readout now rather than two spans with their own middots.
+    expect(metrics(el)).toContain('4m 12s');
   });
 
   it('renders NOTHING when nothing measured a cost, rather than $0.00', () => {
@@ -552,7 +619,7 @@ describe('ChatHeader — what this thread SPENT', () => {
       <ChatHeader {...baseProps} status="completed" costUsd={null} />,
     );
 
-    expect(el.querySelector('[data-slot="thread-spend"]')).toBeNull();
+    expect(el.querySelector('[data-slot="thread-metrics"]')).toBeNull();
     expect(el.textContent).not.toContain('$');
   });
 

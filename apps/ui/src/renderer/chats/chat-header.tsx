@@ -2,12 +2,12 @@ import {
   Bot,
   FolderOpen,
   IdCard,
+  Timer,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import { HoverPopover } from '../components/hover-popover';
-import { Chip } from '../components/ui/chip';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
 import { folderName } from './directory-select';
@@ -64,78 +64,216 @@ const COUNT_TRIGGER_CLASS =
   'gap-1 rounded-md px-1 py-0.5 text-xs font-normal hover:bg-accent';
 
 /**
- * What this thread has WORKED — the settled turns plus the one in flight,
- * ticking while it runs.
+ * What this thread has WORKED and what it has SPENT — ONE readout, on the
+ * right, beside the counters.
  *
- * The whole figure moves, rather than the running turn being stated separately
- * beside it: "how much work is in here" is one number, and a thread mid-turn
- * had it standing still for the entire turn — a header reading `running · 18s ·
- * worked 64m 34s` where the 64m had not moved in an hour of watching. The
- * elapsed clock beside it is NOT the same answer: that one is this turn alone,
- * and it is the raw wall clock — it keeps running while the agent sits parked
- * on a question, which is exactly when this one must not.
+ * It used to be two spans in the middle of the identity line, each with its own
+ * leading middot, spelling `· worked 4m 13s / 5 turns · $1.11` — six words and
+ * two figures for two numbers. REPORTED as "we have soo much information here.
+ * I wanna redesign it, minimize", against a header carrying nine things on one
+ * line. What went is the PROSE, not a figure: the word `worked` is a glyph now,
+ * the turn count moved onto the hover, and the pair reads `4m 13s · $1.11`.
+ *
+ * It also crossed the row. The left side truncates the TITLE when it runs short
+ * (the whole reason `min-w-0` is on it), so every character of prose there was
+ * paid for by the thread's own name; the right side is a fixed handful of
+ * characters already. Beside the counters these are what they are — the numbers
+ * about this thread, in one place, rather than two of them wedged between the
+ * folder and the sub-agent count.
+ *
+ * The whole worked figure MOVES while a turn is in flight, rather than the
+ * running turn being stated separately: "how much work is in here" is one
+ * number, and a thread mid-turn had it standing still for the entire turn — a
+ * header reading `running · 18s · worked 64m 34s` where the 64m had not moved
+ * in an hour of watching.
+ *
+ * A null spend renders NOTHING rather than `$0.00`, and the distinction is the
+ * whole rule the figures obey end to end: cursor-agent reports no cost unless
+ * its currency is USD, so a thread on it has not spent nothing — it has not
+ * been measured. Writing `$0.00` there would be the app inventing a number the
+ * CLI refused to give.
  */
-function WorkedTime({
+function ThreadMetrics({
   settledMs,
   turnCount,
   openTurn,
+  costUsd,
 }: {
   settledMs: number;
   turnCount: number;
   openTurn: OpenTurn | null;
+  costUsd: number | null;
 }): React.JSX.Element | null {
   useSecondTick(openTurn !== null);
   const liveMs = openTurnWorkedMs(openTurn, Date.now());
   const totalMs = settledMs + liveMs;
-  if (totalMs <= 0) {
-    return null;
-  }
   // The running turn counts toward the tally because its time counts toward
   // the total — a sum over fifteen turns labelled "14 turns" is the kind of
   // small lie a reader has no way to catch.
   const turns = turnCount + (openTurn === null ? 0 : 1);
+  const worked = totalMs > 0 ? formatDuration(totalMs) : null;
+  const spend = costUsd === null ? null : formatUsd(costUsd);
+  if (worked === null && spend === null) {
+    return null;
+  }
   return (
     <span
-      data-slot="thread-worked"
-      className="shrink-0 text-xs tabular-nums text-muted-foreground"
-      title={
-        openTurn === null
-          ? `Total time the agent worked in this thread, across ${turns} ${turns === 1 ? 'turn' : 'turns'} — not the span since it started`
-          : `Total time the agent worked in this thread, across ${turns} ${turns === 1 ? 'turn' : 'turns'} — the turn in flight included, measured by the wall clock and paused while it waits on you`
-      }>
-      · worked {formatDuration(totalMs)}
-      {turns > 1 ? ` / ${turns} turns` : ''}
+      data-slot="thread-metrics"
+      className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground"
+      title={threadMetricsTitle(worked, turns, openTurn !== null, spend)}>
+      {worked === null ? null : (
+        <>
+          {/* The word `worked` was three of the line's characters and is the
+              one thing here a glyph can say as well. It is NOT decoration: a
+              bare `4m 13s` beside a price reads as "4m 13s ago", which is a
+              different fact and one the header used to state a few pixels to
+              the left. */}
+          <Timer aria-hidden="true" className="size-3.5 shrink-0" />
+          {worked}
+        </>
+      )}
+      {worked !== null && spend !== null ? (
+        <span aria-hidden="true">·</span>
+      ) : null}
+      {spend}
     </span>
   );
 }
 
 /**
- * What this thread has SPENT — the reported ask, beside what it worked.
+ * The sentence behind {@link ThreadMetrics} — everything the row stopped
+ * spelling out.
  *
- * Null renders NOTHING rather than `$0.00`, and the distinction is the whole
- * rule the figures obey end to end: cursor-agent reports no cost unless its
- * currency is USD, so a thread on it has not spent nothing — it has not been
- * measured. Writing `$0.00` there would be the app inventing a number the CLI
- * refused to give.
- *
- * Its own component so a spend that arrives after the header first painted
- * re-renders this span alone, not the identity line beside it.
+ * Kept as a `title` rather than a hover panel: it is two clauses of prose, and
+ * the panels in this header exist for LISTS (the delegates, the shells, the
+ * tasks) where a count alone cannot say what it counts.
  */
-function ThreadSpend({
-  costUsd,
+function threadMetricsTitle(
+  worked: string | null,
+  turns: number,
+  running: boolean,
+  spend: string | null,
+): string {
+  const parts: string[] = [];
+  if (worked !== null) {
+    parts.push(
+      running
+        ? `Worked ${worked} across ${turns} ${turns === 1 ? 'turn' : 'turns'} — the turn in flight included, paused while it waits on you`
+        : `Worked ${worked} across ${turns} ${turns === 1 ? 'turn' : 'turns'} — not the span since the thread started`,
+    );
+  }
+  if (spend !== null) {
+    parts.push(`Cost ${spend}, summed over every turn that reported one`);
+  }
+  return parts.join('. ');
+}
+
+/**
+ * The three facts fixed for this run's whole life — the agent, the folder and
+ * the profile — behind ONE chip.
+ *
+ * They were three chips in a row, and on the reported header they read
+ * `claude  ManifestOS  .claude-manifest-lab` before the status word had even
+ * been reached. Each is true and each is the same KIND of fact, which is what
+ * makes one chip the right shape: the folder is the one a reader checks at a
+ * glance ("which repo is this thread in"), and the other two are qualifiers on
+ * it that are consulted, not scanned.
+ *
+ * So the leaf stays on the trigger and the rest is one hover away, with every
+ * value in full — which the chips could not do anyway, since all three
+ * truncated a deep path down to its last component.
+ */
+function ThreadIdentity({
+  agentKind,
+  cwd,
+  configDir,
 }: {
-  costUsd: number | null;
+  agentKind: string | null;
+  cwd: string | null;
+  configDir: string | null;
 }): React.JSX.Element | null {
-  if (costUsd === null) {
+  // The folder leads, and the agent stands in for it on a run that has none —
+  // a workflow, whose agents are per node, has neither and draws nothing.
+  const leaf = cwd === null ? agentKind : folderName(cwd);
+  if (leaf === null) {
     return null;
   }
   return (
-    <span
-      data-slot="thread-spend"
-      className="shrink-0 text-xs tabular-nums text-muted-foreground"
-      title="What this thread has cost, summed over every turn that reported one">
-      · {formatUsd(costUsd)}
-    </span>
+    <HoverPopover
+      slot="thread-identity"
+      label={`Thread identity: ${[agentKind, cwd, configDir].filter((part) => part !== null).join(', ')}`}
+      panelLabel="Thread identity"
+      side="bottom"
+      align="start"
+      // The chip's own look, spelled here rather than nested: `HoverPopover`
+      // renders the trigger BUTTON, and a `Chip` inside it would be an element
+      // with a control's styling wrapped in a control.
+      triggerClassName="h-6 min-w-0 gap-1.5 rounded-lg px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+      panelClassName="w-[24rem]"
+      trigger={
+        <>
+          {cwd === null ? (
+            <Bot aria-hidden="true" className="size-3.5 shrink-0" />
+          ) : (
+            <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
+          )}
+          <span className="max-w-40 truncate">{leaf}</span>
+        </>
+      }>
+      <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+        <IdentityRow
+          icon={<Bot aria-hidden="true" className="size-3.5 shrink-0" />}
+          name="Agent"
+          value={agentKind}
+          fallback="One per node"
+        />
+        <IdentityRow
+          icon={<FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />}
+          name="Folder"
+          value={cwd}
+          fallback={null}
+        />
+        <IdentityRow
+          icon={<IdCard aria-hidden="true" className="size-3.5 shrink-0" />}
+          name="Profile"
+          value={configDir}
+          // A run on the CLI's own profile is not a run with no profile, and
+          // the chips said nothing at all about it — the row that vanished was
+          // the commonest case.
+          fallback="The CLI’s default"
+        />
+      </ul>
+    </HoverPopover>
+  );
+}
+
+/**
+ * One fact in {@link ThreadIdentity}'s panel. `fallback` is what a null MEANS
+ * where it means something; a null with none is simply not a row.
+ */
+function IdentityRow({
+  icon,
+  name,
+  value,
+  fallback,
+}: {
+  icon: React.ReactNode;
+  name: string;
+  value: string | null;
+  fallback: string | null;
+}): React.JSX.Element | null {
+  const shown = value ?? fallback;
+  if (shown === null) {
+    return null;
+  }
+  return (
+    <li className="flex items-start gap-1.5 text-xs text-muted-foreground">
+      {icon}
+      <span className="w-14 shrink-0">{name}</span>
+      {/* `break-all`, not truncation: the panel exists BECAUSE the chips could
+          only ever show a path's last component. */}
+      <span className="min-w-0 flex-1 break-all text-foreground">{shown}</span>
+    </li>
   );
 }
 
@@ -204,20 +342,29 @@ function SubagentList({
 }
 
 /**
- * The open transcript's header: the same identity the sidebar row carries —
- * label, live status (spinning while running), last activity — plus the three
- * facts fixed for the run's whole life: the agent, the folder it runs in and
- * the profile it runs as. The folder arrived here last, after three composer
- * arrangements the user rejected on how they looked; see the `cwd` prop.
+ * The open transcript's header, in two halves: on the LEFT what this thread IS
+ * — its name, the three facts fixed for the run's whole life behind one chip
+ * ({@link ThreadIdentity}: the agent, the folder it runs in, the profile it
+ * runs as), then the live status and, once it settles, when it last spoke. On
+ * the RIGHT the NUMBERS about it — what it worked and what it cost
+ * ({@link ThreadMetrics}), then what the agents panel is holding.
  *
- * On the right, only what the agents panel is holding, as a readout. It used to
- * be that panel's toggle; the panel is always on screen now, so there is nothing
- * left to open. The context meter used to sit here
- * too and has moved into the composer, beside Send — the question it answers
- * ("how much room is left") is asked while composing the next message, not
- * while reading the header, and the eye leaves this row as soon as the
- * conversation starts. Everything per-agent (threads, per-node context) stays
- * in the panel.
+ * That split is the answer to "we have soo much information here. I wanna
+ * redesign it, minimize", reported against a line carrying nine things:
+ * `Смотри, у меня… claude  ManifestOS  .claude-manifest-lab  running · worked
+ * 4m 13s / 5 turns · $1.11` plus two counters. Nothing was DELETED — every
+ * figure is still on the header or one hover into it — and nothing new was
+ * invented; three chips became one and two prose readouts became one pair of
+ * figures. What the arrangement buys is the title: the left side is what
+ * truncates when the row runs short, so every character of prose there was
+ * paid for out of the thread's own name.
+ *
+ * The counters used to BE the agents panel's toggle; the panel is always on
+ * screen now, so there is nothing left to open. The context meter used to sit
+ * here too and has moved into the composer, beside Send — the question it
+ * answers ("how much room is left") is asked while composing the next message,
+ * not while reading the header. Everything per-agent (threads, per-node
+ * context) stays in the panel.
  */
 export function ChatHeader({
   label,
@@ -389,44 +536,15 @@ export function ChatHeader({
         <h2 className="min-w-0 truncate text-sm font-semibold tracking-tight">
           {label}
         </h2>
-        {agentKind ? <Chip className="h-6 px-1.5">{agentKind}</Chip> : null}
-        {cwd ? (
-          // The LEAF plus the full path on hover, exactly as the profile chip
-          // below does it and for the same reason — a working directory is
-          // routinely deep, and this row is a one-line identity rather than a
-          // place to read paths.
-          //
-          // AHEAD of the profile: the folder is the fact a reader checks first
-          // ("which repo is this thread in"), and a profile is only ever a
-          // qualifier on it. `shrink-0` is deliberately absent — with the title
-          // beside it this is the second-best thing here to truncate, and the
-          // title is the first.
-          <Chip
-            className="h-6 min-w-0 px-1.5"
-            title={`Working directory: ${cwd}`}>
-            <FolderOpen />
-            <span className="max-w-40 truncate">{folderName(cwd)}</span>
-          </Chip>
-        ) : null}
-        {configDir ? (
-          // The LEAF, with the whole path on hover: a profile directory is
-          // usually deep (`~/Desktop/Projects/X/.claude-thing`) and the header
-          // is a one-line identity, not a place to read paths.
-          <Chip
-            className="h-6 min-w-0 px-1.5"
-            title={`Agent config directory (account / profile): ${configDir}`}>
-            <IdCard />
-            <span className="max-w-40 truncate">{folderName(configDir)}</span>
-          </Chip>
-        ) : null}
+        <ThreadIdentity agentKind={agentKind} cwd={cwd} configDir={configDir} />
         <span className="flex shrink-0 items-center gap-1 text-xs">
           <RunStatusIcon status={status} />
           <span className={RUN_STATUS_META[status].className}>
             {RUN_STATUS_META[status].label}
           </span>
         </span>
-        {/* NOTHING while it runs — {@link WorkedTime} is the clock then, and it
-            ticks. There used to be a second one here, this turn's raw wall
+        {/* NOTHING while it runs — {@link ThreadMetrics} is the clock then, and
+            it ticks. There used to be a second one here, this turn's raw wall
             clock, and on a thread's first turn the two are the same number
             twice: REPORTED against `running · 21s · worked 21s` as "у нас
             сейчас два раза показывается таймер… нам нужен только таймер,
@@ -450,20 +568,21 @@ export function ChatHeader({
             · {formatRelativeTime(lastActivityAt)}
           </span>
         )}
-        <WorkedTime
-          settledMs={workedMs}
-          turnCount={turnCount}
-          openTurn={openTurn}
-        />
+      </div>
+      {/* `shrink-0` beside the identity's `flex-1 min-w-0`: the figures and the
+          counters are a fixed handful of characters, so the row gives up width
+          on the side that has a truncating title rather than squeezing a
+          number. */}
+      <div className="ml-auto flex shrink-0 items-center gap-3">
         {/* The reported ask: what the thread COST, next to what it worked. The
             pair is the point — a price with no sense of the work behind it is
             the same half-answer the duration was on its own. */}
-        <ThreadSpend costUsd={costUsd} />
-      </div>
-      {/* `shrink-0` beside the identity's `flex-1 min-w-0`: the two counters
-          are a fixed handful of characters, so the row gives up width on the
-          side that has a truncating title rather than squeezing a number. */}
-      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        <ThreadMetrics
+          settledMs={workedMs}
+          turnCount={turnCount}
+          openTurn={openTurn}
+          costUsd={costUsd}
+        />
         {/* What the agents panel is holding, at a glance. It used to BE that
             panel's toggle — "how much work is in here" was the one thing a bare
             chevron could not say, so the counts and the control were one

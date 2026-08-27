@@ -2493,6 +2493,12 @@ export interface UpdateChatSettingsDto {
      * @memberof UpdateChatSettingsDto
      */
     modelParameters?: { [key: string]: string; } | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateChatSettingsDto
+     */
+    configDir?: string | null;
 }
 
 

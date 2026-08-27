@@ -1,5 +1,13 @@
-import { open, readdir, realpath, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { constants } from 'node:fs';
+import {
+  copyFile,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  stat,
+} from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 
 import { titleFromText } from '../../../utils/derive-title';
@@ -807,4 +815,69 @@ function feed(
     return true;
   }
   return onLine(parsed as Record<string, unknown>);
+}
+
+/**
+ * Make one conversation readable from a SECOND profile, by putting its file
+ * where that profile looks for it.
+ *
+ * The mechanism behind `ClaudeAdapter.carrySessionToConfigDir`, and it is the
+ * whole of what a resume needs: probed on 2.1.237 across two real accounts,
+ * `--resume <id>` under a profile that does not hold the file answers
+ * `No conversation found with session ID: …`, and answers the conversation’s own
+ * codeword the moment the `.jsonl` is copied in.
+ *
+ * The target directory is the SOURCE file’s own directory NAME, never one
+ * composed here — this file’s doc block records that the name is the cwd with
+ * its separators flattened, which is lossy and undocumented, so re-deriving it
+ * is how a copy would land somewhere the CLI never looks. {@link
+ * findSessionFile} is what makes that available: the caller names a session and
+ * the store says where it lives, id guard included.
+ *
+ * A COPY, not a move. The old profile keeps the conversation it genuinely held,
+ * which is what the user sees if they open that account’s own `claude` — and a
+ * switch that deleted history out of an account nobody asked about would be
+ * doing something no button was pressed for.
+ */
+export async function carryClaudeSession(input: {
+  sessionId: string;
+  fromProfileDir: string;
+  toProfileDir: string;
+}): Promise<{ carried: true } | { carried: false; reason: string }> {
+  const { sessionId, fromProfileDir, toProfileDir } = input;
+  const source = await findSessionFile(fromProfileDir, sessionId);
+  if (source === null) {
+    return {
+      carried: false,
+      reason:
+        'the previous profile no longer holds this conversation, so there was nothing to bring across',
+    };
+  }
+  const targetDir = join(
+    toProfileDir,
+    CLAUDE_SESSIONS_DIR_NAME,
+    basename(dirname(source)),
+  );
+  try {
+    await mkdir(targetDir, { recursive: true });
+    // `COPYFILE_EXCL` rather than an overwrite: an id already present in the
+    // target is the SAME conversation (the ids are the CLI’s own), so the copy
+    // has been made before — a switch back and forth, or a retry. Overwriting
+    // would replace whatever that profile has since appended with an older
+    // prefix of the same thread.
+    await copyFile(
+      source,
+      join(targetDir, basename(source)),
+      constants.COPYFILE_EXCL,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return { carried: true };
+    }
+    return {
+      carried: false,
+      reason: `the conversation could not be copied into the new profile: ${(error as Error).message}`,
+    };
+  }
+  return { carried: true };
 }

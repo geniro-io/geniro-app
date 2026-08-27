@@ -779,6 +779,14 @@ export class CursorAcpAdapter extends AgentAdapter {
         envVar: null,
         unavailableReason:
           'cursor-agent reads a config directory but keeps the account outside it — a fresh one still resolves the same login, so pointing a run at one would not change the subscription',
+        /**
+         * Moot while the field above refuses the switch outright — there is no
+         * profile to move a conversation TO — but stated rather than left to a
+         * default, because the two questions are genuinely separate and the
+         * next reader should not have to infer this one from the other.
+         */
+        sessionCarryUnavailableReason:
+          'cursor-agent cannot be pointed at another profile at all, so there is nowhere to move a conversation to',
       },
       followUp: {
         /**

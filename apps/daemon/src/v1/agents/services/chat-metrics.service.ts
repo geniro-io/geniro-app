@@ -17,6 +17,7 @@ import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
+import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 
 /**
@@ -38,6 +39,17 @@ import { AgentSessionRegistry } from './agent-session.registry';
 export class ChatMetricsService implements OnModuleInit {
   private readonly logger = new Logger(ChatMetricsService.name);
 
+  /**
+   * Runs whose context readout has been opened at least once this launch — the
+   * ones worth keeping a fresh reading for.
+   *
+   * In memory rather than on the run row, and that is the honest lifetime: it
+   * is a guess about what this user is watching RIGHT NOW, not a fact about the
+   * conversation. A restart forgets it and the first open pays the ask again,
+   * which is exactly what the first open of a new chat does anyway.
+   */
+  private readonly watched = new Set<string>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -45,6 +57,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly nodeStateDao: NodeStateDao,
     private readonly sessions: AgentSessionRegistry,
     private readonly adapters: AgentAdapterRegistry,
+    private readonly bus: AgentEventBus,
   ) {}
 
   /**
@@ -55,7 +68,34 @@ export class ChatMetricsService implements OnModuleInit {
    * see `AgentSessionRegistry.onIdleFarewell` for why that close and no other.
    */
   onModuleInit(): void {
-    this.sessions.onIdleFarewell((runId) => this.captureFarewell(runId));
+    this.sessions.onIdleFarewell((runId) => this.capture(runId));
+    // PREWARM, and only for chats whose readout this user actually opens.
+    //
+    // REPORTED as "'reading agent context' is too slow when i hover on current
+    // context circly. Why it working without delays for claude/cursor in their
+    // UI?" — and the answer to the question is the shape of the fix. Those UIs
+    // are the CLI: the accounting is already in the process's own memory, so
+    // `/context` is a render. geniro is a different process and has to ASK,
+    // measured at 1.84–2.18s against a warm claude on this machine. The only
+    // way to be instant is to have asked already.
+    //
+    // A turn's end is when to ask: the process is idle, and the answer is
+    // exactly what the next open wants. It is gated on {@link watched} rather
+    // than run for every chat because the ask is a real control write on the
+    // user's own agent — a tax on every turn of every conversation, for a
+    // readout most of them never open.
+    this.bus.all().subscribe((event) => {
+      if (
+        event.item.kind !== 'turn_complete' ||
+        !this.watched.has(event.runId)
+      ) {
+        return;
+      }
+      // Owned here: this is an RxJS subscriber, so a rejection escaping it
+      // reaches the process-level crash guard — and a missed prewarm is a
+      // slower hover, not something worth taking the turn plumbing down for.
+      void this.capture(event.runId);
+    });
   }
 
   /**
@@ -72,17 +112,82 @@ export class ChatMetricsService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
+    // From here on this run is worth keeping a reading warm for.
+    this.watched.add(runId);
+    // A stored reading whose `atSeq` still matches the transcript describes THIS
+    // conversation as it stands — nothing has been said since it was taken — so
+    // asking again would spend 1.84–2.18s (measured, warm claude) to be told the
+    // same thing. That wait is the whole of the report: "'reading agent context'
+    // is too slow when i hover on current context circly".
+    //
+    // Asked BEFORE the agent rather than after, which is the change: this
+    // reading was already stored and already validated against the transcript,
+    // and it was consulted only where the live answer came back empty — so
+    // every open paid the full question, including the second open a minute
+    // after the first with not a word said in between.
+    //
+    // `atSeq` is what makes it safe, and it is strict: one new row of any kind
+    // and the stored reading stops being served, so a figure can never outlive
+    // the conversation it measured. The freshest thing this can serve is
+    // therefore either current or a live ask.
+    // Read ONCE, ahead of everything: the same position decides whether the
+    // stored reading still describes this conversation AND stamps a fresh one
+    // taken below. Read after the ask instead, a turn landing mid-question
+    // would file figures under a transcript they do not describe.
+    const atSeq = await this.itemDao.maxSeq(runId, em);
+    const current = this.parseStoredReading(run.lastMetricsReading, atSeq);
+    // Two conditions, and each rules out a different wrong answer.
+    //
+    // The BREAKDOWN must be present — not both halves. A stored reading is only
+    // ever written with at least one figure in it, and a null `plan` beside a
+    // real `context` is the ordinary state of every CLI that reports no
+    // allowance, so requiring both would mean this path never ran for them and
+    // the wait came back for exactly the users it was meant to help.
+    //
+    // And there must be a LIVE agent. This is a shortcut past a question whose
+    // answer is already known, so it belongs only where that question would
+    // otherwise be asked and be slow. With no process the reading is not a
+    // shortcut but the last thing anyone measured, which is a different fact
+    // and one the panel says out loud ("closed … send a message to take a fresh
+    // reading") off `takenAt` — so that case falls through to the path below,
+    // which stamps it. Cursor never takes this path either, and does not need
+    // to: it answers off its own session store on disk, in milliseconds.
+    const usable =
+      current !== null &&
+      current.context !== null &&
+      this.sessions.peek(runId) !== null
+        ? current
+        : null;
     const [agent, payloads] = await Promise.all([
-      this.readFromAgent(runId, run.agentKind, em),
+      usable === null
+        ? this.readFromAgent(runId, run.agentKind, em)
+        : Promise.resolve({
+            context: usable.context,
+            plan: usable.plan,
+            // ASKED, because this reading is the answer to an ask — one made
+            // when the conversation was in exactly the state it is in now.
+            // These two flags decide only WHICH sentence an absent half gets,
+            // and "the agent did not answer" is the true one: it did not,
+            // when it was asked. Saying "no live process" instead would send
+            // the user to send a message, which would change nothing about a
+            // figure the CLI does not report.
+            askedContext: true,
+            askedPlan: true,
+          }),
       this.itemDao.turnCompletePayloads(runId, em),
     ]);
+    // A live answer is FILED, which is the other half of making the next open
+    // instant — without it the very first open of a chat pays two seconds, and
+    // so does every open after it, since nothing was written down. Not awaited:
+    // the user is waiting on this reply and the write is for the next reader.
+    if (usable === null && (agent.context !== null || agent.plan !== null)) {
+      void this.store(runId, atSeq, agent.context, agent.plan);
+    }
     // The stored last reading is consulted ONLY where the live one is missing
     // and could not have been taken — a CLI that answers is always preferred,
     // and a reading nobody could take is what this exists for.
     const stored =
-      agent.context === null || agent.plan === null
-        ? await this.storedReading(run.lastMetricsReading, runId, em)
-        : null;
+      agent.context === null || agent.plan === null ? current : null;
     const context = agent.context ?? stored?.context ?? null;
     const plan = agent.plan ?? stored?.plan ?? null;
     return {
@@ -264,11 +369,10 @@ export class ChatMetricsService implements OnModuleInit {
    * no longer exists; a timestamp on screen does not make that honest, so they
    * are dropped.
    */
-  private async storedReading(
+  private parseStoredReading(
     raw: string | null,
-    runId: string,
-    em: EntityManager,
-  ): Promise<StoredMetricsReading | null> {
+    atSeq: number,
+  ): StoredMetricsReading | null {
     if (raw === null) {
       return null;
     }
@@ -281,23 +385,65 @@ export class ChatMetricsService implements OnModuleInit {
     if (!parsed.success) {
       return null;
     }
-    const seq = await this.itemDao.maxSeq(runId, em);
-    return parsed.data.atSeq === seq ? parsed.data : null;
+    return parsed.data.atSeq === atSeq ? parsed.data : null;
   }
 
   /**
-   * Take both readings from a process that is about to be closed, and file them
-   * on the run.
+   * File one reading against the transcript position it describes.
+   *
+   * The ONE write path, shared by the live read and by {@link capture}, so the
+   * `atSeq` contract cannot be honoured in one place and forgotten in the
+   * other — that field is the whole of what keeps a stored reading from
+   * outliving its conversation.
+   *
+   * Never throws, on both its callers' terms: for the reader this is a cache
+   * fill nobody is waiting on, and for the farewell a failed write must not
+   * keep a process alive.
+   */
+  private async store(
+    runId: string,
+    atSeq: number,
+    context: ContextBreakdownWire | null,
+    plan: PlanLimitsWire | null,
+  ): Promise<void> {
+    try {
+      await this.runDao.rememberMetricsReading(
+        runId,
+        JSON.stringify({
+          takenAt: new Date().toISOString(),
+          atSeq,
+          context,
+          plan,
+        } satisfies StoredMetricsReading),
+        this.em.fork(),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `the reading for run ${runId} could not be filed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
+  /**
+   * Take both readings from this run's agent and file them on the run.
+   *
+   * Called from two moments and the difference is worth naming. On the way to
+   * CLOSING a process it is the last chance to ask at all — see
+   * `AgentSessionRegistry.onIdleFarewell`. After a TURN it is a prewarm: the
+   * process is idle, nobody is waiting, and the reading it files is what makes
+   * the next open instant instead of a two-second question.
    *
    * The transcript position is read FIRST and deliberately: a turn arriving
    * while the questions are in flight leaves the figures describing the older
    * conversation, and a position taken afterwards would claim they describe the
    * newer one. Read first, the stored reading simply stops being served.
    *
-   * Never throws: this runs on the way to closing a process, and a failed
-   * reading must not keep that process alive.
+   * Never throws. On the farewell path a failed reading must not keep a process
+   * alive; on the prewarm path it is a cache miss and nothing more.
    */
-  private async captureFarewell(runId: string): Promise<void> {
+  private async capture(runId: string): Promise<void> {
     const em = this.em.fork();
     try {
       const run = await this.runDao.getById(runId, em);
@@ -305,20 +451,18 @@ export class ChatMetricsService implements OnModuleInit {
         return;
       }
       const atSeq = await this.itemDao.maxSeq(runId, em);
+      // Already current — the farewell of a session that took a reading and
+      // then went unused, or a second turn-end for a transcript nothing has
+      // been added to. Asking again would spend two seconds of the user's own
+      // agent to write down what is already written down.
+      if (this.parseStoredReading(run.lastMetricsReading, atSeq) !== null) {
+        return;
+      }
       const agent = await this.readFromAgent(runId, run.agentKind, em);
       if (agent.context === null && agent.plan === null) {
         return;
       }
-      await this.runDao.rememberMetricsReading(
-        runId,
-        JSON.stringify({
-          takenAt: new Date().toISOString(),
-          atSeq,
-          context: agent.context,
-          plan: agent.plan,
-        } satisfies StoredMetricsReading),
-        em,
-      );
+      await this.store(runId, atSeq, agent.context, agent.plan);
     } catch (err) {
       this.logger.warn(
         `the last reading for run ${runId} could not be taken: ${

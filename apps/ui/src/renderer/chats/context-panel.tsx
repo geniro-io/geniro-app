@@ -176,13 +176,24 @@ function Breakdown({
           true of a live one: a stored reading was NOT re-read when this opened,
           and saying it was is the same class of lie as the sentence this
           replaced ("the reading is taken again while this stays open" over a
-          process that had been closed for eighteen minutes). */}
+          process that had been closed for eighteen minutes).
+
+          The live half no longer promises a re-read either, and that promise
+          is what had to go: the daemon now serves a reading it already holds
+          whenever the transcript has not moved since it was taken — which is
+          the whole of the fix for "'reading agent context' is too slow when i
+          hover on current context circly" (2.97s → 0.01s, measured). The
+          figures are exactly as current as they were before; what changed is
+          that they are no longer re-asked to prove it. So the sentence states
+          the guarantee that survives — as of the last thing said here — rather
+          than the mechanism, which is now sometimes a cache and sometimes an
+          ask and is not the reader's business either way. */}
       <p className="text-[11px] text-muted-foreground">
         {takenAt === null ? (
           <>
-            Reported by the agent&rsquo;s own accounting, re-read each time this
-            opens. The ring carries the last turn&rsquo;s reading, so the two
-            can differ.
+            Reported by the agent&rsquo;s own accounting, as of the last thing
+            said in this chat. The ring carries the last turn&rsquo;s reading,
+            so the two can differ.
           </>
         ) : (
           <>

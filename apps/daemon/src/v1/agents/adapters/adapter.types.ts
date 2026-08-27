@@ -2560,6 +2560,36 @@ export interface HandoffInput {
  * A refusal is DATA, not an exception: the adapter layer knows nothing about
  * HTTP, and the owning module decides how to say it.
  */
+/**
+ * Which conversation is being moved to which profile, for
+ * {@link AgentAdapter.carrySessionToConfigDir}.
+ *
+ * The FOLDER is deliberately absent. A CLI that stores conversations per
+ * working directory already records which one this session belongs to, and
+ * asking the caller would let the two disagree — claude's own doc block says
+ * the directory name it uses is lossy and must never be re-derived, so the
+ * only safe answer is the one the store itself gives.
+ */
+export interface CarrySessionInput {
+  /** The conversation, in the CLI's own id namespace. */
+  readonly sessionId: string;
+  /** The profile that holds it now — null for the CLI's own default. */
+  readonly from: string | null;
+  /** The profile it should also be readable from — null for the default. */
+  readonly to: string | null;
+}
+
+/**
+ * Whether the conversation followed the run to its new profile.
+ *
+ * A refusal is DATA on the same rule {@link HandoffResult} follows, and here it
+ * is not even a failure: the switch is legitimate either way, and `reason` is
+ * the sentence the transcript prints so the user knows the agent is starting
+ * fresh rather than silently forgetting the thread.
+ */
+export type CarrySessionResult =
+  { carried: true } | { carried: false; reason: string };
+
 export type HandoffResult =
   | {
       ok: true;
@@ -3201,6 +3231,21 @@ export interface AdapterConfig {
      * null reason promises a var to carry it.
      */
     readonly unavailableReason: string | null;
+    /**
+     * Why an OPEN conversation cannot follow the run to another profile, or
+     * null when it can.
+     *
+     * A separate question from `unavailableReason`, and a run can genuinely
+     * answer them differently: pointing the NEXT turn at another account is
+     * one thing, and taking the conversation so far with it is another. Where
+     * this is non-null the switch still happens — the thread's transcript is
+     * geniro's own and is untouched — but the agent starts a fresh CLI
+     * conversation from that point, which is what the user is told.
+     *
+     * MUST agree with {@link AgentAdapter.carrySessionToConfigDir}: a null
+     * reason promises that method does something.
+     */
+    readonly sessionCarryUnavailableReason: string | null;
   };
 
   // ── A message into a turn that is already running ───────────────────────

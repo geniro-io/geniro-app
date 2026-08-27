@@ -144,6 +144,25 @@ export const updateChatSettingsSchema = z
      * heard of. An explicit `{}` clears them; null does the same.
      */
     modelParameters: z.record(z.string(), z.string()).nullable().optional(),
+    /**
+     * Which ACCOUNT this thread's next turns run as — the agent config
+     * directory, or an explicit null for the CLI's own default profile.
+     *
+     * This route used to refuse the field on the reading that a config
+     * directory is part of a run's IDENTITY, like its folder. That was true of
+     * everything except what the user actually wanted from it: REPORTED as "I
+     * wanna have ability to dynamically change config directory for current
+     * claude threads to have an ability continue thread with other account".
+     * A folder decides what the conversation is ABOUT; a profile decides who is
+     * paying for it and what tools they have, and neither is a fact about the
+     * words already said.
+     *
+     * The switch does more than write a column — the conversation is carried
+     * into the new profile and the run's live process is retired — so unlike
+     * `model` and `effort` this one is REFUSED while a turn is running. See
+     * `ChatService.updateSettings`.
+     */
+    configDir: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) =>
@@ -151,8 +170,9 @@ export const updateChatSettingsSchema = z
       dto.model !== undefined ||
       dto.effort !== undefined ||
       dto.contextWindow !== undefined ||
-      dto.modelParameters !== undefined,
-    'a settings patch must change the approval mode, the model, the effort, the context window or a model parameter',
+      dto.modelParameters !== undefined ||
+      dto.configDir !== undefined,
+    'a settings patch must change the approval mode, the model, the effort, the context window, a model parameter or the config directory',
   );
 export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,

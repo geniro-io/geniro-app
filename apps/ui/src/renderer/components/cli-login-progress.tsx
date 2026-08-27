@@ -33,12 +33,35 @@ export function CliLoginProgress({
   onCancel,
   onDismiss,
   error,
+  variant = 'band',
 }: {
   session: LoginSession;
   onSubmitCode: (code: string) => void;
   onCancel: () => void;
   onDismiss: () => void;
   error: string | null;
+  /**
+   * Where this is standing, which decides its EDGES and nothing else.
+   *
+   * `band` is the original and still the default: a full-bleed strip across
+   * the foot of a card, which is what the agent card wants and why the
+   * negative margin is there — it cancels the card's own `px-4` so the rule
+   * reaches both edges.
+   *
+   * `inline` is a line sitting among rows, and the negative margin is exactly
+   * wrong there: REPORTED as "I have broken UI" against the MCP dialog, where
+   * this rendered inside a narrower container and pulled itself 16px past both
+   * of its sides, taking the pasted-code field off the edge with it.
+   *
+   * It is also QUIETER, which is the second half of that report ("make it
+   * smaller and without background"). It first landed here as a tinted,
+   * bordered box at the band's own type size, and that made a status line
+   * heavier than the servers it belongs to — a box drawn around one sentence,
+   * in a panel whose content is a list of rows. Inline it is a row: the row's
+   * own 12px, the row's own glyph size, no fill and no frame. Nothing about
+   * WHAT it says changes with the variant — only its weight.
+   */
+  variant?: 'band' | 'inline';
 }): React.JSX.Element {
   const [code, setCode] = useState('');
   const over =
@@ -46,27 +69,39 @@ export function CliLoginProgress({
     session.status === 'failed' ||
     session.status === 'cancelled';
 
+  const band = variant === 'band';
+  // One place the two weights are decided, so a later edit cannot make the
+  // glyph small and leave the words large.
+  const glyph = band ? 'size-4 shrink-0' : 'size-3.5 shrink-0';
+  const control = band ? undefined : 'h-5 px-1.5 text-[11px]';
+
   return (
     <div
       data-slot="cli-login-progress"
-      className="-mx-4 flex flex-col gap-2 border-t border-border bg-muted/40 px-4 py-3">
-      <div className="flex items-center gap-2 text-sm">
+      className={cn(
+        'flex flex-col',
+        band
+          ? '-mx-4 gap-2 border-t border-border bg-muted/40 px-4 py-3'
+          : 'gap-1 px-1.5 py-1',
+      )}>
+      <div
+        className={cn(
+          'flex items-center',
+          band ? 'gap-2 text-sm' : 'gap-1.5 text-xs',
+        )}>
         {over ? (
           session.status === 'succeeded' ? (
-            <Check
-              aria-hidden="true"
-              className="size-4 shrink-0 text-success"
-            />
+            <Check aria-hidden="true" className={cn(glyph, 'text-success')} />
           ) : (
             <TriangleAlert
               aria-hidden="true"
-              className="size-4 shrink-0 text-warning"
+              className={cn(glyph, 'text-warning')}
             />
           )
         ) : (
           <Loader2
             aria-hidden="true"
-            className="size-4 shrink-0 animate-spin text-muted-foreground"
+            className={cn(glyph, 'animate-spin text-muted-foreground')}
           />
         )}
         <span
@@ -92,7 +127,7 @@ export function CliLoginProgress({
                 type="button"
                 variant="ghost"
                 size="sm"
-                className="text-muted-foreground"
+                className={cn('text-muted-foreground', control)}
                 title="Open the sign-in page in your browser"
                 onClick={() => window.open(session.url ?? '', '_blank')}>
                 Open
@@ -104,7 +139,7 @@ export function CliLoginProgress({
             type="button"
             variant="ghost"
             size="sm"
-            className="text-muted-foreground"
+            className={cn('text-muted-foreground', control)}
             onClick={over ? onDismiss : onCancel}>
             {over ? 'Dismiss' : 'Cancel'}
           </Button>
@@ -127,6 +162,7 @@ export function CliLoginProgress({
             // says what to paste, and a second label would repeat it.
             aria-label="Sign-in code from the browser"
             placeholder="Paste the code from your browser"
+            className={cn(band ? undefined : 'h-7 text-xs')}
             value={code}
             onChange={(event) => setCode(event.target.value)}
             autoFocus
@@ -135,7 +171,7 @@ export function CliLoginProgress({
             type="submit"
             variant="outline"
             size="sm"
-            className="shrink-0"
+            className={cn('shrink-0', control)}
             disabled={code.trim() === ''}>
             Submit
           </Button>
@@ -146,10 +182,18 @@ export function CliLoginProgress({
           a code is being asked for, where the headline is already the
           instruction and this would restate it. */}
       {session.message !== null && session.status !== 'needs_code' ? (
-        <p className="text-xs text-muted-foreground">{session.message}</p>
+        <p
+          className={cn(
+            'text-muted-foreground',
+            band ? 'text-xs' : 'text-[11px]',
+          )}>
+          {session.message}
+        </p>
       ) : null}
       {error !== null ? (
-        <p className="text-xs text-destructive">{error}</p>
+        <p className={cn('text-destructive', band ? 'text-xs' : 'text-[11px]')}>
+          {error}
+        </p>
       ) : null}
     </div>
   );

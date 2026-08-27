@@ -683,6 +683,12 @@ export class ChatService implements OnModuleInit {
    * `model: null` / `effort: null` are real values — they clear the run back
    * to the CLI's own default (no `--model` / `--effort` flag), which an
    * omitted key cannot express.
+   *
+   * `configDir` is the second exception and refuses on the SAME terms as
+   * `approval`, for a different reason: it is not a value the next turn merely
+   * reads. Switching profiles carries the CLI's own conversation into the new
+   * one and retires the run's live process, and both of those are wrong to do
+   * underneath a turn that is writing into the old profile as they happen.
    */
   async updateSettings(
     runId: string,
@@ -692,6 +698,7 @@ export class ChatService implements OnModuleInit {
       effort?: string | null;
       contextWindow?: string | null;
       modelParameters?: Record<string, string> | null;
+      configDir?: string | null;
     },
   ): Promise<RunWire> {
     const em = this.em.fork();
@@ -699,6 +706,10 @@ export class ChatService implements OnModuleInit {
     if (patch.approval !== undefined) {
       this.assertApprovalSupported(run.agentKind, patch.approval);
     }
+    const profileMove =
+      patch.configDir === undefined
+        ? null
+        : await this.moveToConfigDir(runId, run, patch.configDir, em);
     if (patch.effort !== undefined) {
       // The model this patch LEAVES the run on — its own if it is changing one,
       // otherwise the run's. Checking against the old model would refuse a level
@@ -734,6 +745,7 @@ export class ChatService implements OnModuleInit {
         : patch.model !== undefined
           ? { modelParameters: null }
           : {}),
+      ...(profileMove === null ? {} : { configDir: profileMove.configDir }),
     };
     // Captured before the write: `updateById` mutates this same
     // identity-mapped entity, so `run.approval` is already the NEW value by the
@@ -793,8 +805,124 @@ export class ChatService implements OnModuleInit {
       );
     }
     Object.assign(run, changes);
+    if (profileMove !== null) {
+      // AFTER the column is written, so a crash between the two leaves the run
+      // on its old profile with no row claiming otherwise — and the row is
+      // what the next turn reads. The transcript is where the user finds out
+      // what a switch cost them, since nothing else on screen can say whether
+      // the agent still remembers the conversation.
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        { message: profileMove.notice, severity: 'info' },
+      );
+    }
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * Point this thread's next turns at another account, taking the CLI's own
+   * conversation with them.
+   *
+   * REPORTED as "I wanna have ability to dynamically change config directory
+   * for current claude threads to have an ability continue thread with other
+   * account" — and the second half is the hard half. geniro's transcript is
+   * geniro's own and never moves; what a profile holds is the CLI's session
+   * store, and `--resume <id>` under a profile that does not hold the file
+   * answers "No conversation found" (probed on 2.1.237 across two real
+   * accounts). So a switch that only rewrote the column would silently hand
+   * the user an agent with amnesia, under a transcript still showing the
+   * conversation it had forgotten.
+   *
+   * Three things happen, in an order that is load-bearing:
+   *
+   * 1. REFUSE while a turn is running. That turn is appending to the old
+   *    profile's session file, so a copy taken now carries a conversation
+   *    missing its last minutes, and retiring the process under it would kill
+   *    work the user asked for. `model` and `effort` are accepted mid-turn
+   *    because they only describe the NEXT one; this does more than describe.
+   * 2. CARRY the conversation (`AgentAdapter.carrySessionToConfigDir`). A CLI
+   *    that cannot says so, and the switch still happens — the honest failure
+   *    is a fresh CLI conversation under a transcript that says so, never a
+   *    refused switch.
+   * 3. RETIRE the run's live process. It was spawned with the old profile in
+   *    its env and can never be told otherwise, so leaving it would serve the
+   *    next turn from the account the user just switched away from.
+   */
+  private async moveToConfigDir(
+    runId: string,
+    run: Run,
+    requested: string | null,
+    em: EntityManager,
+  ): Promise<{ configDir: string | null; notice: string } | null> {
+    const agentKind = run.agentKind;
+    if (agentKind === null) {
+      throw new BadRequestException(
+        'CONFIG_DIR_UNSUPPORTED',
+        'this run has no agent of its own to point at a profile',
+      );
+    }
+    const adapter = this.adapterFor(agentKind);
+    const unsupported = adapter.getConfig().configDir.unavailableReason;
+    if (unsupported !== null) {
+      throw new BadRequestException('CONFIG_DIR_UNSUPPORTED', unsupported);
+    }
+    const next = requested === null ? null : resolveValidConfigDir(requested);
+    if (next === run.configDir) {
+      // Not an error — a picker can re-choose what is already chosen — but
+      // nothing should be copied, nothing retired and nothing announced.
+      return null;
+    }
+    // BUSY is wider than "a turn is claimed", and the difference is a
+    // SUB-AGENT. `ProcessRegistry` tracks TURNS, and a delegate routinely
+    // outlives the one that launched it: an un-bracketed delegate goes on
+    // producing rows after its turn's `result` line, which is exactly what
+    // {@link leaseOnDelegateRow} exists to keep the badge honest about. In that
+    // window the registry is empty while the run row reads `running` and a
+    // delegate is alive INSIDE the process this switch would close — so a
+    // registry-only guard would kill the sub-agent's work outright, and copy a
+    // session file mid-append while it was at it. The run's own reading is the
+    // authority, with the registry covering the window before a claimed turn
+    // has written one and `heldRuns` covering a turn deferred for a BRACKETED
+    // delegate.
+    if (
+      this.registry.has(runId) ||
+      run.status === 'running' ||
+      (this.heldRuns.get(runId) ?? 0) > 0
+    ) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'this thread is still working — switching account moves its conversation and restarts its agent, so wait until the turn and its sub-agents have finished',
+      );
+    }
+    const node = await this.nodeStateDao.getByRunNode(
+      runId,
+      SINGLE_AGENT_NODE,
+      em,
+    );
+    const sessionId = node?.agentSessionId ?? null;
+    const carried =
+      sessionId === null
+        ? // Nothing has been said yet, so there is nothing to carry and no
+          // caveat to print — this is the clean case, not a degraded one.
+          { carried: true as const }
+        : await adapter.carrySessionToConfigDir({
+            sessionId,
+            from: run.configDir,
+            to: next,
+          });
+    this.sessions.close(runId);
+    const profile = next === null ? 'the CLI’s default profile' : next;
+    return {
+      configDir: next,
+      notice: carried.carried
+        ? `This chat now runs as ${profile}. Its conversation came with it.`
+        : `This chat now runs as ${profile}. The agent starts a fresh conversation from here — ${carried.reason}.`,
+    };
   }
 
   /**

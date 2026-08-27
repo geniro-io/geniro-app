@@ -33,6 +33,8 @@ import type {
   AgentSessionsInput,
   AgentTitleInput,
   AgentTurnInput,
+  CarrySessionInput,
+  CarrySessionResult,
   FollowUpMessage,
   InstalledApprovalSupport,
   InstalledCapabilities,
@@ -134,6 +136,7 @@ import {
   withResponse,
 } from './utils/claude-question.utils';
 import {
+  carryClaudeSession,
   listClaudeSessions,
   readClaudeSessionHistory,
 } from './utils/claude-sessions.utils';
@@ -499,6 +502,20 @@ export class ClaudeAdapter extends AgentAdapter {
          */
         envVar: CLAUDE_CONFIG_DIR_ENV,
         unavailableReason: null,
+        /**
+         * A conversation FOLLOWS the run to the other account, and that is a
+         * measurement rather than a hope — the null here promises
+         * {@link ClaudeAdapter.carrySessionToConfigDir} does something.
+         *
+         * Probed on 2.1.237 across this machine's two real profiles: a turn
+         * under profile A was told a codeword; `--resume <id>` under profile B
+         * answered `No conversation found with session ID: …`; the session's
+         * own `.jsonl` was copied into B's `projects/<same dir>/`; the same
+         * resume under B then answered the codeword. So the store is the whole
+         * of what makes a conversation resumable here, and moving the file is
+         * moving the conversation.
+         */
+        sessionCarryUnavailableReason: null,
       },
       followUp: {
         /**
@@ -794,6 +811,25 @@ export class ClaudeAdapter extends AgentAdapter {
    */
   override prepareSessionImport(): Promise<void> {
     return Promise.resolve();
+  }
+
+  /**
+   * Bring the conversation with the run when it is repointed at another
+   * account, so the next turn resumes it rather than starting over.
+   *
+   * The mechanism is a file copy inside this CLI's own store, which is the
+   * whole of what a resume needs here — see `carryClaudeSession` for the probe
+   * that established it and for why the target directory is the source's own
+   * name rather than one composed from the cwd.
+   */
+  override carrySessionToConfigDir(
+    input: CarrySessionInput,
+  ): Promise<CarrySessionResult> {
+    return carryClaudeSession({
+      sessionId: input.sessionId,
+      fromProfileDir: this.profileDir(input.from),
+      toProfileDir: this.profileDir(input.to),
+    });
   }
 
   /**

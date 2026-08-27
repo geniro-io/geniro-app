@@ -51,6 +51,8 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  CarrySessionInput,
+  CarrySessionResult,
   FollowUpMessage,
   HandoffInput,
   HandoffResult,
@@ -299,6 +301,31 @@ export abstract class AgentAdapter {
     const trimmed = configDir?.trim();
     const envVar = this.getConfig().configDir.envVar;
     return trimmed && envVar ? { [envVar]: trimmed } : {};
+  }
+
+  /**
+   * Make one conversation readable from ANOTHER of this CLI's profiles, so a
+   * chat repointed at a second account carries on where it left off instead of
+   * starting over.
+   *
+   * Concrete here and driven by config, on the base's own rule: what differs
+   * per CLI is whether a conversation can be moved at all
+   * (`configDir.sessionCarryUnavailableReason`), and a CLI that can override
+   * the MECHANISM. Refusing is a legitimate answer and never an exception —
+   * the switch itself still happens, and the caller prints the reason.
+   *
+   * The default is the refusal, which is right for every CLI that has not
+   * measured the move: a copy into another program's store, made on a guess
+   * about where it keeps things, is worse than an honest fresh start.
+   */
+  async carrySessionToConfigDir(
+    _input: CarrySessionInput,
+  ): Promise<CarrySessionResult> {
+    const reason = this.getConfig().configDir.sessionCarryUnavailableReason;
+    return {
+      carried: false,
+      reason: reason ?? 'this CLI cannot move a conversation between profiles',
+    };
   }
 
   /**

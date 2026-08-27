@@ -980,7 +980,8 @@ describe('the expanded readout the meter opens onto', () => {
   it('DATES a reading whose agent has since been closed, and drops the re-read claim', async () => {
     // The figures are real and the moment is not now: they were taken on the
     // way out of a process that has since been closed, and the standing caption
-    // ("re-read each time this opens") describes a live reading only. Saying it
+    // ("as of the last thing said in this chat") describes a live reading
+    // only. Saying it
     // over a stored one is the same lie as the sentence this whole fix started
     // from — a panel promising a reading nobody was going to take.
     renderWithLoader(() =>
@@ -996,7 +997,7 @@ describe('the expanded readout the meter opens onto', () => {
     expect(text).toContain('before its process was closed');
     expect(text).toContain('(3h)');
     expect(text).toContain('Send a message to take a fresh one');
-    expect(text).not.toContain('re-read each time this opens');
+    expect(text).not.toContain('as of the last thing said');
     // ...and the figures themselves are still drawn, which is the whole point.
     // A category from the BREAKDOWN, which stays open — the drill-downs below
     // it are folded by default.

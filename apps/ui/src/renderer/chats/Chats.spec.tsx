@@ -4826,18 +4826,27 @@ describe('Chats queued messages', () => {
     // ONE of them, which is not a formality: this chip has been moved four
     // times, and every move that left the old one in place rendered the folder
     // twice — once above the textarea AND again beside Send.
-    const folders = [
-      ...container.querySelectorAll('[data-slot="chip"]'),
-    ].filter((chip) => chip.getAttribute('title')?.includes('/proj'));
-    expect(folders).toHaveLength(1);
-    const folder = folders[0]!;
+    const identities = [
+      ...container.querySelectorAll('[data-slot="thread-identity"]'),
+    ];
+    expect(identities).toHaveLength(1);
+    const folder = identities[0]!.querySelector('button')!;
     expect(folder.textContent).toContain('proj');
 
-    // In the header's identity line, beside the agent chip.
-    const agent = [...container.querySelectorAll('[data-slot="chip"]')].find(
-      (chip) => chip.textContent === 'claude',
-    )!;
-    expect(folder.parentElement).toBe(agent.parentElement);
+    // And no CHIP names it either. The folder used to be one, so this is the
+    // same "every move left the old one behind" guard read against the shape
+    // the header has now.
+    expect(
+      [...container.querySelectorAll('[data-slot="chip"]')].filter(
+        (chip) =>
+          chip.textContent?.includes('proj') === true ||
+          chip.getAttribute('title')?.includes('/proj') === true,
+      ),
+    ).toEqual([]);
+
+    // The agent is named by the SAME control — the two life-long facts are one
+    // chip now rather than two beside each other.
+    expect(folder.getAttribute('aria-label')).toContain('claude');
 
     // …and nowhere in the composer: not in the card, and not in the row above
     // it. The header check alone would still pass with a second chip left
@@ -6411,25 +6420,29 @@ describe('Chats run composer chips', () => {
 
     // The agent cannot change for the life of a run, so it states itself on
     // the header's identity line rather than sitting among five chips that DO
-    // change things.
+    // change things. Three such facts used to be three chips there; the
+    // reported "we have soo much information here" folded them into ONE, whose
+    // face is the folder and whose label carries all three.
     const header = container.querySelector('h2')!.parentElement!;
-    expect(header.textContent).toContain('claude');
-    const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
+    expect(header.textContent).toContain('proj');
+    const identity = container.querySelector<HTMLButtonElement>(
+      '[data-slot="thread-identity"] button',
+    )!;
+    expect(identity.getAttribute('aria-label')).toContain('claude');
+    expect(identity.getAttribute('aria-label')).toContain('/proj');
     // No chip is rendered as a disabled button (the tooltip-blocking shape).
     expect(
       [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // The folder chip's full-path tooltip is reachable again (native title).
-    const folderChip = chips(container).find((el) =>
-      el.textContent?.includes('proj'),
-    );
-    // Labelled now, not a bare path: the header shows this chip beside the
-    // profile chip, and two unlabelled paths side by side say nothing about
-    // which is which.
-    expect(folderChip?.getAttribute('title')).toContain('/proj');
+    // And the full path is behind it, under its own name — which the chip it
+    // replaced could only ever put in a `title`.
+    await act(async () => {
+      identity.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(header.textContent).toContain('Folder');
+    expect(header.textContent).toContain('/proj');
     // The send action is the same round icon button as the create screen.
     expect(composerButton(container, 'Send')).not.toBeNull();
   });
@@ -6533,8 +6546,13 @@ describe('Chats run composer chips', () => {
     // The run's IDENTITY (which workflow) is the header's line; the footer
     // carries only what a run of it needs stated or changed.
     expect(container.querySelector('h2')?.textContent).toBe('Review team');
+    // The folder is the header's identity chip — a workflow run has no agent
+    // of its own, so the chip's face is the folder either way.
+    expect(
+      container.querySelector('[data-slot="thread-identity"] button')
+        ?.textContent,
+    ).toContain('proj');
     const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('proj'))).toBe(true);
     expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
       true,
     );

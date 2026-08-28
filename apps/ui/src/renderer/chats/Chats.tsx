@@ -75,6 +75,7 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
+import { chatExportFileName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
@@ -1307,6 +1308,45 @@ export function Chats({
 
   /** Stable, so the memoized headers do not re-render on every keystroke. */
   const clearNamingGroup = useCallback(() => setNamingGroupId(null), []);
+
+  /**
+   * Write one thread to a file — the whole transcript with every tool call, the
+   * settings its turns ran under, its per-node state and its spend.
+   *
+   * The DOCUMENT is the daemon's (`exportChat`), deliberately: a chat's history
+   * is paged behind a cursor, so a file built from `items` on screen would be
+   * whatever the user had scrolled through, and nothing in it would say so.
+   * This side only names the file and hands the bytes to main.
+   *
+   * NOT gated behind a confirm, and SILENT on success: it creates a file and
+   * changes nothing, the save dialog is itself the decision point, and the user
+   * chose where the file went — a strip afterwards saying so would report back
+   * the one fact they just supplied. Only a failure has anything to say.
+   */
+  const handleExportRun = useCallback(
+    (runId: string): void => {
+      const run = runsRef.current.find((r) => r.id === runId);
+      if (!run) {
+        return;
+      }
+      setError(null);
+      void (async () => {
+        try {
+          const doc = await chatApi.exportChat({ runId });
+          await window.geniro.saveChatExport({
+            suggestedName: chatExportFileName(runLabel(run, workflowNames)),
+            // Indented rather than compact: this file exists to be read and
+            // pasted into a bug report, and two spaces is the difference
+            // between a diffable document and one very long line.
+            content: JSON.stringify(doc, null, 2),
+          });
+        } catch (err) {
+          setError(String(err));
+        }
+      })();
+    },
+    [chatApi, workflowNames],
+  );
 
   // The run queued for deletion (null = no confirm open). Deleting is
   // IRREVERSIBLE — rows, attachments and PTY sessions all go — so it is the
@@ -6289,6 +6329,15 @@ export function Chats({
                     // there — the panel itself never sees the path.
                     onOpenFolderTerminal={
                       activeRun?.cwd ? openFolderTerminal : undefined
+                    }
+                    // The panel is per-OPEN-run, so the control is only ever
+                    // about the thread on screen — which is also why the handler
+                    // is bound to that run's id here rather than the panel being
+                    // handed one to look up.
+                    onExportChat={
+                      activeRun
+                        ? () => handleExportRun(activeRun.id)
+                        : undefined
                     }
                     terminalReasons={terminalReasons}
                     // A chat only: a workflow run's nodes each hold their own

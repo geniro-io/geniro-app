@@ -201,6 +201,39 @@ export const revealPathSchema = absolutePath;
 export const openTerminalAtSchema = absolutePath;
 
 /**
+ * A chat export on its way to disk: the file name to suggest, and the document.
+ *
+ * The NAME is held to a bare filename, and that is the whole of the validation
+ * here — it is the field that reaches a PATH (`showSaveDialog`'s `defaultPath`),
+ * so a separator or a `..` in it would open the dialog somewhere the user did
+ * not ask to be. Control characters go with them: the value is drawn in a native
+ * dialog this process does not paint.
+ *
+ * `content` is bounded in SHAPE and deliberately not in LENGTH, which is the one
+ * departure from this module's own rule. It is this app's own export document,
+ * already materialized in renderer memory to be sent, and its destination is a
+ * path the USER picked in a native dialog — so a cap would buy no safety and
+ * would refuse exactly the long conversations the feature exists for (a real
+ * transcript runs to tens of megabytes).
+ */
+export const chatExportSaveSchema = z.strictObject({
+  suggestedName: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine((name) => !name.includes('/') && !name.includes('\\'), {
+      message: 'must be a bare file name, not a path',
+    })
+    .refine((name) => name !== '.' && name !== '..', {
+      message: 'must name a file',
+    })
+    .refine((name) => !hasControlCharacters(name), {
+      message: 'must not contain control characters',
+    }),
+  content: z.string(),
+});
+
+/**
  * One system notification the renderer asks main to post.
  *
  * Bounded rather than merely typed, because both strings land in an OS surface

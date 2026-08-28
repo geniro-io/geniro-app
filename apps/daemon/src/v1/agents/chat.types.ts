@@ -639,6 +639,136 @@ export const ItemWireSchema = z.object({
 export type ItemWire = z.infer<typeof ItemWireSchema>;
 
 /**
+ * The version of the export DOCUMENT's own shape, stamped on every file.
+ *
+ * An export is read back by whatever the user pastes it into — a bug report, a
+ * script, a later build of this app — long after the daemon that wrote it is
+ * gone, so the reader needs to know which shape it is holding. Bumped when a
+ * field is removed or changes meaning; adding one does not, since a reader that
+ * does not know a key ignores it.
+ */
+export const CHAT_EXPORT_FORMAT_VERSION = 1;
+
+/**
+ * The run's own row in an export — every column, including the four the wire
+ * has never carried.
+ *
+ * Deliberately NOT {@link RunWireSchema}: that shape is what a CHAT SCREEN
+ * needs, so it folds in live registry readings (`awaiting`, `holdingFor`) that
+ * describe this instant rather than the conversation, and it withholds the
+ * fields nothing renders — `customInstructions`, `cursorMaxMode`,
+ * `lastMetricsReading`, `pendingContext`. Those four are exactly what a
+ * debugging export is for: they are what the turns actually ran under, and
+ * three of them can silently change what a CLI did.
+ */
+export const ChatExportRunSchema = z
+  .object({
+    id: z.string(),
+    workflowId: z.string().nullable(),
+    status: RunStatusSchema,
+    title: z.string().nullable(),
+    agentKind: AgentKindSchema.nullable(),
+    cwd: z.string().nullable(),
+    model: z.string().nullable(),
+    approval: ChatApprovalModeSchema.nullable(),
+    effort: z.string().nullable(),
+    contextWindow: z.string().nullable(),
+    modelParameters: z.record(z.string(), z.string()),
+    contextTokens: z.number().nullable(),
+    contextWindowTokens: z.number().nullable(),
+    configDir: z.string().nullable(),
+    groupId: z.string().nullable(),
+    customInstructions: z
+      .string()
+      .nullable()
+      .describe(
+        "The user's standing instructions AS THIS RUN SNAPSHOTTED THEM — not what the settings box says now",
+      ),
+    cursorMaxMode: z
+      .boolean()
+      .nullable()
+      .describe(
+        'Whether this run asks cursor for Max Mode; null = the run predates the setting, which the adapter reads as the default rather than as off',
+      ),
+    lastMetricsReading: z
+      .unknown()
+      .describe(
+        "The last context/plan reading taken from this run's agent before its process closed, as stored; null when none was ever kept",
+      ),
+    pendingContext: z
+      .string()
+      .nullable()
+      .describe(
+        'A compaction summary owed to the next turn; non-null only between a geniro-performed compaction and the message that consumes it',
+      ),
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .meta({ id: 'ChatExportRun' });
+export type ChatExportRunWire = z.infer<typeof ChatExportRunSchema>;
+
+/**
+ * One `node_state` row in an export — empty for a chat, one entry per node for
+ * a workflow run.
+ *
+ * Included because it holds what the transcript cannot say: which CLI and which
+ * model each node ACTUALLY ran as (stamped at turn start, so run history does
+ * not depend on the live YAML), the session id that turn resumed by, and the
+ * error that ended it.
+ */
+export const ChatExportNodeSchema = z
+  .object({
+    nodeId: z.string(),
+    status: z.string(),
+    agentKind: AgentKindSchema.nullable(),
+    model: z.string().nullable(),
+    agentSessionId: z.string().nullable(),
+    startedAt: z.number().nullable(),
+    endedAt: z.number().nullable(),
+    error: z.string().nullable(),
+  })
+  .meta({ id: 'ChatExportNode' });
+export type ChatExportNodeWire = z.infer<typeof ChatExportNodeSchema>;
+
+/**
+ * One whole conversation as a file — the thread's settings, its complete
+ * transcript with every tool call and result verbatim, its per-node execution
+ * state and what it cost.
+ *
+ * Assembled by the DAEMON rather than from what a client holds, and that is the
+ * point rather than a convenience: a chat's history is paged behind an
+ * `afterSeq` cursor, so the renderer only ever holds the window it has scrolled
+ * through — an export built there would silently be a fraction of a long
+ * conversation, which is the exact failure `ChatTotalsWireSchema` records for
+ * the totals beside it.
+ *
+ * `items` inlines {@link ItemWireSchema} rather than referencing it as a named
+ * component: that schema is `ItemDto`'s ROOT, so giving it `.meta({ id })` is
+ * the dangling `$ref` `setupSwagger` fails the boot on.
+ *
+ * No `.meta({ id })` on this one either — it is a response DTO root.
+ */
+export const ChatExportWireSchema = z.object({
+  formatVersion: z
+    .number()
+    .int()
+    .describe('Shape of this document — see CHAT_EXPORT_FORMAT_VERSION'),
+  exportedAt: z.string(),
+  daemonVersion: z
+    .string()
+    .describe('The daemon build that wrote this file, for a bug report'),
+  run: ChatExportRunSchema,
+  totals: ChatTotalsWireSchema,
+  nodes: z.array(ChatExportNodeSchema),
+  items: z
+    .array(ItemWireSchema)
+    .describe(
+      'The COMPLETE transcript in seq order — payloads parsed back from their stored JSON, so a tool_call and its tool_result survive verbatim',
+    ),
+});
+export type ChatExportWire = z.infer<typeof ChatExportWireSchema>;
+
+/**
  * One skill / slash command a CLI agent can be invoked with (`/name …` in the
  * message) in a given working directory — the rows of the composer's `/`
  * autocomplete. `kind` separates a skill directory

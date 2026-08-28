@@ -28,6 +28,7 @@ import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
 import { ChatService } from './services/chat.service';
+import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
@@ -80,6 +81,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
+    ChatExportService,
     ChatMetricsService,
     ChatTitleService,
     LocalImageService,

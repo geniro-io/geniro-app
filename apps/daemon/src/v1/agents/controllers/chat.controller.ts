@@ -14,6 +14,7 @@ import { ZodResponse } from 'nestjs-zod';
 
 import type {
   AttachmentDataWire,
+  ChatExportWire,
   ChatMetricsWire,
   ChatTotalsResponse,
   ItemWire,
@@ -24,6 +25,7 @@ import type {
 import {
   AttachmentDataDto,
   CancelledDto,
+  ChatExportDto,
   ChatMetricsDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -42,6 +44,7 @@ import {
 } from '../dto/chat.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ChatService } from '../services/chat.service';
+import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
@@ -60,6 +63,7 @@ import { ShellOutputService } from '../services/shell-output.service';
 export class ChatController {
   constructor(
     private readonly chatService: ChatService,
+    private readonly chatExport: ChatExportService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
     private readonly shellOutput: ShellOutputService,
@@ -143,6 +147,23 @@ export class ChatController {
         ? undefined
         : { limit: query.limit, beforeSeq: query.beforeSeq },
     );
+  }
+
+  /**
+   * The whole conversation as one file — every setting, every transcript item
+   * with its payload verbatim, the per-node execution state and the spend.
+   *
+   * Its own route rather than a flag on `:runId/items`, because it answers a
+   * different question: that route serves a WINDOW to a screen and is paged
+   * behind a cursor, while this is the complete thread for a bug report. It is
+   * also the one read here that is deliberately unbounded, which is why it is
+   * pressed rather than polled.
+   */
+  @Get(':runId/export')
+  @ApiOperation({ operationId: 'exportChat' })
+  @ZodResponse({ status: 200, type: ChatExportDto })
+  exportChat(@Param('runId') runId: string): Promise<ChatExportWire> {
+    return this.chatExport.export(runId);
   }
 
   @Post(':runId/messages')

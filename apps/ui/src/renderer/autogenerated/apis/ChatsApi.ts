@@ -17,6 +17,7 @@ import * as runtime from '../runtime';
 import type {
   AttachmentDataDto,
   CancelledDto,
+  ChatExportDto,
   ChatMetricsDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -41,6 +42,10 @@ export interface ChatsApiCreateChatRequest {
 }
 
 export interface ChatsApiDeleteChatRequest {
+    runId: string;
+}
+
+export interface ChatsApiExportChatRequest {
     runId: string;
 }
 
@@ -233,6 +238,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
         const response = await this.deleteChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async exportChatRaw(requestParameters: ChatsApiExportChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatExportDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling exportChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/export`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async exportChat(requestParameters: ChatsApiExportChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatExportDto> {
+        const response = await this.exportChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

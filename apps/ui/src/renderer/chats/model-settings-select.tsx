@@ -1,5 +1,7 @@
 import {
+  FolderOpen,
   Gauge,
+  IdCard,
   Maximize2,
   ShieldCheck,
   SlidersHorizontal,
@@ -23,6 +25,7 @@ import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatTokens } from './agent-activity';
 import { approvalOptions } from './approval-mode-select';
+import { folderName, shortenPath } from './directory-select';
 
 /**
  * The one row that means "send this axis no value at all" — a distinct token
@@ -37,6 +40,17 @@ const EFFORT = 'effort';
 const CONTEXT = 'context';
 const PARAMETER = 'parameter';
 const APPROVAL = 'approval';
+const PROFILE = 'profile';
+
+/**
+ * The profile submenu's two ACTION rows — a path is never one of these, since
+ * both are bare words and every real value is absolute.
+ */
+const PROFILE_DEFAULT = '__default_profile__';
+const PROFILE_BROWSE = '__browse_profile__';
+
+/** Stable, so a caller with no recents does not re-key the memo each render. */
+const EMPTY_RECENTS: readonly string[] = [];
 
 /** `<kind>:<id>` — and for a parameter, `parameter:<parameterId>:<value>`. */
 const encode = (...parts: string[]): string => parts.join(':');
@@ -150,6 +164,11 @@ export function ModelSettingsSelect({
   parameters,
   parameterValues,
   onParameterChange,
+  configDir = null,
+  recentConfigDirs = EMPTY_RECENTS,
+  configDirUnavailableReason,
+  onConfigDirChange,
+  onBrowseConfigDir,
   loading = false,
   settingsLoading = false,
   nextTurnOnly = false,
@@ -185,6 +204,22 @@ export function ModelSettingsSelect({
   /** The run's own picks, keyed by the CLI's parameter id. */
   parameterValues: Record<string, string>;
   onParameterChange: (parameterId: string, value: string | null) => void;
+  /** The chosen profile, or null for the CLI's own — the normal state. */
+  configDir?: string | null;
+  recentConfigDirs?: readonly string[];
+  /**
+   * Why this CLI cannot be pointed at a config directory (`null` = it can),
+   * `undefined` while the capability read is in flight — and `undefined` also
+   * for a caller that does not offer the axis at all. All three draw no row,
+   * which is why one field carries them: the honest rendering before the daemon
+   * has spoken is nothing rather than a guess, and so is the rendering for a
+   * surface that never asked.
+   */
+  configDirUnavailableReason?: string | null;
+  /** A pick, or null from the "Default profile" row. Absent hides the axis. */
+  onConfigDirChange?: (configDir: string | null) => void;
+  /** Open the native directory dialog. Absent hides the axis. */
+  onBrowseConfigDir?: () => void;
   /** The model list is still being fetched — the trigger says so. */
   loading?: boolean;
   /**
@@ -293,6 +328,82 @@ export function ModelSettingsSelect({
     };
 
     /**
+     * WHICH PROFILE the chat runs as — the account, and the toolbelt with it.
+     *
+     * ASKED FOR as "давай еще Default profile тоже засунем в Opus Submenu": it
+     * was a chip beside this one, and it belongs here for the reason approval
+     * did — the composer row was a queue of pickers, and this panel is where a
+     * setting gets a name and a stated value instead of a bare word.
+     *
+     * It LEADS, ahead of approval, which is the order the run-configuration
+     * editor teaches: profile, approval, then the model and everything the
+     * model offers. Two screens with a label column should not teach two
+     * orders.
+     *
+     * ABSENT — not disabled — for a CLI that reads no config directory, and
+     * absent while the daemon has not said either way: the standing "a picker
+     * with nothing to pick is not drawn" rule, which the chip decided for
+     * itself and the row now decides the same way.
+     */
+    const profileRow = ((): MenuItem | null => {
+      if (
+        configDirUnavailableReason !== null ||
+        onConfigDirChange === undefined ||
+        onBrowseConfigDir === undefined
+      ) {
+        return null;
+      }
+      // The current one leads even before it is among the persisted recents,
+      // so the panel always has a row to put the checkmark on.
+      const paths =
+        configDir !== null && !recentConfigDirs.includes(configDir)
+          ? [configDir, ...recentConfigDirs]
+          : recentConfigDirs;
+      return {
+        value: 'axis:profile:',
+        icon: <IdCard />,
+        label: 'Profile',
+        // The LEAF, like the chip it replaced: a full path is a paragraph in a
+        // row that has to state four other settings beside it, and the whole
+        // of it is one row down.
+        hint: configDir === null ? 'default' : folderName(configDir),
+        submenu: [
+          ...(paths.length > 0
+            ? [
+                {
+                  label: 'Recents',
+                  items: paths.map((path) => ({
+                    value: encode(PROFILE, path),
+                    // More than the leaf here: two checkouts of one repo are
+                    // both `geniro-app` and would be the same row.
+                    label: shortenPath(path),
+                    title: path,
+                    icon: <IdCard />,
+                    checked: path === configDir,
+                  })),
+                },
+              ]
+            : []),
+          {
+            items: [
+              {
+                value: encode(PROFILE, PROFILE_DEFAULT),
+                label: 'Default profile',
+                checked: configDir === null,
+              },
+              {
+                value: encode(PROFILE, PROFILE_BROWSE),
+                label: 'Choose config directory…',
+                icon: <FolderOpen />,
+                action: true,
+              },
+            ],
+          },
+        ],
+      };
+    })();
+
+    /**
      * The tool-approval posture, as the FIRST row.
      *
      * ASKED FOR as "add auto-approve option to model settings popover instead"
@@ -369,6 +480,7 @@ export function ModelSettingsSelect({
     };
 
     return [
+      profileRow,
       approvalRow,
       axis(
         <Gauge />,
@@ -425,6 +537,11 @@ export function ModelSettingsSelect({
       modelRow,
     ].filter((row): row is MenuItem => row !== null);
   }, [
+    configDir,
+    recentConfigDirs,
+    configDirUnavailableReason,
+    onConfigDirChange,
+    onBrowseConfigDir,
     models,
     model,
     efforts,
@@ -489,6 +606,14 @@ export function ModelSettingsSelect({
         const tail = rest.join(':');
         if (kind === MODEL) {
           onModelChange(tail === DEFAULT ? null : tail);
+          return;
+        }
+        if (kind === PROFILE) {
+          if (tail === PROFILE_BROWSE) {
+            onBrowseConfigDir?.();
+            return;
+          }
+          onConfigDirChange?.(tail === PROFILE_DEFAULT ? null : tail);
           return;
         }
         if (kind === APPROVAL) {

@@ -7644,18 +7644,23 @@ describe('Chats — signing a server in', () => {
     const container = await mount(client);
     await clickRun(container, 'First chat');
 
-    const chip = container.querySelector<HTMLElement>(
-      '[aria-label="Agent config directory this chat runs as"]',
-    );
-    expect(chip?.textContent).toContain('personal');
-    expect(chip?.textContent).not.toContain('team');
+    // It is a ROW of the model-settings panel now, not a chip beside it — see
+    // that panel's `profileRow`.
+    await act(async () => {
+      modelTrigger(container).dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    const row = axisRow(container, 'Profile');
+    expect(row?.textContent).toContain('personal');
+    expect(row?.textContent).not.toContain('team');
     // It names no folder file either: a pin that decides nothing must not be
     // reported as having decided this.
-    expect(chip?.getAttribute('title')).not.toContain('settings.local.json');
+    expect(row?.textContent).not.toContain('settings.local.json');
     // And it stays PICKABLE. It was disabled under a pin for one pass, on the
     // reasoning that a control whose value cannot move is a lie — REPORTED as
     // "now i cant change profile at all", which by then it genuinely could not.
-    expect((chip as HTMLButtonElement | null)?.disabled).toBe(false);
+    expect((row as HTMLButtonElement | null)?.disabled).toBeFalsy();
   });
 
   it('asks for the MCP list under the profile the CHAT runs as, not a folder pin', async () => {

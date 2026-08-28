@@ -6225,58 +6225,56 @@ export function Chats({
                                       ),
                                     })
                                   }
-                                />
-                                {/* WHICH ACCOUNT the next turns run as, and it
-                          is here rather than in the header because it now
-                          CHANGES something — the composer's own rule. It was
-                          stated in the header beside the folder for as long as
-                          it was fixed for the run's life; the report that made
-                          it live ("I wanna have ability to dynamically change
-                          config directory for current claude threads to have
-                          an ability continue thread with other account") is
-                          what moved it.
-
-                          It carries no `nextTurnOnly`: the daemon REFUSES the
-                          change mid-turn rather than deferring it, because
-                          switching profiles moves the CLI's own conversation
-                          and retires the run's process — neither of which is
-                          safe to do underneath a turn writing into the profile
-                          being left. The refusal arrives as the daemon's own
-                          sentence through `changeRunSettings`. */}
-                                {/* This chat's OWN profile — which is what the
-                          turn runs as. Two releases said otherwise, and both
-                          were built on an override that MEASUREMENT says does
-                          not exist: a folder's `.claude/settings.local.json`
-                          `env.CLAUDE_CONFIG_DIR` neither outranks what geniro
-                          sets nor applies when it sets nothing (see the
-                          `Profile` row in `chat-header.tsx` for the three
-                          readings). What that mistake cost is worth keeping:
-                          the chip first showed the folder's profile, which is
-                          the wrong account; then it was DISABLED under a pin,
-                          on the reasoning that a control whose value cannot
-                          move is a lie — REPORTED as "now i cant change
-                          profile at all", which by then it genuinely could not.
-                          Both are gone. The report that started it ("Its again
-                          showing different account plan", `Plan limits · TEAM`
-                          under a chip reading `-personal`) had no override in
-                          it either: both readings were true at once. The
-                          config directory decides which credentials, settings,
-                          MCP servers and history a turn uses; the PLAN comes
-                          from whatever account those credentials are, and
-                          probing both of the reporter's profiles returns
-                          `subscription_type: "team"` with the same five-hour
-                          bucket at the same 65%. A directory is not a
-                          subscription. */}
-                                <ConfigDirSelect
+                                  // WHICH ACCOUNT the next turns run as — a row
+                                  // of this panel now rather than a chip beside
+                                  // it, ASKED FOR as "давай еще Default profile
+                                  // тоже засунем в Opus Submenu". It is here at
+                                  // all, rather than stated in the header,
+                                  // because it CHANGES something: the report
+                                  // that made it live was "I wanna have ability
+                                  // to dynamically change config directory for
+                                  // current claude threads to have an ability
+                                  // continue thread with other account".
+                                  //
+                                  // It carries no `nextTurnOnly`: the daemon
+                                  // REFUSES the change mid-turn rather than
+                                  // deferring it, because switching profiles
+                                  // moves the CLI's own conversation and retires
+                                  // the run's process — neither safe underneath
+                                  // a turn writing into the profile being left.
+                                  // The refusal arrives as the daemon's own
+                                  // sentence through `changeRunSettings`.
+                                  //
+                                  // This chat's OWN profile, which is what the
+                                  // turn runs as. Two releases said otherwise on
+                                  // the strength of an override MEASUREMENT says
+                                  // does not exist — a folder's
+                                  // `.claude/settings.local.json`
+                                  // `env.CLAUDE_CONFIG_DIR` neither outranks
+                                  // what geniro sets nor applies when it sets
+                                  // nothing (the three readings are in the
+                                  // `Profile` row of `chat-header.tsx`). The
+                                  // report behind that ("Its again showing
+                                  // different account plan", `Plan limits ·
+                                  // TEAM` under a chip reading `-personal`) had
+                                  // no override in it either: a directory
+                                  // decides which credentials, settings, MCP
+                                  // servers and history a turn uses, while the
+                                  // PLAN comes from whatever account those
+                                  // credentials are. Probing both of the
+                                  // reporter's profiles returned
+                                  // `subscription_type: "team"` with the same
+                                  // five-hour bucket at the same 65%. A
+                                  // directory is not a subscription.
                                   configDir={activeRun.configDir}
                                   recentConfigDirs={recentConfigDirs}
-                                  unavailableReason={configDirReasonFor(
+                                  configDirUnavailableReason={configDirReasonFor(
                                     activeRun.agentKind,
                                   )}
-                                  ariaLabel="Agent config directory this chat runs as"
-                                  hint="The config directory (account / profile) this chat's next turns run as — its conversation comes with it"
-                                  onChange={changeRunConfigDir}
-                                  onBrowse={() => void pickRunConfigDir()}
+                                  onConfigDirChange={changeRunConfigDir}
+                                  onBrowseConfigDir={() =>
+                                    void pickRunConfigDir()
+                                  }
                                 />
                                 {/* The context readout, DIRECTLY after the effort
                           chip rather than over beside Send.

@@ -193,6 +193,96 @@ describe('ModelSettingsSelect', () => {
     ]);
   });
 
+  it('leads with the PROFILE, and offers its recents behind it', () => {
+    // ASKED FOR as "давай еще Default profile тоже засунем в Opus Submenu" — it
+    // was a chip beside this one. It leads because that is the order the
+    // run-configuration editor teaches: profile, approval, then the model and
+    // everything the model offers.
+    const chosen: (string | null)[] = [];
+    const { el } = render({
+      configDir: '/profiles/personal',
+      recentConfigDirs: ['/profiles/team'],
+      configDirUnavailableReason: null,
+      onConfigDirChange: (next) => chosen.push(next),
+      onBrowseConfigDir: () => undefined,
+    });
+
+    open(el);
+    expect(axisRows(el)[0]).toBe('Profile');
+    // The LEAF on the row, like the chip it replaced: a full path is a
+    // paragraph in a row that has four other settings beside it.
+    expect(axisRow(el, 'Profile')?.textContent).toContain('personal');
+
+    openAxis(el, 'Profile');
+    // The current one leads even before it is among the persisted recents.
+    expect(
+      submenuRows(el).map((r) => r.querySelector('span')?.textContent),
+    ).toEqual([
+      '/profiles/personal',
+      '/profiles/team',
+      'Default profile',
+      'Choose config directory…',
+    ]);
+
+    act(() => {
+      submenuRow(el, '/profiles/team')!.click();
+    });
+    expect(chosen).toEqual(['/profiles/team']);
+  });
+
+  it('sends null from its default row and opens the picker from the other', () => {
+    const chosen: (string | null)[] = [];
+    let browsed = 0;
+    const { el } = render({
+      configDir: '/profiles/personal',
+      configDirUnavailableReason: null,
+      onConfigDirChange: (next) => chosen.push(next),
+      onBrowseConfigDir: () => {
+        browsed += 1;
+      },
+    });
+
+    open(el);
+    openAxis(el, 'Profile');
+    act(() => {
+      submenuRow(el, 'Default profile')!.click();
+    });
+    expect(chosen).toEqual([null]);
+
+    open(el);
+    openAxis(el, 'Profile');
+    act(() => {
+      submenuRow(el, 'Choose config directory…')!.click();
+    });
+    // The browse row opens a dialog; it must NOT also report a pick, or the
+    // run would change profile to the sentinel before the user chose anything.
+    expect(browsed).toBe(1);
+    expect(chosen).toEqual([null]);
+  });
+
+  it('draws NO profile row for a CLI that reads no config directory', () => {
+    // The standing "a picker with nothing to pick is not drawn" rule, which the
+    // chip decided for itself and the row now decides the same way — and it
+    // covers the daemon not having answered yet, which is `undefined`.
+    const withReason = render({
+      configDirUnavailableReason: 'cursor keeps the account outside it',
+      onConfigDirChange: () => undefined,
+      onBrowseConfigDir: () => undefined,
+    });
+    open(withReason.el);
+    expect(axisRows(withReason.el)).not.toContain('Profile');
+  });
+
+  it('draws no profile row while the capability read is still in flight', () => {
+    const { el } = render({
+      onConfigDirChange: () => undefined,
+      onBrowseConfigDir: () => undefined,
+    });
+
+    open(el);
+    expect(axisRows(el)).not.toContain('Profile');
+  });
+
   it('states where each axis STANDS on its own row', () => {
     // The reason a level beats a heading: five current values readable at a
     // glance. A chosen value wins; with nothing chosen the row reports what the

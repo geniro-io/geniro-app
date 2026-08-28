@@ -30,6 +30,7 @@ import { cn } from './ui/utils';
 export function McpDialogButton({
   title,
   variant = 'icon',
+  chipNamesItself = true,
   open,
   onOpenChange,
   listing,
@@ -47,6 +48,17 @@ export function McpDialogButton({
   title: string;
   /** `icon` for a control row, `chip` beside other chips. */
   variant?: 'icon' | 'chip';
+  /**
+   * Whether the `chip` names ITSELF — `MCP · 10` rather than `10 servers`.
+   *
+   * True beside other chips, which is where a control has to say what it is.
+   * False in a LABELLED ROW, where the row's own label already says `MCP` and
+   * repeating it stutters (`MCP    MCP · 10`); the chip then spends its width
+   * on the only thing left to say, which is the count. It still reads as a
+   * control rather than as text, because the plug glyph and the chip's own
+   * hover fill are unchanged.
+   */
+  chipNamesItself?: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   listing: AgentMcpListing | undefined;
@@ -110,10 +122,23 @@ export function McpDialogButton({
           )}
           onClick={toggle}>
           <Plug aria-hidden="true" />
-          <span className="truncate">MCP</span>
-          {count > 0 ? (
-            <span className="text-muted-foreground">· {count}</span>
-          ) : null}
+          {chipNamesItself ? (
+            <>
+              <span className="truncate">MCP</span>
+              {count > 0 ? (
+                <span className="text-muted-foreground">· {count}</span>
+              ) : null}
+            </>
+          ) : (
+            // Spelled out rather than a bare number: `10` alone beside a `MCP`
+            // label reads as a setting whose VALUE is ten, and `0` reads as a
+            // broken listing rather than as a folder with no servers.
+            <span className="truncate">
+              {count === 0
+                ? 'No servers'
+                : `${count} server${count === 1 ? '' : 's'}`}
+            </span>
+          )}
         </button>
       ) : (
         <Button

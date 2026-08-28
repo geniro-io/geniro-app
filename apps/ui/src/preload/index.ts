@@ -91,6 +91,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.openInTerminal, input) as ReturnType<
       GeniroApi['openInTerminal']
     >,
+  openTerminalAt: (cwd) =>
+    ipcRenderer.invoke(IPC.openTerminalAt, cwd) as ReturnType<
+      GeniroApi['openTerminalAt']
+    >,
   switchBranch: (dir, branch) =>
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']

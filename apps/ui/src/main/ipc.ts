@@ -16,13 +16,14 @@ import {
   gitDirSchema,
   notificationSchema,
   onboardingInputSchema,
+  openTerminalAtSchema,
   openTerminalSchema,
   revealPathSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
-import { openInTerminal } from './open-terminal';
+import { openInTerminal, openTerminalAt } from './open-terminal';
 import { revealPath } from './reveal-path';
 import { readSettings, updateSettings } from './settings';
 import type { UpdateService } from './update-service';
@@ -139,6 +140,12 @@ export function registerIpc(
   // script the main process writes and hands to LaunchServices.
   ipcMain.handle(IPC.openInTerminal, (_event, input: unknown) =>
     openInTerminal(openTerminalSchema.parse(input)),
+  );
+
+  // A folder and nothing else — the narrow channel, on the same rule as
+  // `revealPath`: what cannot be handed a command cannot be made to run one.
+  ipcMain.handle(IPC.openTerminalAt, (_event, cwd: unknown) =>
+    openTerminalAt({ cwd: openTerminalAtSchema.parse(cwd) }),
   );
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>

@@ -177,6 +177,41 @@ function OpenInCliButton({
 }
 
 /**
+ * "Open a terminal here": a plain system shell in the folder this run works in.
+ *
+ * NOT {@link OpenInCliButton}, which is the handoff — that one resolves an
+ * invocation from the daemon and reopens the agent's own conversation, and it
+ * belongs to a THREAD. This belongs to the RUN, runs nothing, and is the answer
+ * to "I want a terminal in this repo" — a `cd` and the user's login shell.
+ *
+ * It is the panel's own control rather than a card's, which is why it sits in
+ * the heading row where the word `Agents` used to: the panel is one column
+ * about one run, and a per-card copy would offer the same folder N times.
+ * Drawn on the RAIL as well, so folding the panel away does not take it with
+ * it — one component for both, or the two would drift.
+ */
+function OpenFolderTerminalButton({
+  onOpen,
+  className,
+}: {
+  onOpen: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Open a terminal in this chat’s folder"
+      title="Open a terminal in this chat’s folder"
+      onClick={onOpen}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <TerminalIcon className="size-4" />
+    </Button>
+  );
+}
+
+/**
  * One conversation of one agent, as a row of the card's thread list.
  *
  * Extracted because the list now renders threads from three places — the
@@ -282,6 +317,7 @@ export function AgentsPanel({
   onMcpOpenChange,
   onOpenThread,
   onOpenSubagent,
+  onOpenFolderTerminal,
   onResolveHandoff,
   terminalReasons,
   metricsRunId = null,
@@ -377,6 +413,17 @@ export function AgentsPanel({
    * {@link onSetMcpEnabled}.
    */
   onOpenSubagent?: (subagentId: string) => void;
+  /**
+   * Open a plain system terminal in the folder this run works in.
+   *
+   * Absent draws no button at all — the same rule as {@link onOpenSubagent}:
+   * this panel never invents a surface it was not given. The owner withholds it
+   * for a run with no working directory, so the control cannot appear over a
+   * folder that does not exist. The panel is deliberately told nothing about
+   * the PATH: the owner has it, main validates it, and a column that never sees
+   * it cannot render a stale one.
+   */
+  onOpenFolderTerminal?: () => void;
   /**
    * Each agent's OWN current task list, keyed by `AgentDisplay.id` — the
    * checklist its CLI keeps while working a multi-step job.
@@ -538,13 +585,15 @@ export function AgentsPanel({
     });
   };
   if (collapsed) {
-    // The heading stays READABLE while folded — set on its side, the way the
-    // palette's is. A bare chevron on an empty strip says only "something
-    // opens here"; the run's agents are what a reader is deciding whether to
-    // look at, and the label is what lets them decide without opening it.
+    // The rail is CONTROLS now, not a label. It used to carry the word `Agents`
+    // set on its side, on the reading that a bare chevron says only "something
+    // opens here" — true while opening was the only thing the rail could do.
+    // It is not the only thing any more: the folder's terminal is here too, so
+    // the strip is reachable rather than merely readable, and the `aria-label`
+    // on the `aside` still names the column for a reader who cannot see it.
     return (
       <aside
-        className="flex w-9 shrink-0 flex-col items-center gap-2 border-l border-border bg-sidebar py-3"
+        className="flex w-9 shrink-0 flex-col items-center gap-1 border-l border-border bg-sidebar py-3"
         aria-label="Run agents">
         <Button
           type="button"
@@ -556,9 +605,27 @@ export function AgentsPanel({
           className="size-7 text-muted-foreground">
           <ChevronLeft className="size-4" />
         </Button>
-        <span className="mt-1 rotate-180 text-xs font-medium tracking-wide text-muted-foreground uppercase [writing-mode:vertical-rl]">
-          Agents
-        </span>
+        {onOpenFolderTerminal ? (
+          <>
+            {/* The chevron acts on the COLUMN; everything under it acts on the
+                run. A hairline is the cheapest thing that says so on a 36px
+                strip, where the two kinds would otherwise read as one stack of
+                glyphs. Drawn only when something is actually below it — a rule
+                trailing the last control is a divider with nothing to divide.
+                `aria-hidden`, not `role="separator"`: it separates two groups a
+                screen reader reaches as an ordinary run of buttons, so
+                announcing it would add a landmark that means nothing there. */}
+            <span
+              data-slot="rail-divider"
+              aria-hidden="true"
+              className="my-0.5 h-px w-5 shrink-0 bg-border"
+            />
+            <OpenFolderTerminalButton
+              onOpen={onOpenFolderTerminal}
+              className="size-7"
+            />
+          </>
+        ) : null}
       </aside>
     );
   }
@@ -577,15 +644,25 @@ export function AgentsPanel({
         max={maxWidth}
         onResize={resizeTo}
       />
-      {/* The heading, and the one control that acts on the panel as a whole.
-          The chevron points at the edge the panel folds toward, which is the
-          same reading as the palette's on the left. Resizing is still the other
-          half of "put this out of the way" — this is the half that goes all the
-          way, and both are remembered per install. */}
-      <div className="flex items-center py-1.5 pr-2 pl-3">
-        <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-          Agents
-        </span>
+      {/* The panel's own controls — the ones that act on the column rather than
+          on an agent in it: a terminal in the run's folder, and the fold. The
+          chevron points at the edge the panel folds toward, which is the same
+          reading as the palette's on the left. Resizing is still the other half
+          of "put this out of the way" — this is the half that goes all the way,
+          and both are remembered per install.
+
+          The `AGENTS` heading that used to lead this row is GONE. It named the
+          column a reader is already looking at, directly above cards that name
+          themselves, and it was the one thing in the row that could not be
+          pressed; the `aria-label` on the `aside` carries the name for a reader
+          who cannot see the cards. */}
+      <div className="flex items-center py-1.5 pr-2 pl-2">
+        {onOpenFolderTerminal ? (
+          <OpenFolderTerminalButton
+            onOpen={onOpenFolderTerminal}
+            className="size-6"
+          />
+        ) : null}
         <Button
           type="button"
           variant="ghost"

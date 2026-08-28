@@ -190,6 +190,17 @@ export const gitDirSchema = absolutePath;
 export const revealPathSchema = absolutePath;
 
 /**
+ * The folder the renderer asks for a plain terminal in.
+ *
+ * A bare absolute path is the WHOLE payload, and that is the point of the
+ * channel existing beside `openTerminalSchema` rather than as an option on it:
+ * the only thing reaching the generated script is a `cd` target this process
+ * quotes, so there is no argv and no env for a tampered renderer to smuggle a
+ * second command through.
+ */
+export const openTerminalAtSchema = absolutePath;
+
+/**
  * One system notification the renderer asks main to post.
  *
  * Bounded rather than merely typed, because both strings land in an OS surface

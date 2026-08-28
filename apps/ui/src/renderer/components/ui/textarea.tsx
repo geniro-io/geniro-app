@@ -2,6 +2,11 @@ import * as React from 'react';
 
 import { cn } from './utils';
 
+/**
+ * `ref` rides the PROPS, which React 19 supports directly — no `forwardRef`,
+ * which nothing else in this directory uses either. It exists because
+ * `ExpandableTextarea` measures the element to grow it with its text.
+ */
 function Textarea({
   className,
   ...props

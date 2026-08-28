@@ -5,6 +5,7 @@ import { AgentKindSchema } from '../../runs/runs.types';
 import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
+  ChatExportWireSchema,
   ChatMetricsWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
@@ -233,6 +234,9 @@ export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** One persisted transcript item. */
 export class ItemDto extends createZodDto(ItemWireSchema) {}
+
+/** One whole conversation as a file — settings, transcript, nodes, spend. */
+export class ChatExportDto extends createZodDto(ChatExportWireSchema) {}
 
 /**
  * One attachment's bytes, base64 in JSON rather than a binary body: the daemon

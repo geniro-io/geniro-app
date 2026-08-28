@@ -13,6 +13,7 @@ import type { DaemonSupervisor } from './daemon-supervisor';
 import { pullBranch, readGitInfo, switchBranch } from './git-info';
 import {
   branchNameSchema,
+  chatExportSaveSchema,
   gitDirSchema,
   notificationSchema,
   onboardingInputSchema,
@@ -25,6 +26,7 @@ import { openNotificationSettings } from './notifications/notification-settings'
 import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal, openTerminalAt } from './open-terminal';
 import { revealPath } from './reveal-path';
+import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
 import type { UpdateService } from './update-service';
 
@@ -146,6 +148,13 @@ export function registerIpc(
   // `revealPath`: what cannot be handed a command cannot be made to run one.
   ipcMain.handle(IPC.openTerminalAt, (_event, cwd: unknown) =>
     openTerminalAt({ cwd: openTerminalAtSchema.parse(cwd) }),
+  );
+
+  // The name is what reaches a PATH here (the dialog's starting point), so it
+  // is validated as a bare filename; the content is only ever written to what
+  // the user then picks. See `chatExportSaveSchema`.
+  ipcMain.handle(IPC.saveChatExport, (_event, input: unknown) =>
+    saveChatExport(chatExportSaveSchema.parse(input)),
   );
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>

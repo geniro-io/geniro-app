@@ -684,6 +684,20 @@ export interface BranchPullResult {
   stashLeft: string | null;
 }
 
+/**
+ * Where a chat export ended up — or that the user closed the dialog.
+ *
+ * `saved: false` is the CANCEL, and it is the reason this is a result rather
+ * than a bare `Promise<string | null>` that a caller could read as a failure:
+ * closing a save dialog is the commonest thing to do with one, and it deserves
+ * silence rather than an error strip. A write that genuinely fails rejects.
+ */
+export interface ChatExportSaveResult {
+  saved: boolean;
+  /** Where it was written; null when the dialog was cancelled. */
+  path: string | null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Secrets — none. The app stores no credentials.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -822,6 +836,19 @@ export interface GeniroApi {
    * which is the same reason {@link revealPath} is its own narrow channel.
    */
   openTerminalAt(cwd: string): Promise<void>;
+  /**
+   * Ask where to keep a chat export, and write it there.
+   *
+   * Both halves on one channel because the renderer already HOLDS the document
+   * — see `main/save-chat-export.ts` for why that differs from
+   * {@link pickWorkflowExport}, whose bytes live in the daemon. A cancelled
+   * dialog resolves `saved: false`, which is an outcome and not an error.
+   */
+  saveChatExport(input: {
+    /** A bare file name to suggest — never a path; main refuses separators. */
+    suggestedName: string;
+    content: string;
+  }): Promise<ChatExportSaveResult>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
@@ -946,6 +973,7 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
   openTerminalAt: 'geniro:openTerminalAt',
+  saveChatExport: 'geniro:saveChatExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   revealPath: 'geniro:revealPath',

@@ -797,6 +797,304 @@ export type ChatApprovalMode = typeof ChatApprovalMode[keyof typeof ChatApproval
 /**
  * 
  * @export
+ * @interface ChatExportDto
+ */
+export interface ChatExportDto {
+    /**
+     * Shape of this document — see CHAT_EXPORT_FORMAT_VERSION
+     * @type {number}
+     * @memberof ChatExportDto
+     */
+    formatVersion: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDto
+     */
+    exportedAt: string;
+    /**
+     * The daemon build that wrote this file, for a bug report
+     * @type {string}
+     * @memberof ChatExportDto
+     */
+    daemonVersion: string;
+    /**
+     * 
+     * @type {ChatExportRun}
+     * @memberof ChatExportDto
+     */
+    run: ChatExportRun;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof ChatExportDto
+     */
+    totals: ChatTotals;
+    /**
+     * 
+     * @type {Array<ChatExportNode>}
+     * @memberof ChatExportDto
+     */
+    nodes: Array<ChatExportNode>;
+    /**
+     * The COMPLETE transcript in seq order — payloads parsed back from their stored JSON, so a tool_call and its tool_result survive verbatim
+     * @type {Array<ChatExportDtoItemsInner>}
+     * @memberof ChatExportDto
+     */
+    items: Array<ChatExportDtoItemsInner>;
+}
+/**
+ * 
+ * @export
+ * @interface ChatExportDtoItemsInner
+ */
+export interface ChatExportDtoItemsInner {
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDtoItemsInner
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDtoItemsInner
+     */
+    runId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDtoItemsInner
+     */
+    nodeId: string | null;
+    /**
+     * Monotonic per-run sequence — the replay cursor
+     * @type {number}
+     * @memberof ChatExportDtoItemsInner
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof ChatExportDtoItemsInner
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDtoItemsInner
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {any}
+     * @memberof ChatExportDtoItemsInner
+     */
+    payload: any | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportDtoItemsInner
+     */
+    createdAt: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ChatExportNode
+ */
+export interface ChatExportNode {
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportNode
+     */
+    nodeId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportNode
+     */
+    status: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ChatExportNode
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportNode
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportNode
+     */
+    agentSessionId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatExportNode
+     */
+    startedAt: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatExportNode
+     */
+    endedAt: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportNode
+     */
+    error: string | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ChatExportRun
+ */
+export interface ChatExportRun {
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    workflowId: string | null;
+    /**
+     * 
+     * @type {RunStatus}
+     * @memberof ChatExportRun
+     */
+    status: RunStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ChatExportRun
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof ChatExportRun
+     */
+    approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    effort: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    contextWindow: string | null;
+    /**
+     * 
+     * @type {{ [key: string]: string; }}
+     * @memberof ChatExportRun
+     */
+    modelParameters: { [key: string]: string; };
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatExportRun
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatExportRun
+     */
+    contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    customInstructions: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ChatExportRun
+     */
+    cursorMaxMode: boolean | null;
+    /**
+     * 
+     * @type {any}
+     * @memberof ChatExportRun
+     */
+    lastMetricsReading: any | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    pendingContext: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    updatedAt: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface ChatMetricsDto
  */
 export interface ChatMetricsDto {

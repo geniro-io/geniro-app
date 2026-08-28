@@ -574,6 +574,60 @@ describe('AgentsPanel', () => {
     expect(el.querySelector('[data-slot="rail-divider"]')).toBeNull();
   });
 
+  it('exports the chat from the heading and from the rail', () => {
+    const onExportChat = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onExportChat={onExportChat}
+      />,
+    );
+    const selector = 'button[aria-label="Export this chat to a file"]';
+    click(el.querySelector(selector));
+    expect(onExportChat).toHaveBeenCalledTimes(1);
+
+    // Same rule the terminal control follows: folding the panel away must not
+    // take a run-level control with it.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    click(el.querySelector(selector));
+    expect(onExportChat).toHaveBeenCalledTimes(2);
+  });
+
+  it('draws the rail divider for the export control ALONE', () => {
+    // The divider's condition is the OR of every run control, not the terminal
+    // one's alone: a run with no `cwd` but an open thread still has something
+    // under the chevron, and gating on the first control would leave that
+    // something butted against a chevron that means a different thing.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onExportChat={vi.fn()}
+      />,
+    );
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(el.querySelector('[data-slot="rail-divider"]')).not.toBeNull();
+    expect(
+      el.querySelector('button[aria-label="Export this chat to a file"]'),
+    ).not.toBeNull();
+  });
+
+  it('draws no export control when the owner withholds it', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(
+      el.querySelector('button[aria-label="Export this chat to a file"]'),
+    ).toBeNull();
+  });
+
   it('shows an empty state when the run has no agents', () => {
     const el = render(
       <AgentsPanel

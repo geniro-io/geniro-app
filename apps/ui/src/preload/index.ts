@@ -95,6 +95,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.openTerminalAt, cwd) as ReturnType<
       GeniroApi['openTerminalAt']
     >,
+  saveChatExport: (input) =>
+    ipcRenderer.invoke(IPC.saveChatExport, input) as ReturnType<
+      GeniroApi['saveChatExport']
+    >,
   switchBranch: (dir, branch) =>
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']

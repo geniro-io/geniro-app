@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   ExternalLink,
   FileText,
   Terminal as TerminalIcon,
@@ -212,6 +213,43 @@ function OpenFolderTerminalButton({
 }
 
 /**
+ * "Export this thread": the whole conversation written to a file — every
+ * transcript item with its tool calls verbatim, the settings the turns ran
+ * under, the per-node state and the spend.
+ *
+ * A panel control for the same reason {@link OpenFolderTerminalButton} is one:
+ * it acts on the RUN rather than on an agent within it, so a per-card copy
+ * would offer the same file N times. Drawn on the rail too, through the same
+ * one component, or the folded and unfolded halves would drift.
+ *
+ * It began as a hover control on the sidebar ROW, which reached every chat
+ * rather than only the open one. Moving it here trades that reach for a
+ * permanent, labelled control on the column that is already about this run —
+ * exporting a thread is something you decide while reading it, not while
+ * scanning a list.
+ */
+function ExportChatButton({
+  onExport,
+  className,
+}: {
+  onExport: () => void;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Export this chat to a file"
+      title="Export this chat to a file"
+      onClick={onExport}
+      className={cn('shrink-0 text-muted-foreground', className)}>
+      <Download className="size-4" />
+    </Button>
+  );
+}
+
+/**
  * One conversation of one agent, as a row of the card's thread list.
  *
  * Extracted because the list now renders threads from three places — the
@@ -318,6 +356,7 @@ export function AgentsPanel({
   onOpenThread,
   onOpenSubagent,
   onOpenFolderTerminal,
+  onExportChat,
   onResolveHandoff,
   terminalReasons,
   metricsRunId = null,
@@ -424,6 +463,15 @@ export function AgentsPanel({
    * it cannot render a stale one.
    */
   onOpenFolderTerminal?: () => void;
+  /**
+   * Write this run's whole conversation to a file the user picks.
+   *
+   * Absent draws no button, the same rule its two neighbours follow — the panel
+   * never invents a surface it was not given. The DOCUMENT is the daemon's, so
+   * this side is handed a callback and told nothing about the transcript: a
+   * column that never sees the items cannot export a stale window of them.
+   */
+  onExportChat?: () => void;
   /**
    * Each agent's OWN current task list, keyed by `AgentDisplay.id` — the
    * checklist its CLI keeps while working a multi-step job.
@@ -605,25 +653,32 @@ export function AgentsPanel({
           className="size-7 text-muted-foreground">
           <ChevronLeft className="size-4" />
         </Button>
-        {onOpenFolderTerminal ? (
+        {onOpenFolderTerminal || onExportChat ? (
           <>
             {/* The chevron acts on the COLUMN; everything under it acts on the
                 run. A hairline is the cheapest thing that says so on a 36px
                 strip, where the two kinds would otherwise read as one stack of
                 glyphs. Drawn only when something is actually below it — a rule
-                trailing the last control is a divider with nothing to divide.
-                `aria-hidden`, not `role="separator"`: it separates two groups a
-                screen reader reaches as an ordinary run of buttons, so
-                announcing it would add a landmark that means nothing there. */}
+                trailing the last control is a divider with nothing to divide,
+                which is why the condition is the OR of every run control rather
+                than the first one's alone. `aria-hidden`, not
+                `role="separator"`: it separates two groups a screen reader
+                reaches as an ordinary run of buttons, so announcing it would add
+                a landmark that means nothing there. */}
             <span
               data-slot="rail-divider"
               aria-hidden="true"
               className="my-0.5 h-px w-5 shrink-0 bg-border"
             />
-            <OpenFolderTerminalButton
-              onOpen={onOpenFolderTerminal}
-              className="size-7"
-            />
+            {onOpenFolderTerminal ? (
+              <OpenFolderTerminalButton
+                onOpen={onOpenFolderTerminal}
+                className="size-7"
+              />
+            ) : null}
+            {onExportChat ? (
+              <ExportChatButton onExport={onExportChat} className="size-7" />
+            ) : null}
           </>
         ) : null}
       </aside>
@@ -645,11 +700,11 @@ export function AgentsPanel({
         onResize={resizeTo}
       />
       {/* The panel's own controls — the ones that act on the column rather than
-          on an agent in it: a terminal in the run's folder, and the fold. The
-          chevron points at the edge the panel folds toward, which is the same
-          reading as the palette's on the left. Resizing is still the other half
-          of "put this out of the way" — this is the half that goes all the way,
-          and both are remembered per install.
+          on an agent in it: a terminal in the run's folder, this thread as a
+          file, and the fold. The chevron points at the edge the panel folds
+          toward, which is the same reading as the palette's on the left.
+          Resizing is still the other half of "put this out of the way" — this
+          is the half that goes all the way, and both are remembered per install.
 
           The `AGENTS` heading that used to lead this row is GONE. It named the
           column a reader is already looking at, directly above cards that name
@@ -662,6 +717,9 @@ export function AgentsPanel({
             onOpen={onOpenFolderTerminal}
             className="size-6"
           />
+        ) : null}
+        {onExportChat ? (
+          <ExportChatButton onExport={onExportChat} className="size-6" />
         ) : null}
         <Button
           type="button"

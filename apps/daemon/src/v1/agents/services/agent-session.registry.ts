@@ -28,13 +28,28 @@ import type {
  * complaint this exists to fix. Too long and an abandoned chat holds a CLI and
  * every server it started for hours.
  *
- * Thirty minutes: long enough to cover reading a long answer, switching to
- * another window and coming back; short enough that walking away for the
- * afternoon does not. The daemon's own idle exit (10 min with no connected
- * client) reaps everything sooner whenever the app is simply closed, so this
- * only governs a session the user still has open.
+ * THREE HOURS, raised from thirty minutes on request. Thirty covered reading a
+ * long answer and coming back from another window; it did not cover the way
+ * these threads are actually used — left open across a meeting or an afternoon
+ * and returned to — and the cost of getting that wrong is asymmetric. A window
+ * that is too long reaps an abandoned chat late; one that is too short reboots
+ * the user's MCP servers, and a browser one of them owns, in front of someone
+ * who was still working in that thread.
+ *
+ * What it changes is WHICH mechanism does the reaping, not whether anything
+ * does — and neither of the other two moved:
+ *
+ * - The daemon's own idle exit (10 min with no connected client) still takes
+ *   everything the moment the app is closed, so this only ever governs a
+ *   session whose window the user still has open.
+ * - {@link MAX_LIVE_SESSIONS} still caps how many are held at once, derived
+ *   from this machine's memory at ~1GB each. Past three hours that ceiling is
+ *   what closes the oldest IDLE session rather than the clock — which is the
+ *   better order anyway: it reclaims the process the user is least likely to
+ *   come back to, at the moment the memory is actually wanted, instead of on a
+ *   timer that cannot see whether anything needs the room.
  */
-export const SESSION_IDLE_MS = 30 * 60_000;
+export const SESSION_IDLE_MS = 3 * 60 * 60_000;
 
 /**
  * What one kept CLI process costs in memory.

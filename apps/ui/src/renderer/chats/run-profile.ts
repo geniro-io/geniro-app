@@ -9,34 +9,57 @@ export interface RunProfile {
 }
 
 /**
- * The config directory this run's turns ACTUALLY run under — which is the one
- * the chat asked for, because nothing overrides it.
+ * The config directory this run's CLI reads its CONFIGURATION from — its MCP
+ * servers, its skills, where its conversation is stored.
  *
- * THE PIN DOES NOT WIN, and that is a measurement rather than a reading of the
- * docs. On claude 2.1.247, in a folder whose `.claude/settings.local.json`
- * carries `env.CLAUDE_CONFIG_DIR`, three launches from the same cwd:
- * `CLAUDE_CONFIG_DIR=<A>` loaded profile A's 17 MCP servers, `<B>` loaded
- * profile B's 51, and NO variable at all loaded the default `~/.claude`'s 12 —
- * the pinned profile never once won, not even against silence. It cannot: that
- * variable decides where the CLI reads its configuration FROM, and a project
- * settings file is read after that decision has been made, so its `env` block
- * reaches the tools the agent runs rather than the CLI's own resolution.
+ * The chat's own pick, because the pin does not reach this. Measured on claude
+ * 2.1.247, three launches from one folder whose `.claude/settings.local.json`
+ * carries `env.CLAUDE_CONFIG_DIR`: `CLAUDE_CONFIG_DIR=<A>` loaded profile A's
+ * 17 MCP servers, `<B>` loaded profile B's 51, and NO variable at all loaded
+ * the default `~/.claude`'s 12 — the pinned profile never won, not even
+ * against silence. It cannot: that variable decides where the CLI reads its
+ * configuration FROM, and it has already been read by the time a project
+ * settings file is applied.
  *
- * The evidence this function was WRITTEN on is real and belonged to a different
- * cause. "Chat cn see datadog, but i cant see it in the list", 15 servers
- * against 50, is the harvest store having been keyed `configDir: null` — so
- * the panel asked under the DEFAULT profile while the chat ran under the one it
- * was configured with. That is fixed in `ChatService`, and it is the whole of
- * that report; the pin was a second explanation layered onto an already-fixed
- * defect.
- *
- * The function survives its own premise on purpose: it is the ONE seam every
- * surface asks through, so this correction is one line rather than five, and
- * re-introducing an override — should a CLI ever really have one — is one line
- * too. `RunProfile.configDirPin` is now read by nothing; deleting
- * `ConfigDirPin` from the daemon, the wire and this type is the cleanup that
- * belongs with this.
+ * Anything that asks the DAEMON what this run's CLI can SEE asks with this.
+ * Which ACCOUNT the turn ends up on is a different question — see
+ * {@link accountConfigDir}, and read the block there before assuming these two
+ * can be collapsed back into one function. They have been, twice, in both
+ * directions, because each collapse was made on a measurement of only one of
+ * them.
  */
 export function effectiveConfigDir(run: RunProfile): string | null {
   return run.configDir;
+}
+
+/**
+ * The config directory whose ACCOUNT this run's turns actually run on — the
+ * folder's pin where there is one, else the chat's own pick.
+ *
+ * THE PIN WINS HERE, and it wins LATE, which is the whole reason this took
+ * three passes to get right. The CLI applies a project settings file's `env`
+ * block to its own process after startup, so the account is re-resolved about
+ * half a minute in. Measured 2026-08-28 on 2.1.247, one process per case,
+ * asking the `get_usage` control request every 12s for two minutes with
+ * `CLAUDE_CONFIG_DIR` naming a personal `max` profile throughout:
+ *
+ * | cwd | +4s … +25s | +37s onward |
+ * | --- | --- | --- |
+ * | a folder pinning the team profile | `max`, weekly 1% | `team`, weekly 100% |
+ * | an unpinned folder | `max`, weekly 1% | `max`, weekly 1% (never moves) |
+ *
+ * The two readings differ only in the cwd. So a probe that asks once, straight
+ * after spawn, measures the window BEFORE the pin lands and reports the
+ * profile geniro asked for — which is how this was twice concluded not to
+ * happen. geniro's own readings come from a long-lived turn process, so they
+ * are always taken after the flip: the plan limits reported as "another
+ * account's" were the honest reading, and the label above them was the claim
+ * the turn did not support.
+ *
+ * Kept apart from {@link effectiveConfigDir} because the CLI genuinely answers
+ * the two questions differently — its MCP set from the environment, its account
+ * from the folder — and one function returning one directory cannot say that.
+ */
+export function accountConfigDir(run: RunProfile): string | null {
+  return run.configDirPin?.effective ?? run.configDir;
 }

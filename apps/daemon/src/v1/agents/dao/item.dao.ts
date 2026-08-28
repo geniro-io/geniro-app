@@ -112,24 +112,29 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
-   * Text of each run's latest AGENT message — the chat list's preview line.
+   * Text of each run's LATEST message, whoever said it — the chat list's
+   * preview line.
    *
-   * The agent's, not simply the newest of either role, and that is the whole
-   * point of the method rather than a detail of it. A preview taken from "the
-   * last message" alternates owner at every turn boundary: it is the user's own
-   * sentence echoed back for as long as the agent is working, then the agent's
-   * reply, then the user's again — reported as the preview flicking between the
-   * two. Neither reading is wrong on its own, which is exactly why the line has
-   * to pick ONE and keep it, and the useful one is what the thread last said to
-   * the user. A run whose agent has not spoken yet falls back to the newest
-   * message of any role, so a brand-new chat still previews the question that
-   * started it rather than showing nothing.
+   * TWIN PARSER: `apps/ui/src/renderer/chats/chat-preview.ts`
+   * `previewMessageOf` decides the same thing for a LIVE turn. The two take
+   * turns writing this one line — the list value on a refetch, that one as
+   * messages stream — so a rule held on only one side is a preview whose owner
+   * depends on which source spoke last.
    *
-   * Two bounded queries, never the full transcripts: first the (runId, seq,
-   * role) triples of message items (integers + ids only, no payloads), reduced
-   * to the per-run head in memory, then just those head rows' payloads. Runs
-   * with no message items (or a non-text payload) are simply absent from the
-   * map.
+   * It used to be the AGENT's latest, falling back to any role while the agent
+   * had not spoken, deliberately: "the last message" alternates owner at every
+   * turn boundary — the user's sentence echoed back while the agent works, then
+   * the reply, then the user's again. REPORTED as "In thread i cant see last
+   * user message. I should see there last AI or USER message": what that rule
+   * costs is that a thread shows the previous answer for the whole time it is
+   * working on what you just asked, so the row is stalest exactly when you go
+   * looking for the chat you were last in. Alternation is the price of the
+   * asked-for behaviour, and a preview tracks where a conversation has got to.
+   *
+   * Two bounded queries, never the full transcripts: first the (runId, seq)
+   * pairs of message items (integers + ids only, no payloads), reduced to the
+   * per-run head in memory, then just those head rows' payloads. Runs with no
+   * message items (or a non-text payload) are simply absent from the map.
    */
   async latestMessageTextPerRun(
     runIds: string[],
@@ -141,33 +146,17 @@ export class ItemDao extends BaseDao<Item> {
     const repo = this.getRepo(txEm);
     const heads = await repo.find(
       { runId: { $in: runIds }, kind: 'message' },
-      { fields: ['runId', 'seq', 'role'], disableIdentityMap: true },
+      { fields: ['runId', 'seq'], disableIdentityMap: true },
     );
-    // Two heads per run, resolved to one below: the newest agent message and
-    // the newest message of any role. Tracking only a single "best so far"
-    // cannot express the fallback — a run whose agent HAS spoken must ignore
-    // every later user message, which is undecidable until the whole set is in.
-    const agentSeq = new Map<string, number>();
-    const anySeq = new Map<string, number>();
-    for (const head of heads) {
-      const prevAny = anySeq.get(head.runId);
-      if (prevAny === undefined || head.seq > prevAny) {
-        anySeq.set(head.runId, head.seq);
-      }
-      // Anything that is not the user is the thread talking back. Read as "not
-      // user" rather than as an allowlist of agent role names, so a CLI that
-      // spells its own role differently still previews instead of falling
-      // silently back to echoing the user.
-      if (head.role !== 'user') {
-        const prevAgent = agentSeq.get(head.runId);
-        if (prevAgent === undefined || head.seq > prevAgent) {
-          agentSeq.set(head.runId, head.seq);
-        }
-      }
-    }
+    // ONE head per run now — the highest seq. The role no longer decides
+    // anything, so the two-map fold this used to need (an agent head and an
+    // any-role head, resolved afterwards) collapses to a single running max.
     const headSeq = new Map<string, number>();
-    for (const [runId, seq] of anySeq) {
-      headSeq.set(runId, agentSeq.get(runId) ?? seq);
+    for (const head of heads) {
+      const prev = headSeq.get(head.runId);
+      if (prev === undefined || head.seq > prev) {
+        headSeq.set(head.runId, head.seq);
+      }
     }
     if (headSeq.size === 0) {
       return new Map();

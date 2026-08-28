@@ -1354,8 +1354,15 @@ describe('buildSubagentBlocks', () => {
 
     const block = onlyBlock(entries);
     expect(subagentBlockStatus(block)).toBe('running');
+    // STOPPED, which is what this test has been called since it was written and
+    // is now what it checks. It asserted `completed` — the fall-through to
+    // `returned`, the launching call coming back — and that is an outcome
+    // nobody reported: the CLI said the work outlives that call and then never
+    // said how it ended. Reading the return as the ending is precisely the
+    // defect `backgroundOpen` exists to prevent, so it must not be what a
+    // background block lands on once the run settles underneath it.
     expect(subagentBlockStatus(block, Date.parse('2026-08-18T10:00:00Z'))).toBe(
-      'completed',
+      'stopped',
     );
   });
 

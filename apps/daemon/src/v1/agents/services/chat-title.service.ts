@@ -31,6 +31,27 @@ const TERMINAL_ITEM_KINDS = new Set([
 ]);
 
 /**
+ * Has the AGENT started working on this turn — the trigger for naming a chat
+ * before its turn ends.
+ *
+ * Two kinds, and the second is the fix: an assistant message is the agent
+ * TALKING, a tool call is the agent WORKING, and a turn routinely does minutes
+ * of the second before any of the first. Gating on talking alone is what left a
+ * tool-led turn wearing its raw opening line for its whole duration.
+ *
+ * Deliberately narrow. It is not "any item the agent produced": a `tool_result`
+ * is the same unit of work reported a second time, and the progress kinds say
+ * nothing about the conversation having a subject yet. One trigger per unit of
+ * work is what keeps the cooldown meaning what it says.
+ */
+function agentHasStarted(item: { kind: string; role: string | null }): boolean {
+  return (
+    (item.kind === 'message' && item.role === 'assistant') ||
+    item.kind === 'tool_call'
+  );
+}
+
+/**
  * How long after one agent-triggered naming the next may be tried.
  *
  * Long enough that a chatty stretch cannot spend a run's whole ask budget in its
@@ -234,11 +255,27 @@ export class ChatTitleService implements OnModuleInit {
       // same one ask earlier rather than an additional one, and a naming that
       // succeeds retires them. Once per run — a `-p` turn per assistant message
       // would be a model call per paragraph.
-      if (
-        event.item.kind === 'message' &&
-        event.item.role === 'assistant' &&
-        this.earlyAskIsDue(event.runId)
-      ) {
+      //
+      // REPORTED a FOURTH time, as "It didnt change the thread title", with a
+      // screenshot of a chat 1m 47s into its first turn still wearing its raw
+      // opening paragraph — and the transcript beside it says why: `Read 1 file
+      // · ran 11 commands`, `running Bash · 25s`, and not one assistant message.
+      // An agent that opens by WORKING rather than by talking is the norm on the
+      // tasks this app is for, so gating the early naming on an assistant
+      // message left exactly those turns — the long ones, the ones somebody is
+      // hunting for in the sidebar — with nothing but the derived line for their
+      // whole duration. `agentHasStarted` is the widening: a tool call is the
+      // agent demonstrably working, and it is the FIRST evidence of that on a
+      // tool-led turn.
+      //
+      // Asking with no reply yet is not a degraded ask. `titlePrompt` omits an
+      // empty section, so the model is handed the user's opening alone — which
+      // is a whole specification on the reported chat, and is strictly more than
+      // `titleFromText` can do with it, that being a truncation of the first
+      // line. A model with nothing nameable still declines, `readTitleAnswer`
+      // rejects the prose, and the cooldown plus the per-run budget bound what
+      // the declining costs.
+      if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
         this.lastEarlyAskAt.set(event.runId, this.now());
         void this.name(event.runId).catch((err) => {
           this.logger.warn(

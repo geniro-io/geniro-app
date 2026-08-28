@@ -307,6 +307,38 @@ describe('Menu', () => {
     expect(el.textContent).toContain('No matches');
   });
 
+  it('sizes the panel to its longest row, between a floor and a ceiling', () => {
+    // The panel used to take its shrink-to-fit width and land exactly on
+    // `min-w-56` whatever its rows said, so every label truncated inside a
+    // panel with room to spare — measured in the running app as the composer's
+    // model-settings panel at 210px with `Approval` clipped to `Appro…`, and
+    // 216px with nothing clipped once the panel asks for its content.
+    //
+    // A CLASS assertion deliberately: jsdom computes no layout, so the width
+    // itself is unobservable here — but WHICH sizing the panel declares is the
+    // DOM fact that decides it, and it is the half that regressed.
+    const el = open();
+    const panel = el.querySelector('[data-slot="menu-panel"]')!;
+
+    expect(panel.className).toContain('w-max');
+    // The bounds stay: never narrower than the floor, never past the cap, and
+    // a row longer than the cap still truncates the way it always did.
+    expect(panel.className).toContain('min-w-56');
+    expect(panel.className).toContain('max-w-96');
+  });
+
+  it('lets a caller in a narrow container pin the width instead', () => {
+    // The chat sidebar's own override — measured at 260px, a menu sized by its
+    // longest row came out 257px inside a 235px slot and was clipped by the
+    // list's scroll container. That caller passes `w-52`, and it has to WIN
+    // over the sizing above or the fix for one surface breaks the other.
+    const el = open(BRANCHES, { className: 'min-w-0 w-52' });
+    const panel = el.querySelector('[data-slot="menu-panel"]')!;
+
+    expect(panel.className).toContain('w-52');
+    expect(panel.className).not.toContain('w-max');
+  });
+
   it('draws no block for a group with no rows, so the group after it carries no stray hairline', () => {
     // A caller composes groups from data, so an empty block is ordinary — the
     // context-window chip's sizes group is empty on a model that offers one

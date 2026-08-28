@@ -1243,6 +1243,22 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
+   * How many DETACHED commands this run still has out, or `undefined` when this
+   * event says nothing about it.
+   *
+   * Three states like {@link holdingFor} beside it, and for the identical
+   * reason: only the open and the close know anything about the count, and
+   * every other announce must leave the client's reading alone. `0` says the
+   * last one has reported.
+   *
+   * Unlike {@link holdingFor} this is a DISPLAY fact and nothing acts on it —
+   * a shell does not hold a turn open, so the composer must not read it to
+   * decide whether a message queues. It exists so a row can say "the agent has
+   * finished and something it started is still running" whether or not the user
+   * happens to have that thread open.
+   */
+  shellsOpen?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *
@@ -1393,6 +1409,24 @@ export interface RunStatusEvent {
    * sidebar rows a user is not looking at, which is where a chat named a second
    * after its turn ended has to land.
    */
+  /**
+   * How full this run's context window was when its CLI last reported, and the
+   * window that is measured against — ABSENT asserts nothing, a value sets.
+   *
+   * Stamped onto every status event by the bus rather than by any producer
+   * (see `RunContextRegistry`), because the alternative had a client learning
+   * the figure only two ways: the run list it fetched when its window opened,
+   * and the live deltas of the ONE run it has joined. A thread working while
+   * the user is on another chat is neither, so the ring drew an hour-old
+   * number and only a hover — the readout asking the live CLI — corrected it.
+   *
+   * The count can be NULL beside a window: that is a compaction, whose
+   * conversation is gone while the model's window is not. The pair travels
+   * together for that reason, so a client cannot end up scaling a fresh count
+   * against a window from before a model change.
+   */
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
   title?: string;
   /**
    * Whether a NAME for this run is being worked out right now — absent when this
@@ -1632,6 +1666,27 @@ export const RunWireSchema = z.object({
     .min(0)
     .describe(
       'Units of background work this run is being held for; 0 when the agent itself is working',
+    ),
+  /**
+   * How many DETACHED commands this run still has out — 0 when none.
+   *
+   * On the snapshot for the reason {@link holdingFor} is, and for a sharper
+   * one: a detached command routinely OUTLIVES the turn that launched it, so a
+   * window that opened afterwards has no turn, no event and no transcript of
+   * its own to learn it from. Before this rode the row, the renderer folded it
+   * out of the OPEN thread's items, which is knowable for one run and no other
+   * — so a settled chat with a command still out badged itself `working` while
+   * selected and `completed` the moment it was not.
+   *
+   * It says nothing about whether the turn is still going. A shell does not
+   * hold a turn open, deliberately.
+   */
+  shellsOpen: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Detached commands this run still has running; 0 when none are out',
     ),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),

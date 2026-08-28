@@ -26,6 +26,7 @@ const run1: ChatRun = {
   status: 'running',
   awaiting: null,
   holdingFor: 0,
+  shellsOpen: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -588,6 +589,59 @@ describe('useChatRun', () => {
     expect(row?.contextWindowTokens).toBe(1_000_000);
   });
 
+  it('keeps a BACKGROUND thread’s reading current from the broadcast it can see', async () => {
+    // REPORTED as "запустил тред, он отработал где-то час, и я обратно за него
+    // захожу … контекст совсем маленький, но как только я на него навожу, он
+    // через несколько секунд обновляется". The live plane above only ever
+    // covers the ONE run this client has joined; a thread working while the
+    // user is on another chat reached neither it nor a refetch, so the row
+    // froze at whatever the run list said when the window opened and the ring
+    // drew an hour-old figure. The hover was the readout asking the live CLI.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    // r1 is the thread on screen; the reading below is for the OTHER one.
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        activity: 'running Bash',
+        contextTokens: 740_515,
+        contextWindowTokens: 1_000_000,
+      });
+    });
+
+    const row = harness.state().runs.find((run) => run.id === 'r2');
+    expect(row?.contextTokens).toBe(740_515);
+    expect(row?.contextWindowTokens).toBe(1_000_000);
+  });
+
+  it('leaves the reading alone on an announce that carries none', async () => {
+    // Absent asserts nothing — the contract every other three-state field on
+    // this event obeys. An announce with no reading (a daemon restarted
+    // mid-conversation, whose registry is empty) must not blank a real figure.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: null,
+        contextTokens: 500_000,
+        contextWindowTokens: 1_000_000,
+      });
+    });
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed' });
+    });
+
+    expect(
+      harness.state().runs.find((run) => run.id === 'r2')?.contextTokens,
+    ).toBe(500_000);
+  });
+
   it('does not let a turn that measured NOTHING erase the reading', async () => {
     // The rule the live plane and the transcript fold already apply, restated
     // here because this is a third writer of the same field: a reported 0 is
@@ -687,6 +741,74 @@ describe('useChatRun', () => {
       });
     });
     expect(contextNow()).toBeNull();
+  });
+
+  it("clears the live reading when the CLI's OWN compaction named no new size", async () => {
+    // REPORTED as "after compact the context circle will not be updated, unless
+    // i will hover on it". Claude sends `post_tokens` only sometimes; on the
+    // silent ones the daemon clears its own column and the transcript fold
+    // resets at the row, while the live plane — which outranks both in
+    // `chatContext` — went on holding the pre-compaction figure. Hovering was
+    // the only correction, because the readout asks the CLI directly.
+    const { client, emitLiveText, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    const contextNow = (): number | null | undefined =>
+      [...harness.state().liveText.values()][0]?.contextTokens;
+    const compaction = (seq: number, postTokens: number | null): void => {
+      emitItem({
+        id: `r1-i${seq}`,
+        runId: 'r1',
+        nodeId: null,
+        seq,
+        kind: 'system',
+        role: null,
+        payload: {
+          message: 'This session is being continued…',
+          compaction: { preTokens: 653_400, postTokens },
+        },
+        createdAt: 'now',
+      });
+    };
+    const seed = (): void => {
+      emitLiveText({
+        runId: 'r1',
+        nodeId: null,
+        text: 'working',
+        thinkingTokens: null,
+        thinkingText: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 653_400,
+        contextWindowTokens: 1_000_000,
+      });
+    };
+
+    // A compaction that DID name its new size keeps every reading: that figure
+    // arrives around this row rather than safely after it, so clearing here
+    // would wipe the very number the ring is waiting for.
+    await act(async () => {
+      seed();
+    });
+    expect(contextNow()).toBe(653_400);
+    await act(async () => {
+      compaction(10, 25_800);
+    });
+    expect(contextNow()).toBe(653_400);
+
+    // A SILENT one has no figure to wipe and none coming — the same test the
+    // daemon's `forgetContext` arm applies to the run row.
+    await act(async () => {
+      compaction(11, null);
+    });
+    expect(contextNow()).toBeNull();
+
+    // The window survives: it belongs to the model, which a compaction does not
+    // change, and without it the ring has no denominator to be a gauge at all.
+    expect([...harness.state().liveText.values()][0]?.contextWindowTokens).toBe(
+      1_000_000,
+    );
   });
 
   it('records an EXPIRED verdict for the open run, and only that', async () => {

@@ -16,8 +16,15 @@ function Probe({
   runId: string | null;
   settledTurns: number;
 }): React.JSX.Element {
-  const { costUsd } = useChatTotals(api, runId, settledTurns);
-  return <span data-slot="spend">{costUsd === null ? 'none' : costUsd}</span>;
+  const { costUsd, costedTurns } = useChatTotals(api, runId, settledTurns);
+  return (
+    <>
+      <span data-slot="spend">{costUsd === null ? 'none' : costUsd}</span>
+      <span data-slot="costed">
+        {costedTurns === null ? 'unknown' : costedTurns}
+      </span>
+    </>
+  );
 }
 
 let root: Root | null = null;
@@ -58,12 +65,15 @@ afterEach(() => {
  * than as a loose mock, so a spec cannot go on passing a shape the real client
  * stopped accepting.
  */
-function apiReturning(costUsd: number | null): {
+function apiReturning(
+  costUsd: number | null,
+  costedTurns = costUsd === null ? 0 : 1,
+): {
   readChatTotals: Mock<ChatsApi['readChatTotals']>;
 } {
   return {
     readChatTotals: vi.fn<ChatsApi['readChatTotals']>().mockResolvedValue({
-      totals: { costUsd },
+      totals: { costUsd, costedTurns },
     } as Awaited<ReturnType<ChatsApi['readChatTotals']>>),
   };
 }
@@ -130,5 +140,48 @@ describe('useChatTotals', () => {
     await settle();
 
     expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('none');
+  });
+
+  it('drops the PRICED-turn count too when a later read fails', async () => {
+    // Otherwise a thread that was once summed keeps its old count beside a
+    // cleared cost — which is exactly the shape the header reads as "every
+    // turn was summed and none was priced" and marks with a dash. A read that
+    // failed knows nothing about this thread's turns, so it must say so.
+    const el = mount({
+      api: apiReturning(1.25, 4),
+      runId: 'run-1',
+      settledTurns: 0,
+    });
+    await settle();
+    expect(el.querySelector('[data-slot="costed"]')?.textContent).toBe('4');
+
+    rerender({
+      api: {
+        readChatTotals: vi
+          .fn<ChatsApi['readChatTotals']>()
+          .mockRejectedValue(new Error('daemon gone')),
+      },
+      runId: 'run-1',
+      settledTurns: 0,
+    });
+    await settle();
+
+    expect(el.querySelector('[data-slot="costed"]')?.textContent).toBe(
+      'unknown',
+    );
+  });
+
+  it('reports a thread whose turns carried no price as ZERO, not unknown', async () => {
+    // The reading behind the header's dash. cursor-agent prices nothing —
+    // probed on 2026.08.11-e8db854, a completed turn sends no `usage_update`
+    // at all — so its threads come back summed with a null cost, which is a
+    // different fact from a total nobody has fetched.
+    const api = apiReturning(null, 0);
+
+    const el = mount({ api, runId: 'run-1', settledTurns: 0 });
+    await settle();
+
+    expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('none');
+    expect(el.querySelector('[data-slot="costed"]')?.textContent).toBe('0');
   });
 });

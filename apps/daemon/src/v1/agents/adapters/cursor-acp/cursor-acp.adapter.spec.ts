@@ -1345,6 +1345,71 @@ describe('CursorAcpAdapter — background sub-agents', () => {
     expect(result).toMatchObject({ id: 'toolu_018bc', result: null });
   });
 
+  it('marks a BACKGROUND launch as still out, and drops its launch duration', () => {
+    // MEASURED on 2026.08.11-e8db854 by asking for a background delegate: the
+    // launching call completes in 203ms with `isBackground: true`, the turn
+    // ends four seconds later, and the delegate is still asking this client for
+    // shell permissions seventy seconds after that. Everything about the frame
+    // is otherwise identical to a delegate the call waited for — this boolean
+    // is the whole of the difference.
+    //
+    // REPORTED as ten reviewers each reading `took 0s` under a green check
+    // while every one of them was working.
+    const { child, events } = driveTurn();
+    child.stdout.emitData(LAUNCH);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'toolu_018bc',
+        status: 'completed',
+        rawOutput: { durationMs: 203, isBackground: true },
+      }),
+    );
+    // The announcement that follows carries the LAUNCH's milliseconds.
+    child.stdout.emitData(
+      taskAnnouncement({
+        toolCallId: 'toolu_018bc',
+        description: 'Bugs-dimension review',
+        durationMs: 203,
+      }),
+    );
+
+    const info = events.filter((event) => event.type === 'subagent_info');
+    // The row that says the work outlives its launching call.
+    expect(info.some((event) => event.backgroundOpen === true)).toBe(true);
+    // Never FALSE: this wire announces no ending for a background delegate, so
+    // claiming one would be the same invention from the other side.
+    expect(info.some((event) => event.backgroundOpen === false)).toBe(false);
+    // And no announcement may publish 203ms as what the delegate took.
+    expect(info.every((event) => event.durationMs === null)).toBe(true);
+  });
+
+  it('leaves a delegate the call WAITED for exactly as it was', () => {
+    // The other half: `isBackground: false` is the case every earlier
+    // measurement saw, and its duration is the delegate's own work.
+    const { child, events } = driveTurn();
+    child.stdout.emitData(LAUNCH);
+    child.stdout.emitData(
+      sessionUpdate({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'toolu_018bc',
+        status: 'completed',
+        rawOutput: { durationMs: 15430, isBackground: false },
+      }),
+    );
+    child.stdout.emitData(
+      taskAnnouncement({
+        toolCallId: 'toolu_018bc',
+        description: 'List files in directory',
+        durationMs: 15430,
+      }),
+    );
+
+    const info = events.filter((event) => event.type === 'subagent_info');
+    expect(info.every((event) => event.backgroundOpen === null)).toBe(true);
+    expect(info.some((event) => event.durationMs === 15430)).toBe(true);
+  });
+
   it('keeps an ordinary tool call’s output, which IS its answer', () => {
     // The other half of the rule: only a recognised delegation's result is
     // accounting. A blanket drop would empty every shell and search row.

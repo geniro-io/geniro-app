@@ -60,11 +60,13 @@ import { Field } from '../components/field';
 import { McpDialogButton } from '../components/mcp-dialog-button';
 import { NoteBox } from '../components/note-box';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import { SettingRow } from '../components/setting-row';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { createDaemonApis } from '../daemon-api';
 import { useCapabilities } from '../use-capabilities';
 import { AgentAvatar } from './agent-avatar';
+import { AgentCallsCard } from './agent-calls-card';
 import { AgentNode } from './agent-node';
 import { CallEdge, InstructionEdge } from './annotation-edge';
 import { BuilderStatusBar } from './builder-status-bar';
@@ -1168,129 +1170,187 @@ export function Graphs({
                   </>
                 ) : (
                   <>
-                    {/* Every per-run setting in ONE band, as the composer's
-                        chips rather than as four labelled form rows.
+                    {/* Every per-run setting as a LABELLED ROW, in one divided
+                        card — the run-configuration editor's shape, over the
+                        composer's own chips.
 
-                        Reported: "effort select and model should be same design
-                        as when we create chat … approval should be near by …
-                        config directory should be the same setting". They were
-                        four `Field`s of three different kinds — two selects, a
-                        bordered chevron and a bare path input — spread down the
-                        panel with Description and Role between the model and
-                        the approval it belongs beside. Every one of them names
-                        the same thing the composer names one chip at a time, so
-                        they are the composer's chips: same component, same
-                        vocabulary, same menu.
+                        The controls are already right and stay untouched: an
+                        earlier report ("effort select and model should be same
+                        design as when we create chat … approval should be near
+                        by … config directory should be the same setting")
+                        replaced four `Field`s of three different kinds with the
+                        composer's chips, and every one of them still names the
+                        same thing the composer names.
 
-                        A card, not a bare row. The chips are `ghost` — flat
-                        until hovered — and on the inspector's own tinted ground
-                        a row of them read as loose text; the card gives the
-                        group an edge, which is what says these five belong
-                        together. */}
+                        What changed is the LAYOUT, and the reason is the same
+                        one written on `SettingRow`. A wrapping chip row is
+                        right under a message box, where it reads as a sentence
+                        about the next turn. Here it is read rather than
+                        written: an unlabelled `high` says nothing about which
+                        axis it is, and the row REFLOWS as the model changes —
+                        `claude-opus-5` through cursor draws eight chips over
+                        four lines — so the same setting sat somewhere different
+                        on every node you clicked. A fixed label column gives
+                        each one an address, and the control's cell truncates
+                        instead of wrapping.
+
+                        `compact`, because this panel is draggable down to 240px
+                        (`inspector`'s `minWidth`) where the dialog's 7rem label
+                        column would leave the control ~100px.
+
+                        ORDER mirrors the run-configuration editor — profile,
+                        approval, then the model and everything the model
+                        offers — so the two screens that both use a label column
+                        teach one order rather than two. MCP is last because it
+                        is the one row that opens something instead of setting
+                        a value. */}
                     <Field label="Agent settings">
-                      <div className="flex flex-wrap items-center gap-x-0.5 gap-y-1 rounded-lg border border-border bg-card p-1.5">
-                        {/* `key` per node: the chip decides its free-text mode
-                            once, and that decision is one node's. */}
-                        <ModelSelect
-                          key={selected.id}
-                          agentKind={selected.agent}
-                          models={agentModels}
-                          loading={agentModelsLoading}
-                          // The builder's own half of the chip — a full model id
-                          // the CLI does not enumerate is worth a text field in
-                          // a workflow that runs for months.
-                          allowCustom
-                          value={selected.model ?? null}
-                          // Changing the model clears the window and the other
-                          // parameters with it: both belong to the model that
-                          // offered them, and a workflow keeping `1m` — or an
-                          // `optimize_for` the new model never enumerated —
-                          // would send `-32602` on every turn for months.
-                          onChange={(model) =>
-                            patchSelected({
-                              model: model ?? undefined,
-                              contextWindow: undefined,
-                              modelParameters: undefined,
-                            })
-                          }
-                        />
-                        {/* No outer guard on the levels any more: the chip
-                            answers all three states itself — a picker, an inert
-                            chip carrying the daemon's reason, or nothing while
-                            the report is in flight — which is what the composer
-                            gets and what a labelled row around it could not. */}
-                        <EffortSelect
-                          efforts={agentEfforts.efforts}
-                          levelsAreModelSpecific={selected.model !== undefined}
-                          value={selected.effort ?? null}
-                          onChange={(effort) =>
-                            patchSelected({ effort: effort ?? undefined })
-                          }
-                        />
-                        <ContextWindowSelect
-                          windows={agentContextWindows.windows}
-                          value={selected.contextWindow ?? null}
-                          onChange={(contextWindow) =>
-                            patchSelected({
-                              contextWindow: contextWindow ?? undefined,
-                            })
-                          }
-                        />
-                        {/* One chip per OTHER setting this node's model
-                            enumerates — the same set the composer draws, over
-                            the node's own stored map. `undefined` rather than
-                            an empty object when the last one is cleared, so the
-                            YAML loses the key instead of carrying `{}`. */}
-                        {agentModelParameters.parameters.map((parameter) => (
-                          <ModelParameterSelect
-                            key={parameter.id}
-                            parameter={parameter}
-                            value={
-                              selected.modelParameters?.[parameter.id] ?? null
-                            }
-                            onChange={(next) => {
-                              const merged = withModelParameter(
-                                selected.modelParameters ?? {},
-                                parameter.id,
-                                next,
-                              );
-                              patchSelected({
-                                modelParameters:
-                                  Object.keys(merged).length === 0
-                                    ? undefined
-                                    : merged,
-                              });
-                            }}
-                          />
-                        ))}
-                        <ApprovalModeSelect
-                          supportedModes={nodeApprovalModes}
-                          // Never on a workflow node — see `nodeApprovalModes`.
-                          planSupported={false}
-                          value={selected.approval}
-                          onChange={(approval) =>
-                            patchSelected({
-                              approval: approval as WorkflowApproval,
-                            })
-                          }
-                        />
+                      {/* `@container`: the rows fit themselves to THIS card,
+                          whose width comes from the panel's drag handle rather
+                          than from the window — see `SettingRow`'s `compact`,
+                          which stacks label over control once two columns can no
+                          longer hold the longest value. */}
+                      <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
                         {/* Absent — not disabled — for a CLI that reads no
                             config directory, and absent while the daemon has
-                            not said either way. The chip decides that itself
-                            from the reason it is handed. */}
-                        <ConfigDirSelect
-                          configDir={selected.configDir ?? null}
-                          recentConfigDirs={recentConfigDirs}
-                          unavailableReason={configDirCapability.unavailableReasonFor(
-                            selected.agent,
-                          )}
-                          ariaLabel="Agent config directory for this node"
-                          hint="Optional: the config directory (account / profile) this node runs as — the CLI's own by default"
-                          onChange={(configDir) =>
-                            patchSelected({ configDir: configDir ?? undefined })
-                          }
-                          onBrowse={() => void chooseNodeConfigDir()}
-                        />
+                            not said either way. The chip decided that itself
+                            from the reason it was handed; in a label column the
+                            ROW has to go with it, or the panel carries a
+                            `Profile` heading with a hole under it. */}
+                        {configDirCapability.unavailableReasonFor(
+                          selected.agent,
+                        ) === null ? (
+                          <SettingRow width="compact" label="Profile">
+                            <ConfigDirSelect
+                              configDir={selected.configDir ?? null}
+                              recentConfigDirs={recentConfigDirs}
+                              unavailableReason={null}
+                              ariaLabel="Agent config directory for this node"
+                              onChange={(configDir) =>
+                                patchSelected({
+                                  configDir: configDir ?? undefined,
+                                })
+                              }
+                              onBrowse={() => void chooseNodeConfigDir()}
+                            />
+                          </SettingRow>
+                        ) : null}
+                        <SettingRow width="compact" label="Approval">
+                          <ApprovalModeSelect
+                            supportedModes={nodeApprovalModes}
+                            // Never on a workflow node — see `nodeApprovalModes`.
+                            planSupported={false}
+                            value={selected.approval}
+                            onChange={(approval) =>
+                              patchSelected({
+                                approval: approval as WorkflowApproval,
+                              })
+                            }
+                          />
+                        </SettingRow>
+                        <SettingRow width="compact" label="Model">
+                          {/* `key` per node: the chip decides its free-text mode
+                              once, and that decision is one node's. */}
+                          <ModelSelect
+                            key={selected.id}
+                            agentKind={selected.agent}
+                            models={agentModels}
+                            loading={agentModelsLoading}
+                            // The builder's own half of the chip — a full model
+                            // id the CLI does not enumerate is worth a text
+                            // field in a workflow that runs for months.
+                            allowCustom
+                            value={selected.model ?? null}
+                            // Changing the model clears the window and the other
+                            // parameters with it: both belong to the model that
+                            // offered them, and a workflow keeping `1m` — or an
+                            // `optimize_for` the new model never enumerated —
+                            // would send `-32602` on every turn for months.
+                            onChange={(model) =>
+                              patchSelected({
+                                model: model ?? undefined,
+                                contextWindow: undefined,
+                                modelParameters: undefined,
+                              })
+                            }
+                          />
+                        </SettingRow>
+                        {/* The ROW goes with the control, here and in the two
+                            below. Each of these chips renders nothing when the
+                            model offers no such axis, and a labelled row around
+                            nothing is a label with a hole under it — louder in a
+                            fixed column than the missing chip ever was. The
+                            guards are the run-configuration editor's, so the two
+                            label-column screens drop a row on the same test. */}
+                        {agentEfforts.efforts.length === 0 ? null : (
+                          <SettingRow width="compact" label="Effort">
+                            <EffortSelect
+                              efforts={agentEfforts.efforts}
+                              levelsAreModelSpecific={
+                                selected.model !== undefined
+                              }
+                              value={selected.effort ?? null}
+                              onChange={(effort) =>
+                                patchSelected({ effort: effort ?? undefined })
+                              }
+                            />
+                          </SettingRow>
+                        )}
+                        {agentContextWindows.windows.length === 0 ? null : (
+                          <SettingRow width="compact" label="Context">
+                            <ContextWindowSelect
+                              windows={agentContextWindows.windows}
+                              value={selected.contextWindow ?? null}
+                              onChange={(contextWindow) =>
+                                patchSelected({
+                                  contextWindow: contextWindow ?? undefined,
+                                })
+                              }
+                            />
+                          </SettingRow>
+                        )}
+                        {/* One labelled ROW per OTHER setting this node's model
+                            enumerates — the same set the composer draws, over
+                            the node's own stored map, and a row apiece for the
+                            reason the editor gives: a setting with no address of
+                            its own is the wrapping chip row this band replaced.
+                            The label is the CLI's own word for the axis, which
+                            is the only name this app has for it.
+
+                            `undefined` rather than an empty object when the last
+                            one is cleared, so the YAML loses the key instead of
+                            carrying `{}`. */}
+                        {agentModelParameters.parameters.map((parameter) => (
+                          <SettingRow
+                            key={parameter.id}
+                            width="compact"
+                            label={parameter.label}>
+                            <ModelParameterSelect
+                              parameter={parameter}
+                              // The row names the axis now, so the chip must not
+                              // name it too — `Optimize For    Optimize For ·
+                              // Balance` is the stutter the label column exists
+                              // to remove.
+                              showAxisName={false}
+                              value={
+                                selected.modelParameters?.[parameter.id] ?? null
+                              }
+                              onChange={(next) => {
+                                const merged = withModelParameter(
+                                  selected.modelParameters ?? {},
+                                  parameter.id,
+                                  next,
+                                );
+                                patchSelected({
+                                  modelParameters:
+                                    Object.keys(merged).length === 0
+                                      ? undefined
+                                      : merged,
+                                });
+                              }}
+                            />
+                          </SettingRow>
+                        ))}
                         {/* Reported as "we should have a button there to show
                             MCP, not just inline". It was a section standing
                             open in the panel — a header, a hint, up to ten
@@ -1310,20 +1370,24 @@ export function Graphs({
                             were a fact about the folder's servers, and there is
                             nothing behind it to show. */}
                         {configDirError === null ? (
-                          <McpDialogButton
-                            variant="chip"
-                            title={`MCP servers — ${selected.name ?? selected.id}`}
-                            open={mcpOpen}
-                            onOpenChange={setMcpOpen}
-                            listing={nodeMcp.listing}
-                            loading={nodeMcp.loading}
-                            hint={
-                              selected.configDir
-                                ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs."
-                                : 'Global servers. The run folder’s own project servers are added when it runs.'
-                            }
-                            onRefresh={nodeMcp.refresh}
-                          />
+                          <SettingRow width="compact" label="MCP">
+                            <McpDialogButton
+                              variant="chip"
+                              // The row says `MCP`; the control says how many.
+                              chipNamesItself={false}
+                              title={`MCP servers — ${selected.name ?? selected.id}`}
+                              open={mcpOpen}
+                              onOpenChange={setMcpOpen}
+                              listing={nodeMcp.listing}
+                              loading={nodeMcp.loading}
+                              hint={
+                                selected.configDir
+                                  ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs."
+                                  : 'Global servers. The run folder’s own project servers are added when it runs.'
+                              }
+                              onRefresh={nodeMcp.refresh}
+                            />
+                          </SettingRow>
                         ) : null}
                       </div>
                       {/* The daemon's refusal is the ONLY thing that can tell
@@ -1399,48 +1463,14 @@ export function Graphs({
                       />
                     </Field>
                     {callInfo ? (
-                      <NoteBox aria-label="Agent calls" className="text-xs">
-                        <span className="block font-medium text-foreground">
-                          Agent calls
-                        </span>
-                        {callInfo.callees.length > 0 ? (
-                          <span className="block">
-                            May call: {callInfo.callees.join(', ')}
-                          </span>
-                        ) : null}
-                        {callInfo.callers.length > 0 ? (
-                          <span className="block">
-                            Callable by: {callInfo.callers.join(', ')}
-                          </span>
-                        ) : null}
-                        {callInfo.inCycle ? (
-                          <span className="block text-warning">
-                            Takes part in a call loop — runtime calls are
-                            depth-capped.
-                          </span>
-                        ) : null}
-                        <span className="block">
-                          Call edges let this agent invoke its callees at
-                          runtime via the call_agent tool. It is told each
-                          callee&apos;s Description — never their Role — so it
-                          routes by what they do.
-                        </span>
-                        {callInfo.undescribedCallees.length > 0 ? (
-                          <span className="block text-warning">
-                            No description on{' '}
-                            {callInfo.undescribedCallees.join(', ')} — this
-                            agent sees only their names and has nothing to route
-                            on.
-                          </span>
-                        ) : null}
-                        {callInfo.callees.length > 0 ? (
-                          <span className="block">
-                            {selected.agent === 'cursor-agent'
-                              ? 'Callee questions: this agent can answer them (answer_agent) but cannot escalate to you — an unanswered question times the call out.'
-                              : 'Callee questions reach this agent first; it answers from its role or escalates to you as a question card.'}
-                          </span>
-                        ) : null}
-                      </NoteBox>
+                      <Field
+                        label="Agent calls"
+                        hint="This agent routes by each callee's Description — never their Role.">
+                        <AgentCallsCard
+                          info={callInfo}
+                          agentKind={selected.agent}
+                        />
+                      </Field>
                     ) : null}
                   </>
                 )}

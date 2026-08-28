@@ -135,6 +135,34 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Move the row's `updatedAt` and nothing else — "the user just did something
+   * in this thread".
+   *
+   * The sidebar orders by that column inside its tier, and only a STATUS write
+   * moved it: a message that starts a turn does (`running`), and a settle does,
+   * but answering a question card does not — the verdict writes an item, and
+   * items never touch the run row. So a thread parked on a question led the
+   * list while it was asking and dropped to wherever its turn had STARTED the
+   * moment it was answered. REPORTED as "как только я на него ответил, он
+   * переместился обратно. То есть он прыгает!", and measured on the reporter's
+   * own database: `CI336` was last written at 15:44:21, when its turn began,
+   * with three threads written since — so answering sent it from first to
+   * fourth.
+   *
+   * An explicit write rather than a no-op update: `onUpdate` fires when the ORM
+   * flushes a CHANGED entity, and every write on this DAO is a `nativeUpdate`
+   * that bypasses it — which is correct for the readings beside it (a context
+   * figure is not activity) and exactly what this one exists to do on purpose.
+   */
+  async touch(
+    runId: string,
+    at: Date = new Date(),
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate({ id: runId }, { updatedAt: at });
+  }
+
+  /**
    * File the last reading taken from this run's agent before its process was
    * closed — see {@link Run.lastMetricsReading}.
    *

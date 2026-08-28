@@ -144,11 +144,7 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import {
-  hasRunningBackgroundShell,
-  runningShellsByAgent,
-  type ShellRun,
-} from './shell-activity';
+import { runningShellsByAgent, type ShellRun } from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
@@ -700,6 +696,7 @@ export function Chats({
     setError,
     activities,
     holding,
+    shellsOut,
     settleSummaries,
     quietSettles,
     deadRequestKeys,
@@ -3909,18 +3906,6 @@ export function Chats({
     [durableEntries, runStoppedAt],
   );
   /**
-   * A detached command this run started is still going.
-   *
-   * Read STRAIGHT from the transcript rather than from `shellsByAgent`, which
-   * is the same question one layer up: that map filters by each agent's
-   * display status, so feeding it back in here would be a cycle. This asks
-   * only what the rows say.
-   */
-  const backgroundShellRunning = useMemo(
-    () => hasRunningBackgroundShell(items, handle.startedAt),
-    [items, handle.startedAt],
-  );
-  /**
    * The badge reading WITHOUT the background-command clause — what the run
    * would say if the only question were whether its agent is working.
    *
@@ -3958,17 +3943,13 @@ export function Chats({
             awaitingAnswer: awaitingAnswer.size > 0,
             subagentRunning,
             heldForBackgroundWork: holding.has(activeRun.id),
-            shellsRunning: backgroundShellRunning,
+            // The RUN ROW's count, not this thread's transcript — the same
+            // fact the unfocused rows read, which is the whole of the
+            // blinking fix. See {@link rowRunStatus}.
+            shellsRunning: shellsOut.has(activeRun.id),
           })
         : 'pending',
-    [
-      activeRun,
-      streaming,
-      awaitingAnswer,
-      subagentRunning,
-      holding,
-      backgroundShellRunning,
-    ],
+    [activeRun, streaming, awaitingAnswer, subagentRunning, holding, shellsOut],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -4933,37 +4914,71 @@ export function Chats({
    * header's "something in here is working" cannot contradict the rows under
    * it.
    *
-   * The focused run answers from the live plane (`activeRunStatus`); every
-   * other one goes through the same rule with `streaming` false, because items
-   * only ever arrive for the focused run. Its "parked on you" comes from the
-   * row instead — the daemon's approval registry publishes it there — which is
-   * what stops a chat sitting on an unanswered question from showing a spinner
-   * for as long as the user is looking elsewhere.
+   * It is computed from facts EVERY run carries, and that is the whole rule: a
+   * row must not change what it says merely because the user looked at it.
+   *
+   * REPORTED as "when i select thread - it became working status, but when
+   * unselect - success. So it's blinking". The focused row used to answer from
+   * `activeRunStatus`, which folds in `subagentRunning` and `shellsRunning` —
+   * both derived from the LOADED transcript, so knowable for the open thread
+   * and for no other. A settled run with a detached command still out therefore
+   * read `⌛ working · waiting on background work` while selected and
+   * `✓ completed · just now` the instant it was deselected, for one unchanged
+   * run. Reproduced in the dev app on a `completed` turn holding one background
+   * `sleep`.
+   *
+   * This is the same defect `heldForBackgroundWork` was ranked FIRST to fix
+   * ("a held run read `running` in the header and `idle` in its own sidebar
+   * row, and clicking it swapped one for the other in front of the user"), and
+   * it takes the same answer: the fact has to be one the daemon publishes about
+   * every run, not one a client folds out of the transcript it happens to hold.
+   * So `shellsRunning` now comes from `shellsOut` — the run row's own
+   * `shellsOpen`, seeded from the list and kept current by the announce — on
+   * BOTH branches, and an unfocused row reads `⌛ working · waiting on
+   * background work` exactly as the selected one does, which is the state the
+   * report wanted to KEEP rather than lose.
+   *
+   * The other two focused-only readings STAY, and the difference is what each
+   * one can do. `subagentRunning` is folded from the loaded transcript and no
+   * row carries it, so it remains knowable for the open thread alone — dropping
+   * it was tried and broke the pin that a delegate still producing rows keeps
+   * the badge `running`, which is a real state the daemon's own delegate lease
+   * also restores on the row. `awaitingAnswer` is read live because an open
+   * card is known here before the row's own `awaiting` catches up, and
+   * `needs-input` is the one state that must never be missed. Both can only
+   * ever say MORE than the row, never contradict it into looking finished.
    */
+  const rowRunStatus = useCallback(
+    (run: ChatRun, liveTurn: boolean): RunStatusKind =>
+      displayRunStatus({
+        status: run.status,
+        streaming: liveTurn,
+        awaitingAnswer: run.awaiting !== null,
+        // Row-carried like the hold below, which is the whole point of it
+        // being on the wire — see this callback's own doc.
+        shellsRunning: shellsOut.has(run.id),
+        // Row-carried for every run, not just the focused one: seeded from the
+        // run list's own `holdingFor` and then kept current by the live
+        // announce, which is what makes it right for a thread the user is not
+        // looking at. Its "parked on you" comes from the row for the same
+        // reason — the daemon's approval registry publishes it there — which is
+        // what stops a chat sitting on an unanswered question from showing a
+        // spinner for as long as the user is looking elsewhere.
+        heldForBackgroundWork: holding.has(run.id),
+      }),
+    [holding, shellsOut],
+  );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
    * the user were looking somewhere else.
    *
    * Split out because the ORDER has to be computed from it (see
    * `sortRunsForSidebar`): every input to the sort must mean the same thing for
-   * every run, or focusing a thread moves it. The badge keeps the focused
-   * reading, which is richer and is about ONE row rather than about where the
-   * rows go.
+   * every run, or focusing a thread moves it.
    */
   const unfocusedRunStatus = useCallback(
-    (run: ChatRun): RunStatusKind =>
-      displayRunStatus({
-        status: run.status,
-        streaming: false,
-        awaitingAnswer: run.awaiting !== null,
-        // The SAME set the focused branch reads, so a row cannot say one thing
-        // while the header beside it says another. It covers every run, not
-        // just this one: it is seeded from the run list's own `holdingFor` and
-        // then kept current by the live announce, which is what makes it right
-        // for a thread the user is not looking at.
-        heldForBackgroundWork: holding.has(run.id),
-      }),
-    [holding],
+    (run: ChatRun): RunStatusKind => rowRunStatus(run, false),
+    [rowRunStatus],
   );
   const sidebarRunStatus = useCallback(
     (run: ChatRun): RunStatusKind =>
@@ -5676,6 +5691,7 @@ export function Chats({
                         workedMs={threadTotalsShown.ms}
                         turnCount={threadTotalsShown.turns}
                         costUsd={threadTotals.costUsd}
+                        costedTurns={threadTotals.costedTurns}
                         // Only while the run is actually live. A transcript
                         // whose last row is a user message describes an open
                         // turn whether or not one is still running — a daemon

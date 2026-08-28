@@ -655,7 +655,20 @@ export function subagentBlockStatus(
   if (block.backgroundOpen === false) {
     return 'completed';
   }
-  if (block.returned) {
+  // NOT for a delegate the CLI declared still out. `returned` is the launching
+  // call coming back, and once a CLI has said the work outlives that call, its
+  // return can never again mean the delegate finished — so a block that was
+  // declared open and never closed falls to the reading below instead, which is
+  // `stopped` once the run has settled.
+  //
+  // That is the honest answer rather than a defensive one: cursor-agent
+  // announces a background delegate's ENDING nowhere (measured across 70s of
+  // listening past the turn's own end), and geniro terminates the CLI's process
+  // group shortly after the turn settles — so whatever was still out was cut
+  // off, and a green check over it is the app inventing an outcome. REPORTED as
+  // "We still ahve problems with subagents for cursor", against ten reviewers
+  // each reading `took 0s · completed` while every one of them was working.
+  if (block.returned && block.backgroundOpen !== true) {
     return 'completed';
   }
   return block.closed || endedByRun ? 'stopped' : 'running';

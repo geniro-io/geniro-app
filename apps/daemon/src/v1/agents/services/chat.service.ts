@@ -76,6 +76,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import { SkillHarvestStore } from './skill-harvest.store';
@@ -304,12 +305,42 @@ export class ChatService implements OnModuleInit {
    */
   private readonly heldRuns = new Map<string, number>();
 
+  /**
+   * Runs holding DETACHED commands that have not reported back, by work id.
+   *
+   * The twin of {@link heldRuns} for the other thing that can outlive a turn,
+   * and deliberately NOT folded into it: a shell does not HOLD the turn open —
+   * that is the defect shells were carved out of `openWork` to fix (a thread
+   * reading `working · waiting on 1 background task` over an agent that had
+   * finished and was waiting for its user). This asserts nothing about the
+   * turn; it is a DISPLAY fact, and the badge is the only thing that reads it.
+   *
+   * On the wire for the reason `heldRuns` is, and the reason it had to exist at
+   * all: the renderer used to derive this from the OPEN thread's transcript,
+   * which is knowable for one run and for no other — so a settled chat with a
+   * `sleep` still out read `⌛ working` while it was selected and `✓ completed`
+   * the instant it was not. REPORTED as "when i select thread - it bacame
+   * working status, but when unselect - successs. So it's blinking". A fact
+   * every row can read is the only thing that fixes that, and the daemon is
+   * the only place that HAS it for every run at once.
+   *
+   * A SET of work ids rather than a counter: a CLI is free to report one unit's
+   * end on both of its terminal channels (claude does — measured 7ms apart),
+   * and a counter would go negative or latch on the double.
+   */
+  private readonly shellRuns = new Map<string, Set<string>>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly bus: AgentEventBus,
+    /**
+     * The newest context reading per run — what every status broadcast is
+     * stamped from, so a client that is not in this run's room still learns it.
+     */
+    private readonly contexts: RunContextRegistry,
     private readonly registry: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
     private readonly approvals: ApprovalRegistry,
@@ -950,6 +981,7 @@ export class ChatService implements OnModuleInit {
       // CONVERSATION, so it survives a move that brought one and is meaningless
       // after one that did not — exactly the rule `forgetContext` already
       // states for a compaction, which is the same event seen from inside.
+      this.contexts.forgetTokens(runId);
       await this.runDao.forgetContext(runId, em);
     }
     const profile = next === null ? 'the default profile' : basename(next);
@@ -1251,6 +1283,14 @@ export class ChatService implements OnModuleInit {
       // The run is gone, so its posture has nothing left to govern — and the
       // teardown has already closed the process that would have consulted it.
       this.runPosture.delete(runId);
+      // The ONE place this is cleared. A shell deliberately outlives its turn,
+      // so neither the settle finalizer nor the next turn may drop it the way
+      // `heldRuns` and `closedDelegates` are dropped — the whole point of the
+      // map is that a detached command is still out after the turn ended. A
+      // deleted run is the only state in which nothing can be waiting on it.
+      this.shellRuns.delete(runId);
+      // Same rule, same one place: nothing can read a deleted run's context.
+      this.contexts.forget(runId);
     }
   }
 
@@ -1368,6 +1408,9 @@ export class ChatService implements OnModuleInit {
             ),
           );
           this.announceAwaiting(runId);
+          // Answering IS acting in this thread, and the sidebar orders by the
+          // row — see `noteUserActivity` for the jump this stops.
+          void this.noteUserActivity(runId);
           if (delivered) {
             void (async () => {
               await this.persist(
@@ -1490,6 +1533,10 @@ export class ChatService implements OnModuleInit {
       );
       return;
     }
+    // ABOVE the row gate, like the in-turn twin: a `shell_open` yields no row,
+    // so a launch recorded below this line would be dropped and the count would
+    // only ever go down.
+    this.recordShellBracket(runId, event);
     const mapped = mapEventToItem(event);
     if (!mapped) {
       // No row and no live meaning — `background_work` bookkeeping for a turn
@@ -1630,6 +1677,44 @@ export class ChatService implements OnModuleInit {
    * a run must never fail a turn over it. Which halves of the reading are
    * usable is the DAO's rule, since it is the one that must never clear either.
    */
+  /**
+   * The user just acted in this thread — move its row so the sidebar knows.
+   *
+   * The sidebar orders by `updatedAt` inside its tier, and the only writers of
+   * that column are status changes: a message that starts a turn, and a settle.
+   * Two interactions write no status at all — ANSWERING a question card, and a
+   * follow-up delivered into a turn already running — so both left the row
+   * stamped with whenever the turn had begun. The first is what got reported:
+   * a thread led the list while it was asking and dropped several places the
+   * moment it was answered, because that is where its turn-start time put it.
+   *
+   * It ANNOUNCES rather than only writing, since the sort reads the client's
+   * copy of the row and nothing else would refresh it; and it never touches the
+   * status, which is not this event's to state — the turn is running before the
+   * answer and running after it.
+   *
+   * Failure is swallowed with a log line, like the context write beside it: a
+   * row that did not move is a thread one place lower in a list, and no turn
+   * should fail over it.
+   */
+  private async noteUserActivity(runId: string): Promise<void> {
+    const at = new Date();
+    try {
+      await this.runDao.touch(runId, at);
+      this.bus.publishRunStatus({
+        runId,
+        status: null,
+        at: at.toISOString(),
+      });
+    } catch (err) {
+      this.logger.warn(
+        `failed to record user activity for run ${runId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+  }
+
   private async rememberContext(
     runId: string,
     reading: {
@@ -1637,6 +1722,14 @@ export class ChatService implements OnModuleInit {
       contextWindowTokens?: number | null;
     },
   ): Promise<void> {
+    // The in-memory twin FIRST, and unconditionally: it is what every status
+    // broadcast is stamped from, so a database write that fails must not also
+    // cost every client its reading. Same rule the DAO applies — a half of the
+    // pair that was not reported does not clear the half that was.
+    this.contexts.remember(runId, {
+      tokens: reading.contextTokens ?? null,
+      window: reading.contextWindowTokens ?? null,
+    });
     try {
       await this.runDao.rememberContext(runId, reading);
     } catch (err) {
@@ -1654,6 +1747,7 @@ export class ChatService implements OnModuleInit {
    * it: a stale ring is worth a warning, never a failed turn.
    */
   private async forgetContext(runId: string): Promise<void> {
+    this.contexts.forgetTokens(runId);
     try {
       await this.runDao.forgetContext(runId);
     } catch (err) {
@@ -1994,6 +2088,66 @@ export class ChatService implements OnModuleInit {
       return;
     }
     this.closedDelegates.set(runId, new Set([event.id]));
+  }
+
+  /**
+   * Track the DETACHED commands this run still has out — see {@link shellRuns}.
+   *
+   * Read off the two ANNOUNCEMENTS `spawn-cli` makes about a detached command,
+   * `shell_open` and `shell_info`, never off the `background_work` bracket they
+   * are derived from: that bracket is turn plumbing and is deliberately not
+   * forwarded to the owner, so a recorder written against it would watch every
+   * command end and never see one begin. The delegate/shell split is already
+   * made at the announce, so nothing here asks what `unit` a bracket named.
+   *
+   * Called ABOVE the row gate in both event handlers, because `shell_open`
+   * yields no row — the launch is in the transcript as the tool call that made
+   * it. Both handlers, on {@link recordDelegateBracket}'s own reasoning: a
+   * command backgrounded inside a turn that then settles reports its end
+   * off-turn, while one whose whole life fits inside its turn reports it
+   * in-turn. Recording one half only leaves the count latched on for the life of
+   * the session, which is the phantom-shell defect from a new direction.
+   */
+  private recordShellBracket(runId: string, event: AgentEvent): void {
+    const open = this.shellRuns.get(runId);
+    if (event.type === 'shell_open') {
+      if (open) {
+        open.add(event.workId);
+      } else {
+        this.shellRuns.set(runId, new Set([event.workId]));
+      }
+      this.announceShellsOpen(runId);
+      return;
+    }
+    if (event.type !== 'shell_info') {
+      return;
+    }
+    // A close for a unit this run never opened changes nothing — and must not
+    // announce, or every duplicate terminal (claude sends two, 7ms apart) is a
+    // second broadcast to every window saying what the first already said.
+    if (!open?.delete(event.workId)) {
+      return;
+    }
+    if (open.size === 0) {
+      this.shellRuns.delete(runId);
+    }
+    this.announceShellsOpen(runId);
+  }
+
+  /**
+   * Tell every window how many detached commands this run still has out.
+   *
+   * A `status: null` announce, like the activity and hold ones beside it: this
+   * says what the run is HOLDING, never whether it is still going, and a status
+   * asserted by an event that never read the run is the defect the nullable
+   * status exists to prevent.
+   */
+  private announceShellsOpen(runId: string): void {
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      shellsOpen: this.shellRuns.get(runId)?.size ?? 0,
+    });
   }
 
   /**
@@ -2880,6 +3034,7 @@ export class ChatService implements OnModuleInit {
             // bookkeeping the OFF-turn plane reads later, and a delegate whose
             // whole life fits inside its turn is bracketed only here.
             this.recordDelegateBracket(runId, event);
+            this.recordShellBracket(runId, event);
             const mapped = mapEventToItem(event);
             if (!mapped) {
               return;
@@ -3056,6 +3211,7 @@ export class ChatService implements OnModuleInit {
                     runId,
                     runningToolActivity() ?? idleActivity(),
                   );
+                  void this.noteUserActivity(runId);
                   if (delivered) {
                     enqueue(async () => {
                       await this.persist(
@@ -3521,6 +3677,11 @@ export class ChatService implements OnModuleInit {
     if (!delivered) {
       throw busy;
     }
+    // The other write that changes no status: a follow-up joins a turn that is
+    // already `running`, so without this the row keeps the timestamp of when
+    // that turn began and the thread the user is typing in sinks past ones they
+    // have not touched.
+    void this.noteUserActivity(runId);
     const em = this.em.fork();
     // Its OWN seq, allocated now: the follow-up belongs after everything the
     // turn has already written, not at the position it would have had when the
@@ -3627,6 +3788,7 @@ export class ChatService implements OnModuleInit {
       this.approvals.awaitingFor(run.id),
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),
+      this.shellRuns.get(run.id)?.size ?? 0,
     );
   }
 

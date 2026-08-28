@@ -811,16 +811,43 @@ export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 // A fourth thing follows from the `rawOutput` above, and it is why the adapter
 // declares `resultIsBookkeeping`: `{durationMs, isBackground}` is the CLI's own
 // accounting, not the delegate's report — the findings only ever appear in the
-// MAIN agent's next message. The duration is kept (it rides `cursor/task`);
-// `isBackground` is deliberately dropped, having been observed only as `false`.
+// MAIN agent's next message.
+//
+// `isBackground: true` HAS NOW BEEN SEEN, which is what the RE-CHECK below used
+// to be waiting for, and it changes what the two other fields mean. MEASURED
+// 2026-08-28 on the same build, asking for a background delegate:
+//
+//   +18.7s tool_call_update completed  rawOutput {durationMs:203, isBackground:TRUE}
+//   +18.7s cursor/task      {…, durationMs:203}
+//   +22.7s session/prompt   → {"stopReason":"end_turn"}          ← the TURN ends
+//   +26.7s … +89s           session/request_permission from the DELEGATE's shell
+//
+// So for a backgrounded delegate the launching call measures the LAUNCH (203ms,
+// and 198–408ms across the ten on the reported thread) rather than the work, and
+// its return says the delegation was accepted rather than that anything
+// finished. Both were being published as the delegate's own — `took 0s` under a
+// green check while it worked. `isBackground` is therefore read now
+// (`readCursorLaunchIsBackground`), and it is read off `rawOutput` because the
+// `cursor/task` announcement does not carry it: the CLI's own
+// `sendToolExtensionNotification` builds that payload from the args and the
+// duration alone.
+//
+// The line above also corrects §3 in one respect: the delegate's own steps
+// still never arrive, but its PERMISSION REQUESTS do, on the parent's session,
+// after the parent's turn has ended.
+//
+// STILL UNKNOWN, and the reason a background block ends as `stopped` rather than
+// completed: nothing announces such a delegate's ENDING. No second
+// `cursor/task`, no further `tool_call_update`, nothing across 70s of listening
+// past the turn's own end.
 //
 // RE-CHECK IF: a release starts sending `rawInput` with the args populated on the
 // opening frame (then the marker can give way to reading them directly); a
 // `session/update` variant appears that carries a parent/sub-session id (then the
 // delegate's own steps become streamable and
-// `CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON` must go); or `isBackground: true` is
-// ever seen, which would be a delegate still running past the turn and the one
-// state this transcript could not currently express.
+// `CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON` must go); or any frame appears that
+// announces a background delegate's ending (then it can close its own block with
+// a real outcome instead of being read as cut off when the run settles).
 
 /** The vendor method announcing one background sub-agent, with its brief. */
 export const CURSOR_TASK_METHOD = 'cursor/task';
@@ -850,7 +877,9 @@ export const CURSOR_SUBAGENT_TYPE_UNSPECIFIED: readonly string[] = [
 export const CURSOR_SUBAGENT_STEPS_UNAVAILABLE_REASON =
   'cursor-agent reports the delegation but not the work inside it — the ' +
   'sub-agent runs as its own conversation and none of its steps reach this ' +
-  'client, so there is nothing to show but what it was asked and what it took';
+  'client, so there is nothing to show but what it was asked. It does not ' +
+  'report how one ends either, so a sub-agent still out when the turn ' +
+  'finishes is shown as cut off rather than as having succeeded';
 
 /**
  * The flat JSON header beside that database, carrying the conversation's `cwd`

@@ -196,6 +196,7 @@ const run1: ChatRun = {
   status: 'running',
   awaiting: null,
   holdingFor: 0,
+  shellsOpen: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -1811,6 +1812,7 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
         activity: null,
         awaiting: null,
         holdingFor: 0,
+        shellsOpen: 0,
       });
     });
     expect(secondRow().textContent).not.toContain('needs more info');
@@ -3080,6 +3082,7 @@ describe('Chats workflow runs', () => {
     status: 'running',
     awaiting: null,
     holdingFor: 0,
+    shellsOpen: 0,
     title: 'Review team',
     agentKind: null,
     workflowId: 'review-team',
@@ -3635,6 +3638,7 @@ describe('Chats — handing a conversation to the user', () => {
       status: 'running',
       awaiting: null,
       holdingFor: 0,
+      shellsOpen: 0,
       title: 'Review team',
       agentKind: null,
       workflowId: 'review-team',
@@ -5316,6 +5320,7 @@ describe('Chats queued messages', () => {
         status: null,
         activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
+        shellsOpen: 0,
       });
     });
     // The composer stops warning about a queue it is no longer going to use.
@@ -5547,6 +5552,7 @@ describe('Chats queued messages', () => {
         status: null,
         activity: 'waiting on 2 sub-agents',
         holdingFor: 2,
+        shellsOpen: 0,
       });
     });
 
@@ -5578,6 +5584,7 @@ describe('Chats queued messages', () => {
         status: null,
         activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
+        shellsOpen: 0,
       });
     });
     await act(async () => {
@@ -5586,6 +5593,7 @@ describe('Chats queued messages', () => {
         status: null,
         activity: 'running Bash',
         holdingFor: 0,
+        shellsOpen: 0,
       });
     });
 
@@ -6956,6 +6964,7 @@ describe('Chats sidebar list', () => {
         status: 'running',
         awaiting: null,
         holdingFor: 0,
+        shellsOpen: 0,
         title: 'Big team',
         agentKind: null,
         workflowId: 'big-team',

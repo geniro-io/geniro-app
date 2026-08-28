@@ -2422,6 +2422,12 @@ export interface RunDto {
      */
     holdingFor: number;
     /**
+     * Detached commands this run still has running; 0 when none are out
+     * @type {number}
+     * @memberof RunDto
+     */
+    shellsOpen: number;
+    /**
      * 
      * @type {string}
      * @memberof RunDto

@@ -570,7 +570,22 @@ export function Menu({
         // search field keeps its height and the list takes what is left. As a
         // plain block the capped panel would simply clip its own rows, hiding
         // them with no way to scroll to them.
-        'flex min-w-56 max-w-96 flex-col overflow-hidden',
+        // `w-max` is what makes the panel size to its LONGEST ROW; the two
+        // bounds either side of it are the floor and the ceiling, not the
+        // width. Without it the panel took its shrink-to-fit width and landed
+        // exactly on `min-w-56` whatever its rows said — the intrinsic
+        // contribution never reaching it through the row list — so every label
+        // truncated inside a panel with room to spare. MEASURED in the running
+        // app at this repo's 15px root: the composer's model-settings panel
+        // 210px wide with `Approval` clipped to `Appro…` (55px of text in a
+        // 50px box), against 216px and nothing clipped once the panel asks for
+        // its content. REPORTED as "оно должно влезать".
+        //
+        // `max-w-96` still caps it and the rows still carry `min-w-0 truncate`,
+        // so a genuinely long label truncates exactly as before — and a caller
+        // that pins a width for a narrow container (`min-w-0 w-52`, the chat
+        // sidebar) still wins, its class landing after this one.
+        'flex w-max min-w-56 max-w-96 flex-col overflow-hidden',
         // The placement utilities are `absolute` offsets and belong to the
         // ancestor mode alone; the floating box above carries its own.
         box === null &&

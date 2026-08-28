@@ -230,11 +230,13 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.get('run-b')).toBe('fine');
     });
 
-    it('prefers the AGENT’s latest message over a newer USER message', async () => {
-      // The rule this method exists for. With "highest seq wins" the preview is
-      // the user's own sentence echoed back for as long as the agent is
-      // working, then the agent's reply, then the user's again — the line
-      // changing owner every turn, which is what got reported.
+    it('previews the USER’s message when it is the newest', async () => {
+      // REPORTED as "In thread i cant see last user message. I should see there
+      // last AI or USER message". This preferred the AGENT's latest, so a
+      // thread showed the previous answer for the whole time it was working on
+      // what the user had just asked — stalest exactly when somebody goes
+      // looking for the chat they were last in. Restore that preference and
+      // this reads `agent reply`.
       await dao.create({
         runId: 'run-a',
         seq: 0,
@@ -252,7 +254,7 @@ describe('ItemDao (in-memory sqlite)', () => {
 
       const previews = await dao.latestMessageTextPerRun(['run-a']);
 
-      expect(previews.get('run-a')).toBe('agent reply');
+      expect(previews.get('run-a')).toBe('and now do this');
     });
 
     it('falls back to the user’s message while the agent has not spoken', async () => {
@@ -271,23 +273,25 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.get('run-a')).toBe('first question');
     });
 
-    it('reads an unknown role as the agent rather than as the user', async () => {
-      // Only `user` is geniro's own word; the rest of the vocabulary belongs to
-      // the CLI. An allowlist of agent role names would demote a new spelling
-      // to "the user is talking" and echo their message back instead.
+    it('previews a message under ANY role once it is the newest', async () => {
+      // The role no longer decides anything, which is what makes this rule
+      // robust where the old one needed care: a CLI is free to spell its own
+      // role, and the previous rule had to read every unknown spelling as "the
+      // agent" or it would demote a reply to "the user is talking". Nothing has
+      // to classify a role now — only order it.
       await dao.create({
         runId: 'run-a',
         seq: 0,
         kind: 'message',
-        role: 'model',
-        payload: JSON.stringify({ text: 'from the model' }),
+        role: 'user',
+        payload: JSON.stringify({ text: 'the question' }),
       });
       await dao.create({
         runId: 'run-a',
         seq: 1,
         kind: 'message',
-        role: 'user',
-        payload: JSON.stringify({ text: 'newer, but the user’s' }),
+        role: 'model',
+        payload: JSON.stringify({ text: 'from the model' }),
       });
 
       const previews = await dao.latestMessageTextPerRun(['run-a']);

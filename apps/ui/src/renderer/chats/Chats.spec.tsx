@@ -521,6 +521,7 @@ beforeEach(() => {
     }),
     updateSettings: vi.fn().mockResolvedValue({}),
     openInTerminal: vi.fn().mockResolvedValue(undefined),
+    openTerminalAt: vi.fn().mockResolvedValue(undefined),
     // Default to a plain (non-git) folder so the branch chip stays absent
     // unless a test opts into a repo.
     getGitInfo: vi.fn().mockResolvedValue({
@@ -9209,6 +9210,31 @@ describe('Chats — background sub-agents', () => {
     // counted behind the finished-sub-agents disclosure.
     expect(panel?.textContent).toContain('Review the diff');
     expect(panel?.textContent).not.toContain('finished sub-agent');
+  });
+
+  it("opens a plain terminal in the open chat's own folder", async () => {
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'find the bug')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const panel = container.querySelector('aside[aria-label="Run agents"]');
+    await act(async () => {
+      panel
+        ?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Open a terminal in this chat’s folder"]',
+        )
+        ?.click();
+    });
+
+    // The RUN's cwd, not the composer's folder — the two differ the moment a
+    // chat is opened from a thread started somewhere else, and the terminal
+    // has to land where the agent is working.
+    expect(window.geniro.openTerminalAt).toHaveBeenCalledWith('/proj');
+    // And it is the NARROW channel: this control runs nothing, so it must not
+    // reach the one that takes a command.
+    expect(window.geniro.openInTerminal).not.toHaveBeenCalled();
   });
 
   it("lists a cancelled run's unreturned delegate as cancelled, not running forever", async () => {

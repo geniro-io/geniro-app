@@ -4510,6 +4510,29 @@ export function Chats({
     [resolveHandoff, openResolvedTarget],
   );
 
+  /**
+   * Open a plain system terminal in the folder this chat works in.
+   *
+   * The other half of {@link openThreadTerminal} and deliberately not built on
+   * it: that one asks the daemon for an invocation and reopens the AGENT's
+   * conversation, which is a thing only a CLI that can resume offers. This one
+   * resolves nothing — the run already carries its `cwd`, and what the user
+   * asked for is a shell in that directory, not a conversation.
+   *
+   * The failure goes to the same error slot the handoff uses. It is a real
+   * possibility rather than defensive padding: main refuses outright off
+   * darwin, and `open` fails when nothing is registered for a `.command`.
+   */
+  const openFolderTerminal = useCallback(() => {
+    const cwd = activeRun?.cwd ?? null;
+    if (cwd === null) {
+      return;
+    }
+    void window.geniro.openTerminalAt(cwd).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : String(err));
+    });
+  }, [activeRun?.cwd]);
+
   /** The pages this thread has published to claude.ai, newest first. */
   const artifacts = useMemo(() => artifactsFrom(items), [items]);
   /**
@@ -6261,6 +6284,12 @@ export function Chats({
                     tasksByAgent={tasksByAgent}
                     shellsByAgent={shellsByAgent}
                     onOpenShell={setOpenShell}
+                    // Withheld for a run with no working directory, so the
+                    // panel cannot draw a control over a folder that is not
+                    // there — the panel itself never sees the path.
+                    onOpenFolderTerminal={
+                      activeRun?.cwd ? openFolderTerminal : undefined
+                    }
                     terminalReasons={terminalReasons}
                     // A chat only: a workflow run's nodes each hold their own
                     // process, and this readout is about the one a chat holds.

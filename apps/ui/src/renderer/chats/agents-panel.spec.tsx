@@ -501,9 +501,15 @@ describe('AgentsPanel', () => {
     // need a second control hosted somewhere else to bring it back — the
     // arrangement that was retired and is not being reintroduced.
     expect(el.textContent).not.toContain('Orchestrator');
+    // The rail is what proves the column survived, and it is CONTROLS rather
+    // than a label now — the word `Agents` that used to be asserted here is
+    // gone from both the rail and the heading. What must not go is the way
+    // back in.
     expect(
-      el.querySelector('aside[aria-label="Run agents"]')?.textContent,
-    ).toBe('Agents');
+      el.querySelector(
+        'aside[aria-label="Run agents"] button[aria-label="Expand agents panel"]',
+      ),
+    ).not.toBeNull();
 
     // Remount, exactly as switching chats does: the panel is keyed by run id
     // in `Chats.tsx`, so component state alone would unfold it on the next
@@ -517,6 +523,55 @@ describe('AgentsPanel', () => {
 
     click(again.querySelector('button[aria-label="Expand agents panel"]'));
     expect(again.textContent).toContain('Orchestrator');
+  });
+
+  it('opens a terminal in the run’s folder from the heading and from the rail', () => {
+    const onOpenFolderTerminal = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onOpenFolderTerminal={onOpenFolderTerminal}
+      />,
+    );
+    const selector =
+      'button[aria-label="Open a terminal in this chat’s folder"]';
+    click(el.querySelector(selector));
+    expect(onOpenFolderTerminal).toHaveBeenCalledTimes(1);
+
+    // And it survives the fold: the rail is where the control has to stay
+    // reachable, or putting the panel away would take the terminal with it.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    click(el.querySelector(selector));
+    expect(onOpenFolderTerminal).toHaveBeenCalledTimes(2);
+
+    // The rail's two kinds of control are told apart by a rule: the chevron
+    // acts on the column, everything under it on the run.
+    expect(el.querySelector('[data-slot="rail-divider"]')).not.toBeNull();
+  });
+
+  it('draws no terminal control for a run with no folder', () => {
+    // The owner withholds the callback for a run with no `cwd`; the panel must
+    // then draw nothing rather than a button over a folder that is not there.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(
+      el.querySelector(
+        'button[aria-label="Open a terminal in this chat’s folder"]',
+      ),
+    ).toBeNull();
+
+    // And the rail's divider goes with it: folded, the chevron is then the
+    // only thing on the strip, and a rule under the last control divides
+    // nothing.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(el.querySelector('[data-slot="rail-divider"]')).toBeNull();
   });
 
   it('shows an empty state when the run has no agents', () => {

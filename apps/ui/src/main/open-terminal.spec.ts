@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,7 +38,7 @@ vi.mock('node:child_process', async () => {
   };
 });
 
-const { openInTerminal } = await import('./open-terminal');
+const { openInTerminal, openTerminalAt } = await import('./open-terminal');
 
 const realPlatform = process.platform;
 
@@ -72,9 +72,31 @@ function scriptPath(): string {
  * on the file's text would pass for a line no shell can run — which is exactly
  * the state that shipped.
  */
-function runScript(): { stdout: string; status: number | null } {
-  const result = spawnSync('/bin/sh', [scriptPath()], { encoding: 'utf8' });
+function runScript(env?: NodeJS.ProcessEnv): {
+  stdout: string;
+  status: number | null;
+} {
+  const result = spawnSync('/bin/sh', [scriptPath()], {
+    encoding: 'utf8',
+    ...(env === undefined ? {} : { env }),
+  });
   return { stdout: result.stdout, status: result.status };
+}
+
+/**
+ * An executable standing in for the user's login shell, printing its own argv
+ * and the directory it was started in.
+ *
+ * The folder path is what makes it usable for the awkward-path case as well:
+ * the stub is written INSIDE the directory under test, so a `cd` the script
+ * failed to quote correctly cannot reach it.
+ */
+function shellStub(dir: string): string {
+  const path = join(dir, 'fake-shell');
+  writeFileSync(path, `#!/bin/sh\nprintf '%s|%s' "$1" "$(pwd)"\n`, {
+    mode: 0o700,
+  });
+  return path;
 }
 
 describe('openInTerminal', () => {
@@ -179,6 +201,98 @@ describe('openInTerminal', () => {
       await expect(
         openInTerminal({ command: 'true', args: [], cwd: tmpdir() }),
       ).rejects.toThrow(/macOS-only/);
+      expect(mocks.openedWith).toHaveLength(0);
+    } finally {
+      setPlatform('darwin');
+    }
+  });
+});
+
+describe('openTerminalAt', () => {
+  it('lands the user’s own login shell in the folder it was given', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'open-terminal-here-'));
+    const stub = shellStub(dir);
+
+    await openTerminalAt({ cwd: dir });
+
+    // Three claims in one reading, because the script makes them together:
+    // the `cd` happened (the pwd half), `$SHELL` decided WHICH shell (the stub
+    // ran at all — a hardcoded /bin/zsh would print nothing of this), and `-l`
+    // reached it (the argv half). `-l` is what makes the window's PATH and
+    // prompt the ones the user has everywhere else.
+    const { stdout, status } = runScript({ ...process.env, SHELL: stub });
+    expect(status).toBe(0);
+    const [flag, pwd] = stdout.split('|');
+    expect(flag).toBe('-l');
+    // `realpath` because macOS resolves /var → /private/var under tmpdir().
+    expect(pwd).toBe(
+      spawnSync('/bin/sh', ['-c', `cd ${dir} && pwd`], {
+        encoding: 'utf8',
+      }).stdout.trim(),
+    );
+  });
+
+  it('enters a folder whose name a shell would otherwise split or expand', async () => {
+    // A project folder is user-chosen, so spaces and shell metacharacters are
+    // ordinary input. Unquoted, `cd` gets several arguments and the script
+    // exits 1 before the shell is ever reached.
+    const dir = mkdtempSync(join(tmpdir(), 'open terminal $odd-'));
+    const stub = shellStub(dir);
+
+    await openTerminalAt({ cwd: dir });
+
+    const { stdout, status } = runScript({ ...process.env, SHELL: stub });
+    expect(status).toBe(0);
+    expect(stdout.split('|')[1]).toBe(
+      spawnSync('/bin/sh', ['-c', `cd '${dir}' && pwd`], {
+        encoding: 'utf8',
+      }).stdout.trim(),
+    );
+  });
+
+  it('falls back to a real shell when the terminal sets no SHELL', async () => {
+    // The one claim here that a run cannot make: executing the fallback would
+    // mean starting the machine's own login zsh, which sources the user's
+    // profile and reads stdin — nondeterministic in a suite. So this asserts
+    // the DEFAULT is present in the expansion, which still fails the moment
+    // someone writes a bare `exec "$SHELL" -l`: with SHELL unset that script
+    // execs nothing and the window dies at a prompt-less shell.
+    await openTerminalAt({ cwd: tmpdir() });
+
+    expect(readFileSync(scriptPath(), 'utf8')).toContain('${SHELL:-/bin/zsh}');
+  });
+
+  it('carries no command, no argv and no env — only the cd', async () => {
+    // The reason this is a channel of its own rather than `openInTerminal`
+    // with an optional command: nothing a caller supplies reaches the script
+    // except the directory, so there is no second slot to smuggle a program
+    // into. `export` would be the trace of an env block; `exec` appears once,
+    // for the shell itself.
+    await openTerminalAt({ cwd: tmpdir() });
+
+    const script = readFileSync(scriptPath(), 'utf8');
+    expect(script).not.toContain('export');
+    expect(script.match(/^exec /gm)).toHaveLength(1);
+  });
+
+  it('writes the script owner-only', async () => {
+    // Same rule as the handoff's: it is executable and it names the folder the
+    // agent works in, so it must not be readable by other users of a shared
+    // temp dir.
+    await openTerminalAt({ cwd: tmpdir() });
+
+    expect(statSync(scriptPath()).mode & 0o777).toBe(0o700);
+  });
+
+  it('refuses off darwin rather than writing a script nothing will open', async () => {
+    // The guard lives in the shared helper, so this path has it without
+    // restating it — and this is the assertion that would fail if a later
+    // refactor moved it back into `openInTerminal` alone.
+    setPlatform('linux');
+    try {
+      await expect(openTerminalAt({ cwd: tmpdir() })).rejects.toThrow(
+        /macOS-only/,
+      );
       expect(mocks.openedWith).toHaveLength(0);
     } finally {
       setPlatform('darwin');

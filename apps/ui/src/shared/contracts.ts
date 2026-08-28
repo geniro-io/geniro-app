@@ -811,6 +811,17 @@ export interface GeniroApi {
      */
     env?: Record<string, string>;
   }): Promise<void>;
+  /**
+   * Open the user's own terminal ON A FOLDER — a plain login shell, nothing
+   * running in it.
+   *
+   * Separate from {@link openInTerminal} rather than that one with an optional
+   * command, because the two carry different things across this boundary: there
+   * an invocation the daemon composed, here a directory and nothing else. A
+   * channel that takes only a path cannot be talked into running a program,
+   * which is the same reason {@link revealPath} is its own narrow channel.
+   */
+  openTerminalAt(cwd: string): Promise<void>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
@@ -934,6 +945,7 @@ export const IPC = {
   onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
   openInTerminal: 'geniro:openInTerminal',
+  openTerminalAt: 'geniro:openTerminalAt',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   revealPath: 'geniro:revealPath',

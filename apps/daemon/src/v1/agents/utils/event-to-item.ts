@@ -197,6 +197,15 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         role: null,
         payload: { id: event.toolCallId, workId: event.workId },
       };
+    case 'shell_open':
+      // NO row, and that is the whole difference from its close above. A
+      // command's start is already in the transcript as the tool call that
+      // detached it, so a row here would double every background command —
+      // which is the reason `shell_info` was settle-only before this existed.
+      // What the event carries is LIVE state: `ChatService.recordShellBracket`
+      // counts it so the run's row can say a command is still out, which is a
+      // fact no replayed transcript can be asked for.
+      return null;
     case 'task_list':
       // A DURABLE row, unlike the other progress-shaped events above. The list
       // is not derivable from anything else in the transcript: a patch names

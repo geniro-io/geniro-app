@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { type Observable, Subject } from 'rxjs';
 
 import type {
@@ -6,6 +6,7 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
+import { RunContextRegistry } from './run-context.registry';
 
 /**
  * In-process pub-sub for persisted run items — the `session_stream`-style bus.
@@ -16,6 +17,14 @@ import type {
  */
 @Injectable()
 export class AgentEventBus {
+  /**
+   * `@Optional()` so a bare `new AgentEventBus()` still works — a dozen specs
+   * build one to assert what a subscriber receives, and none of them is about
+   * the stamp. A bus without the registry publishes exactly what it is handed,
+   * which is the pre-existing behaviour rather than a degraded one.
+   */
+  constructor(@Optional() private readonly contexts?: RunContextRegistry) {}
+
   private readonly subject = new Subject<RunItemEvent>();
   private readonly deltas = new Subject<RunDeltaEvent>();
   private readonly statuses = new Subject<RunStatusEvent>();
@@ -60,7 +69,39 @@ export class AgentEventBus {
    * attention decide whether it is accurate.
    */
   publishRunStatus(event: RunStatusEvent): void {
-    this.statuses.next(event);
+    this.statuses.next(this.withContextReading(event));
+  }
+
+  /**
+   * Stamp the run's newest context reading onto a status event that does not
+   * already carry one.
+   *
+   * HERE rather than at the producers, and that is the whole point: there are
+   * five announce sites in the chat service alone, three more in the title
+   * service, and one shared settle helper both the chat and graph paths go
+   * through. A fact carried by "whichever of those remembered to add it" is a
+   * fact that goes stale at the next call site somebody writes — which is
+   * exactly how the ring came to be an hour behind. One seam cannot be
+   * forgotten.
+   *
+   * It is additive and never corrective: an event that states the pair itself
+   * is left alone, and a run the registry has never heard of is published
+   * exactly as it was, so a producer keeps the last word and nothing invents a
+   * figure for a run that has none.
+   */
+  private withContextReading(event: RunStatusEvent): RunStatusEvent {
+    if (event.contextTokens !== undefined) {
+      return event;
+    }
+    const reading = this.contexts?.read(event.runId) ?? null;
+    if (reading === null) {
+      return event;
+    }
+    return {
+      ...event,
+      contextTokens: reading.tokens,
+      contextWindowTokens: reading.window,
+    };
   }
 
   /** All run-status changes, for the single fan-out subscriber. */

@@ -65,6 +65,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { ProcessRegistry } from './process-registry';
+import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
 import type { SkillHarvestStore } from './skill-harvest.store';
@@ -119,6 +120,13 @@ class FakeRunDao {
     }
     Object.assign(run, data);
     return 1;
+  }
+  /** The real one writes the column explicitly; so does this. */
+  async touch(id: string, at: Date = new Date()): Promise<void> {
+    const run = this.runs.get(id);
+    if (run) {
+      run.updatedAt = at;
+    }
   }
   async listChats(): Promise<Run[]> {
     return [...this.runs.values()];
@@ -586,6 +594,9 @@ function setup(
     publishRunDeleted: (runId: string) => deletedRuns.push(runId),
   } as unknown as AgentEventBus;
   const registry = new ProcessRegistry();
+  // A REAL one: it is the thing every status broadcast is stamped from, so a
+  // double would make the spec's own statuses disagree with the daemon's.
+  const contexts = new RunContextRegistry();
   const approvals = new ApprovalRegistry();
   const claude = fakeAdapter('claude');
   const cursor = fakeAdapter('cursor-agent');
@@ -677,6 +688,7 @@ function setup(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
     bus,
+    contexts,
     registry,
     sessions,
     approvals,
@@ -2890,6 +2902,42 @@ describe('ChatService — approval modes (parity M1)', () => {
     });
     await service.sendMessage(run.id, 'hi');
     expect(claudeProbe.ensureVerdict).not.toHaveBeenCalled();
+    claude.finish();
+    await drain();
+  });
+
+  it('records ANSWERING a card as activity, so the sidebar stops demoting the thread', async () => {
+    // REPORTED as "как только я на него ответил, он переместился обратно. То
+    // есть он прыгает!". The sidebar floats a thread that is asking something
+    // to the top and orders everything else by `updatedAt` — and answering
+    // wrote no status, so the row still carried the time its TURN began. On the
+    // reporter's own database `CI336` was stamped 15:44:21, with three threads
+    // written since, so one click sent it from first place to fourth.
+    const { service, claude, approvals, runDao, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'q-1',
+      toolName: 'AskUserQuestion',
+      input: QUESTION_INPUT,
+      requiresUserInteraction: true,
+    });
+    await drain();
+    const before = (await runDao.getById(run.id))!.updatedAt.getTime();
+
+    expect(approvals.resolve(run.id, 'q-1', true, 'Blue')).toBe(true);
+    await drain();
+
+    expect(
+      (await runDao.getById(run.id))!.updatedAt.getTime(),
+    ).toBeGreaterThanOrEqual(before);
+    // …and every client is told, since the sort reads their copy of the row.
+    const announced = statuses.filter((event) => event.at !== undefined);
+    expect(announced.length).toBeGreaterThan(0);
+    // It says WHEN, never what the run is doing: the turn was running before
+    // the answer and is running after it.
+    expect(announced.at(-1)?.status).toBeNull();
     claude.finish();
     await drain();
   });
@@ -5162,7 +5210,12 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
 
     expect(approvals.resolve(run.id, 'a-1', true)).toBe(true);
     await drain();
-    expect(statuses.at(-1)).toEqual({
+    // The AWAITING announce, not simply the last event: answering also records
+    // user activity, which lands after it and says only when — see
+    // `noteUserActivity`. This test is about what the run goes back to DOING.
+    expect(
+      statuses.filter((event) => event.awaiting !== undefined).at(-1),
+    ).toEqual({
       runId: run.id,
       status: null,
       activity: 'running Bash',
@@ -5231,6 +5284,90 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
+  });
+
+  it('counts a DETACHED command on the run, and clears it when it reports', async () => {
+    // REPORTED as "when i select thread - it bacame working status, but when
+    // unselect - successs. So it's blinking". The renderer folded "a command is
+    // still out" from the OPEN thread's transcript, which is answerable for one
+    // run and for no other — so a settled chat with a `sleep` still running
+    // badged itself `working` while selected and `completed` the instant it was
+    // not. A count on the run row is the only thing that fixes it, and this is
+    // the announce that carries it to every window.
+    //
+    // Driven by `shell_open`/`shell_info` rather than by `background_work`, for
+    // the reason written on the held-turn spec above: `spawn-cli` consumes the
+    // bracket as turn plumbing and never forwards it, so a recorder written
+    // against it runs from a spec and never from the app. (It was written that
+    // way first, and the real app is what caught it.)
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'shell_open',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+    expect(statuses.at(-1)).toEqual({
+      runId: run.id,
+      status: null,
+      shellsOpen: 1,
+    });
+
+    // A SECOND command, so the count is a count rather than a flag.
+    claude.emit({
+      type: 'shell_open',
+      toolCallId: 'toolu_sh2',
+      workId: 'bash_2',
+    });
+    await drain();
+    expect(statuses.at(-1)?.shellsOpen).toBe(2);
+
+    // The turn ENDING does not clear it — which is the whole point of the
+    // field. A detached command outlives its turn, and that stretch is exactly
+    // when the badge is the only thing saying the work is not over.
+    claude.finish();
+    await drain();
+    expect(
+      (await service.listChats()).find((r) => r.id === run.id)?.shellsOpen,
+    ).toBe(2);
+
+    claude.emit({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+    expect(statuses.at(-1)?.shellsOpen).toBe(1);
+
+    // A DUPLICATE close announces nothing: claude reports one unit's end on
+    // both of its terminal channels, 7ms apart, so a count that decremented per
+    // report would go to 0 with a command still running.
+    const before = statuses.length;
+    claude.emit({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh',
+      workId: 'bash_1',
+    });
+    await drain();
+    expect(statuses.length).toBe(before);
+
+    claude.emit({
+      type: 'shell_info',
+      toolCallId: 'toolu_sh2',
+      workId: 'bash_2',
+    });
+    await drain();
+    expect(statuses.at(-1)?.shellsOpen).toBe(0);
+    expect(
+      (await service.listChats()).find((r) => r.id === run.id)?.shellsOpen,
+    ).toBe(0);
   });
 
   it('does NOT clear the parent’s activity on a SUB-AGENT’s tool result', async () => {

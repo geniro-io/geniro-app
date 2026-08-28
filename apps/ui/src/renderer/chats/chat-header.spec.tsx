@@ -542,6 +542,66 @@ describe('ChatHeader — how long this thread WORKED', () => {
     expect(el.textContent).not.toContain('0s');
   });
 
+  it('marks an UNPRICED thread with a dash, and says why behind it', () => {
+    // REPORTED as "I dont see how much i spend for thread - i should see it",
+    // on a cursor thread. The daemon was right to send no figure — probed on
+    // cursor-agent 2026.08.11-e8db854, a completed turn sends no `usage_update`
+    // at all, so nothing prices it — but an EMPTY slot reads as a header with
+    // no spend readout rather than as a thread nothing measured.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+        costUsd={null}
+        costedTurns={0}
+      />,
+    );
+
+    expect(metrics(el)).toContain('—');
+    // Never a fabricated zero: that is the rule the dash exists to keep.
+    expect(metrics(el)).not.toContain('$');
+    expect(metricsTitle(el)).toContain('No cost reported');
+    expect(metricsTitle(el)).toContain('6 turns');
+  });
+
+  it('draws NO dash while the totals have simply not been read yet', () => {
+    // A thread whose read failed, or has not landed, knows nothing about its
+    // turns — claiming none of them was priced would be an answer invented out
+    // of a missing one. `costedTurns` null, not zero, is what separates them.
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+        costUsd={null}
+        costedTurns={null}
+      />,
+    );
+
+    expect(metrics(el)).not.toContain('—');
+    expect(metricsTitle(el)).not.toContain('No cost reported');
+  });
+
+  it('shows the PRICE, not the dash, on a thread that reported one', () => {
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        status="completed"
+        workedMs={252_000}
+        turnCount={6}
+        costUsd={1.25}
+        costedTurns={6}
+      />,
+    );
+
+    expect(metrics(el)).toContain('$1.25');
+    expect(metrics(el)).not.toContain('—');
+    expect(metricsTitle(el)).not.toContain('No cost reported');
+  });
+
   it('says "1 turn" rather than "1 turns" for a single-turn thread', () => {
     // The figure IS that turn, and `1 turns` is the kind of small wrongness a
     // reader trusts a number less for.

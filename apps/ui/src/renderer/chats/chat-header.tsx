@@ -90,22 +90,33 @@ const COUNT_TRIGGER_CLASS =
  * header reading `running · 18s · worked 64m 34s` where the 64m had not moved
  * in an hour of watching.
  *
- * A null spend renders NOTHING rather than `$0.00`, and the distinction is the
- * whole rule the figures obey end to end: cursor-agent reports no cost unless
- * its currency is USD, so a thread on it has not spent nothing — it has not
- * been measured. Writing `$0.00` there would be the app inventing a number the
- * CLI refused to give.
+ * A null spend never renders `$0.00`, and that is the whole rule the figures
+ * obey end to end: a thread on a CLI that reports no cost has not spent
+ * nothing — it has not been measured, and writing a zero there would be the app
+ * inventing a number the CLI refused to give. It used to render NOTHING, which
+ * kept the rule and lost the reader: REPORTED as "I dont see how much i spend
+ * for thread - i should see it", on a `kimi-k3` thread where an empty slot said
+ * the same as a header with no such readout at all. So a thread whose turns
+ * were summed and priced none of them draws {@link UNPRICED} instead, with the
+ * reason on the row's hover.
  */
 function ThreadMetrics({
   settledMs,
   turnCount,
   openTurn,
   costUsd,
+  costedTurns,
 }: {
   settledMs: number;
   turnCount: number;
   openTurn: OpenTurn | null;
   costUsd: number | null;
+  /**
+   * How many of this thread's finished turns carried a price — the daemon's
+   * own count. Zero beside finished turns is what makes {@link UNPRICED}
+   * truthful rather than a guess about which CLI this is.
+   */
+  costedTurns: number | null;
 }): React.JSX.Element | null {
   useSecondTick(openTurn !== null);
   const liveMs = openTurnWorkedMs(openTurn, Date.now());
@@ -115,7 +126,11 @@ function ThreadMetrics({
   // small lie a reader has no way to catch.
   const turns = turnCount + (openTurn === null ? 0 : 1);
   const worked = totalMs > 0 ? formatDuration(totalMs) : null;
-  const spend = costUsd === null ? null : formatUsd(costUsd);
+  // A thread the daemon HAS summed, whose turns carried no price between them.
+  // Not the same as having nothing to say, which is what it used to render as.
+  const unpriced = costUsd === null && costedTurns === 0 && turnCount > 0;
+  const spend =
+    costUsd === null ? (unpriced ? UNPRICED : null) : formatUsd(costUsd);
   if (worked === null && spend === null) {
     return null;
   }
@@ -123,7 +138,13 @@ function ThreadMetrics({
     <span
       data-slot="thread-metrics"
       className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-muted-foreground"
-      title={threadMetricsTitle(worked, turns, openTurn !== null, spend)}>
+      title={threadMetricsTitle(
+        worked,
+        turns,
+        openTurn !== null,
+        spend,
+        unpriced,
+      )}>
       {worked === null ? null : (
         <>
           {/* The word `worked` was three of the line's characters and is the
@@ -156,6 +177,7 @@ function threadMetricsTitle(
   turns: number,
   running: boolean,
   spend: string | null,
+  unpriced: boolean,
 ): string {
   const parts: string[] = [];
   if (worked !== null) {
@@ -165,11 +187,40 @@ function threadMetricsTitle(
         : `Worked ${worked} across ${turns} ${turns === 1 ? 'turn' : 'turns'} — not the span since the thread started`,
     );
   }
-  if (spend !== null) {
+  if (unpriced) {
+    // The one clause that says something the row cannot: the dash is an
+    // ABSENCE of measurement, and the reader's next thought is "so is it free,
+    // or is it broken?". Neither — nothing this thread ran was priced. It is
+    // worded from the COUNT rather than by naming the CLI, so it stays true
+    // when a priced agent has an unpriced turn and when a new agent is added.
+    parts.push(
+      turns === 1
+        ? "No cost reported — this thread's one turn did not tell geniro what it cost"
+        : `No cost reported — none of this thread's ${turns} turns told geniro what it cost`,
+    );
+  } else if (spend !== null) {
     parts.push(`Cost ${spend}, summed over every turn that reported one`);
   }
   return parts.join('. ');
 }
+
+/**
+ * The spend slot on a thread nothing has priced.
+ *
+ * REPORTED as "I dont see how much i spend for thread - i should see it",
+ * against a header that was behaving exactly as designed: a null spend renders
+ * nothing rather than `$0.00`, since an unmeasured thread has not spent
+ * nothing. What that rule never covered is that an EMPTY slot is indis-
+ * tinguishable from a header that simply has no such readout — the figure is
+ * missing either way, and the user's own reading of it was "it is not there".
+ * A dash keeps the rule (it claims no amount) and answers the question the
+ * blank could not, with the sentence behind it on the row's hover.
+ *
+ * An em dash rather than `$—` or `n/a`: the slot's neighbours are a duration
+ * and a price, both of which read as figures, and a dash is what a table of
+ * figures already uses for one that was not taken.
+ */
+const UNPRICED = '—';
 
 /**
  * The three facts fixed for this run's whole life — the agent, the folder and
@@ -425,6 +476,7 @@ export function ChatHeader({
   workedMs = 0,
   turnCount = 0,
   costUsd = null,
+  costedTurns = null,
   openTurn = null,
   runningSubagents = 0,
   shells = [],
@@ -508,6 +560,13 @@ export function ChatHeader({
    * renders nothing: a CLI that reports no cost has not made this thread free.
    */
   costUsd?: number | null;
+  /**
+   * How many of this thread's summed turns carried a price, from the same
+   * answer as {@link costUsd}. Zero over finished turns is the one reading
+   * that can say "nothing here was ever priced" rather than "no figure yet",
+   * and it is what puts a dash in the spend slot instead of a blank.
+   */
+  costedTurns?: number | null;
   /**
    * The turn still in flight, so the total keeps MOVING while one is — null
    * when nothing is running.
@@ -643,6 +702,7 @@ export function ChatHeader({
           turnCount={turnCount}
           openTurn={openTurn}
           costUsd={costUsd}
+          costedTurns={costedTurns}
         />
         {/* What the agents panel is holding, at a glance. It used to BE that
             panel's toggle — "how much work is in here" was the one thing a bare

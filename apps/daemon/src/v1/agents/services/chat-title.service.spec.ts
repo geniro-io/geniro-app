@@ -202,6 +202,21 @@ function build(opts: {
     await drain();
   };
 
+  /**
+   * The agent reaching for a TOOL — what names a chat on a turn where the agent
+   * works before it says anything, which is most of them.
+   */
+  const toolCall = async (): Promise<void> => {
+    items.next({ runId: 'run-a', item: item(null, 'tool_call') });
+    await drain();
+  };
+
+  /** That call coming BACK — the same unit of work, reported a second time. */
+  const toolResult = async (): Promise<void> => {
+    items.next({ runId: 'run-a', item: item(null, 'tool_result') });
+    await drain();
+  };
+
   /** Two settles in a row, the second after the first has fully drained. */
   const settleTwice = async (): Promise<void> => {
     await settle();
@@ -235,6 +250,8 @@ function build(opts: {
     settleKind,
     userMessage,
     assistantMessage,
+    toolCall,
+    toolResult,
     waitOutCooldown,
     settleTwice,
     settleConcurrently,
@@ -791,6 +808,50 @@ describe('naming while the turn is still running', () => {
       expect.anything(),
     );
     expect(statuses.at(-1)?.title).toBe('Fix Conflicts Worktree');
+  });
+
+  it('upgrades when the agent WORKS without talking, on its first tool call', async () => {
+    // REPORTED a fourth time as "It didnt change the thread title", over a chat
+    // 1m 47s into its first turn whose transcript read `Read 1 file · ran 11
+    // commands` with no assistant message anywhere. A tool-led opening is the
+    // norm on the work this app is for, so gating the early naming on the agent
+    // TALKING left exactly the long turns — the ones somebody is hunting for in
+    // the sidebar — on their raw opening line for the whole duration.
+    const { toolCall, retitle, statuses } = build({
+      run: { title: 'can you look at the merge conflicts in the worktree' },
+      firstUserMessageText:
+        'can you look at the merge conflicts in the worktree',
+      nativeTitle: 'Fix Conflicts Worktree',
+    });
+
+    await toolCall();
+
+    // No settle and no assistant message anywhere above: narrow the trigger back
+    // to an assistant message and this is zero calls, which is what was reported.
+    expect(retitle).toHaveBeenCalledWith(
+      'run-a',
+      'Fix Conflicts Worktree',
+      'can you look at the merge conflicts in the worktree',
+      expect.anything(),
+    );
+    expect(statuses.at(-1)?.title).toBe('Fix Conflicts Worktree');
+  });
+
+  it('does NOT re-trigger on a tool RESULT, which is the same work reported twice', async () => {
+    // The trigger is deliberately narrow. A call and its result are one unit of
+    // work, so counting both would spend two of the run's attempts on one
+    // action and halve what the cooldown is holding back.
+    const { toolCall, toolResult, retitle } = build({
+      run: { title: 'look at the merge conflicts' },
+      firstUserMessageText: 'look at the merge conflicts',
+      nativeTitle: null,
+    });
+
+    await toolCall();
+    const afterCall = retitle.mock.calls.length;
+    await toolResult();
+
+    expect(retitle.mock.calls.length).toBe(afterCall);
   });
 
   it('asks once per cooldown, however many messages the agent writes', async () => {

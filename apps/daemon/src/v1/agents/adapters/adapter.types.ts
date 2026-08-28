@@ -843,6 +843,35 @@ type AgentEventBody =
     }
   | {
       /**
+       * A detached command has STARTED — the opening half of `shell_info`.
+       *
+       * It writes NO row, deliberately: the launch is already in the transcript
+       * as the tool call that made it, which is the reason `shell_info` was
+       * settle-only in the first place. What it carries instead is the one thing
+       * no row can — that this run has a command out RIGHT NOW — so the daemon
+       * can publish a live count per run (`ChatService.shellRuns`).
+       *
+       * That count exists because the renderer used to fold the same question
+       * out of the OPEN thread's transcript, which is answerable for one run and
+       * for no other: a settled chat with a `sleep` still out badged itself
+       * `working` while it was selected and `completed` the moment it was not.
+       *
+       * It is announced from the same `background_work` bracket its close is
+       * (`spawn-cli`'s `announceShellWork`), because that event is NOT forwarded
+       * to the owner — the bracket is turn plumbing, and this is the projection
+       * of it the owner is allowed to see.
+       *
+       * NOT part of `closesWork`, and the opposite of it: a launch is evidence
+       * the agent is working, never that it has stopped.
+       */
+      type: 'shell_open';
+      /** The tool call that launched it, when the CLI ties one to the unit. */
+      toolCallId: string | null;
+      /** The CLI's own id for the unit — what its {@link workId} close names. */
+      workId: string;
+    }
+  | {
+      /**
        * The agent's OWN task list moved — the todo list a coding CLI keeps for
        * itself while it works through a multi-step job.
        *

@@ -428,38 +428,3 @@ export function runningShellsByAgent(
   }
   return byAgent;
 }
-
-/**
- * Whether a DETACHED command this run started is still going.
- *
- * The one reading that survives its turn. A foreground command is "running"
- * only because its tool call has not come back, which a cancelled or abandoned
- * turn leaves true for ever — so it says nothing once the run has settled, and
- * this deliberately ignores it. A detached one is different in kind: its end is
- * a durable `shell_info` row the daemon writes, including for every shell still
- * open when the CLI process dies, so "still going" here is reported rather than
- * inferred.
- *
- * `startedSince` is the daemon's own launch time. A shell recorded by an
- * EARLIER daemon cannot still be running under this one — the process that
- * owned it is gone — and its row would otherwise stand for the life of the
- * transcript. An unparseable stamp on either side proves nothing and so decides
- * nothing: the row stands on whatever the transcript said.
- */
-export function hasRunningBackgroundShell(
-  items: readonly ChatItem[],
-  startedSince: string,
-): boolean {
-  const daemonStartedAt = Date.parse(startedSince);
-  return shellRuns(items).some((shell) => {
-    if (shell.status !== 'running' || !shell.background) {
-      return false;
-    }
-    const startedAt = Date.parse(shell.startedAt);
-    return (
-      !Number.isFinite(daemonStartedAt) ||
-      !Number.isFinite(startedAt) ||
-      startedAt >= daemonStartedAt
-    );
-  });
-}

@@ -44,6 +44,7 @@ import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { ProcessRegistry } from './services/process-registry';
+import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
 import { ShellOutputService } from './services/shell-output.service';
@@ -184,6 +185,7 @@ import { defaultSpawn } from './utils/spawn-cli';
       inject: [AgentAdapterRegistry, ProcessRegistry, AgentVersionService],
     },
     AgentEventBus,
+    RunContextRegistry,
     ApprovalRegistry,
     {
       provide: ContextWindowStore,

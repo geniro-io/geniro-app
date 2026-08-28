@@ -1398,6 +1398,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (event.unit !== 'agent' && event.toolCallId !== null) {
         shellWork.set(event.id, event.toolCallId);
       }
+      // …and the OWNER is told, which the bracket itself cannot do: a
+      // `background_work` is turn plumbing and is never forwarded, so without
+      // this the daemon could watch every detached command END and never see
+      // one begin. `unit !== 'agent'` is the same carve-out the settle below
+      // makes — a delegate's liveness is `announceDelegateWork`'s business.
+      if (event.unit !== 'agent') {
+        const opened: AgentEvent = {
+          type: 'shell_open',
+          toolCallId: event.toolCallId ?? null,
+          workId: event.id,
+        };
+        if (current) {
+          current.options.onEvent(opened);
+        } else {
+          opts.onBetweenTurnEvent?.(opened);
+        }
+      }
       return;
     }
     // A delegate's settle is the other twin's business — it is matched against

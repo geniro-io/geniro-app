@@ -111,6 +111,37 @@ export interface RunStatusEvent {
    */
   holdingFor?: number;
   /**
+   * How many DETACHED commands this run still has out, or `undefined` when this
+   * event says nothing about it.
+   *
+   * Three states like {@link holdingFor} beside it: absent asserts nothing, `0`
+   * says the last one has reported.
+   *
+   * It is NOT the same fact. A hold means the agent has stopped and the process
+   * is being kept alive; a shell holds nothing open, so nothing may act on this
+   * — the composer must not queue on it. Its one reader is the badge, which is
+   * exactly why it has to ride this channel: the reading it replaced was folded
+   * out of the OPEN thread's transcript, so an unfocused row could not see it
+   * and the badge changed when the user looked away.
+   */
+  shellsOpen?: number;
+  /**
+   * How full this run's context window was when its CLI last reported, and the
+   * window it is measured against.
+   *
+   * TWIN PARSER of the daemon's `RunStatusEvent` — absent asserts nothing, a
+   * value sets, and the COUNT may be null beside a window (a compaction, whose
+   * conversation is gone while the model's window is not).
+   *
+   * It rides this channel for the reason every other row-carried fact does: a
+   * client only ever learned it from the run list its window opened with, or
+   * from the live deltas of the ONE run it has joined — so a thread that worked
+   * for an hour while the user was elsewhere left the ring drawing an hour-old
+   * figure that only a hover would correct.
+   */
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
+  /**
    * What the run said as it reached this status — the agent's closing words, or
    * a failure's message.
    *
@@ -189,6 +220,9 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     at,
     awaiting,
     holdingFor,
+    shellsOpen,
+    contextTokens,
+    contextWindowTokens,
     summary,
     preview,
     housekeeping,
@@ -244,6 +278,32 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // announce says nothing about the hold and must not clear it.
     ...(typeof holdingFor === 'number' && Number.isFinite(holdingFor)
       ? { holdingFor: Math.max(0, Math.trunc(holdingFor)) }
+      : {}),
+    // Read on the same terms as the hold above, and absent for the same reason:
+    // an announce that carried no count says nothing about the commands this
+    // run has out, and clearing on silence would take the badge down while a
+    // `pnpm dev` was still running.
+    ...(typeof shellsOpen === 'number' && Number.isFinite(shellsOpen)
+      ? { shellsOpen: Math.max(0, Math.trunc(shellsOpen)) }
+      : {}),
+    // The PAIR travels together or not at all: a count is only a reading with
+    // the window it was measured against, and admitting half would let a fresh
+    // count be scaled against a window from before a model change. `null` is a
+    // real value for the count alone — a compaction clears it and keeps the
+    // window — so the guard admits a number OR null, and nothing else.
+    ...((typeof contextTokens === 'number' && Number.isFinite(contextTokens)) ||
+    contextTokens === null
+      ? {
+          contextTokens:
+            contextTokens === null
+              ? null
+              : Math.max(0, Math.trunc(contextTokens)),
+          contextWindowTokens:
+            typeof contextWindowTokens === 'number' &&
+            Number.isFinite(contextWindowTokens)
+              ? Math.max(0, Math.trunc(contextWindowTokens))
+              : null,
+        }
       : {}),
     // Three states, and the empty string is deliberately one of the CLEARING
     // ones: a settle whose agent said nothing arrives as null, and a daemon

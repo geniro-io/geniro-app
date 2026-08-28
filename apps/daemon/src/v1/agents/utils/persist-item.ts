@@ -92,12 +92,27 @@ export function runToWire(
    * whose agents are per node — say nothing rather than guessing.
    */
   configDirPin: ConfigDirPinWire | null = null,
+  /**
+   * How many DETACHED commands this run still has out, from the live turn
+   * state — see `ChatService.shellRuns`.
+   *
+   * Passed in and on the ROW for the reasons {@link holdingFor} is, plus one of
+   * its own: the renderer used to derive this from the OPEN thread's
+   * transcript, so a row could only answer it about the chat the user happened
+   * to be looking at, and the badge changed when they looked away.
+   *
+   * It asserts nothing about the turn — a shell does not hold one open. Last in
+   * the parameter list so the callers that cannot know (a run being created, a
+   * workflow node's row) keep saying nothing by saying nothing.
+   */
+  shellsOpen = 0,
 ): RunWire {
   return {
     id: run.id,
     status: run.status,
     awaiting,
     holdingFor,
+    shellsOpen,
     title: run.title,
     agentKind: run.agentKind,
     workflowId: run.workflowId,

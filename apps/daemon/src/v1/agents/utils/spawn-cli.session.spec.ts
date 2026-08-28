@@ -1321,7 +1321,12 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await handle?.done;
 
+    // BOTH halves, in order. The open writes no row — the launching call is
+    // already in the transcript — but it is the only thing that says a command
+    // is out RIGHT NOW, which is what the run row's `shellsOpen` is counted
+    // from; without it the daemon watches every command end and sees none begin.
     expect(events).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_sh', workId: 'bash_1' },
       { type: 'shell_info', toolCallId: 'toolu_sh', workId: 'bash_1' },
       COMPLETE,
     ]);
@@ -1527,6 +1532,7 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(events.filter((e) => e.type === 'subagent_info')).toEqual([]);
     expect(events).toEqual([
+      { type: 'shell_open', toolCallId: 'toolu_bash', workId: 'task-bash' },
       { type: 'shell_info', toolCallId: 'toolu_bash', workId: 'task-bash' },
       COMPLETE,
     ]);

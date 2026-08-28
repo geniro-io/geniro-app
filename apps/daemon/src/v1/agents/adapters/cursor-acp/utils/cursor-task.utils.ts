@@ -43,6 +43,30 @@ export function readCursorTask(params: unknown): AcpDelegateFacts | null {
 }
 
 /**
+ * Whether the `task` call's own return says the delegate keeps running after
+ * it — cursor's `isBackground`, read off that call's `rawOutput`.
+ *
+ * The launch and the completion are the SAME frame shape on this wire, so this
+ * boolean is the only thing separating them. MEASURED on 2026.08.11-e8db854 by
+ * asking for a background delegate: `rawOutput: {durationMs: 203,
+ * isBackground: true}`, the turn ending four seconds later, and the delegate
+ * still asking this client for shell permissions seventy seconds after that.
+ * The neighbouring `cursor/task` announcement does NOT carry the field (the
+ * CLI's own `sendToolExtensionNotification` builds it from the args and the
+ * duration), which is why this reads the tool call's output instead.
+ *
+ * Null rather than false for a missing or unreadable field: a CLI that stopped
+ * sending it must leave the old reading alone, not assert that every delegate
+ * waits.
+ */
+export function readCursorLaunchIsBackground(
+  rawOutput: unknown,
+): boolean | null {
+  const value = asRecord(rawOutput)?.isBackground;
+  return typeof value === 'boolean' ? value : null;
+}
+
+/**
  * What the delegate was asked to BE, as a name, or null when it was not typed.
  *
  * Two shapes, both from the CLI's own `mapSubagentType`: a bare string for a

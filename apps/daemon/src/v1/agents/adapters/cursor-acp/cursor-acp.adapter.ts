@@ -127,7 +127,10 @@ import {
   withCursorAnswer,
 } from './utils/cursor-question.utils';
 import { readCursorSessionTitle } from './utils/cursor-session-meta.utils';
-import { readCursorTask } from './utils/cursor-task.utils';
+import {
+  readCursorLaunchIsBackground,
+  readCursorTask,
+} from './utils/cursor-task.utils';
 import { parseCursorTodos } from './utils/cursor-todos.utils';
 
 /** Cursor's read-only planning mode, as `session/new` reports it. */
@@ -2403,6 +2406,9 @@ export class CursorAcpAdapter extends AgentAdapter {
         // delegate said — see the field's own doc block for what that looked
         // like framed as its answer.
         resultIsBookkeeping: true,
+        // The other half of that same `rawOutput`, and the half that says
+        // whether the call waited for anything at all.
+        readsBackgroundLaunch: readCursorLaunchIsBackground,
         stepsUnavailableReason:
           this.getConfig().subagents.stepsUnavailableReason,
       },

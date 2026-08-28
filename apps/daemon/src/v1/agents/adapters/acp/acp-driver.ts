@@ -176,6 +176,31 @@ export interface AcpDelegateProtocol {
    * reason with it rather than needing a second lookup.
    */
   stepsUnavailableReason: string | null;
+  /**
+   * Whether the LAUNCHING call's own return says the delegate goes on running
+   * after it — read off that call's `rawOutput`, or null when this CLI says
+   * nothing either way.
+   *
+   * The one fact that separates "the delegation was accepted" from "the work is
+   * over", and without it a backgrounded delegate is indistinguishable from a
+   * finished one: the call returns in a fifth of a second and carries the same
+   * shape either way. MEASURED on cursor-agent 2026.08.11-e8db854 by asking for
+   * a background delegate and watching the wire — `tool_call_update` completed
+   * at +18.7s with `rawOutput: {durationMs: 203, isBackground: true}`, the turn
+   * ended at +22.7s, and the delegate was still asking this client for shell
+   * permissions at +89s. The `cursor/task` announcement carries no such field
+   * (checked in the CLI's own `sendToolExtensionNotification`, which builds it
+   * from the args and the duration alone), so `rawOutput` is the only carrier.
+   *
+   * This is the condition `cursor-acp.const.ts` wrote down as RE-CHECK IF —
+   * "`isBackground: true` is ever seen" — and it has now been seen, on a real
+   * thread: ten reviewers launched in the background, each block reading
+   * `took 0s` under a green check while every one of them was still working.
+   *
+   * An adapter that declares none keeps the old reading, which is right for a
+   * CLI whose launching call genuinely waits for its delegate.
+   */
+  readsBackgroundLaunch?: (rawOutput: unknown) => boolean | null;
 }
 
 /**
@@ -754,6 +779,13 @@ export class AcpTurnDriver implements TurnDriver {
    * {@link AcpDelegateProtocol.resultIsBookkeeping}).
    */
   private readonly delegateToolCalls = new Set<string>();
+  /**
+   * Of those, the ones the CLI said keep running past their launching call.
+   *
+   * Per-TURN on the driver like its neighbour, and for the same reason: one
+   * adapter instance serves N concurrent turns under graph fan-out.
+   */
+  private readonly backgroundDelegates = new Set<string>();
   /**
    * The MCP servers this turn actually registered. `composePrompt` derives the
    * call-surface grant from this rather than from a separate flag, so the
@@ -2217,11 +2249,51 @@ export class AcpTurnDriver implements TurnDriver {
     );
   }
 
+  /**
+   * The `subagent_info` saying this delegate is still out, when the launching
+   * call's return said so — and nothing at all otherwise.
+   *
+   * Recording it is what makes {@link delegateEvent} drop the duration: the
+   * announcement that follows carries the LAUNCH's milliseconds (198–408ms
+   * across the ten delegates on the reported thread), and a block reading
+   * `took 0s` states, about work that runs for minutes, a figure that measures
+   * how long it took to ask for it.
+   */
+  private delegateBackgroundEvents(toolCall: AcpToolCall): AgentEvent[] {
+    const reads = this.options.delegate?.readsBackgroundLaunch;
+    if (
+      reads === undefined ||
+      !this.delegateToolCalls.has(toolCall.toolCallId)
+    ) {
+      return [];
+    }
+    if (reads(toolCall.rawOutput) !== true) {
+      return [];
+    }
+    this.backgroundDelegates.add(toolCall.toolCallId);
+    return [
+      this.delegateEvent({
+        id: toolCall.toolCallId,
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+      }),
+    ];
+  }
+
   /** One `subagent_info` row, with this protocol's steps reason stamped on. */
   private delegateEvent(facts: AcpDelegateFacts): AgentEvent {
+    // A delegate the CLI said outlives its launching call: its announcement's
+    // duration measured the LAUNCH, so it is dropped rather than published as
+    // the delegate's own. Null cannot overwrite a figure under the merge rule,
+    // so a later announcement carrying a real one still wins.
+    const background = this.backgroundDelegates.has(facts.id);
     return {
       type: 'subagent_info',
       ...facts,
+      ...(background ? { durationMs: null } : {}),
       // This protocol's delegate frame carries a duration and nothing else it
       // spent — measured on cursor's `cursor/task`, whose result is
       // `{durationMs, isBackground}` — so the figures are declared absent
@@ -2236,10 +2308,17 @@ export class AcpTurnDriver implements TurnDriver {
       backgroundOutcome: null,
       stepsUnavailableReason:
         this.options.delegate?.stepsUnavailableReason ?? null,
-      // This protocol reports no background lifecycle for a delegate, so it
-      // claims nothing about one: null leaves the transcript's own reading (the
-      // launching call returning) exactly as it was for every ACP agent.
-      backgroundOpen: null,
+      // Null unless the launching call's own return said the work outlives it,
+      // which is the ONE thing this protocol reports about a delegate's
+      // lifecycle. Null leaves the transcript's own reading (the launching call
+      // returning) exactly as it was for every ACP agent; true withdraws it,
+      // because a call that returned in 203ms did not wait for anything.
+      //
+      // It is never set FALSE here. False would mean "the CLI told us the work
+      // is over", which this protocol has no frame for — nothing announces a
+      // background delegate's ending on this wire, measured across 70s of
+      // listening past the turn's own end.
+      backgroundOpen: background ? true : null,
     };
   }
 
@@ -2449,6 +2528,13 @@ export class AcpTurnDriver implements TurnDriver {
                 (diffs.length > 0 ? { diffs } : (update.content ?? null))),
             isError: toolCall.status === 'failed',
           },
+          // …and, when this call launched a delegate that OUTLIVES it, the row
+          // that says so. It rides the settled launching call because that is
+          // the only frame carrying the flag, and it is emitted here rather
+          // than folded into the announcement below because the announcement is
+          // fire-and-forget on the agent's side — a delegate whose `cursor/task`
+          // never arrived would otherwise be recorded as finished.
+          ...this.delegateBackgroundEvents(toolCall),
         ];
       }
       case 'available_commands_update': {

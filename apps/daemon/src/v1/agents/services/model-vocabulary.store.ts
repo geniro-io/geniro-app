@@ -1,11 +1,10 @@
-import { readFileSync, statSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 
 import { environment } from '../../../environments';
-import { atomicWrite } from '../../../utils/atomic-file';
+import { atomicWriteSync } from '../../../utils/atomic-file';
 
 /**
  * How old an entry may get before it is SERVED AND REFRESHED behind the answer
@@ -266,7 +265,7 @@ export class ModelVocabularyStore {
       }
     }
     records.set(key, { version, fetchedAt: this.now(), value });
-    void this.save(records);
+    this.save(records);
   }
 
   /**
@@ -291,7 +290,7 @@ export class ModelVocabularyStore {
       }
     }
     if (dropped > 0) {
-      void this.save(records);
+      this.save(records);
     }
     return dropped;
   }
@@ -310,7 +309,7 @@ export class ModelVocabularyStore {
   clear(): number {
     const dropped = this.load().size;
     if (dropped > 0) {
-      void this.save(new Map());
+      this.save(new Map());
     }
     return dropped;
   }
@@ -349,14 +348,30 @@ export class ModelVocabularyStore {
     return records;
   }
 
-  private async save(records: Map<string, StoredRecord>): Promise<void> {
+  /**
+   * Write the map out, SYNCHRONOUSLY — the file is consistent with what
+   * {@link remember} just recorded by the time it returns.
+   *
+   * It was a floating promise, and nothing could then know when it landed.
+   * Two consequences, both real: two `remember` calls in the same tick raced
+   * each other's rename, so the OLDER snapshot could win and the file end up
+   * behind the map it mirrors; and a caller that needs the write to be over —
+   * a spec tearing its temp directory down — had only a fixed delay to wait,
+   * which is what made `model-vocabulary.store.spec.ts` fail on CI with
+   * `ENOTEMPTY` while a straggler staged its tmp file inside the `rmSync`.
+   *
+   * Blocking is affordable HERE and is not a licence to write this way
+   * elsewhere: `remember` is called once per cold CLI probe — a handshake that
+   * has just cost seconds — and the file is bounded by {@link MAX_ENTRIES}.
+   */
+  private save(records: Map<string, StoredRecord>): void {
     // The in-memory map is updated before the write, so a disk failure leaves
     // THIS daemon serving the answer while warning that it will not survive a
     // restart.
     this.records = records;
     try {
-      await mkdir(dirname(this.file), { recursive: true });
-      await atomicWrite(this.file, JSON.stringify(Object.fromEntries(records)));
+      mkdirSync(dirname(this.file), { recursive: true });
+      atomicWriteSync(this.file, JSON.stringify(Object.fromEntries(records)));
     } catch (err) {
       this.logger.warn(
         `model-vocabulary cache write failed (this session only, lost on restart): ${err instanceof Error ? err.message : String(err)}`,

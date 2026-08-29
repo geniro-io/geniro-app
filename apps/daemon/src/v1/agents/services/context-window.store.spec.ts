@@ -27,40 +27,35 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-/**
- * Wait for the store's fire-and-forget write to reach disk.
- *
- * `remember` is synchronous and the save is a floating promise, and the save
- * itself is mkdir + write + fsync + rename + fsync-dir — several ticks, not
- * one. Polling for the file is what makes this deterministic rather than a
- * race against a fixed delay.
- */
-async function waitForFile(path = file): Promise<void> {
-  for (let i = 0; i < 200 && !existsSync(path); i += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
-}
-
-/** Give a write that must NOT happen every chance to happen anyway. */
-async function settle(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 50));
-}
-
 function seed(records: Record<string, unknown>): void {
   writeFileSync(file, JSON.stringify(records), 'utf8');
 }
 
 describe('ContextWindowStore — what it remembers', () => {
-  it('survives the process that learned it', async () => {
+  it('survives the process that learned it', () => {
     // The whole reason it exists. In memory alone, a run had nothing to scale
     // against until its own first turn COMPLETED, so every chat showed a
     // denominator-less meter for its whole first turn after each app launch.
     const learned = new ContextWindowStore({ file });
     learned.remember(AGENT, MODEL, 1_000_000);
-    await waitForFile();
 
     const nextLaunch = new ContextWindowStore({ file });
     expect(nextLaunch.get(AGENT, MODEL)).toBe(1_000_000);
+  });
+
+  it('has the window on disk by the time `remember` returns', () => {
+    // The twin of `ModelVocabularyStore`'s pin, and this store had the same
+    // floating save: nothing could know when the write landed, so two calls in
+    // one tick raced each other's rename and a caller cleaning up behind it had
+    // only a delay to wait on.
+    const store = new ContextWindowStore({ file });
+
+    store.remember(AGENT, MODEL, 1_000_000);
+
+    expect(existsSync(file)).toBe(true);
+    expect(JSON.parse(readFileSync(file, 'utf8')) as object).toEqual({
+      [contextWindowKey(AGENT, MODEL)]: 1_000_000,
+    });
   });
 
   it('says nothing about a model it has never seen', () => {
@@ -70,10 +65,9 @@ describe('ContextWindowStore — what it remembers', () => {
     expect(new ContextWindowStore({ file }).get(AGENT, 'never-run')).toBeNull();
   });
 
-  it('does not share a window between two CLIs naming the same model', async () => {
+  it('does not share a window between two CLIs naming the same model', () => {
     const store = new ContextWindowStore({ file });
     store.remember('claude', 'shared-name', 1_000_000);
-    await waitForFile();
 
     expect(store.get('cursor-agent', 'shared-name')).toBeNull();
   });
@@ -85,34 +79,31 @@ describe('ContextWindowStore — what it refuses to remember', () => {
     ['negative', -1],
     ['NaN', Number.NaN],
     ['Infinity', Number.POSITIVE_INFINITY],
-  ])('rejects a %s window rather than storing it', async (_label, window) => {
+  ])('rejects a %s window rather than storing it', (_label, window) => {
     // Consumers read this as "the window" and DIVIDE by it. A zero reaching a
     // consumer puts "Context Infinity% full" in the accessible name.
     const store = new ContextWindowStore({ file });
     store.remember(AGENT, MODEL, window);
-    await settle();
 
     expect(store.get(AGENT, MODEL)).toBeNull();
     expect(() => readFileSync(file, 'utf8')).toThrow();
   });
 
-  it('does not rewrite the file when the value has not changed', async () => {
+  it('does not rewrite the file when the value has not changed', () => {
     // A turn completes every few seconds and reports the same window every
     // time; that must not mean a disk write every few seconds.
     const store = new ContextWindowStore({ file });
     store.remember(AGENT, MODEL, 1_000_000);
-    await waitForFile();
     rmSync(file);
 
     store.remember(AGENT, MODEL, 1_000_000);
-    await settle();
 
     // Nothing recreated the file, so nothing was written.
     expect(() => readFileSync(file, 'utf8')).toThrow();
     expect(store.get(AGENT, MODEL)).toBe(1_000_000);
   });
 
-  it('refuses a NEW model past the entry cap, but still updates a known one', async () => {
+  it('refuses a NEW model past the entry cap, but still updates a known one', () => {
     // The defensive branch `.claude/rules/testing.md` explicitly requires a
     // test for. Evicting to make room would drop a model the user may be on
     // right now, so growth is what is refused.
@@ -124,12 +115,10 @@ describe('ContextWindowStore — what it refuses to remember', () => {
     const store = new ContextWindowStore({ file });
 
     store.remember(AGENT, 'one-model-too-many', 1_000_000);
-    await settle();
     expect(store.get(AGENT, 'one-model-too-many')).toBeNull();
 
     // A model already in the file is not new, so correcting it still lands.
     store.remember(AGENT, 'model-7', 1_000_000);
-    await settle();
     expect(store.get(AGENT, 'model-7')).toBe(1_000_000);
   });
 });
@@ -197,7 +186,7 @@ describe('ContextWindowStore — a file it cannot trust', () => {
     );
   });
 
-  it('serves the toggle this session even when the write cannot land', async () => {
+  it('serves the toggle this session even when the write cannot land', () => {
     // A disk failure must not cost the meter its denominator for the rest of
     // the session; the in-memory map is updated before the write is attempted.
     const blocked = join(dir, 'blocker', 'nested.json');
@@ -205,7 +194,6 @@ describe('ContextWindowStore — a file it cannot trust', () => {
     const store = new ContextWindowStore({ file: blocked });
 
     store.remember(AGENT, MODEL, 1_000_000);
-    await settle();
 
     expect(store.get(AGENT, MODEL)).toBe(1_000_000);
     expect(() => readFileSync(blocked, 'utf8')).toThrow();

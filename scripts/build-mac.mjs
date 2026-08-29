@@ -7,9 +7,23 @@
  * Why staging at all: the workspace uses hoisted node_modules at the REPO
  * root, so apps/ui has no local node_modules for electron-builder to collect,
  * and the daemon's runtime tree (NestJS + @packages/* + native addons) lives
- * outside the app dir entirely. `pnpm deploy --prod --legacy` materializes
- * each package with real (non-symlinked) production node_modules — exactly the
- * npm-shaped layout electron-builder and asar expect.
+ * outside the app dir entirely. `pnpm deploy --prod` materializes each package
+ * with real (non-symlinked) production node_modules — exactly the npm-shaped
+ * layout electron-builder and asar expect.
+ *
+ * NOT `--legacy`, which is what this used to pass. The legacy deploy refuses
+ * the lockfile outright — it prints `A pnpm-lock.yaml file exists. The current
+ * configuration prohibits to read or write a lockfile` and then RE-RESOLVES
+ * every `^`/`~` range against the registry, so the release shipped dependency
+ * versions no build, test or CI run had ever executed. That is not theoretical:
+ * 1.60.0 went out with nestjs-zod floated 5.4.0 -> 5.5.0, whose stricter
+ * duplicate-component check turned a latent OpenAPI mistake into a fatal
+ * `[cleanupOpenApiDoc]` throw, and the daemon never finished booting — every
+ * install of that build showed "Not connected to the local engine". The modern
+ * deploy copies from the workspace's OWN installed tree instead (`resolved 0`
+ * in its output), so what ships is exactly what `pnpm install` + `pnpm
+ * full-check` ran against. It needs `inject-workspace-packages`, which is why
+ * that config is passed per-invocation below rather than left to the workspace.
  *
  * Output: release/dist/Geniro-<version>-arm64.dmg (+ .zip for the updater).
  */
@@ -130,8 +144,11 @@ try {
 
   // 3. Stage the shell app and the daemon as self-contained trees.
   rmSync(release, { recursive: true, force: true });
-  run('pnpm', ['--filter', '@geniro/ui', 'deploy', '--prod', '--legacy', appDir]);
-  run('pnpm', ['--filter', '@geniro/daemon', 'deploy', '--prod', '--legacy', daemonDir]);
+  const deploy = (pkg, dir) =>
+    run('pnpm', ['--filter', pkg, '--config.inject-workspace-packages=true',
+      'deploy', '--prod', dir]);
+  deploy('@geniro/ui', appDir);
+  deploy('@geniro/daemon', daemonDir);
 
   // 4. Prune what the artifact must not carry: sources/config scaffolding, and
   // the app's @geniro/daemon workspace-dep copy (the real daemon ships under

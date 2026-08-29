@@ -110,10 +110,16 @@ export function ShellOutputDialog({
   useEffect(() => {
     const box = boxRef.current;
     if (box !== null && pinned) {
-      // `scrollTop`, not `scrollToBottom`: that helper is the PAGE scroller's,
-      // and it animates. This is a 24rem box that a poll refills every two
-      // seconds — a smooth jump would still be travelling when the next one
-      // lands. The same assignment `TaskScrollRows` makes on its own box.
+      // A direct assignment rather than `followTail`: this is a 24rem box a
+      // poll refills every two seconds, and the write is the whole operation.
+      // The same assignment `TaskScrollRows` makes on its own box.
+      //
+      // This comment used to say the shared helper "animates", which was the
+      // reason to avoid it — and that was true, and was ALSO the bug: the
+      // transcript's own tail-follow animated too, re-issued per streamed chunk,
+      // and never moved at all. `followTail` no longer takes a behaviour (see
+      // `scroll-to-bottom.ts`), so the hazard this box sidestepped locally is
+      // gone everywhere.
       box.scrollTop = box.scrollHeight;
     }
   }, [text, pinned]);

@@ -18,7 +18,7 @@ import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
 import type { DaemonApis } from '../daemon-api';
 import type { DaemonClient, DebugLogEntry } from '../daemon-client';
-import { scrollToBottom } from '../scroll-to-bottom';
+import { followTail } from '../scroll-to-bottom';
 import { useDebugLog } from './use-debug-log';
 
 /**
@@ -130,7 +130,7 @@ export function DebugPanel({
     // including the document. See `scroll-to-bottom.ts` for the whole story.
     const scroller = tailRef.current?.parentElement;
     if (!paused && scroller) {
-      scrollToBottom(scroller, 'auto');
+      followTail(scroller);
     }
   }, [shown.length, paused]);
 

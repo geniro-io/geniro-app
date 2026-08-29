@@ -2,7 +2,7 @@ import { ChevronRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { cn } from '../components/ui/utils';
-import { scrollToBottom } from '../scroll-to-bottom';
+import { followTail } from '../scroll-to-bottom';
 import { nextFollowState } from './scroll-follow';
 
 /**
@@ -75,7 +75,7 @@ export function ThinkingScroller({
     if (box === null || !following.current) {
       return;
     }
-    scrollToBottom(box, 'auto');
+    followTail(box);
     // Record where WE put it, so the scroll event this causes is not read as
     // the reader scrolling away.
     lastTop.current = box.scrollTop;

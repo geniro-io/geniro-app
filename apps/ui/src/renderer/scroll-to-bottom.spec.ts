@@ -1,17 +1,96 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { revealWithinBox, scrollToBottom } from './scroll-to-bottom';
+import { followTail, jumpToBottom, revealWithinBox } from './scroll-to-bottom';
 
-describe('scrollToBottom', () => {
-  it('drives the box to its own full scroll height', () => {
+/**
+ * A scroll box that models the ONE browser behaviour this module exists to get
+ * right: `auto` lands immediately, `smooth` is an animation, and a second
+ * animated call REPLACES the one still in flight rather than queueing behind
+ * it. Measured in the running app — 53 smooth calls across one streaming turn
+ * left `scrollTop` unchanged at 1404 while `scrollHeight` climbed to 3502.
+ *
+ * Modelled rather than asserted-on-the-argument because the argument is not the
+ * point: what broke was that the viewport never arrived.
+ */
+function browserBox(scrollHeight: number, clientHeight = 500) {
+  const box = {
+    scrollHeight,
+    scrollTop: 0,
+    clientHeight,
+    /** Set while an animation is in flight; a new call discards it. */
+    animating: null as number | null,
+    scrollTo(options: ScrollToOptions) {
+      const target = Math.min(
+        options.top ?? 0,
+        box.scrollHeight - box.clientHeight,
+      );
+      if (options.behavior === 'smooth') {
+        // Starts travelling; arrives only if left alone (see `settle`).
+        box.animating = target;
+        return;
+      }
+      box.animating = null;
+      box.scrollTop = target;
+    },
+    /** The animation finally being left alone to finish. */
+    settle() {
+      if (box.animating !== null) {
+        box.scrollTop = box.animating;
+        box.animating = null;
+      }
+    },
+    grow(by: number) {
+      box.scrollHeight += by;
+    },
+    get distanceFromBottom() {
+      return box.scrollHeight - box.scrollTop - box.clientHeight;
+    },
+  };
+  return box;
+}
+
+describe('followTail', () => {
+  it('lands on the bottom immediately', () => {
     const scrollTo = vi.fn();
-    scrollToBottom({ scrollHeight: 4000, scrollTo }, 'auto');
+    followTail({ scrollHeight: 4000, scrollTo });
     expect(scrollTo).toHaveBeenCalledWith({ top: 4000, behavior: 'auto' });
   });
 
-  it('passes the behaviour through', () => {
+  it('KEEPS UP with a stream that re-issues it faster than an animation runs', () => {
+    // The regression. Each chunk grows the transcript and asks to follow; an
+    // animated follow would cancel its own predecessor every time and never
+    // advance, which is what "it stays in one place while content piles up"
+    // was. Landing immediately means every chunk leaves the viewport at the
+    // tail, however fast they arrive.
+    const box = browserBox(600);
+    for (let chunk = 0; chunk < 30; chunk += 1) {
+      box.grow(40);
+      followTail(box);
+    }
+    expect(box.distanceFromBottom).toBe(0);
+  });
+
+  it('would NOT keep up if it animated — the failure this pins, made visible', () => {
+    // The same 30 chunks through the animated path: every call replaces the one
+    // in flight, so the box never moves until the stream stops. Written out so
+    // the test above is a measurement rather than an assertion about a literal.
+    const box = browserBox(600);
+    for (let chunk = 0; chunk < 30; chunk += 1) {
+      box.grow(40);
+      jumpToBottom(box);
+    }
+    expect(box.scrollTop).toBe(0);
+    expect(box.distanceFromBottom).toBe(1300);
+    // …and only once nothing re-issues it does it finally arrive.
+    box.settle();
+    expect(box.distanceFromBottom).toBe(0);
+  });
+});
+
+describe('jumpToBottom', () => {
+  it('animates, because a single press is what the movement explains', () => {
     const scrollTo = vi.fn();
-    scrollToBottom({ scrollHeight: 120, scrollTo }, 'smooth');
+    jumpToBottom({ scrollHeight: 120, scrollTo });
     expect(scrollTo).toHaveBeenCalledWith({ top: 120, behavior: 'smooth' });
   });
 });

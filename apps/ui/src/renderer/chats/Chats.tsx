@@ -6404,6 +6404,21 @@ export function Chats({
                           also wraps with the chips instead of squeezing the
                           actions. */}
                                 <ContextMeter
+                                  // The row's `gap-x-0.5` is 2px because every
+                                  // OTHER child of it is a chip carrying `px-2`
+                                  // inside its own box — so two chips read as
+                                  // 18px apart while their fills sit 2px apart.
+                                  // The ring carries no padding at all, so that
+                                  // same gap put it 2px from the model chip's
+                                  // edge and it read as stuck to it. `ml-1.5`
+                                  // makes 8px in total: the ring stands off the
+                                  // chip by exactly the chip's own inner
+                                  // padding, so it is as far from that box as
+                                  // the word inside it is. A margin here rather
+                                  // than a wider row gap, which would space the
+                                  // chips from each other as well and undo the
+                                  // one-line rule above.
+                                  className="ml-1.5"
                                   // The expanded readout is about ONE agent's
                                   // window, so it is offered for a chat and not
                                   // for a workflow run, whose nodes each hold one

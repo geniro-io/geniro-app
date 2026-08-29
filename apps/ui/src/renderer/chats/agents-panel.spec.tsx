@@ -2063,15 +2063,17 @@ describe('AgentsPanel pull requests', () => {
     expect(section(el)?.textContent).toContain('builder polish');
   });
 
-  it('says so when a repo has finished pull requests but none open', async () => {
-    // The state a repo whose work is all merged actually lands in — the section
-    // still draws, and its only visible row is this sentence.
+  it('says so when the branch has finished pull requests but none open', async () => {
+    // The state a reused branch lands in — the section still draws, and its
+    // only visible row is this sentence. It names the BRANCH because the list
+    // is the branch's: "Nothing open" alone would read as a claim about the
+    // repo, where colleagues' pull requests may well be open.
     const el = withPullRequests([
       pullRequest(70, 'builder polish', 'merged'),
       pullRequest(69, 'abandoned idea', 'closed'),
     ]);
 
-    expect(section(el)?.textContent).toContain('Nothing open right now');
+    expect(section(el)?.textContent).toContain('Nothing open on this branch');
     expect(foldControl(el)?.textContent).toContain('2');
   });
 

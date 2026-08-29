@@ -26,8 +26,6 @@ vi.setConfig({ testTimeout: 30_000 });
 let dir = '';
 let binDir = '';
 let argsLog = '';
-let openJson = '';
-let closedJson = '';
 let headJson = '';
 let originalPath = '';
 
@@ -77,19 +75,15 @@ function installGhShim(body: string): void {
   process.env.PATH = `${binDir}:${originalPath}`;
 }
 
-/** A shim answering both states from the fixture files, logging its argv. */
+/** A shim answering from the fixture file, logging its argv. */
 const RECORDING_SHIM = `printf '%s\\n' "$*" >> "ARGS_LOG"
-case "$*" in
-  *"--head"*) cat "HEAD_JSON" ;;
-  *"--state open"*) cat "OPEN_JSON" ;;
-  *) cat "CLOSED_JSON" ;;
-esac`;
+cat "HEAD_JSON"`;
 
 function recordingShim(): string {
-  return RECORDING_SHIM.replace('ARGS_LOG', argsLog)
-    .replace('HEAD_JSON', headJson)
-    .replace('OPEN_JSON', openJson)
-    .replace('CLOSED_JSON', closedJson);
+  return RECORDING_SHIM.replace('ARGS_LOG', argsLog).replace(
+    'HEAD_JSON',
+    headJson,
+  );
 }
 
 const ghCalls = (): string[] =>
@@ -99,12 +93,8 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'geniro-gh-'));
   binDir = mkdtempSync(join(tmpdir(), 'geniro-bin-'));
   argsLog = join(binDir, 'args.log');
-  openJson = join(binDir, 'open.json');
-  closedJson = join(binDir, 'closed.json');
   headJson = join(binDir, 'head.json');
   writeFileSync(argsLog, '');
-  writeFileSync(openJson, '[]');
-  writeFileSync(closedJson, '[]');
   writeFileSync(headJson, '[]');
   originalPath = process.env.PATH ?? '';
 });
@@ -120,21 +110,37 @@ afterEach(() => {
 });
 
 describe('readPullRequests', () => {
-  it('asks gh for BOTH states and merges them newest-first', async () => {
-    // The two queries are a correctness point, not tidiness: `--limit` is applied
-    // before the rows come back and gh orders newest-first, so one `--state all`
-    // query on a repo whose recent history is all merges returns no open pull
-    // requests at all. Reverting to a single call fails this case.
+  it('asks ONE head-filtered query, and no repo-wide one', async () => {
+    // The scope of the whole feature, in the only place it can be enforced: a
+    // thread is one folder on one branch, so asking for the repo's open and
+    // closed lists would fetch other people's work for a panel that must not
+    // show it. `--state all` is the other half — a branch's own history, the
+    // merged pull request under the open one that replaced it.
+    initRepo();
+    installGhShim(recordingShim());
+
+    await readPullRequests(dir);
+
+    const calls = ghCalls();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain('--state all --head main');
+    // Named individually as well: a future third query for `--state open` would
+    // pass the length check above only until someone raised it.
+    expect(calls.some((call) => call.includes('--state open'))).toBe(false);
+    expect(calls.some((call) => call.includes('--state closed'))).toBe(false);
+  });
+
+  it('answers the branch, the origin owner and the rows newest-first', async () => {
+    // The fixtures arrive OUT of order, so a pass-through of gh's own ordering
+    // fails here. It matters because `currentPullRequest` takes the first row
+    // when none on the branch is open — the newest is the one the thread is on.
     initRepo();
     writeFileSync(
-      openJson,
-      JSON.stringify([ghRow(71, 'OPEN', '2026-08-20T00:00:00Z')]),
-    );
-    writeFileSync(
-      closedJson,
+      headJson,
       JSON.stringify([
-        ghRow(70, 'MERGED', '2026-08-25T00:00:00Z'),
         ghRow(69, 'CLOSED', '2026-08-10T00:00:00Z'),
+        ghRow(71, 'OPEN', '2026-08-20T00:00:00Z'),
+        ghRow(70, 'MERGED', '2026-08-25T00:00:00Z'),
       ]),
     );
     installGhShim(recordingShim());
@@ -151,10 +157,6 @@ describe('readPullRequests', () => {
       'open',
       'closed',
     ]);
-
-    const calls = ghCalls();
-    expect(calls.some((call) => call.includes('--state open'))).toBe(true);
-    expect(calls.some((call) => call.includes('--state closed'))).toBe(true);
   });
 
   it('asks for exactly the fields the parser requires', async () => {
@@ -174,58 +176,27 @@ describe('readPullRequests', () => {
     }
   });
 
-  it('finds this branch’s pull request even when the capped lists missed it', async () => {
-    // The two lists are a DISPLAY list, where a cap is right; "which one is this
-    // branch's" is a lookup, where a cap is a correctness BOUND. Here neither
-    // list carries it and only the exact `--head` query does — which is what a
-    // repo with more than fifty open pull requests looks like.
-    initRepo();
-    writeFileSync(
-      headJson,
-      JSON.stringify([ghRow(999, 'OPEN', '2026-01-01T00:00:00Z')]),
-    );
-    installGhShim(recordingShim());
-
-    const result = await readPullRequests(dir);
-
-    expect(result.pullRequests.map((entry) => entry.number)).toEqual([999]);
-    // The whole selector, not just the flag: narrowed to `--state open` this
-    // query would stop finding a merged or closed branch pull request past the
-    // cap, which is most of what it is for.
-    expect(
-      ghCalls().some((call) => call.includes('--state all --head main')),
-    ).toBe(true);
-  });
-
-  it('lists a pull request once when the branch query overlaps a list', async () => {
-    initRepo();
-    const both = ghRow(71, 'OPEN', '2026-08-20T00:00:00Z');
-    writeFileSync(openJson, JSON.stringify([both]));
-    writeFileSync(headJson, JSON.stringify([both]));
-    installGhShim(recordingShim());
-
-    const result = await readPullRequests(dir);
-
-    expect(result.pullRequests.map((entry) => entry.number)).toEqual([71]);
-  });
-
-  it('names no branch on a detached HEAD, and still lists the pull requests', async () => {
-    // "Current PR" is defined by this branch, so the detached mapping is what
-    // decides whether a thread claims a pull request that is not its own.
+  it('asks gh NOTHING on a detached HEAD', async () => {
+    // The branch IS the query's argument, so there is nothing to ask — and
+    // nothing any surface would draw from an answer, since a detached HEAD
+    // matches no pull request. Spawning anyway would be a round trip to GitHub
+    // per folder on every window focus for a result thrown away.
     initRepo();
     run(['checkout', '-q', '--detach']);
     writeFileSync(
-      openJson,
+      headJson,
       JSON.stringify([ghRow(71, 'OPEN', '2026-08-20T00:00:00Z')]),
     );
     installGhShim(recordingShim());
 
     const result = await readPullRequests(dir);
 
-    expect(result.branch).toBeNull();
-    expect(result.pullRequests).toHaveLength(1);
-    // And no branch query is even attempted: there is no branch to ask about.
-    expect(ghCalls().some((call) => call.includes('--head'))).toBe(false);
+    expect(result).toEqual({
+      branch: null,
+      originOwner: null,
+      pullRequests: [],
+    });
+    expect(ghCalls()).toEqual([]);
   });
 
   it('answers empty when gh cannot answer', async () => {
@@ -242,50 +213,17 @@ describe('readPullRequests', () => {
     });
   });
 
-  it('FAILS CLOSED when only one of the three queries fails', async () => {
-    // Keeping the half that answered reads as a confident wrong answer rather
-    // than a partial one: with the OPEN query alone failing, the panel would say
-    // "Nothing open right now" and the composer would name a merged pull request
-    // as this thread's — both stated plainly, neither true.
+  it('answers empty rather than naming the branch with no list', async () => {
+    // The failure arm keeps BOTH halves back. Answering `{branch, []}` would
+    // read as "this branch has no pull request" — a confident wrong answer,
+    // where the truth is that gh could not be asked.
     initRepo();
-    writeFileSync(
-      closedJson,
-      JSON.stringify([ghRow(70, 'MERGED', '2026-08-25T00:00:00Z')]),
-    );
-    installGhShim(`case "$*" in
-  *"--head"*) cat "${headJson}" ;;
-  *"--state open"*) exit 1 ;;
-  *) cat "${closedJson}" ;;
-esac`);
+    installGhShim('exit 1');
 
-    expect(await readPullRequests(dir)).toEqual({
-      branch: null,
-      originOwner: null,
-      pullRequests: [],
-    });
-  });
+    const result = await readPullRequests(dir);
 
-  it('FAILS CLOSED when the BRANCH query is the one that fails', async () => {
-    // The third query's own failure arm, which nothing else enters. Dropping
-    // that clause — or writing `onBranch ?? []` — would let a blip on the
-    // LOOKUP quietly downgrade to "this branch has no pull request" while both
-    // display lists answered perfectly well.
-    initRepo();
-    writeFileSync(
-      openJson,
-      JSON.stringify([ghRow(71, 'OPEN', '2026-08-20T00:00:00Z')]),
-    );
-    installGhShim(`case "$*" in
-  *"--head"*) exit 1 ;;
-  *"--state open"*) cat "${openJson}" ;;
-  *) cat "${closedJson}" ;;
-esac`);
-
-    expect(await readPullRequests(dir)).toEqual({
-      branch: null,
-      originOwner: null,
-      pullRequests: [],
-    });
+    expect(result.branch).toBeNull();
+    expect(result.originOwner).toBeNull();
   });
 
   it('hands gh NONE of the agent CLIs’ credentials', async () => {

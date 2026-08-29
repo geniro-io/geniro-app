@@ -11067,6 +11067,30 @@ describe('Chats — the pull request above the composer', () => {
     expect(reads.mock.calls.length).toBeGreaterThan(before);
   });
 
+  it('keeps another branch’s pull request off the panel as well', async () => {
+    // The panel is THIS thread's work, not the repo's. It used to list every
+    // pull request in the repo, which on a busy one buried the branch's own
+    // under fifty of other people's. End-to-end here rather than on the fold
+    // alone: the scoping is wiring in this component, so a panel handed the
+    // unfiltered list would pass every unit test underneath it.
+    const container = await openMyChat({
+      branch: 'fix/builder',
+      originOwner: null,
+      pullRequests: [
+        openPullRequest,
+        {
+          ...openPullRequest,
+          number: 71,
+          title: 'unrelated work',
+          headRefName: 'feat/other',
+        },
+      ],
+    });
+
+    expect(container.textContent).toContain('builder polish');
+    expect(container.textContent).not.toContain('unrelated work');
+  });
+
   it('draws nothing when no pull request is on the folder’s branch', async () => {
     // The end-to-end half of the branch match: a repo full of pull requests
     // none of which is this thread's must not put someone else's on its

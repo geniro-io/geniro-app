@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PullRequestInfo, PullRequestState } from '../../shared/contracts';
-import { currentPullRequest, splitPullRequests } from './pull-request';
+import {
+  currentPullRequest,
+  splitPullRequests,
+  threadPullRequests,
+} from './pull-request';
 
 function pr(
   number: number,
@@ -26,74 +30,83 @@ function pr(
   };
 }
 
-describe('currentPullRequest', () => {
-  it('matches the pull request whose head branch is the checked-out one', () => {
+const numbers = (pullRequests: readonly PullRequestInfo[]): number[] =>
+  pullRequests.map((entry) => entry.number);
+
+describe('threadPullRequests', () => {
+  it('keeps only the pull requests whose head branch is the checked-out one', () => {
+    // The scope of every surface. `gh` is asked with `--head`, so a row on
+    // another branch should not arrive at all — this is the second wall, and
+    // the one that holds when the list is served from an earlier read taken on
+    // a branch the folder has since left.
     expect(
-      currentPullRequest({
-        branch: 'feat/show-prs',
-        originOwner: null,
-        pullRequests: [pr(1, 'feat/other'), pr(2, 'feat/show-prs')],
-      })?.number,
-    ).toBe(2);
+      numbers(
+        threadPullRequests({
+          branch: 'feat/show-prs',
+          originOwner: null,
+          pullRequests: [pr(1, 'feat/other'), pr(2, 'feat/show-prs')],
+        }),
+      ),
+    ).toEqual([2]);
   });
 
-  it('prefers an OPEN pull request over a merged one from the same branch', () => {
-    // Reusing a branch after its pull request merged is routine; naming the
-    // merged one as this thread's would describe work that is already over.
+  it('keeps a branch’s whole history, not just its open pull request', () => {
+    // What the panel lists under a thread: reusing a branch after its pull
+    // request merged is routine, and the merged one is the history OF this
+    // thread's work rather than someone else's — it belongs in the fold below
+    // the open one, which is the ticket's own "merged PRs should be collapsed".
     expect(
-      currentPullRequest({
-        branch: 'feat/reused',
-        originOwner: null,
-        pullRequests: [pr(9, 'feat/reused', 'merged'), pr(10, 'feat/reused')],
-      })?.number,
-    ).toBe(10);
+      numbers(
+        threadPullRequests({
+          branch: 'feat/reused',
+          originOwner: null,
+          pullRequests: [
+            pr(10, 'feat/reused'),
+            pr(9, 'feat/reused', 'merged'),
+            pr(8, 'feat/elsewhere', 'merged'),
+          ],
+        }),
+      ),
+    ).toEqual([10, 9]);
   });
 
-  it('falls back to the newest when none on the branch is open', () => {
-    // The list arrives newest-first, so the first match is the newest one. The
-    // fixtures carry DISTINCT stamps and the assertion reads the chosen one's,
-    // so taking the last instead of the first fails here rather than passing on
-    // two rows that happen to look alike.
-    const chosen = currentPullRequest({
-      branch: 'feat/reused',
-      originOwner: null,
-      pullRequests: [
-        pr(10, 'feat/reused', 'closed', false, '2026-08-25T00:00:00Z'),
-        pr(9, 'feat/reused', 'merged', false, '2026-07-01T00:00:00Z'),
-      ],
-    });
-
-    expect(chosen?.number).toBe(10);
-    expect(chosen?.updatedAt).toBe('2026-08-25T00:00:00Z');
-  });
-
-  it('names none on a detached HEAD', () => {
-    // No branch, so nothing identifies one of these as this thread's — even
+  it('lists none on a detached HEAD', () => {
+    // No branch, so nothing identifies any of these as this thread's — even
     // though the list itself is perfectly good.
     expect(
-      currentPullRequest({
+      threadPullRequests({
         branch: null,
         originOwner: null,
         pullRequests: [pr(1, 'main')],
       }),
-    ).toBeNull();
+    ).toEqual([]);
   });
 
   it('never claims a STRANGER’s fork pull request, however well the branch matches', () => {
     // A fork's `headRefName` names a branch in someone else's repository, and
     // those are routinely ordinary names — so matching on the name alone would
-    // let a thread on `main` name a stranger's pull request and open it.
-    const chosen = currentPullRequest({
-      branch: 'main',
-      originOwner: 'me',
-      pullRequests: [
-        pr(50, 'main', 'open', false, '2026-08-25T00:00:00Z', true, 'stranger'),
-        pr(51, 'main', 'open', false, '2026-08-01T00:00:00Z', false, 'me'),
-      ],
-    });
-
-    // The stranger's is newer AND open, so it wins every other tie-break here.
-    expect(chosen?.number).toBe(51);
+    // put a stranger's pull request under this thread and offer to open it.
+    // `--head` does not filter it out either: gh matches the branch NAME.
+    expect(
+      numbers(
+        threadPullRequests({
+          branch: 'main',
+          originOwner: 'me',
+          pullRequests: [
+            pr(
+              50,
+              'main',
+              'open',
+              false,
+              '2026-08-25T00:00:00Z',
+              true,
+              'stranger',
+            ),
+            pr(51, 'main', 'open', false, '2026-08-01T00:00:00Z', false, 'me'),
+          ],
+        }),
+      ),
+    ).toEqual([51]);
   });
 
   it('DOES claim the user’s own fork pull request', () => {
@@ -101,69 +114,105 @@ describe('currentPullRequest', () => {
     // than on the cross-repository flag alone: with an `upstream` remote `gh`
     // resolves the base repo to upstream, so the user's own pull request comes
     // back cross-repository. Excluding it would leave a fork contributor with
-    // no current-PR line at all.
+    // an empty panel.
     expect(
-      currentPullRequest({
-        branch: 'feat/mine',
-        originOwner: 'me',
-        pullRequests: [
-          pr(50, 'feat/mine', 'open', false, undefined, true, 'me'),
-        ],
-      })?.number,
-    ).toBe(50);
+      numbers(
+        threadPullRequests({
+          branch: 'feat/mine',
+          originOwner: 'me',
+          pullRequests: [
+            pr(50, 'feat/mine', 'open', false, undefined, true, 'me'),
+          ],
+        }),
+      ),
+    ).toEqual([50]);
   });
 
   it('matches the user’s own fork whatever case the remote was cloned with', () => {
     // GitHub logins are case-insensitive and it hands back the canonical
     // spelling, while the origin owner is whatever the user typed when cloning.
-    // Compared raw, `Me` against `me` leaves a fork contributor with no line at
-    // all — the one case the owner match exists to serve.
+    // Compared raw, `Me` against `me` leaves a fork contributor with nothing —
+    // the one case the owner match exists to serve.
     expect(
-      currentPullRequest({
-        branch: 'feat/mine',
-        originOwner: 'Me',
-        pullRequests: [
-          pr(50, 'feat/mine', 'open', false, undefined, true, 'me'),
-        ],
-      })?.number,
-    ).toBe(50);
+      numbers(
+        threadPullRequests({
+          branch: 'feat/mine',
+          originOwner: 'Me',
+          pullRequests: [
+            pr(50, 'feat/mine', 'open', false, undefined, true, 'me'),
+          ],
+        }),
+      ),
+    ).toEqual([50]);
   });
 
   it('claims no fork whose head repository has been deleted', () => {
-    // A deleted fork still belongs in the panel's list, but there is nothing
-    // left to compare against, so it cannot be named as this thread's.
+    // Nothing is left to compare against, so it cannot be shown as this
+    // thread's. A deleted fork is GitHub's own routine null here, which is why
+    // the field is parsed as optional rather than dropping the row.
     expect(
-      currentPullRequest({
+      threadPullRequests({
         branch: 'feat/mine',
         originOwner: 'me',
         pullRequests: [
           pr(50, 'feat/mine', 'open', false, undefined, true, null),
         ],
       }),
-    ).toBeNull();
+    ).toEqual([]);
   });
 
-  it('names none when the only match is a fork and the origin owner is unknown', () => {
+  it('claims no fork when the origin owner is unknown', () => {
     // Without an origin to compare against there is no way to tell the user's
-    // own fork pull request from a stranger's, and claiming the wrong one is
-    // worse than naming none.
+    // own fork pull request from a stranger's, and showing the wrong one is
+    // worse than showing none.
     expect(
-      currentPullRequest({
+      threadPullRequests({
         branch: 'main',
         originOwner: null,
         pullRequests: [pr(50, 'main', 'open', false, undefined, true, 'me')],
       }),
-    ).toBeNull();
+    ).toEqual([]);
   });
 
-  it('names none when no pull request is on this branch', () => {
+  it('lists none when no pull request is on this branch', () => {
     expect(
-      currentPullRequest({
+      threadPullRequests({
         branch: 'feat/untouched',
         originOwner: null,
         pullRequests: [pr(1, 'main')],
       }),
-    ).toBeNull();
+    ).toEqual([]);
+  });
+});
+
+describe('currentPullRequest', () => {
+  it('prefers an OPEN pull request over a merged one from the same branch', () => {
+    // Reusing a branch after its pull request merged is routine; naming the
+    // merged one as this thread's would describe work that is already over.
+    expect(
+      currentPullRequest([
+        pr(9, 'feat/reused', 'merged'),
+        pr(10, 'feat/reused'),
+      ])?.number,
+    ).toBe(10);
+  });
+
+  it('falls back to the newest when none is open', () => {
+    // The list arrives newest-first, so the first row is the newest. The
+    // fixtures carry DISTINCT stamps and the assertion reads the chosen one's,
+    // so taking the last instead of the first fails here rather than passing on
+    // two rows that happen to look alike.
+    const chosen = currentPullRequest([
+      pr(10, 'feat/reused', 'closed', false, '2026-08-25T00:00:00Z'),
+      pr(9, 'feat/reused', 'merged', false, '2026-07-01T00:00:00Z'),
+    ]);
+
+    expect(chosen?.number).toBe(10);
+    expect(chosen?.updatedAt).toBe('2026-08-25T00:00:00Z');
+  });
+
+  it('names none when the thread has no pull request', () => {
+    expect(currentPullRequest([])).toBeNull();
   });
 });
 
@@ -177,8 +226,8 @@ describe('splitPullRequests', () => {
     ]);
 
     // A draft is still open work — it belongs above the fold with the rest.
-    expect(open.map((entry) => entry.number)).toEqual([1, 4]);
-    expect(settled.map((entry) => entry.number)).toEqual([2, 3]);
+    expect(numbers(open)).toEqual([1, 4]);
+    expect(numbers(settled)).toEqual([2, 3]);
   });
 
   it('keeps the order it was given inside each group', () => {
@@ -188,6 +237,6 @@ describe('splitPullRequests', () => {
       pr(3, 'c', 'merged'),
     ]);
 
-    expect(settled.map((entry) => entry.number)).toEqual([5, 4, 3]);
+    expect(numbers(settled)).toEqual([5, 4, 3]);
   });
 });

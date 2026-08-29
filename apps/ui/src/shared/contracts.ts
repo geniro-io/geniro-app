@@ -723,7 +723,10 @@ export interface PullRequestInfo {
 }
 
 /**
- * Pull requests for a folder, newest first.
+ * The pull requests on a folder's checked-out branch, newest first.
+ *
+ * Head-filtered at the query — every surface in the app is scoped to the thread
+ * (`chats/pull-request.ts`), so the repo's other branches are never fetched.
  *
  * There is no "did it work" flag, deliberately. Every failure — no `gh` on the
  * machine, a `gh` that is not signed in, a folder that is not a GitHub checkout,

@@ -356,8 +356,9 @@ function PullRequestList({
 }
 
 /**
- * The pull requests on the repo this run's folder belongs to — open ones
- * listed, finished ones behind a fold that is shut by default.
+ * The pull requests on the branch this run's folder has checked out — open ones
+ * listed, finished ones behind a fold that is shut by default. THIS thread's
+ * work, never the repo's: the caller scopes the list (`chats/pull-request.ts`).
  *
  * The fold is persisted rather than component state for the reason the panel's
  * own collapse is: `Chats.tsx` keys this panel by run id, so `useState` would
@@ -376,8 +377,11 @@ function PullRequestsSection({
   return (
     <PanelSection label="Pull requests">
       {open.length === 0 ? (
+        // Named, because the list is this BRANCH's: under a bare "Nothing open"
+        // a reader would take it for the repo and conclude the panel is broken
+        // while their colleagues' pull requests are open.
         <span className="text-xs text-muted-foreground">
-          Nothing open right now
+          Nothing open on this branch
         </span>
       ) : (
         <PullRequestList pullRequests={open} />

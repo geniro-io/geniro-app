@@ -4,31 +4,53 @@ import type {
 } from '../../shared/contracts';
 
 /**
- * THIS thread's pull request: the one whose head branch is the branch its
- * folder currently has checked out.
+ * THIS thread's pull requests: the ones whose head branch is the branch its
+ * folder currently has checked out, newest first.
+ *
+ * Every pull-request surface is scoped through here — the panel's list, the
+ * sidebar row and the composer band — so a thread never shows work that is not
+ * its own. Repo-wide was the first shape and was rejected in use: a busy repo
+ * put fifty settled pull requests from other people's branches under a thread
+ * whose subject is one branch.
+ *
+ * Usually one row. More when a branch is REUSED — an open pull request over the
+ * merged one it replaced — which is exactly the history worth having under the
+ * thread that is working on it.
  *
  * The match is a live read rather than anything stored — no branch is kept on a
  * run — which is also what keeps it correct after a branch switch inside an
  * open thread.
  */
-export function currentPullRequest(
+export function threadPullRequests(
   result: PullRequestsResult,
-): PullRequestInfo | null {
+): PullRequestInfo[] {
   const { branch, originOwner } = result;
   if (branch === null) {
-    return null;
+    // A detached HEAD is on no branch, so nothing identifies a pull request as
+    // this thread's — even when the list itself is perfectly good.
+    return [];
   }
-  const onThisBranch = result.pullRequests.filter(
+  return result.pullRequests.filter(
     (pullRequest) =>
       pullRequest.headRefName === branch && isOurHead(pullRequest, originOwner),
   );
-  // An OPEN one outranks a settled one from the same branch. Reusing a branch
-  // after its pull request merged is routine, and naming the merged one as this
-  // thread's PR would describe work that is already over. Otherwise the newest,
-  // which is the order the list arrives in.
+}
+
+/**
+ * The ONE of {@link threadPullRequests} the thread is about — the sidebar row
+ * and the composer band each name a single pull request.
+ *
+ * An OPEN one outranks a settled one from the same branch. Reusing a branch
+ * after its pull request merged is routine, and naming the merged one as this
+ * thread's would describe work that is already over. Otherwise the newest,
+ * which is the order the list arrives in.
+ */
+export function currentPullRequest(
+  pullRequests: readonly PullRequestInfo[],
+): PullRequestInfo | null {
   return (
-    onThisBranch.find((pullRequest) => pullRequest.state === 'open') ??
-    onThisBranch[0] ??
+    pullRequests.find((pullRequest) => pullRequest.state === 'open') ??
+    pullRequests[0] ??
     null
   );
 }

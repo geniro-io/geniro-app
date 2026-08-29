@@ -20,6 +20,7 @@ import type {
   CliDetection,
   CliKind,
   DaemonHandle,
+  PullRequestInfo,
   RunConfig,
 } from '../../shared/contracts';
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
@@ -102,7 +103,7 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
-import { currentPullRequest } from './pull-request';
+import { currentPullRequest, threadPullRequests } from './pull-request';
 import { CurrentPullRequestLine } from './pull-request-row';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
@@ -228,6 +229,13 @@ import { useUnseenRuns } from './use-unseen-runs';
  * budget is half a screen on one thread and thirty on another.
  */
 const OLDER_PAGE_AT = 0.3;
+
+/**
+ * The panel's pull-request list for a run that has no folder, or none read yet.
+ * Module scope so its identity is stable — a fresh `[]` per render would be a
+ * changed prop on every keystroke in the composer.
+ */
+const EMPTY_PULL_REQUESTS: readonly PullRequestInfo[] = [];
 
 interface QueuedMessage {
   id: string;
@@ -3215,25 +3223,37 @@ export function Chats({
   );
   const { byDir: pullRequestsByDir, refresh: refreshPullRequests } =
     usePullRequests(pullRequestFolders);
-  const activePullRequests = pullRequestsIn(
-    pullRequestsByDir,
-    activeRun?.cwd ?? null,
-  );
   /**
-   * Each folder's own current pull request, resolved once per read rather than
-   * once per row per render — the composer's text lives in this component, so
-   * the sidebar's row map re-runs on every keystroke.
+   * Each folder's own pull requests — the ones on the branch it has checked
+   * out, which is the whole of what any surface here shows. Resolved once per
+   * read rather than once per row per render: the composer's text lives in this
+   * component, so the sidebar's row map re-runs on every keystroke.
    */
-  const currentPullRequestByDir = useMemo(
+  const threadPullRequestsByDir = useMemo(
     () =>
       new Map(
         pullRequestFolders.map((dir) => [
           dir,
-          currentPullRequest(pullRequestsIn(pullRequestsByDir, dir)),
+          threadPullRequests(pullRequestsIn(pullRequestsByDir, dir)),
         ]),
       ),
     [pullRequestFolders, pullRequestsByDir],
   );
+  /** The one each folder's sidebar row and composer band name. */
+  const currentPullRequestByDir = useMemo(
+    () =>
+      new Map(
+        [...threadPullRequestsByDir].map(([dir, pullRequests]) => [
+          dir,
+          currentPullRequest(pullRequests),
+        ]),
+      ),
+    [threadPullRequestsByDir],
+  );
+  const activePullRequests =
+    activeRun?.cwd == null
+      ? EMPTY_PULL_REQUESTS
+      : (threadPullRequestsByDir.get(activeRun.cwd) ?? EMPTY_PULL_REQUESTS);
   const activePullRequest =
     activeRun?.cwd == null
       ? null
@@ -6430,7 +6450,7 @@ export function Chats({
                     key={activeRun?.id ?? 'no-run'}
                     agents={agents}
                     artifacts={artifacts}
-                    pullRequests={activePullRequests.pullRequests}
+                    pullRequests={activePullRequests}
                     tasksByAgent={tasksByAgent}
                     shellsByAgent={shellsByAgent}
                     onOpenShell={setOpenShell}

@@ -6,6 +6,7 @@ import {
   MAX_HOST_QUESTIONS,
   MAX_QUESTION_HEADER_LENGTH,
 } from '../chat.types';
+import { isHostToolCall } from './host-tool';
 
 /**
  * The name geniro's own MCP server carries for one run.
@@ -29,24 +30,20 @@ export function hostMcpServerName(runId: string): string {
  * Left un-approved, an `ask`-posture chat shows "may I ask you a question?"
  * and then asks the question — a press with nothing behind it.
  *
- * Matched on the server name geniro MINTED plus its own tool name, rather
- * than on the CLI's rendering of them: cursor sends the pair as one prose
- * label (`<server>: <tool>`), and a matcher written against that sentence
- * would silently stop recognising it the day the vendor changes the
- * separator. Requiring BOTH halves is what keeps a user's own server from
- * ever reaching this branch — the run's server name carries its run id, so no
- * other server can be named it.
+ * How the SERVER-qualified spellings are matched — and why geniro's server has
+ * two names — belongs to {@link isHostToolCall}, which every host tool shares.
+ * The bare-name arm below is this tool's alone: it predates that helper and no
+ * shipped CLI is known to send it, but the tool has been live on this arm, so
+ * removing it would narrow a permission that already works. A newer host tool
+ * gets the qualified spellings only.
  */
 export function isHostQuestionCall(
   serverName: string | null,
   toolName: string,
 ): boolean {
-  if (serverName === null) {
-    return false;
-  }
   return (
-    toolName === HOST_QUESTION_TOOL ||
-    (toolName.includes(serverName) && toolName.includes(HOST_QUESTION_TOOL))
+    (serverName !== null && toolName === HOST_QUESTION_TOOL) ||
+    isHostToolCall(serverName, toolName, HOST_QUESTION_TOOL)
   );
 }
 

@@ -134,6 +134,9 @@ describe('groupTranscript', () => {
   it('drops mcp__geniro__* tool calls AND their results entirely', () => {
     // The dedicated call_* kinds already narrate agent calls — the raw
     // envelope JSON rows are duplication.
+    //
+    // The fixed key is what rows STORED before the server was renamed per run
+    // carry; a live turn produces the run-scoped spelling the next test covers.
     const entries = groupTranscript([
       call('mcp__geniro__call_agent', 't1', { agent: 'poet' }),
       item('call_started', { callId: 'call-1', calleeNodeId: 'poet' }),
@@ -142,6 +145,268 @@ describe('groupTranscript', () => {
 
     expect(entries.map((e) => e.type)).toEqual(['item']);
     expect((entries[0] as { item: ChatItem }).item.kind).toBe('call_started');
+  });
+
+  it('drops the host tools’ own rows too — each already draws its own card', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro__report_findings', 't1', { findings: [] }),
+      result('t1', '0 findings recorded.'),
+      call('mcp__geniro__ask_user_question', 't2', { questions: [] }),
+      result('t2', 'The user responded: yes'),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+
+  it('drops cursor’s spelling too — it carries no mcp__ name at all', () => {
+    // That CLI reports the pair as one prose label around the PER-RUN server
+    // name, which is the other of geniro's two names. Matching only the fixed
+    // key left the raw call rendering beside the very card it draws.
+    const entries = groupTranscript([
+      call('geniro-run-1: report_findings', 't1', { findings: [] }),
+      result('t1', '0 findings recorded.'),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+
+  it('leaves a user’s OWN server named geniro visible', () => {
+    // `geniro` is a name a user may legitimately have given a server of their
+    // own, and the legacy arm is a bare prefix away from hiding every call to
+    // it — an agent working through their server while the transcript shows
+    // nothing. The arm is scoped to geniro's own tool names for exactly this.
+    const entries = groupTranscript([
+      call('mcp__geniro__query', 't1', { q: 'x' }),
+      result('t1', 'rows'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+  });
+
+  it('leaves a user’s own MCP tool alone', () => {
+    // A server merely BEGINNING with the word is not geniro's: the prefix
+    // carries the closing `__` that ends the server-name field.
+    const entries = groupTranscript([
+      call('mcp__geniroscope__scan', 't1', {}),
+      result('t1', 'done'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+  });
+
+  it('folds a report_findings row into its own card entry', () => {
+    const entries = groupTranscript([
+      item('report_findings', {
+        level: 'high',
+        findings: [
+          { file: 'src/a.ts', summary: 'A guard was weakened' },
+          { file: 'src/b.ts', summary: 'Another' },
+        ],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['findings']);
+    const card = entries[0] as { report: { level: string | null } };
+    expect(card.report.level).toBe('high');
+  });
+
+  it('gives each report its own card — a re-report is a step, not a rewrite', () => {
+    // Where a task list coalesces a burst of announcements into one card, two
+    // findings reports are two things the agent said at two points.
+    const entries = groupTranscript([
+      item('report_findings', {
+        findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }],
+      }),
+      item('report_findings', {
+        findings: [
+          {
+            file: 'src/a.ts',
+            summary: 'A guard was weakened',
+            outcome: 'fixed',
+          },
+        ],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['findings', 'findings']);
+  });
+
+  it('drops a report_findings row whose payload does not read as a report', () => {
+    const entries = groupTranscript([item('report_findings', { findings: 3 })]);
+    expect(entries).toEqual([]);
+  });
+
+  it('drops the chart tool’s own row under BOTH CLIs’ spellings', () => {
+    // The per-run name is the live one for both now, so this is the spelling
+    // that actually arrives — the raw call beside the plot is the same row
+    // twice.
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_chart', 't1', { labels: [] }),
+      result('t1', 'Chart drawn for the user: 1 series over 2 points.'),
+      call('geniro-run-1: show_chart', 't2', { labels: [] }),
+      result('t2', 'Chart drawn for the user: 1 series over 2 points.'),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+
+  it('folds a show_chart row into its own card entry', () => {
+    const entries = groupTranscript([
+      item('show_chart', {
+        title: 'Test suite duration',
+        kind: 'bar',
+        labels: ['a', 'b'],
+        series: [{ name: 'unit', values: [1, 2] }],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['chart']);
+    const card = entries[0] as {
+      chart: { kind: string; title: string | null };
+    };
+    expect(card.chart.kind).toBe('bar');
+    expect(card.chart.title).toBe('Test suite duration');
+  });
+
+  it('gives each chart its own card — a redraw is a step, not a rewrite', () => {
+    const one = {
+      title: 'Before',
+      kind: 'line',
+      labels: ['a', 'b'],
+      series: [{ name: 'unit', values: [1, 2] }],
+    };
+    const entries = groupTranscript([
+      item('show_chart', one),
+      item('show_chart', { ...one, title: 'After' }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['chart', 'chart']);
+  });
+
+  it('drops a show_chart row whose payload does not read as a chart', () => {
+    expect(groupTranscript([item('show_chart', { labels: [] })])).toEqual([]);
+    expect(
+      groupTranscript([item('show_chart', { labels: ['a'], series: 3 })]),
+    ).toEqual([]);
+  });
+
+  it('folds a show_metrics row into its own card, and hides the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_metrics', 't1', { metrics: [] }),
+      result('t1', 'Scorecard drawn for the user: 2 figures.'),
+      item('show_metrics', {
+        title: 'After the caching change',
+        metrics: [
+          { label: 'Coverage', value: '82%', delta: '+4 pts' },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['metrics']);
+    const card = entries[0] as {
+      metrics: { title: string | null; metrics: { label: string }[] };
+    };
+    expect(card.metrics.title).toBe('After the caching change');
+    expect(card.metrics.metrics.map((m) => m.label)).toEqual([
+      'Coverage',
+      'Flaky tests',
+    ]);
+  });
+
+  it('drops a show_metrics row whose payload holds no readable figure', () => {
+    expect(groupTranscript([item('show_metrics', { metrics: [] })])).toEqual(
+      [],
+    );
+    // The invariant the twin parser exists for: a bare number is not a value.
+    expect(
+      groupTranscript([
+        item('show_metrics', { metrics: [{ label: 'Coverage', value: 0.82 }] }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('counts a scorecard as a CARD everywhere the other three are', () => {
+    // What `isCardEntry` bought: six readers used to spell a three-arm chain
+    // each, so a new card kind was six edits and every miss was silent. This
+    // drives the two that would otherwise have gone wrong — the tool count (a
+    // card holds no invocations to open) and the surrounding group break.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_metrics', { metrics: [{ label: 'Coverage', value: '82%' }] }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'metrics', 'tools']);
+    expect(countTools(entries)).toBe(2);
+  });
+
+  it('folds a show_comparison row into its own card, hiding the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_comparison', 't1', { title: 'x' }),
+      result('t1', 'Comparison drawn for the user: 2 options over 1 criteria.'),
+      item('show_comparison', {
+        title: 'Local store',
+        options: [{ name: 'SQLite' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'sqlite', reason: 'local-first' },
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['comparison']);
+    const card = entries[0] as {
+      comparison: { title: string; recommendedIndex: number | null };
+    };
+    expect(card.comparison.title).toBe('Local store');
+    // Matched case-insensitively back to its column.
+    expect(card.comparison.recommendedIndex).toBe(0);
+  });
+
+  it('drops a show_comparison row that compares fewer than two options', () => {
+    expect(
+      groupTranscript([
+        item('show_comparison', {
+          title: 'T',
+          options: [{ name: 'only' }],
+          criteria: [{ label: 'row', cells: [{ value: 'a' }] }],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('counts a comparison as a CARD everywhere the other four are', () => {
+    // The `isCardEntry` contract. Adding this fifth kind to the predicate but
+    // not to its union stopped five call sites compiling, which is the trade
+    // that abstraction makes — this drives the two it governs at runtime: the
+    // tool count (a card holds no invocations to open) and the group break.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_comparison', {
+        title: 'T',
+        options: [{ name: 'A' }, { name: 'B' }],
+        criteria: [{ label: 'row', cells: [{ value: 'a' }, { value: 'b' }] }],
+      }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'tools',
+      'comparison',
+      'tools',
+    ]);
+    expect(countTools(entries)).toBe(2);
   });
 
   it('an orphan tool_result (no known call) stays a plain item entry', () => {
@@ -820,6 +1085,36 @@ describe('toolResultText', () => {
 });
 
 describe('buildTurnBlocks', () => {
+  it('folds a findings card INTO the agent’s turn block, not beside it', () => {
+    // This is the path every card a user actually sees goes down — `Chats.tsx`
+    // renders through `buildTurnBlocks(buildSubagentBlocks(…))`. A card that
+    // broke the block would leave the agent's own report attributed to nobody.
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'ask' }, null, 'user'),
+        item('message', { text: 'reviewing' }, 'orch'),
+        item(
+          'report_findings',
+          { findings: [{ file: 'src/a.ts', summary: 'A defect' }] },
+          'orch',
+        ),
+        item('message', { text: 'that is everything' }, 'orch'),
+      ]),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual(['item', 'turn-block']);
+    const block = entries[1];
+    if (block?.type !== 'turn-block') {
+      throw new Error('expected a turn block');
+    }
+    expect(block.nodeId).toBe('orch');
+    expect(block.entries.map((e) => e.type)).toEqual([
+      'item',
+      'findings',
+      'item',
+    ]);
+  });
+
   it("folds one agent's messages, tool groups and call cards into ONE block; a user message breaks it", () => {
     const entries = buildTurnBlocks(
       groupTranscript([
@@ -2038,6 +2333,80 @@ describe('groupTranscript task lists', () => {
       tasks('patch', [{ id: '1', title: 'x' }], 'tc-1'),
     ]);
     expect(countTools(entries)).toBe(0);
+  });
+
+  it('counts a findings card as no tool work, and does not walk into it', () => {
+    // The card entry carries no `entries` array, so the recursion has to stop
+    // at it by TYPE — the arm that does so is unreachable from the task-list
+    // test above, and without it this throws rather than miscounting.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('report_findings', {
+        findings: [{ file: 'src/a.ts', summary: 'A defect' }],
+      }),
+    ]);
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'findings']);
+    expect(countTools(entries)).toBe(1);
+  });
+
+  it('closes the open TASK card too, so a later list does not rewrite it', () => {
+    // Without the second delete the third row folds back into the FIRST card —
+    // the one sitting above the findings — and rewrites it in place, so it ends
+    // up showing state from after the findings it sits over.
+    const entries = groupTranscript([
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'pending' }]),
+      item('report_findings', { findings: [] }),
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'completed' }]),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'task-list',
+      'findings',
+      'task-list',
+    ]);
+  });
+
+  it('closes the open tool group — a card is a narrative row of its own', () => {
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('report_findings', { findings: [] }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+    // Two separate groups, not one of two calls folded across the card.
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'findings', 'tools']);
+  });
+
+  it('a chart card closes both open runs and counts as no tool work either', () => {
+    // The second card of the family gets its own pass rather than riding the
+    // findings tests: the recursion stops at it by TYPE, so a missed arm throws
+    // here instead of quietly miscounting.
+    const chart = {
+      title: 'Duration',
+      kind: 'line',
+      labels: ['a', 'b'],
+      series: [{ name: 'unit', values: [1, 2] }],
+    };
+    const entries = groupTranscript([
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'pending' }]),
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_chart', chart),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'completed' }]),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'task-list',
+      'tools',
+      'chart',
+      'tools',
+      'task-list',
+    ]);
+    expect(countTools(entries)).toBe(2);
   });
 });
 

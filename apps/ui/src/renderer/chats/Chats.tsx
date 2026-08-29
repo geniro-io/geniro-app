@@ -59,7 +59,7 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
-import { scrollToBottom } from '../scroll-to-bottom';
+import { followTail, jumpToBottom } from '../scroll-to-bottom';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
@@ -1626,13 +1626,13 @@ export function Chats({
       }
       pendingScrollRef.current = false;
       followingRef.current = true;
-      scrollToBottom(scroller, 'auto');
+      followTail(scroller);
       return;
     }
     if (!followingRef.current) {
       return;
     }
-    scrollToBottom(scroller, 'smooth');
+    followTail(scroller);
     // `liveText` too, not just `items`: a streaming tail grows the transcript
     // with no new item, and keying on `items` alone let the live text run off
     // the bottom of the viewport mid-turn.
@@ -1728,7 +1728,7 @@ export function Chats({
               setAboveTail(!isScrolledToBottom(scroller));
               return;
             }
-            scrollToBottom(scroller, 'auto');
+            followTail(scroller);
           });
     const repoint = (): void => {
       observer?.disconnect();
@@ -1777,7 +1777,7 @@ export function Chats({
     }
     followingRef.current = true;
     setAboveTail(false);
-    scrollToBottom(scroller, 'smooth');
+    jumpToBottom(scroller);
   }, []);
 
   // Persist a chosen folder as the last-used default for the next new chat,

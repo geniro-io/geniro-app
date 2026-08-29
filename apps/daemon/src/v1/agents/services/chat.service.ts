@@ -28,7 +28,21 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ClaudeModesCapability,
+  HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
+  type HostChart,
+  type HostChartOutcome,
+  type HostComparison,
+  type HostComparisonOutcome,
+  type HostFindingsOutcome,
+  type HostFindingsReport,
+  type HostMetrics,
+  type HostMetricsOutcome,
+  type HostPatch,
+  type HostPatchOutcome,
+  type HostPlan,
+  type HostPlanOutcome,
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
@@ -39,6 +53,7 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { applyHostPatch } from '../utils/apply-patch';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
@@ -51,6 +66,12 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import { isHostChartCall } from '../utils/host-chart';
+import { isHostComparisonCall } from '../utils/host-comparison';
+import { isHostFindingsCall } from '../utils/host-findings';
+import { isHostMetricsCall } from '../utils/host-metrics';
+import { isHostPatchCall } from '../utils/host-patch';
+import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
 import {
@@ -69,12 +90,18 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
+import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
+import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
+import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
+import { MetricsBroker } from './metrics.broker';
 import { PartialStreamService } from './partial-stream.service';
+import { PatchBroker } from './patch.broker';
+import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -357,6 +384,12 @@ export class ChatService implements OnModuleInit {
     private readonly cliSessions: CliSessionsService,
     private readonly configDirPins: ConfigDirPinService,
     private readonly userQuestions: UserQuestionBroker,
+    private readonly findingsReports: FindingsReportBroker,
+    private readonly charts: ChartBroker,
+    private readonly patches: PatchBroker,
+    private readonly plans: PlanBroker,
+    private readonly metrics: MetricsBroker,
+    private readonly comparisons: ComparisonBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2207,6 +2240,16 @@ export class ChatService implements OnModuleInit {
       // or the turn is already on its way out.
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
+    /**
+     * Take geniro's own host channels down, whatever ends the turn.
+     *
+     * Declared out here, ahead of the try, because the failure path that needs
+     * it most is the CATCH below: `startTurn` can throw synchronously, and a
+     * registration made inside the try would then have nothing left able to
+     * remove it — leaving the tools listed on the run's own MCP endpoint with
+     * no turn behind them. Reassigned once the registrations exist.
+     */
+    let disposeHostTools = (): void => {};
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -2258,23 +2301,56 @@ export class ChatService implements OnModuleInit {
        * a chip moved to `ask` after a turn ended go on auto-approving.
        */
       /**
-       * geniro's own MCP server for this run, when this CLI is being handed
-       * one.
+       * geniro's own MCP server for this run, per host tool that could ride it.
        *
-       * A FUNCTION rather than a value: `adapter` is resolved further down,
-       * and every reader of this runs later still. Computed here rather than
-       * read off the endpoint built below, because the permission gate needs
-       * it and the endpoint does not exist at that point.
+       * Two predicates because they answer two different questions. The
+       * QUESTION tool goes only to a CLI whose own model has no way to ask
+       * (`AdapterConfig.hostQuestionToolReason`) — claude has AskUserQuestion,
+       * and a second question tool beside it is a second way to do one thing.
+       * The FINDINGS tool goes to every chat: a host-rendered card is a
+       * property of THIS app's transcript, so there is no CLI that already has
+       * one of its own to be duplicated.
+       *
+       * The question one is a FUNCTION because it reads `adapter`, which is
+       * resolved further down while every reader of this runs later still. Both
+       * are computed here rather than read off the endpoint built below,
+       * because the permission gate needs them and the endpoint does not exist
+       * at that point.
        */
       const hostQuestionServer = (): string | null =>
         adapter.getConfig().hostQuestionToolReason === null
           ? null
           : hostMcpServerName(runId);
+      // The one name the run's own MCP server is published under, and so the
+      // name every host tool is matched against. Unconditional where
+      // `hostQuestionServer` is not: the RENDER tools are registered for every
+      // chat, because a transcript that can draw is a property of this app
+      // rather than of the CLI behind it.
+      const hostServerName = hostMcpServerName(runId);
       const autoApproves = (
         toolName: string,
         mode: ChatApprovalMode | undefined,
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
+        isHostFindingsCall(hostServerName, toolName) ||
+        isHostChartCall(hostServerName, toolName) ||
+        // The patch tool auto-approves TOO, and the reason is worth stating
+        // because the opposite looks right: this tool writes to disk, so surely
+        // it should be gated? It IS — by its own card. Two different gates were
+        // being confused. Approving the CALL applies nothing; all it does is
+        // put a diff on screen with Apply and Reject, and the write happens
+        // only behind that second press. Measured on a live turn before this
+        // arm existed: the user got a meaningless "allow propose_patch?" card
+        // first and the patch card second, and answering the first decided
+        // nothing at all.
+        isHostPatchCall(hostServerName, toolName) ||
+        // The plan tool, on the same reading and one step further from the
+        // disk: proposing a plan does not even offer to change a file. Its card
+        // is the gate; a permission card in front of it would ask the user to
+        // approve the asking.
+        isHostPlanCall(hostServerName, toolName) ||
+        isHostMetricsCall(hostServerName, toolName) ||
+        isHostComparisonCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2606,6 +2682,22 @@ export class ChatService implements OnModuleInit {
         (outcome: HostQuestionOutcome) => boolean
       >();
       /**
+       * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
+       * widening of the one above.
+       *
+       * Both hold promises parked on a card, and both are swept the same way
+       * when the turn settles — but the sentence each is swept with is what the
+       * agent reads, and "the turn ended before the question was answered" is
+       * the wrong thing to tell one that proposed a patch. One set with one
+       * generic sentence would save four lines and cost both tools the ability
+       * to say what actually happened.
+       */
+      const outstandingPatches = new Set<
+        (outcome: HostPatchOutcome) => boolean
+      >();
+      /** The same again for {@link HOST_PLAN_TOOL}, on the reason just above. */
+      const outstandingPlans = new Set<(outcome: HostPlanOutcome) => boolean>();
+      /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
        *
@@ -2704,35 +2796,434 @@ export class ChatService implements OnModuleInit {
           this.announceAwaiting(runId);
         });
       };
-      // Only a CLI that needs the tool is handed the endpoint at all — that is
-      // what `hostQuestionServer` being non-null says. An agent told about a
-      // server it has no use for pays for its tools in every prompt, and
-      // claude would be offered a second question tool beside its own.
+      /**
+       * geniro's own findings channel: the tool hands over an already-parsed
+       * report, this writes the one row the card is drawn from.
+       *
+       * Nothing is parked, unlike {@link askUser}: the agent is not waiting on
+       * a person, only on the row being durable. Resolving on the persist is
+       * also what keeps the receipt honest — it says the findings are on
+       * screen, and by then they are.
+       */
+      const reportFindings = async (
+        report: HostFindingsReport,
+      ): Promise<HostFindingsOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'report_findings',
+            null,
+            report,
+          );
+        } catch (err) {
+          // The row IS the card, so a row that was never written is a report
+          // nobody will ever see. Said so, rather than answered with a count
+          // the agent would take as delivery — but the REASON is logged here
+          // and kept here: a persist failure names an absolute database path,
+          // and this string is handed to a model whose provider is off this
+          // machine. The MCP host's own error path refuses the same thing.
+          this.logger.error(
+            `run ${runId} could not persist a findings report: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return { status: 'recorded', count: report.findings.length };
+      };
+      /**
+       * geniro's own chart channel — {@link reportFindings}'s twin, and
+       * deliberately its structural copy rather than a shared helper: what the
+       * two share is the SINK contract, which {@link HostSinkBroker} already
+       * holds, while the item kind, the payload and the receipt's counts are
+       * each tool's own. Folding them together would buy four lines and cost
+       * the ability to give either one a different failure.
+       */
+      const drawChart = async (chart: HostChart): Promise<HostChartOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_chart',
+            null,
+            chart,
+          );
+        } catch (err) {
+          // Logged here and kept here, for the reason spelled out above: a
+          // persist failure names an absolute database path, and the string
+          // this returns is handed to a model whose provider is off this
+          // machine.
+          this.logger.error(
+            `run ${runId} could not persist a chart: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return {
+          status: 'drawn',
+          series: chart.series.length,
+          // The labels ARE the points: every series was aligned to them at the
+          // reader, so this is the x-axis length rather than any one series'.
+          points: chart.labels.length,
+        };
+      };
+      /**
+       * geniro's own scorecard channel — {@link drawChart}'s twin, and its
+       * structural copy for the reason spelled out there: what the drawing
+       * tools share is the SINK contract, which `HostSinkBroker` already holds,
+       * while the item kind, the payload and the receipt's count belong to each
+       * tool alone.
+       */
+      const drawMetrics = async (
+        metrics: HostMetrics,
+      ): Promise<HostMetricsOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_metrics',
+            null,
+            metrics,
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a scorecard: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return { status: 'drawn', count: metrics.metrics.length };
+      };
+      /**
+       * geniro's own comparison channel — the third of the drawing twins, and
+       * its structural copy for the reason spelled out at {@link drawChart}.
+       */
+      const drawComparison = async (
+        comparison: HostComparison,
+      ): Promise<HostComparisonOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_comparison',
+            null,
+            comparison,
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a comparison: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return {
+          status: 'drawn',
+          options: comparison.options.length,
+          criteria: comparison.criteria.length,
+        };
+      };
+      /**
+       * geniro's own patch channel: the agent proposes a change it has NOT
+       * made, the user sees the diff with Apply and Reject, and this writes the
+       * file if they accept.
+       *
+       * PARKS, unlike its two drawing siblings and exactly like {@link askUser}
+       * — and, like it, rides an ordinary `approval_request` row rather than a
+       * second card channel, so the card, the verdict route, the WS gateway and
+       * the settle-time sweep all serve it unchanged. The `input` is spelled in
+       * `Edit`'s own field names so the renderer's `editDiffOf` draws the diff
+       * it already knows how to draw.
+       *
+       * `question: false`: this IS a tool held at a permission gate, which is
+       * what the badge says — the agent is not asking the user something, it is
+       * asking to change their files.
+       *
+       * THIS card appears even in `auto` approval mode, and deliberately. Mode
+       * governs `autoApproves`, which is the path the CLI's request to CALL the
+       * tool takes — and that one is auto-approved, since calling it writes
+       * nothing. Nothing here goes through that path: a proposal whose whole
+       * purpose is the gate would be pointless auto-applied, and
+       * `ask_user_question` already behaves this way for the same reason.
+       */
+      const proposePatch = async (
+        patch: HostPatch,
+      ): Promise<HostPatchOutcome> => {
+        const requestId = randomUUID();
+        const input = {
+          file_path: patch.filePath,
+          ...(patch.oldString === undefined
+            ? {}
+            : { old_string: patch.oldString }),
+          new_string: patch.newString,
+          ...(patch.summary === undefined ? {} : { summary: patch.summary }),
+        };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: HOST_PATCH_TOOL, input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was never
+          // written is a patch nobody can accept — said so rather than left
+          // parked forever on a verdict that cannot arrive. The reason is
+          // logged and NOT returned: a persist failure names an absolute
+          // database path.
+          this.logger.error(
+            `run ${runId} could not persist a patch proposal: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the card could not be written',
+          };
+        }
+        return await new Promise<HostPatchOutcome>((resolve) => {
+          const settle = (outcome: HostPatchOutcome): boolean => {
+            if (!outstandingPatches.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          outstandingPatches.add(settle);
+          this.approvals.track({
+            runId,
+            nodeId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: HOST_PATCH_TOOL,
+            input,
+            question: false,
+            respond: (allow) => {
+              // Liveness is answered SYNCHRONOUSLY, because that is what the
+              // registry's contract returns — while the write itself is async,
+              // so it is queued and the promise settles after it.
+              if (!outstandingPatches.has(settle)) {
+                return false;
+              }
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              enqueue(async () => {
+                const outcome: HostPatchOutcome = allow
+                  ? await applyHostPatch(cwd, patch)
+                  : { status: 'declined' };
+                // Settled first, so the agent is released the moment the write
+                // is done rather than behind the row.
+                settle(outcome);
+                await this.persist(
+                  em,
+                  runId,
+                  await this.seqs.reserve(runId),
+                  'approval_verdict',
+                  null,
+                  {
+                    id: requestId,
+                    allow,
+                    // Written even when the settle found nobody. The turn can be
+                    // cancelled between the press and the write completing, and
+                    // in that window the FILE HAS CHANGED — a transcript that
+                    // recorded nothing would leave the user with an edited
+                    // working tree and no row saying who edited it.
+                    ...(outcome.status === 'applied'
+                      ? { answer: `applied to ${outcome.path}` }
+                      : {}),
+                  },
+                );
+              });
+              return true;
+            },
+          });
+        });
+      };
+      /**
+       * geniro's own plan channel: the agent shows how it means to carry a
+       * request out, and waits.
+       *
+       * {@link proposePatch}'s twin structurally — an ordinary
+       * `approval_request` row, `question: false`, parked until the press — and
+       * simpler in the one way that matters: approving performs NO action, so
+       * there is nothing to run inside the responder and nothing that can fail
+       * between the press and the effect. The verdict IS the answer.
+       *
+       * What it adds is the NOTE. `respond` already carries the user's words
+       * for question cards, so a plan approved with a caveat or refused with a
+       * redirection reaches the agent in the same press rather than costing a
+       * round trip to ask what they meant. Blank is normalized away here rather
+       * than at the card: an empty string travelling as a note would have the
+       * agent quoting silence back at the user.
+       */
+      const proposePlan = async (plan: HostPlan): Promise<HostPlanOutcome> => {
+        const requestId = randomUUID();
+        const input = { title: plan.title, steps: plan.steps };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: HOST_PLAN_TOOL, input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was never
+          // written is a plan nobody can approve. The reason is logged and NOT
+          // returned: a persist failure names an absolute database path, and
+          // this string is handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a plan proposal: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the card could not be written',
+          };
+        }
+        return await new Promise<HostPlanOutcome>((resolve) => {
+          const settle = (outcome: HostPlanOutcome): boolean => {
+            if (!outstandingPlans.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          outstandingPlans.add(settle);
+          this.approvals.track({
+            runId,
+            nodeId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: HOST_PLAN_TOOL,
+            input,
+            question: false,
+            respond: (allow, answer) => {
+              const note =
+                answer !== undefined && answer.trim().length > 0
+                  ? answer.trim()
+                  : undefined;
+              const delivered = settle({
+                status: allow ? 'approved' : 'declined',
+                ...(note === undefined ? {} : { note }),
+              });
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              if (delivered) {
+                enqueue(async () => {
+                  await this.persist(
+                    em,
+                    runId,
+                    await this.seqs.reserve(runId),
+                    'approval_verdict',
+                    null,
+                    {
+                      id: requestId,
+                      allow,
+                      // Recorded whenever there was a note, on either verdict:
+                      // it reached the agent, so it belongs in the transcript
+                      // beside the yes or no it qualified.
+                      ...(note === undefined ? {} : { answer: note }),
+                    },
+                  );
+                });
+              }
+              return delivered;
+            },
+          });
+          this.announceAwaiting(runId);
+        });
+      };
+      // The endpoint is granted for the UNION of reasons a host tool could be
+      // wanted here, and the listing itself stays composed per request, so an
+      // agent is only ever told about the tools it can actually use. What that
+      // works out to today is: every chat gets the endpoint, because the RENDER
+      // tools have a use in all of them, while the question tool is
+      // still registered only where `hostQuestionServer` is non-null — so
+      // claude is never offered a second question tool beside its own, which
+      // is the invariant this grant has always carried.
       //
       // The token is REUSED across a run's turns where one was already minted:
       // it is the run's credential for its own route, and re-minting per turn
       // would leave the previous turn's endpoint refused for no reason.
       const questionServer = hostQuestionServer();
+      // Only where there is a port to reach: a token nobody can present is a
+      // credential registered as a redaction secret and held to run teardown
+      // for nothing.
+      const port = this.runtime.port;
       const callToken =
-        questionServer === null
+        port === null
           ? null
           : (this.callTokens.get(runId, SINGLE_AGENT_NODE) ?? mintToken());
       if (callToken !== null) {
         this.callTokens.issue(runId, SINGLE_AGENT_NODE, callToken);
       }
       const mcpEndpoint =
-        callToken !== null &&
-        questionServer !== null &&
-        this.runtime.port !== null
+        port !== null && callToken !== null
           ? {
-              url: `http://127.0.0.1:${this.runtime.port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
+              url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
               token: callToken,
-              serverName: questionServer,
+              serverName: hostServerName,
             }
           : null;
-      const disposeAsker = mcpEndpoint
-        ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
+      const disposeAsker =
+        mcpEndpoint && questionServer !== null
+          ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
+          : null;
+      const disposeReporter = mcpEndpoint
+        ? this.findingsReports.register(
+            runId,
+            SINGLE_AGENT_NODE,
+            reportFindings,
+          )
         : null;
+      const disposeDrawer = mcpEndpoint
+        ? this.charts.register(runId, SINGLE_AGENT_NODE, drawChart)
+        : null;
+      const disposeProposer = mcpEndpoint
+        ? this.patches.register(runId, SINGLE_AGENT_NODE, proposePatch)
+        : null;
+      const disposePlanner = mcpEndpoint
+        ? this.plans.register(runId, SINGLE_AGENT_NODE, proposePlan)
+        : null;
+      const disposeScorer = mcpEndpoint
+        ? this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics)
+        : null;
+      const disposeComparer = mcpEndpoint
+        ? this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison)
+        : null;
+      // Idempotent by construction — each disposer only deletes the entry it
+      // installed — which is what lets the settle path call it for ORDERING
+      // (before the sweep) while the two failure paths call it for COVERAGE,
+      // without either having to know about the other.
+      disposeHostTools = (): void => {
+        disposeAsker?.();
+        disposeReporter?.();
+        disposeDrawer?.();
+        disposeProposer?.();
+        disposePlanner?.();
+        disposeScorer?.();
+        disposeComparer?.();
+      };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -2757,10 +3248,10 @@ export class ChatService implements OnModuleInit {
           // words as they are written. Each adapter decides what that costs —
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
-          // …and for a CLI whose own model has no way to ask, the endpoint
-          // carrying geniro's `ask_user_question`. Null for one that already
-          // has its own tool, so nothing is registered where it would only be
-          // a second way to do the same thing.
+          // …and geniro's own endpoint, carrying whichever host tools this
+          // turn registered — the findings tool always, the question tool only
+          // for a CLI whose own model has no way to ask. Null only where the
+          // daemon has no bound port to publish.
           ...(mcpEndpoint === null ? {} : { mcpEndpoint }),
           streamPartials,
           images: attachments.map((attachment) => ({
@@ -3386,12 +3877,27 @@ export class ChatService implements OnModuleInit {
           // The turn that could put a question on screen is over: take the
           // asker down FIRST, so a call arriving during the rest of this
           // finalizer is refused outright rather than parked on a card the
-          // sweep below is in the middle of closing.
-          disposeAsker?.();
+          // sweep below is in the middle of closing. The reporter goes with
+          // it, and for the same reason on its own terms — the persist chain
+          // has just been drained, so a report landing after this point would
+          // reserve a seq against a turn that has finished writing.
+          disposeHostTools();
           for (const settle of [...outstandingAsks]) {
             settle({
               status: 'unavailable',
               reason: 'the turn ended before the question was answered',
+            });
+          }
+          for (const settle of [...outstandingPatches]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the patch was answered',
+            });
+          }
+          for (const settle of [...outstandingPlans]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the plan was answered',
             });
           }
           // Sweep BEFORE the branches below — the failure path early-returns,
@@ -3518,11 +4024,23 @@ export class ChatService implements OnModuleInit {
       // takes the plain persist-only path instead of writing into a dead
       // closure and reporting the change as live.
       void handle.done.finally(() => this.liveApproval.delete(runId));
+      // Attached to the FINALIZER, not to `handle.done`: the finalizer disposes
+      // them itself, in order, after the persist chain drains — hanging this off
+      // `handle.done` would run it first and move that teardown moment earlier
+      // for every ordinary settle. What it covers is the finalizer failing
+      // partway (`await chain` rejecting), where the registrations would
+      // otherwise outlive the turn and leave the tools listed on the run's
+      // endpoint with nothing able to serve them. `handle.done` itself never
+      // rejects, per `AgentTurnHandle.done`.
+      void finalized.finally(disposeHostTools);
 
       return userWire;
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
-      // so the run is not wedged as permanently busy.
+      // so the run is not wedged as permanently busy, and take the host tools
+      // down with it: `startTurn` can throw synchronously, and nothing else
+      // would ever unregister them.
+      disposeHostTools();
       await this.setRunStatus(em, runId, 'failed').catch(
         (statusErr: unknown) => {
           this.logger.error(

@@ -6,7 +6,21 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
-import { HOST_QUESTION_TOOL } from '../../agents/chat.types';
+import {
+  HOST_CHART_TOOL,
+  HOST_COMPARISON_TOOL,
+  HOST_FINDINGS_TOOL,
+  HOST_METRICS_TOOL,
+  HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
+  HOST_QUESTION_TOOL,
+} from '../../agents/chat.types';
+import { ChartBroker } from '../../agents/services/chart.broker';
+import { ComparisonBroker } from '../../agents/services/comparison.broker';
+import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { PatchBroker } from '../../agents/services/patch.broker';
+import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
@@ -43,13 +57,95 @@ function broker(): CallBroker {
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
+  findings = new FindingsReportBroker(),
+  charts = new ChartBroker(),
+  patches = new PatchBroker(),
+  plans = new PlanBroker(),
+  metrics = new MetricsBroker(),
+  comparisons = new ComparisonBroker(),
 ): McpServerService {
-  return new McpServerService(callBroker, questions, {
-    token: 'launch',
-    version: '9.9.9',
-    startedAt: 0,
-    port: 4870,
-  });
+  return new McpServerService(
+    callBroker,
+    questions,
+    findings,
+    charts,
+    patches,
+    plans,
+    metrics,
+    comparisons,
+    {
+      token: 'launch',
+      version: '9.9.9',
+      startedAt: 0,
+      port: 4870,
+    },
+  );
+}
+
+/**
+ * A service whose only registered host tool is the patch one.
+ *
+ * Named rather than spelled out at five call sites: `propose_patch` is the
+ * fifth positional argument, so reaching it means naming four empty brokers,
+ * and a reader would have to count them to see which tool a test is about.
+ */
+/**
+ * A service with EVERY host sink registered, so `tools/list` returns the whole
+ * render family at once. What the description tests below are written against:
+ * a model reads these as one list, not one tool at a time, which is exactly how
+ * the boundary claims came to be missing from one side of a pair.
+ */
+async function everyHostTool(): Promise<
+  { name: string; description: string }[]
+> {
+  const noop = async (): Promise<never> => {
+    throw new Error('not called');
+  };
+  const questions = new UserQuestionBroker();
+  const findings = new FindingsReportBroker();
+  const charts = new ChartBroker();
+  const patches = new PatchBroker();
+  const plans = new PlanBroker();
+  const metrics = new MetricsBroker();
+  const comparisons = new ComparisonBroker();
+  for (const broker of [
+    questions,
+    findings,
+    charts,
+    patches,
+    plans,
+    metrics,
+    comparisons,
+  ]) {
+    broker.register('run-1', 'agent', noop as never);
+  }
+  const { json } = await post(
+    service(
+      new CallBroker(),
+      questions,
+      findings,
+      charts,
+      patches,
+      plans,
+      metrics,
+      comparisons,
+    ),
+    'run-1',
+    'agent',
+    rpc('tools/list', {}),
+  );
+  return (json().result as { tools: { name: string; description: string }[] })
+    .tools;
+}
+
+function patchService(patches: PatchBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    new UserQuestionBroker(),
+    new FindingsReportBroker(),
+    new ChartBroker(),
+    patches,
+  );
 }
 
 /**
@@ -476,6 +572,492 @@ describe('McpServerService', () => {
     expect(JSON.parse(result.content[0]!.text).error).toContain('INVALID_ARGS');
   });
 
+  it('does not offer report_findings to a node with nowhere to draw a card', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_FINDINGS_TOOL);
+  });
+
+  it('offers report_findings once a turn has registered a reporter', async () => {
+    const findings = new FindingsReportBroker();
+    findings.register('run-1', 'agent', async () => ({
+      status: 'recorded',
+      count: 0,
+    }));
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_FINDINGS_TOOL);
+    expect(tool).toBeDefined();
+    // The advertised shape is claude's ReportFindings, snake_case included, so
+    // an agent that has learned that tool needs to learn nothing new here.
+    const items = (
+      tool!.inputSchema as {
+        properties: { findings: { items: { required: string[] } } };
+      }
+    ).properties.findings.items;
+    expect(items.required).toEqual(['file', 'summary', 'failure_scenario']);
+  });
+
+  it('tools/call report_findings hands the report over and answers with a receipt', async () => {
+    const findings = new FindingsReportBroker();
+    const recorded: unknown[] = [];
+    findings.register('run-1', 'agent', async (report) => {
+      recorded.push(report);
+      return { status: 'recorded', count: report.findings.length };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: {
+          level: 'high',
+          findings: [
+            {
+              file: 'src/queue/processor.ts',
+              line: 402,
+              summary: 'finalizeCompleted no longer checks generation',
+              short_summary: 'CAS guard weakened',
+              failure_scenario: 'A superseded worker wins the write.',
+              verdict: 'CONFIRMED',
+            },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(recorded).toEqual([
+      {
+        level: 'high',
+        findings: [
+          {
+            file: 'src/queue/processor.ts',
+            line: 402,
+            summary: 'finalizeCompleted no longer checks generation',
+            shortSummary: 'CAS guard weakened',
+            failureScenario: 'A superseded worker wins the write.',
+            verdict: 'CONFIRMED',
+          },
+        ],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the findings themselves — the card is how the user sees
+    // them, and echoing them here would spend the window on them twice.
+    expect(result.content[0]!.text).toBe(
+      '1 finding recorded and shown to the user.',
+    );
+    expect(result.content[0]!.text).not.toContain('finalizeCompleted');
+  });
+
+  it('accepts an empty report — nothing survived verification is an answer', async () => {
+    const findings = new FindingsReportBroker();
+    findings.register('run-1', 'agent', async (report) => ({
+      status: 'recorded',
+      count: report.findings.length,
+    }));
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: [] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toBe('No findings recorded.');
+  });
+
+  it('refuses a findings argument that is not an array', async () => {
+    const findings = new FindingsReportBroker();
+    let reports = 0;
+    findings.register('run-1', 'agent', async () => {
+      reports += 1;
+      return { status: 'recorded', count: 0 };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: 'three things' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(reports).toBe(0);
+  });
+
+  it('tells a call whose findings all failed to parse apart from an empty report', async () => {
+    // Answering "0 findings recorded" here would have the model believe it had
+    // reported and move on, when every finding it found was dropped at the edge.
+    const findings = new FindingsReportBroker();
+    let reports = 0;
+    findings.register('run-1', 'agent', async () => {
+      reports += 1;
+      return { status: 'recorded', count: 0 };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: [{ summary: 'a defect with no file' }] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(reports).toBe(0);
+  });
+
+  it('answers a report it cannot record without flagging a tool failure', async () => {
+    // The listing and the call are separate requests, so a turn can settle
+    // between them. The agent still holds the findings and can write them out.
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: {
+          findings: [
+            {
+              file: 'a.ts',
+              summary: 'x',
+              failure_scenario: 'y',
+            },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('could not be recorded');
+    expect(result.content[0]!.text).toContain('in your reply');
+  });
+
+  it('does not offer show_chart to a node with nowhere to draw one', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_CHART_TOOL);
+  });
+
+  it('offers show_chart once a turn has registered a drawer', async () => {
+    const charts = new ChartBroker();
+    charts.register('run-1', 'agent', async () => ({
+      status: 'drawn',
+      series: 1,
+      points: 1,
+    }));
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_CHART_TOOL);
+    expect(tool).toBeDefined();
+    // The kinds the card can actually draw, and no more: an enum the model can
+    // read is what keeps `kind` from arriving as "sunburst".
+    const kind = (
+      tool!.inputSchema as { properties: { kind: { enum: string[] } } }
+    ).properties.kind;
+    expect(kind.enum).toEqual(['line', 'bar', 'area']);
+  });
+
+  it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
+    const charts = new ChartBroker();
+    const drawn: unknown[] = [];
+    charts.register('run-1', 'agent', async (chart) => {
+      drawn.push(chart);
+      return {
+        status: 'drawn',
+        series: chart.series.length,
+        points: chart.labels.length,
+      };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: {
+          title: 'Test suite duration',
+          kind: 'line',
+          y_label: 'seconds',
+          labels: ['a1b2', 'c3d4'],
+          series: [{ name: 'unit', values: [12.1, 13.4] }],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(drawn).toEqual([
+      {
+        title: 'Test suite duration',
+        kind: 'line',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        series: [{ name: 'unit', values: [12.1, 13.4] }],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the numbers — same bargain as the findings tool.
+    expect(result.content[0]!.text).toBe(
+      'Chart drawn for the user: 1 series over 2 points.',
+    );
+    expect(result.content[0]!.text).not.toContain('12.1');
+  });
+
+  it('refuses a chart with nothing plottable, without reaching the drawer', async () => {
+    // Unlike an empty findings report — a real review outcome — a chart of
+    // nothing is only ever a mistake, so it is answered as a malformed call.
+    const charts = new ChartBroker();
+    const drawn: unknown[] = [];
+    charts.register('run-1', 'agent', async (chart) => {
+      drawn.push(chart);
+      return { status: 'drawn', series: 0, points: 0 };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: { title: 'Nothing', kind: 'bar', labels: [], series: [] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(drawn).toEqual([]);
+  });
+
+  it('answers a chart it cannot draw without flagging a tool failure', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: {
+          title: 'Late',
+          kind: 'line',
+          labels: ['a'],
+          series: [{ name: 'unit', values: [1] }],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('could not be drawn');
+    expect(result.content[0]!.text).toContain('in your reply');
+  });
+
+  it('does not offer propose_patch to a node with nobody to accept it', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_PATCH_TOOL);
+  });
+
+  it('offers propose_patch with Edit’s own field names', async () => {
+    // Not cosmetic: the renderer's `editDiffOf` reads exactly these, so the
+    // card draws the diff with no second diff renderer.
+    const patches = new PatchBroker();
+    patches.register('run-1', 'agent', async () => ({
+      status: 'declined',
+    }));
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_PATCH_TOOL);
+    expect(tool).toBeDefined();
+    const schema = tool!.inputSchema as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      'file_path',
+      'new_string',
+      'old_string',
+      'summary',
+    ]);
+    // `old_string` is NOT required — omitting it is how a whole file is written.
+    expect(schema.required).not.toContain('old_string');
+  });
+
+  it('tools/call propose_patch hands the patch over and answers the verdict', async () => {
+    const patches = new PatchBroker();
+    const seen: unknown[] = [];
+    patches.register('run-1', 'agent', async (patch) => {
+      seen.push(patch);
+      return { status: 'applied', path: 'src/a.ts' };
+    });
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: {
+          file_path: 'src/a.ts',
+          old_string: 'const timeout = 30;',
+          new_string: 'const timeout = 60;',
+          summary: 'Raise the timeout',
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(seen).toEqual([
+      {
+        filePath: 'src/a.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Applied to src/a.ts');
+    expect(result.content[0]!.text).toContain('do not write it again');
+  });
+
+  it('a REJECTION is not a tool error — the user used the gate', async () => {
+    // Flagged as an error, a model reads its own call as malformed and retries
+    // the change the user just turned down.
+    const patches = new PatchBroker();
+    patches.register('run-1', 'agent', async () => ({ status: 'declined' }));
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: { file_path: 'a.ts', new_string: 'x' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Do not apply it another way');
+  });
+
+  it('refuses a malformed patch by NAMING the field, without asking anybody', async () => {
+    const patches = new PatchBroker();
+    const seen: unknown[] = [];
+    patches.register('run-1', 'agent', async (patch) => {
+      seen.push(patch);
+      return { status: 'declined' };
+    });
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: {
+          file_path: 'a.ts',
+          old_string: 'same',
+          new_string: 'same',
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('identical');
+    expect(seen).toEqual([]);
+  });
+
   it('methodNotAllowed answers 405 with a JSON-RPC error body', () => {
     const send = vi.fn();
     const header = vi.fn(() => ({ send }));
@@ -486,5 +1068,104 @@ describe('McpServerService', () => {
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({ jsonrpc: '2.0' }),
     );
+  });
+});
+
+/**
+ * The tool DESCRIPTIONS, which are the routing logic — the only thing that
+ * decides which of six near-neighbours a model reaches for. They were written
+ * one tool at a time and audited only later as a set, which is how `show_chart`
+ * came to describe the scorecard case without ever naming `show_metrics`, and
+ * how `propose_patch` came to promise "the four outcomes" and list three.
+ *
+ * Asserted on the tools/list RESPONSE rather than on the source string: that is
+ * the text a model actually receives.
+ */
+describe('McpServerService — what the descriptions tell a model', () => {
+  const find = (
+    tools: { name: string; description: string }[],
+    name: string,
+  ): string => {
+    const tool = tools.find((t) => t.name === name);
+    expect(tool, `${name} was not listed`).toBeDefined();
+    return tool!.description;
+  };
+
+  it('makes BOTH sides of the chart/scorecard boundary name the other', async () => {
+    // The pair that actually collides: a model with numbers in hand must pick
+    // one. Stating the rule on one side only leaves a model reading top-down —
+    // which hits show_chart first — with nothing to send it onward.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_CHART_TOOL)).toContain('show_metrics');
+    expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
+  });
+
+  it('names ALL FOUR patch outcomes it promises', async () => {
+    // It said "the four outcomes mean different things" and listed three,
+    // leaving `unavailable` — the one where nothing was decided at all — for
+    // the model to guess at.
+    const description = find(await everyHostTool(), HOST_PATCH_TOOL);
+    expect(description).toContain('four outcomes');
+    for (const outcome of ['applied', 'rejected', 'stale', 'unavailable']) {
+      expect(description, `outcome ${outcome} unmentioned`).toContain(outcome);
+    }
+  });
+
+  it('disambiguates the two tools claude ships its own version of', async () => {
+    // Measured in the claude 2.1.247 binary: `ReportFindings` and
+    // `ExitPlanMode` are both in there. `ExitPlanMode` is REACHABLE from
+    // geniro, since `plan` is one of the four approval modes a chat can run
+    // under — so a model can genuinely hold both tools at once.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_FINDINGS_TOOL)).toContain('ReportFindings');
+    expect(find(tools, HOST_PLAN_TOOL)).toContain('ExitPlanMode');
+  });
+
+  it('tells every DRAWING tool to call once and not restate the data', async () => {
+    // The bargain the whole family makes: the payload is the card and the
+    // result is a receipt, so a model that also writes the data out has put it
+    // on screen twice and spent its context for the privilege.
+    const tools = await everyHostTool();
+    for (const name of [
+      HOST_FINDINGS_TOOL,
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+    ]) {
+      const description = find(tools, name);
+      expect(description, `${name} never says ONCE`).toContain('ONCE');
+      expect(description, `${name} never says "do not also"`).toContain(
+        'do not also',
+      );
+    }
+  });
+
+  it('gives every host tool a WHEN — and every card tool a WHEN NOT', async () => {
+    // A description that only says what a tool does gets called whenever it
+    // could apply rather than when it should.
+    const tools = await everyHostTool();
+    for (const name of [
+      HOST_QUESTION_TOOL,
+      HOST_FINDINGS_TOOL,
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_PATCH_TOOL,
+      HOST_PLAN_TOOL,
+    ]) {
+      expect(find(tools, name), `${name} never says when`).toMatch(
+        /Use it (when|whenever)/,
+      );
+    }
+    for (const name of [
+      HOST_QUESTION_TOOL,
+      HOST_FINDINGS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_PLAN_TOOL,
+    ]) {
+      expect(find(tools, name), `${name} never says when NOT`).toMatch(
+        /(Do NOT use it|Do not use it|instead\.|write a table instead)/,
+      );
+    }
   });
 });

@@ -12,15 +12,6 @@ import type { SessionAsk } from '../utils/spawn-cli';
 // agree on cannot be owned by a module that imports this one.
 
 /**
- * The name geniro's own MCP server is published under, in EVERY CLI's config:
- * claude's per-turn `--mcp-config` file and the `.cursor/mcp.json` entry
- * merged for a cursor turn. It belongs to us, not to either CLI — spelling it
- * twice is how the two configs would silently name different servers.
- * A foreign entry found under this key is a conflict, never ours to overwrite.
- */
-export const GENIRO_MCP_SERVER_KEY = 'geniro';
-
-/**
  * The tool names the per-run MCP endpoint serves. The cursor entry
  * auto-approves exactly these (never `--approve-mcps`, which would
  * blanket-approve the user's other servers too), so the trust expansion stays
@@ -2348,12 +2339,15 @@ export interface AgentTurnInput {
    */
   configDir?: string | null;
   /**
-   * Loopback MCP endpoint granting this turn the agent-call tools
-   * (call_agent / await_agent / answer_agent). Delivery is adapter-specific —
-   * claude gets a per-turn config file referenced by `--mcp-config` (the
-   * token travels IN the 0600 file, never argv); the ACP adapter sends it as
-   * an HTTP header inside a `session/new` stdin frame. Absent or null: the
-   * turn gets no call tools.
+   * Loopback MCP endpoint carrying geniro's OWN tools for this turn — whichever
+   * of them the turn registered. The listing is composed per request at the
+   * endpoint, so holding this grants nothing by itself: a node with callees
+   * sees the agent-call tools, a turn that can put a card on screen sees
+   * `ask_user_question`, a chat sees `report_findings`. Delivery is
+   * adapter-specific — claude gets a per-turn config file referenced by
+   * `--mcp-config` (the token travels IN the 0600 file, never argv); the ACP
+   * adapter sends it as an HTTP header inside a `session/new` stdin frame.
+   * Absent or null: the daemon has no bound port to publish.
    */
   mcpEndpoint?: {
     url: string;
@@ -2361,13 +2355,12 @@ export interface AgentTurnInput {
     /**
      * The name geniro's own MCP server is published under for this turn.
      *
-     * The ACP path uses it verbatim (per-run, so no project server can
-     * collide). Claude currently IGNORES it and publishes under the shared
-     * {@link GENIRO_MCP_SERVER_KEY}, because the renderer drops geniro's own
-     * call tools from the transcript by matching that fixed prefix. Since
-     * `--strict-mcp-config` is no longer passed, `prepareTurn`'s
-     * `definesGeniroServer` guard stands in for the uniqueness this field
-     * gives ACP for free.
+     * Per RUN, and both transports now use it verbatim. The run id in it is
+     * what makes it unforgeable: `--strict-mcp-config` is not passed, so the
+     * user's own servers load beside this one, and a shared name would let ours
+     * silently shadow one of theirs. It is also what the permission gate
+     * matches a call BACK to geniro's tools on (`isHostToolCall`), so a user's
+     * own server can never reach that branch.
      */
     serverName: string;
     /** Override for the CLI's MCP tool timeout (sync calls run minutes). */

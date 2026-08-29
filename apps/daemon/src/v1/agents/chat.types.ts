@@ -177,6 +177,547 @@ export type HostQuestionOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/findings-payload.ts — the reader over
+ * the `report_findings` item payload this tool produces.
+ *
+ * The second tool geniro registers on the run's own MCP server. It exists so an
+ * agent can hand the APP a typed list of findings and have the transcript draw
+ * them, instead of printing markdown the transcript shows as prose. The findings
+ * never re-enter the model's context: the call answers with a short receipt, and
+ * the data lives in the item the renderer reads.
+ *
+ * The ARGUMENT shape deliberately mirrors claude's own `ReportFindings` tool,
+ * snake_case field names included, so an agent that has learned one already
+ * knows this one. The daemon's own types are camelCase; `readHostFindingsReport`
+ * is the one place that seam is crossed.
+ *
+ * Unlike {@link HOST_QUESTION_TOOL} this is NOT registered only for a CLI that
+ * lacks its own: a host-rendered card is a property of THIS app's transcript,
+ * which no CLI can produce for itself.
+ */
+export const HOST_FINDINGS_TOOL = 'report_findings';
+
+/**
+ * Caps on one report. They TRUNCATE rather than refuse, on the same rule the
+ * question caps above follow: a model that found forty things has still done
+ * the work, and failing the call would leave it no way to report at all.
+ */
+export const MAX_HOST_FINDINGS = 32;
+export const MAX_FINDING_TEXT_LENGTH = 4000;
+export const MAX_FINDING_SHORT_SUMMARY_LENGTH = 60;
+export const MAX_FINDING_CATEGORY_LENGTH = 40;
+export const MAX_FINDING_PATH_LENGTH = 1024;
+
+export const FINDING_LEVELS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+export type FindingLevel = (typeof FINDING_LEVELS)[number];
+
+export const FINDING_VERDICTS = ['CONFIRMED', 'PLAUSIBLE'] as const;
+export type FindingVerdict = (typeof FINDING_VERDICTS)[number];
+
+export const FINDING_OUTCOMES = [
+  'fixed',
+  'skipped',
+  'no_change_needed',
+] as const;
+export type FindingOutcome = (typeof FINDING_OUTCOMES)[number];
+
+/** One finding of a host-rendered report. */
+export interface HostFinding {
+  file: string;
+  line?: number;
+  summary: string;
+  /** The collapsed label — short because it shares one row with a badge. */
+  shortSummary?: string;
+  /**
+   * Optional here though the tool advertises it as required: the reader is
+   * defensive, and a finding that named a real defect without spelling out how
+   * it fails is worth a row rather than being dropped whole.
+   */
+  failureScenario?: string;
+  category?: string;
+  /** Present only where the agent ran a verification pass over the finding. */
+  verdict?: FindingVerdict;
+  /** Present only on a RE-report, after the agent acted on its own findings. */
+  outcome?: FindingOutcome;
+}
+
+/** One `report_findings` call, as the card will draw it. */
+export interface HostFindingsReport {
+  level?: FindingLevel;
+  findings: HostFinding[];
+}
+
+/**
+ * What a findings report resolves to.
+ *
+ * Two arms where a question has three: nothing here is put to the user, so
+ * there is no `declined`. `unavailable` is every way the report could not be
+ * RECORDED — no turn to file it against, the turn settled underneath it — and
+ * stays separate from `recorded` so the agent can tell a card nobody will see
+ * from one that is now on screen.
+ */
+export type HostFindingsOutcome =
+  | { status: 'recorded'; count: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * TWIN PARSER: apps/ui/src/renderer/chats/chart-payload.ts — the reader over the
+ * `show_chart` item payload this tool produces.
+ *
+ * The third tool geniro registers on the run's own MCP server, and the second
+ * of the RENDER family — an agent hands over typed numbers and this app plots
+ * them, instead of spending its output on an ASCII bar chart or a markdown table
+ * the reader has to hold in their head. Same bargain as the findings tool: the
+ * data goes to the screen, the call answers with a receipt, and nothing
+ * re-enters the model's context.
+ *
+ * Nothing here mirrors a claude tool, because claude has none — this is
+ * geniro's own shape, and the snake_case argument names exist only for
+ * consistency with the tool beside it. {@link readHostChart} is again the one
+ * place that seam is crossed.
+ */
+export const HOST_CHART_TOOL = 'show_chart';
+
+/**
+ * The plot kinds the card can draw.
+ *
+ * Three, and no pie. A pie encodes magnitude as angle, which is the hardest
+ * encoding to compare by eye, and everything it is reached for — "share of the
+ * bundle by package" — reads better as the bar chart already here. Adding a
+ * kind later is a line in this tuple plus a branch in the card; adding one now
+ * that nobody asked for is a worse chart nobody can un-draw.
+ */
+export const CHART_KINDS = ['line', 'bar', 'area'] as const;
+export type ChartKind = (typeof CHART_KINDS)[number];
+
+/**
+ * Caps on one chart. They TRUNCATE rather than refuse, like every cap above.
+ *
+ * `MAX_CHART_SERIES` is 5 because the palette is five tokens
+ * (`--chart-1..5`) and `categoryToken` WRAPS past the end. Wrapping is right
+ * where each row carries its own label, which is what that helper was written
+ * for; on a multi-series plot colour is the only thing tying a curve to its
+ * legend entry, so a sixth series would be a second curve claiming the first
+ * one's colour. Truncating is the honest failure: five plotted and said so,
+ * rather than six drawn ambiguously.
+ */
+export const MAX_CHART_SERIES = 5;
+export const MAX_CHART_POINTS = 200;
+export const MAX_CHART_TITLE_LENGTH = 120;
+export const MAX_CHART_LABEL_LENGTH = 40;
+
+/**
+ * One plotted series: a name, and one value per x label.
+ *
+ * `values` is positional against {@link HostChart.labels} rather than a list of
+ * `{x, y}` pairs, and that is the whole reason this shape was chosen: a model
+ * filling parallel arrays cannot silently disagree with itself about the
+ * x axis, and a length mismatch is mechanically detectable where a set of
+ * pair-lists with drifting x values is not.
+ *
+ * A null is a GAP — a point that was not measured — and is drawn as a break in
+ * the curve rather than as zero, which would read as a measurement of nothing.
+ */
+export interface HostChartSeries {
+  name: string;
+  values: (number | null)[];
+}
+
+/** One `show_chart` call, as the card will plot it. */
+export interface HostChart {
+  /**
+   * Optional here though the tool advertises it as required, on the reasoning
+   * {@link HostFinding.failureScenario} follows: a plot of real numbers is
+   * worth drawing under a generic heading, where dropping it over a missing
+   * caption would throw away the measurement itself.
+   */
+  title?: string;
+  kind: ChartKind;
+  /** The x-axis categories; every series is read positionally against these. */
+  labels: string[];
+  series: HostChartSeries[];
+  /** Axis captions. Absent where the numbers speak for themselves. */
+  xLabel?: string;
+  yLabel?: string;
+}
+
+/**
+ * What a chart resolves to.
+ *
+ * Two arms, like the findings report and for the same reason — nothing is put
+ * to the user, so there is no `declined`. The counts are in the receipt because
+ * the caps above TRUNCATE silently otherwise: an agent that sent seven series
+ * and reads back "5 series" learns what happened without the findings ever
+ * being echoed.
+ */
+export type HostChartOutcome =
+  | { status: 'drawn'; series: number; points: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * TWIN PARSER: apps/ui/src/renderer/chats/metrics-payload.ts — the reader over
+ * the `show_metrics` item payload this tool produces.
+ *
+ * The render family's SCORECARD: a handful of headline figures with their
+ * changes, for the agent that has just measured a few things and would
+ * otherwise write them into a sentence nobody can scan. Same bargain as its
+ * siblings — the payload is the card, the call answers with a receipt, and the
+ * figures never re-enter the model's context.
+ *
+ * The line against {@link HOST_CHART_TOOL} is worth stating, because an agent
+ * with numbers in hand has to choose: a chart shows a SHAPE — a trend, or one
+ * quantity across several categories — and needs several points per series to
+ * show anything at all. A scorecard shows the CURRENT VALUE of unrelated
+ * quantities, which a chart cannot do: coverage, bundle size and test count
+ * share no axis, and plotting them together produces one enormous bar and two
+ * invisible ones. So: several readings of ONE thing is a chart; one reading
+ * each of several things is this.
+ *
+ * TWO facts about the shape are load-bearing.
+ *
+ * 1. **Every figure arrives ALREADY FORMATTED, as a string.** Only the agent
+ *    knows whether `0.82` reads `82%` and whether `1258291` is `1.2 MB` or
+ *    `1,258,291`, so formatting host-side would be guessing — and a scorecard
+ *    that guesses wrong is worse than no scorecard, because it looks
+ *    authoritative. This row displays; it never computes. That is also why
+ *    there is no `unit` field beside the value: a unit is part of how a figure
+ *    reads, and splitting it out only invites the two to be joined wrong.
+ * 2. **The sentiment is STATED, never derived.** Whether a change is good news
+ *    is not a property of its sign: `-40ms` is good and `-4% coverage` is bad.
+ *    A host that coloured by sign would be confidently wrong half the time, and
+ *    a `higherIsBetter` flag only moves the same guess one step away. The agent
+ *    knows what it measured, so it says.
+ */
+export const HOST_METRICS_TOOL = 'show_metrics';
+
+/**
+ * Is this good news, bad news, or neither — the one question a card cannot work
+ * out for itself, so the agent states it. It governs COLOUR and nothing else,
+ * and `neutral` is both the default and a perfectly good answer.
+ *
+ * ONE vocabulary, shared by {@link HOST_METRICS_TOOL}'s deltas and
+ * {@link HOST_COMPARISON_TOOL}'s cells, because they ask the identical
+ * question of the host: which of three ways should this be painted. Named for
+ * the question rather than for either tool — it was `METRIC_SENTIMENTS` while
+ * only one tool asked — so the second caller did not have to choose between a
+ * misleading name, an alias, and a duplicate tuple free to drift.
+ */
+export const SENTIMENTS = ['good', 'bad', 'neutral'] as const;
+export type Sentiment = (typeof SENTIMENTS)[number];
+
+/**
+ * Caps on one scorecard. They TRUNCATE, like every cap in this family except
+ * the patch tool's.
+ *
+ * The count is where a scorecard stops being scannable at a glance, which is
+ * the only thing it does better than a sentence — past that the figures want a
+ * table, and a card claiming to be the headline numbers while listing twenty of
+ * them is a worse table.
+ */
+export const MAX_HOST_METRICS = 8;
+export const MAX_METRIC_LABEL_LENGTH = 60;
+export const MAX_METRIC_VALUE_LENGTH = 24;
+export const MAX_METRIC_NOTE_LENGTH = 120;
+
+/** One figure on the scorecard. */
+export interface HostMetric {
+  /** What is being measured — the caption under the figure. */
+  label: string;
+  /** The figure AS IT SHOULD READ. Formatted by the agent; see above. */
+  value: string;
+  /** The change, also already formatted (`+4 pts`, `−120 kB`). Absent = none. */
+  delta?: string;
+  /**
+   * What that change means. Absent is `neutral` — said as an absence rather
+   * than a default written in, so the reader of a payload can tell "the agent
+   * said neutral" from "the agent said nothing", which the card draws alike but
+   * a future consumer may not want to.
+   */
+  sentiment?: Sentiment;
+  /** One line of context under the figure, where the number needs one. */
+  note?: string;
+}
+
+/** One `show_metrics` call, as the card will draw it. */
+export interface HostMetrics {
+  /** What the figures are ABOUT — the card's heading. */
+  title?: string;
+  metrics: HostMetric[];
+}
+
+/**
+ * What a scorecard resolves to.
+ *
+ * Two arms, like the findings report and the chart: nothing is put to the user
+ * to decide, so there is no `declined`. The count is in the receipt because the
+ * cap above truncates silently otherwise — an agent that sent twelve figures
+ * and reads back "8 figures" learns what happened without them being echoed.
+ */
+export type HostMetricsOutcome =
+  | { status: 'drawn'; count: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * TWIN PARSER: apps/ui/src/renderer/chats/comparison-payload.ts — the reader
+ * over the `show_comparison` item payload this tool produces.
+ *
+ * The render family's DECISION TABLE: several options, judged against the same
+ * criteria, with a recommendation. What an agent reaches for when it has been
+ * asked "which of these should I use".
+ *
+ * **This one has to justify itself against markdown**, which its siblings do
+ * not, because a markdown table RENDERS in this transcript — an agent can
+ * already draw three columns of prose and it will look fine. So the card only
+ * earns its place by holding what a table cannot:
+ *
+ * 1. A per-cell VERDICT, on the shared {@link SENTIMENTS} vocabulary. That is
+ *    what makes the thing scannable — the winning option's column is visibly
+ *    greener — where a markdown table forces the reader through every cell to
+ *    work out the same answer.
+ * 2. A RECOMMENDATION, named and reasoned. A comparison that does not answer
+ *    the question it was asked has made the reader do the deciding, which is
+ *    the work they delegated. It is optional, because "these are genuinely
+ *    equivalent, it depends on X" is a real answer — but it is asked for.
+ *
+ * Take those two away and this tool should not exist; the agent should write a
+ * table. The tool description says so, so a model can tell the two apart.
+ *
+ * **The cells are POSITIONAL**, the chart's hazard again and handled the same
+ * way: a criterion's `cells` are matched to `options` BY INDEX, so nothing on
+ * either side of the wire may drop or reorder one list independently of the
+ * other. `readHostComparison` re-aligns every row to the option count — padding
+ * short rows with blanks, cutting long ones — rather than trusting the model to
+ * have counted, because that failure does not throw: it silently files one
+ * option's answer under another's name and still looks like a comparison.
+ */
+export const HOST_COMPARISON_TOOL = 'show_comparison';
+
+/**
+ * Caps on one comparison. They TRUNCATE, like the rest of this family bar the
+ * patch tool.
+ *
+ * FOUR options is where a side-by-side stops being side-by-side in a
+ * transcript column — the fifth is what makes the table scroll horizontally,
+ * and a comparison you have to scroll is a table again. The criteria cap is
+ * where the reader stops holding the whole grid at once.
+ */
+export const MAX_COMPARISON_OPTIONS = 4;
+export const MAX_COMPARISON_CRITERIA = 8;
+export const MAX_COMPARISON_LABEL_LENGTH = 60;
+export const MAX_COMPARISON_CELL_LENGTH = 120;
+/**
+ * The reason is the one PROSE field in this family — everywhere else a cap
+ * bounds a phrase, and here the model is asked for a sentence or two. So it is
+ * both roomier than its neighbours and cut differently: see `truncateWords`,
+ * which is what a live turn made necessary by ending a recommendation
+ * "…and where migrati".
+ */
+export const MAX_COMPARISON_REASON_LENGTH = 400;
+
+/** One option being compared — a column of the table. */
+export interface HostComparisonOption {
+  /** The option's name, as its column heading. */
+  name: string;
+  /** One line under the heading, where the name alone is not enough. */
+  note?: string;
+}
+
+/** One option's answer for one criterion. */
+export interface HostComparisonCell {
+  /** What this option does about this criterion, already worded. */
+  value: string;
+  /** How that reads for this option — colour only. Absent is `neutral`. */
+  verdict?: Sentiment;
+}
+
+/** One criterion — a row of the table, one cell per option, BY INDEX. */
+export interface HostComparisonCriterion {
+  label: string;
+  cells: HostComparisonCell[];
+}
+
+/** One `show_comparison` call, as the card will draw it. */
+export interface HostComparison {
+  /** What is being decided — the card's heading. */
+  title: string;
+  options: HostComparisonOption[];
+  criteria: HostComparisonCriterion[];
+  /**
+   * The answer, when there is one.
+   *
+   * `option` is matched to a column BY NAME rather than by index — a model
+   * writing "SQLite" is far more reliable than one writing `1`, and a name that
+   * matches nothing costs only the column highlight while the reason still
+   * reads. An index that pointed at the wrong column would be silently wrong.
+   */
+  recommendation?: { option: string; reason: string };
+}
+
+/**
+ * What a comparison resolves to.
+ *
+ * Two arms, like the other drawings: nothing is put to the user to decide, so
+ * there is no `declined`. The counts are in the receipt because the caps
+ * truncate silently otherwise.
+ */
+export type HostComparisonOutcome =
+  | { status: 'drawn'; options: number; criteria: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * The render family's third tool, and the first that is not only a drawing.
+ *
+ * An agent proposes a change it has NOT made: the transcript shows the diff
+ * with Apply and Reject, and geniro writes the file if the user presses Apply.
+ * That is the whole point of it — an agent working under `ask` can hand over a
+ * fix without holding a write gate open, and an agent that is not allowed to
+ * edit at all can still be useful.
+ *
+ * THREE ways this one is not like its siblings, each load-bearing:
+ *
+ * 1. It PARKS. `report_findings` and `show_chart` are fire-and-forget; this one
+ *    resolves only when the user answers, so it uses the same parked-promise
+ *    machinery as {@link HOST_QUESTION_TOOL} — and, like it, rides an ordinary
+ *    `approval_request` row rather than inventing a second card channel.
+ * 2. It carries a REAL gate, and exactly one. The tool CALL auto-approves like
+ *    its siblings' — calling it writes nothing, it only puts a diff on screen —
+ *    while the Apply press on that diff is what reaches the disk. Getting this
+ *    backwards puts a meaningless "allow propose_patch?" card in front of the
+ *    meaningful one, which is what a live turn did before the auto-approve arm
+ *    existed.
+ * 3. Its caps REFUSE rather than truncate. Every cap above truncates, because a
+ *    model that found forty things has still done the work. Truncating a patch
+ *    would write a TRUNCATED FILE — the one place where taking the first N
+ *    characters is worse than answering "too large".
+ *
+ * The argument names are `Edit`'s (`file_path` / `old_string` / `new_string`)
+ * and deliberately so: an agent that knows that tool needs to learn nothing,
+ * and the renderer's `editDiffOf` already draws exactly this shape, so the card
+ * gets its diff without a second diff renderer.
+ */
+export const HOST_PATCH_TOOL = 'propose_patch';
+
+/**
+ * Refusal thresholds, not truncation points — see (3) above.
+ *
+ * The text cap is per side and generous: it has to hold a whole new file, since
+ * a patch with no `old_string` IS a file creation.
+ */
+export const MAX_PATCH_TEXT_LENGTH = 200_000;
+export const MAX_PATCH_PATH_LENGTH = 1024;
+export const MAX_PATCH_SUMMARY_LENGTH = 200;
+
+/** One `propose_patch` call, as the card will show it. */
+export interface HostPatch {
+  /** Where the change goes, resolved against the run's own cwd. */
+  filePath: string;
+  /**
+   * The exact text being replaced, or absent to write the file WHOLE.
+   *
+   * Absent is `Write`'s shape — a new file, or a deliberate full rewrite — and
+   * the renderer already draws that as additions only.
+   */
+  oldString?: string;
+  newString: string;
+  /** One line saying what the change does; the card's heading. */
+  summary?: string;
+}
+
+/**
+ * What a proposed patch resolves to.
+ *
+ * Four arms, and `stale` is the one that earns its place: the user said YES and
+ * the write still could not happen — the file no longer holds the text the
+ * agent matched on, it holds it twice, or the path is one this app will not
+ * write to. Folding that into `declined` would tell the agent its fix was
+ * rejected when it was in fact accepted, and folding it into `unavailable`
+ * would hide that the right move is to look at the file again and re-propose.
+ * The `reason` is what separates the cases.
+ */
+export type HostPatchOutcome =
+  | { status: 'applied'; path: string }
+  | { status: 'declined' }
+  | { status: 'stale'; reason: string }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * The render family's fourth tool: a plan put to the user BEFORE the work.
+ *
+ * An agent that has understood a request and worked out how it intends to carry
+ * it out shows the steps and waits for a go-ahead. What that buys is the
+ * cheapest correction there is — a plan is redirected in one sentence, while
+ * the same misunderstanding found after the edits costs a revert.
+ *
+ * Structurally this is {@link HOST_PATCH_TOOL}'s twin: it PARKS on an ordinary
+ * `approval_request` row, its CALL auto-approves (proposing changes nothing), and
+ * the press on the card is the only gate. Three things are its own:
+ *
+ * 1. Approving performs NO action. A patch's Apply writes a file; a plan's
+ *    Approve is the answer itself, and the work that follows is the agent's own
+ *    ordinary turn. So there is no `stale` arm — nothing can have moved
+ *    underneath a decision that touches nothing.
+ * 2. Both verdicts carry an optional NOTE, and that is where most of this tool's
+ *    value is. "No" alone tells an agent nothing and costs a round trip to ask
+ *    what the user would rather have; "no — leave the parser alone, just fix the
+ *    cap" redirects it in the same press. It rides the `answer` field the
+ *    approval channel already carries for questions.
+ * 3. It is not a question, and is tracked as `question: false` like the patch
+ *    tool. The badge then reads "waiting for approval", which is what a card
+ *    whose primary controls are Approve and Reject actually wants — the note is
+ *    an addition to a verdict, not the verdict itself.
+ *
+ * Deliberately NOT a to-do list: nothing here is ticked off as the agent works.
+ * A live checklist is a different feature with its own update channel, and
+ * pretending this one is that would leave every plan frozen at step one.
+ */
+export const HOST_PLAN_TOOL = 'propose_plan';
+
+/**
+ * Truncation points, on the findings tool's rule rather than the patch tool's:
+ * a plan that overran is still a plan, and showing fifteen of its steps beats
+ * refusing the call. The step cap is where a plan stops being readable at a
+ * glance, which is the only thing this card is better at than prose.
+ */
+export const MAX_PLAN_STEPS = 15;
+export const MAX_PLAN_TITLE_LENGTH = 200;
+export const MAX_PLAN_STEP_TITLE_LENGTH = 200;
+export const MAX_PLAN_STEP_DETAIL_LENGTH = 600;
+
+/** One step of a proposed plan, as its own row on the card. */
+export interface HostPlanStep {
+  /** What the step does, in one line — the row's own text. */
+  title: string;
+  /** The sentence or two under it, where one is worth reading. */
+  detail?: string;
+}
+
+/** One `propose_plan` call, as the card will show it. */
+export interface HostPlan {
+  /** What the plan is FOR — the card's heading. */
+  title: string;
+  steps: HostPlanStep[];
+}
+
+/**
+ * What a proposed plan resolves to.
+ *
+ * Three arms, one fewer than the patch tool's: approving a plan performs no
+ * action, so nothing can go `stale` between the press and the effect. The note
+ * hangs off BOTH verdicts because a user who approves with a caveat is telling
+ * the agent something it must not lose.
+ */
+export type HostPlanOutcome =
+  | { status: 'approved'; note?: string }
+  | { status: 'declined'; note?: string }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

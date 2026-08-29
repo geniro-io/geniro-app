@@ -128,6 +128,13 @@ describe('isHostQuestionCall', () => {
 
   it('refuses everything when this CLI was handed no server at all', () => {
     expect(isHostQuestionCall(null, HOST_QUESTION_TOOL)).toBe(false);
+    // Including the SERVER-QUALIFIED spelling. A null server means this turn
+    // registered no such tool — which is every claude chat, since that CLI has
+    // its own — so a request naming it is not geniro's to approve, however it
+    // is spelled.
+    expect(
+      isHostQuestionCall(null, `mcp__${server}__${HOST_QUESTION_TOOL}`),
+    ).toBe(false);
   });
 });
 

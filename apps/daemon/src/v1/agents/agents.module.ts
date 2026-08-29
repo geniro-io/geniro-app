@@ -27,22 +27,28 @@ import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
+import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
+import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
+import { FindingsReportBroker } from './services/findings-report.broker';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
+import { PatchBroker } from './services/patch.broker';
+import { PlanBroker } from './services/plan.broker';
 import { ProcessRegistry } from './services/process-registry';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
@@ -79,6 +85,12 @@ import { defaultSpawn } from './utils/spawn-cli';
   providers: [
     ChatService,
     UserQuestionBroker,
+    FindingsReportBroker,
+    ChartBroker,
+    PatchBroker,
+    ComparisonBroker,
+    MetricsBroker,
+    PlanBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -290,6 +302,16 @@ import { defaultSpawn } from './utils/spawn-cli';
     // `ask_user_question` tool through this broker, and the turn that can
     // actually put the card on screen registers here.
     UserQuestionBroker,
+    // Exported on the same terms: the MCP host serves the RENDER family —
+    // `report_findings`, `show_chart` and `propose_patch` — through these
+    // brokers, and the turn that can actually persist the row (and, for a
+    // patch, write the file) registers here.
+    FindingsReportBroker,
+    ChartBroker,
+    PatchBroker,
+    ComparisonBroker,
+    MetricsBroker,
+    PlanBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

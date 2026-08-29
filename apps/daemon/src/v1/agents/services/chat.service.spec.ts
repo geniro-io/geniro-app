@@ -46,10 +46,18 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
-import { HOST_QUESTION_TOOL, SINGLE_AGENT_NODE } from '../chat.types';
+import {
+  HOST_COMPARISON_TOOL,
+  HOST_METRICS_TOOL,
+  HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
+  HOST_QUESTION_TOOL,
+  SINGLE_AGENT_NODE,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { hostMcpServerName } from '../utils/host-question';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -57,13 +65,19 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
+import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
+import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
+import { MetricsBroker } from './metrics.broker';
 import { PartialStreamService } from './partial-stream.service';
+import { PatchBroker } from './patch.broker';
+import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -569,6 +583,12 @@ function setup(
   opts: {
     claudeModes?: ClaudeModesCapability;
     mcpSettingsFile?: string;
+    /**
+     * The daemon's bound port, or null for a launch that has none. Null is the
+     * case the endpoint guard exists for: with no port there is no URL to
+     * publish, so no token is minted either.
+     */
+    port?: number | null;
     /** What the sidebar's auto-filing rule answers for a new chat's cwd. */
     autoGroupId?: string | null;
     /**
@@ -630,6 +650,12 @@ function setup(
   );
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();
+  const findingsReports = new FindingsReportBroker();
+  const charts = new ChartBroker();
+  const patches = new PatchBroker();
+  const plans = new PlanBroker();
+  const metrics = new MetricsBroker();
+  const comparisons = new ComparisonBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -726,8 +752,26 @@ function setup(
     // and the same verdict path a CLI-asked one does — is exactly what a
     // double would have to fake.
     userQuestions,
+    // Real, for the reason the question broker above is: what these tests
+    // observe through it is the row a report actually persists.
+    findingsReports,
+    // And its twin on the same reasoning — the row a chart actually persists.
+    charts,
+    // Real for a stronger reason still: what these tests observe through it is
+    // whether a file on disk actually changed.
+    patches,
+    // Real like the rest, and for the plainest reason of the four: a plan's
+    // whole observable is the card it parks on and the words it settles with.
+    plans,
+    metrics,
+    comparisons,
     callTokens,
-    { token: 'launch', version: '0.0.0', startedAt: 0, port: 4870 },
+    {
+      token: 'launch',
+      version: '0.0.0',
+      startedAt: 0,
+      port: opts.port === undefined ? 4870 : opts.port,
+    },
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -741,6 +785,12 @@ function setup(
     partials,
     callTokens,
     userQuestions,
+    findingsReports,
+    charts,
+    patches,
+    plans,
+    metrics,
+    comparisons,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -993,15 +1043,584 @@ describe('ChatService', () => {
       await settle(cursor);
     });
 
-    it('hands a claude turn neither — its model already has AskUserQuestion', async () => {
-      const { service, claude, userQuestions } = setup();
+    it('publishes no endpoint and mints no token when the daemon has no port', async () => {
+      // With nothing bound there is no URL to hand the CLI, so a token would be
+      // a credential nobody can present — registered as a redaction secret and
+      // held to run teardown for a route that does not exist.
+      const { service, claude, findingsReports, charts, callTokens } = setup({
+        port: null,
+      });
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
 
       const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
       expect(startArg.mcpEndpoint ?? null).toBeNull();
+      expect(callTokens.get(run.id, SINGLE_AGENT_NODE)).toBeNull();
+      // Both render tools, not just the one: they are registered off the same
+      // endpoint, so a grant that leaked would leak both.
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await settle(claude);
+    });
+
+    it('hands a cursor turn the findings tool too — every chat can draw a card', async () => {
+      const { service, cursor, findingsReports } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+    });
+
+    it('hands a claude turn the endpoint for findings — but never a second question tool', async () => {
+      const { service, claude, userQuestions, findingsReports, callTokens } =
+        setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.mcpEndpoint?.url).toContain(
+        `/v1/mcp/${run.id}/${SINGLE_AGENT_NODE}`,
+      );
+      expect(startArg.mcpEndpoint?.token).toBe(
+        callTokens.get(run.id, SINGLE_AGENT_NODE),
+      );
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      // The invariant the grant has always carried, and the whole reason it is
+      // a union of reasons rather than one flag: claude's own model can ask, so
+      // geniro's question tool is never registered beside its own.
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
+    });
+
+    it('answers a report it could not write without naming the database', async () => {
+      // The reason reaches a model whose provider is off this machine, and a
+      // persist failure names an absolute database path — so it is logged here
+      // and replaced with a fixed sentence. The MCP host's own error path
+      // refuses to hand its message across for the same reason.
+      const { service, claude, findingsReports, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'report_findings';
+
+      const outcome = await findingsReports.report(run.id, SINGLE_AGENT_NODE, {
+        findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }],
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('records a findings report as one transcript row, and nothing else', async () => {
+      const { service, claude, findingsReports, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      // EVERY optional field, deliberately: the payload is `z.unknown()` on the
+      // wire, so no type spans this boundary and the renderer's reader
+      // (`chats/findings-payload.ts`) is an independent twin. A key that only
+      // one side spells is a field that silently vanishes from the card, and
+      // this literal is the one place both sides can be checked against the
+      // same worked example.
+      const outcome = await findingsReports.report(run.id, SINGLE_AGENT_NODE, {
+        level: 'high',
+        findings: [
+          {
+            file: 'src/a.ts',
+            line: 12,
+            summary: 'A guard was weakened',
+            shortSummary: 'guard weakened',
+            failureScenario: 'A late writer wins the race.',
+            category: 'correctness',
+            verdict: 'CONFIRMED',
+            outcome: 'fixed',
+          },
+        ],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'recorded', count: 1 });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'report_findings',
+      );
+      expect(rows).toHaveLength(1);
+      // "and nothing else", asserted rather than left to the title: a stray row
+      // of any other kind slips straight past a filtered count.
+      expect(itemDao.items).toHaveLength(before + 1);
+      // The payload IS the card — the tool call answers with a receipt alone,
+      // so anything missing here is missing from the transcript for good. Read
+      // back through JSON because that is how the row actually stores it, which
+      // is also the shape the renderer's twin parser has to survive.
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        level: 'high',
+        findings: [
+          {
+            file: 'src/a.ts',
+            line: 12,
+            summary: 'A guard was weakened',
+            shortSummary: 'guard weakened',
+            failureScenario: 'A late writer wins the race.',
+            category: 'correctness',
+            verdict: 'CONFIRMED',
+            outcome: 'fixed',
+          },
+        ],
+      });
+      await settle(claude);
+    });
+
+    it('records a chart as one transcript row, and nothing else', async () => {
+      const { service, claude, charts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      // EVERY optional field, for the reason the findings literal above spells
+      // out: the payload is `z.unknown()` on the wire, so the renderer's reader
+      // (`chats/chart-payload.ts`) is an independent twin, and this literal is
+      // the one worked example both sides can be checked against.
+      const outcome = await charts.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Test suite duration',
+        kind: 'line',
+        xLabel: 'commit',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        // A null among the numbers, deliberately: a gap has to survive JSON and
+        // the twin parser as a gap, because the alternative reading — zero — is
+        // a measurement the agent never made.
+        series: [{ name: 'unit', values: [12.1, null] }],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', series: 1, points: 2 });
+      const rows = itemDao.items.filter((item) => item.kind === 'show_chart');
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'Test suite duration',
+        kind: 'line',
+        xLabel: 'commit',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        series: [{ name: 'unit', values: [12.1, null] }],
+      });
+      await settle(claude);
+    });
+
+    it('persists a scorecard as its own row, every field surviving', async () => {
+      // EVERY optional field, for the reason the two literals above spell out:
+      // the payload is `z.unknown()` on the wire, so the renderer's reader
+      // (`chats/metrics-payload.ts`) is an independent twin, and this literal
+      // is the one worked example both sides can be checked against.
+      const { service, claude, metrics, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      const outcome = await metrics.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'After the caching change',
+        metrics: [
+          {
+            label: 'Coverage',
+            value: '82%',
+            delta: '+4 pts',
+            sentiment: 'good',
+            note: 'lines, not branches',
+          },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', count: 2 });
+      const rows = itemDao.items.filter((item) => item.kind === 'show_metrics');
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'After the caching change',
+        metrics: [
+          {
+            label: 'Coverage',
+            value: '82%',
+            delta: '+4 pts',
+            sentiment: 'good',
+            note: 'lines, not branches',
+          },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      });
+      await settle(claude);
+    });
+
+    it('persists a comparison as its own row, every field surviving', async () => {
+      // The worked example both twin parsers are checked against, like the
+      // findings, chart and scorecard literals above it.
+      const { service, claude, comparisons, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const outcome = await comparisons.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Local store for the daemon',
+        options: [{ name: 'SQLite', note: 'one file' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'SQLite', reason: 'local-first by rule' },
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', options: 2, criteria: 1 });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'show_comparison',
+      );
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'Local store for the daemon',
+        options: [{ name: 'SQLite', note: 'one file' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'SQLite', reason: 'local-first by rule' },
+      });
+      await settle(claude);
+    });
+
+    it('stops accepting comparisons once the turn that could draw them is over', async () => {
+      const { service, claude, comparisons } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        comparisons.draw(run.id, SINGLE_AGENT_NODE, {
+          title: 'Late',
+          options: [{ name: 'A' }, { name: 'B' }],
+          criteria: [{ label: 'r', cells: [{ value: 'a' }, { value: 'b' }] }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
+    });
+
+    it('stops accepting scorecards once the turn that could draw them is over', async () => {
+      const { service, claude, metrics } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        metrics.draw(run.id, SINGLE_AGENT_NODE, {
+          metrics: [{ label: 'Late', value: '1' }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
+    });
+
+    it('answers a chart it could not write without naming the database', async () => {
+      // Same rule as the findings row: a persist failure names an absolute
+      // database path, and this string is handed to a model whose provider is
+      // off this machine.
+      const { service, claude, charts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'show_chart';
+
+      const outcome = await charts.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Nope',
+        kind: 'bar',
+        labels: ['a'],
+        series: [{ name: 'unit', values: [1] }],
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('stops accepting charts once the turn that could draw them is over', async () => {
+      const { service, claude, charts } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        charts.draw(run.id, SINGLE_AGENT_NODE, {
+          title: 'Late',
+          kind: 'line',
+          labels: ['a'],
+          series: [{ name: 'unit', values: [1] }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
+    });
+
+    it('puts a patch on the SAME card machinery, flagged as a gate not a question', async () => {
+      const { service, claude, patches, approvals, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'a.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      });
+      await drain();
+
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(card?.payload).toContain(HOST_PATCH_TOOL);
+      // The renderer's `editDiffOf` reads Edit's field names, so the card gets
+      // its diff with no second diff renderer — which only holds if the payload
+      // actually spells them.
+      expect(card?.payload).toContain('old_string');
+      expect(card?.payload).toContain('new_string');
+      const pending = approvals.listByRun(run.id);
+      expect(pending).toHaveLength(1);
+      // NOT a question: the agent is not asking the user something, it is
+      // asking to change their files, and the badge says so.
+      expect(pending[0]?.question).toBe(false);
+
+      expect(approvals.resolve(run.id, pending[0]!.requestId, true)).toBe(true);
+      await drain();
+      await expect(proposed).resolves.toEqual({
+        status: 'applied',
+        path: 'a.ts',
+      });
+      expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
+        'const timeout = 60;\n',
+      );
+      await settle(claude);
+    });
+
+    it('writes NOTHING when the user rejects', async () => {
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'b.ts'), 'keep me\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'b.ts',
+        oldString: 'keep me',
+        newString: 'gone',
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      expect(approvals.resolve(run.id, pending[0]!.requestId, false)).toBe(
+        true,
+      );
+      await drain();
+
+      await expect(proposed).resolves.toEqual({ status: 'declined' });
+      expect(readFileSync(join(dir, 'b.ts'), 'utf8')).toBe('keep me\n');
+      await settle(claude);
+    });
+
+    it('answers an ACCEPTED patch that no longer fits as stale, not as a refusal', async () => {
+      // The distinction the fourth outcome arm exists for: told "rejected", an
+      // agent argues with the user; told "stale", it re-reads the file.
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'c.ts'), 'somebody else changed this\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'c.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      approvals.resolve(run.id, pending[0]!.requestId, true);
+      await drain();
+
+      await expect(proposed).resolves.toEqual({
+        status: 'stale',
+        reason: 'the text to replace is no longer in the file',
+      });
+      expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
+        'somebody else changed this\n',
+      );
+      await settle(claude);
+    });
+
+    it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
+      // Its own set, and its own wording: "the question was answered" is the
+      // wrong thing to tell an agent that proposed a patch.
+      const { service, claude, patches } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'd.ts',
+        newString: 'export const x = 1;\n',
+      });
+      await drain();
+      await settle(claude);
+
+      await expect(proposed).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the patch was answered',
+      });
+      // Nothing written: the turn died before anybody accepted.
+      expect(existsSync(join(dir, 'd.ts'))).toBe(false);
+    });
+
+    it('parks a plan on the same card machinery and answers with the verdict', async () => {
+      const { service, claude, plans, approvals, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Make the queue test deterministic',
+        steps: [{ title: 'Reproduce it', detail: 'run with --seed' }],
+      });
+      await drain();
+
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(card?.payload).toContain(HOST_PLAN_TOOL);
+      // The card reads the steps straight off this payload, so they have to be
+      // there in full rather than summarized into the heading.
+      expect(card?.payload).toContain('Reproduce it');
+      expect(card?.payload).toContain('run with --seed');
+      const pending = approvals.listByRun(run.id);
+      // A gate, not a question — the badge reads "waiting for approval", which
+      // is what a card whose controls are Approve and Reject wants.
+      expect(pending[0]?.question).toBe(false);
+
+      expect(approvals.resolve(run.id, pending[0]!.requestId, true)).toBe(true);
+      await drain();
+      await expect(proposed).resolves.toEqual({ status: 'approved' });
+      await settle(claude);
+    });
+
+    it('carries the user’s NOTE to the agent, on either verdict', async () => {
+      // The reason this tool beats a bare yes/no: a refusal that says what to
+      // do instead saves the round trip asking. Both halves are pinned — the
+      // words reaching the agent, and the words landing in the transcript.
+      for (const allow of [true, false]) {
+        const { service, claude, plans, approvals, itemDao } = setup();
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hello');
+        const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+          title: 'Rework the parser',
+          steps: [{ title: 'Rewrite the tokenizer' }],
+        });
+        await drain();
+        const pending = approvals.listByRun(run.id);
+        approvals.resolve(
+          run.id,
+          pending[0]!.requestId,
+          allow,
+          '  leave the parser alone  ',
+        );
+        await drain();
+
+        await expect(proposed).resolves.toEqual({
+          status: allow ? 'approved' : 'declined',
+          note: 'leave the parser alone',
+        });
+        const verdict = itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(verdict?.payload).toContain('leave the parser alone');
+        await settle(claude);
+      }
+    });
+
+    it('normalizes a BLANK note away rather than quoting silence back', async () => {
+      const { service, claude, plans, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Do the thing',
+        steps: [{ title: 'Do it' }],
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      approvals.resolve(run.id, pending[0]!.requestId, true, '   ');
+      await drain();
+
+      await expect(proposed).resolves.toEqual({ status: 'approved' });
+      await settle(claude);
+    });
+
+    it('sweeps a parked plan with its OWN sentence when the turn ends', async () => {
+      const { service, claude, plans } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Never answered',
+        steps: [{ title: 'Wait' }],
+      });
+      await drain();
+      await settle(claude);
+
+      await expect(proposed).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the plan was answered',
+      });
+    });
+
+    it('stops accepting reports once the turn that could persist them is over', async () => {
+      const { service, claude, findingsReports } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        findingsReports.report(run.id, SINGLE_AGENT_NODE, { findings: [] }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could record them',
+      });
     });
 
     it('puts a card on screen and returns the verdict’s answer to the agent', async () => {
@@ -1690,7 +2309,7 @@ describe('ChatService', () => {
   });
 
   it('marks the run failed and releases its claim when adapter start throws', async () => {
-    const { service, runDao, registry, claude } = setup();
+    const { service, runDao, registry, claude, findingsReports } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     claude.start.mockImplementationOnce(() => {
       throw new Error('spawn failed');
@@ -1702,6 +2321,11 @@ describe('ChatService', () => {
 
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     expect(registry.has(run.id)).toBe(false);
+    // The host tools are registered BEFORE the spawn, and this is the only path
+    // that can take them down again — the turn finalizer never runs. Left
+    // registered, the tools stay listed on the run's own MCP endpoint with no
+    // turn behind them for the rest of the launch.
+    expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
   it('rejects sendMessage for an unknown run', async () => {
@@ -3357,6 +3981,161 @@ describe('ChatService — approval modes (parity M1)', () => {
       {
         command: 'ls',
       },
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves a findings report on an ASK chat, under claude’s own spelling', async () => {
+    // The NAME is the load-bearing half, and the counterweight is the ASK-mode
+    // test directly below: claude spells an MCP tool `mcp__<server>__<tool>`,
+    // so the request never arrives as the bare tool name. `ask` is the default
+    // posture, so a predicate that missed this spelling would cost a permission
+    // card before every single report.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-findings',
+      toolName: `mcp__${hostMcpServerName(run.id)}__report_findings`,
+      input: { findings: [] },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-findings',
+      true,
+      { findings: [] },
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the propose_patch CALL — the gate is its own card, not this one', async () => {
+    // The mistake this pins, caught on a live turn: refusing to auto-approve
+    // here looks like the safe choice, because this is the one host tool that
+    // reaches the disk. It is not. Approving the CALL applies nothing — the
+    // tool only puts a diff on screen — so the card it costs sits IN FRONT of
+    // the meaningful one and decides nothing. The write stays behind Apply on
+    // the proposal card, which `proposePatch` raises separately and which the
+    // tests above pin.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { file_path: 'a.ts', new_string: 'x' };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-patch',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_PATCH_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-patch',
+      true,
+      input,
+    );
+    // No permission card of its own, and nothing parked for a human here.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { title: 'A vs B' };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-cmp',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_COMPARISON_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-cmp',
+      true,
+      input,
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the show_metrics CALL, like every drawing tool', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { metrics: [{ label: 'Coverage', value: '82%' }] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-metrics',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_METRICS_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-metrics',
+      true,
+      input,
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the propose_plan CALL — the gate is its own card too', async () => {
+    // One step further from the disk than the patch tool: proposing a plan
+    // does not even offer to change a file, so a permission card here would
+    // ask the user to approve the asking.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { title: 'A plan', steps: [{ title: 'Step one' }] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-plan',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_PLAN_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-plan',
+      true,
+      input,
     );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,

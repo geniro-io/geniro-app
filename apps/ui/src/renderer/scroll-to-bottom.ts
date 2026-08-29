@@ -20,14 +20,45 @@
  * neither `scrollTo` nor `scrollIntoView`, so a test drives this through a stub
  * either way.
  */
-export function scrollToBottom(
-  scroller: {
-    scrollHeight: number;
-    scrollTo: (options: ScrollToOptions) => void;
-  },
-  behavior: ScrollBehavior,
-): void {
-  scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+interface Scroller {
+  scrollHeight: number;
+  scrollTo: (options: ScrollToOptions) => void;
+}
+
+/**
+ * Keep a box pinned to its own bottom as content arrives. INSTANT, always.
+ *
+ * The behaviour is not a parameter, and that is the fix rather than a tidy-up:
+ * it used to be, five call sites passed it, and the one that got it wrong was
+ * the transcript's own tail-follow — the single most important of them.
+ *
+ * A smooth scroll is an ANIMATION, and re-issuing one cancels the animation
+ * still in flight and starts another from where the first had got to. A
+ * streaming turn re-issues it on every chunk, which arrive faster than the
+ * animation can run, so each call cancels its predecessor and the viewport
+ * never advances at all. Measured in the running app: 53 calls across one turn,
+ * `scrollTop` 1404 before and 1404 after EVERY one of them, while `scrollHeight`
+ * climbed 2228 → 3502. The tail only ever caught up once the stream stopped and
+ * the last animation was finally left alone to finish — which is exactly the
+ * report: "it just stays in one place while content piles up below".
+ *
+ * So a follow lands immediately, and cannot be asked to do otherwise. The
+ * animated form belongs to {@link jumpToBottom} alone.
+ */
+export function followTail(scroller: Scroller): void {
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'auto' });
+}
+
+/**
+ * Take the viewport to the bottom because the USER asked for it.
+ *
+ * The one place animation is right: it is a single press, nothing re-issues it,
+ * and the movement is what tells the reader where they were brought from. The
+ * failure above cannot happen here for the same reason it is safe — there is no
+ * second call arriving mid-animation.
+ */
+export function jumpToBottom(scroller: Scroller): void {
+  scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' });
 }
 
 /**

@@ -87,6 +87,40 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * is a dead control. The daemon says so explicitly rather than leaving the
  * renderer to infer staleness from a settled turn — an inference that has no
  * way to distinguish a request the CLI abandoned from one still in flight.
+ *
+ * `report_findings` is a list of code-review findings an agent handed the APP
+ * to draw — through geniro's own MCP tool, rather than printing them as prose
+ * a transcript can only show as prose. The payload IS the card: the tool call
+ * answers with a receipt alone, deliberately, so the findings never re-enter
+ * the model's context, which leaves this row as the only place they exist.
+ * Persisted rather than streamed for `task_list`'s reason — a reopened chat
+ * replays the transcript, and a card that lived only on the wire would be gone
+ * from every conversation the moment it was closed.
+ *
+ * `show_chart` is the second row of that same RENDER family, and everything
+ * said about `report_findings` above holds unchanged — the payload is the card,
+ * the call answers with a receipt, the row is the only place the data exists.
+ * What is its own: the payload is POSITIONAL. Every series holds one value per
+ * entry of `labels`, aligned by index, so a reader that drops or reorders
+ * either list silently re-attributes measurements instead of failing.
+ *
+ * `show_metrics` is a SCORECARD — a handful of headline figures with their
+ * changes, the row an agent reaches for when it has measured a few things and
+ * would otherwise write them into a sentence. Everything said above holds; what
+ * is its own is that every figure arrives ALREADY FORMATTED, as a string. Only
+ * the agent knows whether `0.82` should read `82%` and whether `1258291` is
+ * `1.2 MB` or `1,258,291`, so formatting host-side would be guessing — this row
+ * displays and never computes. The one thing the host cannot infer is whether a
+ * change is good news: lower is better for a latency and worse for a coverage,
+ * so the SENTIMENT is stated by the agent rather than read off the sign.
+ *
+ * `show_comparison` is a DECISION TABLE: several options judged against the
+ * same criteria, with a recommendation. Alone in this family it has to justify
+ * itself against markdown, since a table RENDERS in this transcript — it earns
+ * its place on the two things a table cannot hold, a per-cell VERDICT that makes
+ * the winning column visibly greener and a NAMED recommendation. Its cells are
+ * POSITIONAL against `options`, the chart's hazard again and handled the same
+ * way.
  */
 export const ItemKindSchema = z
   .enum([
@@ -112,6 +146,10 @@ export const ItemKindSchema = z
     'subagent_info',
     'task_list',
     'shell_info',
+    'report_findings',
+    'show_chart',
+    'show_metrics',
+    'show_comparison',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

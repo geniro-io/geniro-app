@@ -562,9 +562,14 @@ export const CardBackedRequestsContext = createContext<ReadonlySet<string>>(
 export interface RecordedVerdict {
   allow: boolean;
   /**
-   * What the user answered, or null. Null covers both a DECLINED card and a
-   * plain tool approval, neither of which carries words — never an answer the
-   * daemon withheld, since it only records one it actually delivered.
+   * What the user said, or null — never an answer the daemon withheld, since
+   * it only records one it actually delivered.
+   *
+   * Null is the common case rather than the meaningful one: a plain tool
+   * approval carries no words at all, and neither does a question that was
+   * declined. A REJECTED card can still carry them, though — `propose_plan`
+   * sends the user's note on either verdict, and that note is the most useful
+   * thing on a rejection.
    */
   answer: string | null;
 }

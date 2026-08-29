@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentSpawnInfo } from '../../agents/adapters/adapter.types';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
+import { ensureFolderlessDir } from '../../agents/utils/folderless-dir';
 import { AgentKind } from '../../runs/runs.types';
 import { CliAuthService } from './cli-auth.service';
 
@@ -57,6 +58,8 @@ function build(
 ) {
   const fake = fakeChild();
   let settle: ((out: string | null) => void) | null = null;
+  /** The folder the last `runMcpLogin` was told to run in. */
+  let mcpLoginCwd: string | null = null;
   const auth = {
     loginArgs:
       overrides.loginArgs === undefined
@@ -91,8 +94,12 @@ function build(
     }),
     runLogout,
     runMcpLogin: (options: {
+      cwd: string;
       onSpawn: (child: unknown, info: AgentSpawnInfo) => void;
     }) => {
+      // The folder the sign-in RUNS in is the whole contract of this call — a
+      // CLI resolves a server name against it — so the double records it.
+      mcpLoginCwd = options.cwd;
       options.onSpawn(fake.child, GROUP);
       return new Promise<string | null>((resolve) => {
         settle = resolve;
@@ -148,6 +155,7 @@ function build(
     fake,
     registered,
     runLogout,
+    mcpLoginCwd: () => mcpLoginCwd,
     exit: (out: string | null) => settle?.(out),
   };
 }
@@ -352,6 +360,40 @@ describe('CliAuthService — sign-in', () => {
     const { service } = build();
 
     expect(() => service.status('nope')).toThrow(/no sign-in/);
+  });
+});
+
+describe('CliAuthService — where a server sign-in runs', () => {
+  it('runs in the folder it was given', async () => {
+    const { service, fake, mcpLoginCwd } = build();
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+      cwd: process.cwd(),
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    expect(mcpLoginCwd()).toBe(realpathSync(process.cwd()));
+  });
+
+  it('runs an unfoldered sign-in where the folderless LISTING is taken', async () => {
+    // The graph builder's case. Its node inspector lists the servers that do
+    // not depend on a folder, which the daemon reads in its own empty
+    // directory — so a name shown there resolves in that directory and nowhere
+    // else. Signing in anywhere else authenticates a different server or none,
+    // which is exactly why this is not "whatever the daemon's cwd happens to
+    // be": that would be the repo the app was launched from.
+    const { service, fake, mcpLoginCwd } = build();
+    const started = service.startMcpLogin({
+      agent: AgentKind.Claude,
+      server: 'linear',
+    });
+    fake.stdout.emit('data', 'visit https://x.test/a\n');
+    await started;
+
+    expect(mcpLoginCwd()).toBe(ensureFolderlessDir());
+    expect(mcpLoginCwd()).not.toBe(realpathSync(process.cwd()));
   });
 });
 

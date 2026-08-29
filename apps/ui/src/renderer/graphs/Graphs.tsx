@@ -51,6 +51,7 @@ import { useAgentContextWindows } from '../chats/use-agent-context-windows';
 import { useAgentEfforts } from '../chats/use-agent-efforts';
 import { useAgentModelParameters } from '../chats/use-agent-model-parameters';
 import { useAgentModels } from '../chats/use-agent-models';
+import { CliLoginProgress } from '../components/cli-login-progress';
 import { ConfirmButton } from '../components/confirm-button';
 import { ConfirmDialog } from '../components/confirm-dialog';
 import { EmptyState } from '../components/empty-state';
@@ -63,8 +64,10 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { SettingRow } from '../components/setting-row';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { MenuAnchorContext } from '../components/ui/menu';
 import { createDaemonApis } from '../daemon-api';
 import { useCapabilities } from '../use-capabilities';
+import { useCliLogin } from '../use-cli-login';
 import { AgentAvatar } from './agent-avatar';
 import { AgentCallsCard } from './agent-calls-card';
 import { AgentNode } from './agent-node';
@@ -558,7 +561,19 @@ export function Graphs({
         nodes,
         edges,
       );
-      const positions = await autoLayout(workflow);
+      // What each card MEASURES on this canvas, which only the canvas knows —
+      // React Flow measures every node it has rendered. Without it ELK places
+      // 128px boxes and the taller cards eat the gap between them (see
+      // `autoLayout`); an unmeasured node simply falls back to the constant.
+      const sizes = new Map(
+        nodes.map((n) => [
+          n.id,
+          n.measured?.width !== undefined && n.measured.height !== undefined
+            ? { width: n.measured.width, height: n.measured.height }
+            : undefined,
+        ]),
+      );
+      const positions = await autoLayout(workflow, sizes);
       setNodes((prev) =>
         prev.map((n) => ({ ...n, position: positions[n.id] ?? n.position })),
       );
@@ -738,6 +753,38 @@ export function Graphs({
     selected?.kind === 'agent' ? selected.agent : null,
     selected?.kind === 'agent' ? (selected.configDir ?? null) : null,
   );
+
+  /**
+   * Signing a node's MCP server in, from the builder.
+   *
+   * REPORTED as "когда я открываю список MCP-серверов, я не могу их настроить
+   * … Здесь я тоже должен иметь возможность абсолютно так же настроить,
+   * залогиниться" — the dialog listed servers, said which needed signing in,
+   * and offered nothing to do about it, while the chat panel's identical
+   * dialog did.
+   *
+   * The sign-in carries no `cwd`, which the daemon reads as its own
+   * folder-independent directory — the very directory this listing was taken
+   * in, so the row and the action name the same server. The controller is the
+   * app's ONE sign-in (`useCliLogin`): one browser challenge at a time, since a
+   * second invalidates the first.
+   *
+   * The on/off TOGGLE deliberately stays absent, and that is not the same
+   * omission. Both CLIs store it per FOLDER (claude in
+   * `projects[<cwd>].disabledMcpServers`), and the builder has no folder until
+   * the workflow runs — so a switch here would write a decision about geniro's
+   * scratch directory and change nothing about the run. `mcp-section` says so
+   * on the rows rather than leaving the reader to wonder, which is the whole
+   * lesson of this report.
+   */
+  const login = useCliLogin(apis, (settled) => {
+    // Only the LISTING can say whether a sign-in landed — the CLI exits as soon
+    // as it has handed the browser the challenge — so a settled server sign-in
+    // re-reads this node's servers. An ACCOUNT sign-in cannot be started here.
+    if (settled.server !== null) {
+      nodeMcp.refresh();
+    }
+  });
 
   /**
    * Why the config directory the node names cannot be used, or null.
@@ -1098,55 +1145,70 @@ export function Graphs({
               max={inspector.maxWidth}
               onResize={inspector.resizeTo}
             />
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-              <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
-                {selected.kind === 'trigger' ? (
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
-                    <Zap aria-hidden="true" className="size-3.5" />
-                  </span>
-                ) : selected.kind === 'instruction' ? (
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-                    <ScrollText aria-hidden="true" className="size-3.5" />
-                  </span>
-                ) : (
-                  <AgentAvatar
-                    label={selected.name ?? selected.id}
-                    className="size-7 text-xs"
-                  />
-                )}
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">
-                    {selected.name ?? selected.id}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {selected.kind === 'trigger'
-                      ? `${selected.trigger} trigger`
-                      : selected.kind === 'instruction'
-                        ? 'Instruction block'
-                        : selected.agent}
-                  </p>
+            {/* The inspector body scrolls, so it CLIPS — and a box that
+                scrolls vertically cannot keep `overflow-x: visible`. A picker
+                panel wider than the 300px panel (a config directory is a whole
+                path) was cut on its left edge, losing the start of every row.
+                Declaring the container is the house rule: every menu inside
+                measures its trigger and places itself `fixed`. */}
+            <MenuAnchorContext.Provider value="viewport">
+              <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+                <div className="flex items-center gap-2 border-b border-border bg-card px-4 py-3">
+                  {selected.kind === 'trigger' ? (
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-success/15 text-success">
+                      <Zap aria-hidden="true" className="size-3.5" />
+                    </span>
+                  ) : selected.kind === 'instruction' ? (
+                    <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+                      <ScrollText aria-hidden="true" className="size-3.5" />
+                    </span>
+                  ) : (
+                    <AgentAvatar
+                      label={selected.name ?? selected.id}
+                      className="size-7 text-xs"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">
+                      {selected.name ?? selected.id}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {selected.kind === 'trigger'
+                        ? `${selected.trigger} trigger`
+                        : selected.kind === 'instruction'
+                          ? 'Instruction block'
+                          : selected.agent}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex flex-col gap-4 p-4">
-                <Field label="Display name" htmlFor="node-name">
-                  <Input
-                    id="node-name"
-                    value={selected.name ?? ''}
-                    placeholder={selected.id}
-                    onChange={(event) =>
-                      patchSelected({
-                        name: event.target.value || undefined,
-                      })
-                    }
-                  />
-                </Field>
-                {selected.kind === 'trigger' ? (
-                  <NoteBox>
-                    Runs start here: firing this {selected.trigger} trigger
-                    seeds every connected agent with the prompt you submit.
-                  </NoteBox>
-                ) : selected.kind === 'instruction' ? (
-                  <>
+                <div className="flex flex-col gap-4 p-4">
+                  <Field label="Display name" htmlFor="node-name">
+                    <Input
+                      id="node-name"
+                      value={selected.name ?? ''}
+                      placeholder={selected.id}
+                      onChange={(event) =>
+                        patchSelected({
+                          name: event.target.value || undefined,
+                        })
+                      }
+                    />
+                  </Field>
+                  {selected.kind === 'trigger' ? (
+                    <NoteBox>
+                      Runs start here: firing this {selected.trigger} trigger
+                      seeds every connected agent with the prompt you submit.
+                    </NoteBox>
+                  ) : selected.kind === 'instruction' ? (
+                    // The field's own hint is the whole explanation this panel
+                    // owes. A `NoteBox` under it repeated it — "never runs and
+                    // has no status", "wire one block to several agents" — as a
+                    // second paragraph about the same block, and was REPORTED
+                    // as exactly that: "этот блок нужно убрать. Он бесполезен!".
+                    // Neither sentence is about THIS block: they describe what
+                    // an instruction node is, which the palette tile's own info
+                    // dialog states once, where somebody is deciding whether to
+                    // add one.
                     <Field
                       label="Instructions"
                       htmlFor="node-instructions"
@@ -1162,15 +1224,9 @@ export function Graphs({
                         }
                       />
                     </Field>
-                    <NoteBox>
-                      This block never runs and has no status of its own — it
-                      only adds its text to the agents you connect it to. Wire
-                      one block to several agents, or several blocks to one.
-                    </NoteBox>
-                  </>
-                ) : (
-                  <>
-                    {/* Every per-run setting as a LABELLED ROW, in one divided
+                  ) : (
+                    <>
+                      {/* Every per-run setting as a LABELLED ROW, in one divided
                         card — the run-configuration editor's shape, over the
                         composer's own chips.
 
@@ -1204,112 +1260,112 @@ export function Graphs({
                         teach one order rather than two. MCP is last because it
                         is the one row that opens something instead of setting
                         a value. */}
-                    <Field label="Agent settings">
-                      {/* `@container`: the rows fit themselves to THIS card,
+                      <Field label="Agent settings">
+                        {/* `@container`: the rows fit themselves to THIS card,
                           whose width comes from the panel's drag handle rather
                           than from the window — see `SettingRow`'s `compact`,
                           which stacks label over control once two columns can no
                           longer hold the longest value. */}
-                      <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
-                        {/* Absent — not disabled — for a CLI that reads no
+                        <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
+                          {/* Absent — not disabled — for a CLI that reads no
                             config directory, and absent while the daemon has
                             not said either way. The chip decided that itself
                             from the reason it was handed; in a label column the
                             ROW has to go with it, or the panel carries a
                             `Profile` heading with a hole under it. */}
-                        {configDirCapability.unavailableReasonFor(
-                          selected.agent,
-                        ) === null ? (
-                          <SettingRow width="compact" label="Profile">
-                            <ConfigDirSelect
-                              configDir={selected.configDir ?? null}
-                              recentConfigDirs={recentConfigDirs}
-                              unavailableReason={null}
-                              ariaLabel="Agent config directory for this node"
-                              onChange={(configDir) =>
+                          {configDirCapability.unavailableReasonFor(
+                            selected.agent,
+                          ) === null ? (
+                            <SettingRow width="compact" label="Profile">
+                              <ConfigDirSelect
+                                configDir={selected.configDir ?? null}
+                                recentConfigDirs={recentConfigDirs}
+                                unavailableReason={null}
+                                ariaLabel="Agent config directory for this node"
+                                onChange={(configDir) =>
+                                  patchSelected({
+                                    configDir: configDir ?? undefined,
+                                  })
+                                }
+                                onBrowse={() => void chooseNodeConfigDir()}
+                              />
+                            </SettingRow>
+                          ) : null}
+                          <SettingRow width="compact" label="Approval">
+                            <ApprovalModeSelect
+                              supportedModes={nodeApprovalModes}
+                              // Never on a workflow node — see `nodeApprovalModes`.
+                              planSupported={false}
+                              value={selected.approval}
+                              onChange={(approval) =>
                                 patchSelected({
-                                  configDir: configDir ?? undefined,
+                                  approval: approval as WorkflowApproval,
                                 })
                               }
-                              onBrowse={() => void chooseNodeConfigDir()}
                             />
                           </SettingRow>
-                        ) : null}
-                        <SettingRow width="compact" label="Approval">
-                          <ApprovalModeSelect
-                            supportedModes={nodeApprovalModes}
-                            // Never on a workflow node — see `nodeApprovalModes`.
-                            planSupported={false}
-                            value={selected.approval}
-                            onChange={(approval) =>
-                              patchSelected({
-                                approval: approval as WorkflowApproval,
-                              })
-                            }
-                          />
-                        </SettingRow>
-                        <SettingRow width="compact" label="Model">
-                          {/* `key` per node: the chip decides its free-text mode
+                          <SettingRow width="compact" label="Model">
+                            {/* `key` per node: the chip decides its free-text mode
                               once, and that decision is one node's. */}
-                          <ModelSelect
-                            key={selected.id}
-                            agentKind={selected.agent}
-                            models={agentModels}
-                            loading={agentModelsLoading}
-                            // The builder's own half of the chip — a full model
-                            // id the CLI does not enumerate is worth a text
-                            // field in a workflow that runs for months.
-                            allowCustom
-                            value={selected.model ?? null}
-                            // Changing the model clears the window and the other
-                            // parameters with it: both belong to the model that
-                            // offered them, and a workflow keeping `1m` — or an
-                            // `optimize_for` the new model never enumerated —
-                            // would send `-32602` on every turn for months.
-                            onChange={(model) =>
-                              patchSelected({
-                                model: model ?? undefined,
-                                contextWindow: undefined,
-                                modelParameters: undefined,
-                              })
-                            }
-                          />
-                        </SettingRow>
-                        {/* The ROW goes with the control, here and in the two
+                            <ModelSelect
+                              key={selected.id}
+                              agentKind={selected.agent}
+                              models={agentModels}
+                              loading={agentModelsLoading}
+                              // The builder's own half of the chip — a full model
+                              // id the CLI does not enumerate is worth a text
+                              // field in a workflow that runs for months.
+                              allowCustom
+                              value={selected.model ?? null}
+                              // Changing the model clears the window and the other
+                              // parameters with it: both belong to the model that
+                              // offered them, and a workflow keeping `1m` — or an
+                              // `optimize_for` the new model never enumerated —
+                              // would send `-32602` on every turn for months.
+                              onChange={(model) =>
+                                patchSelected({
+                                  model: model ?? undefined,
+                                  contextWindow: undefined,
+                                  modelParameters: undefined,
+                                })
+                              }
+                            />
+                          </SettingRow>
+                          {/* The ROW goes with the control, here and in the two
                             below. Each of these chips renders nothing when the
                             model offers no such axis, and a labelled row around
                             nothing is a label with a hole under it — louder in a
                             fixed column than the missing chip ever was. The
                             guards are the run-configuration editor's, so the two
                             label-column screens drop a row on the same test. */}
-                        {agentEfforts.efforts.length === 0 ? null : (
-                          <SettingRow width="compact" label="Effort">
-                            <EffortSelect
-                              efforts={agentEfforts.efforts}
-                              levelsAreModelSpecific={
-                                selected.model !== undefined
-                              }
-                              value={selected.effort ?? null}
-                              onChange={(effort) =>
-                                patchSelected({ effort: effort ?? undefined })
-                              }
-                            />
-                          </SettingRow>
-                        )}
-                        {agentContextWindows.windows.length === 0 ? null : (
-                          <SettingRow width="compact" label="Context">
-                            <ContextWindowSelect
-                              windows={agentContextWindows.windows}
-                              value={selected.contextWindow ?? null}
-                              onChange={(contextWindow) =>
-                                patchSelected({
-                                  contextWindow: contextWindow ?? undefined,
-                                })
-                              }
-                            />
-                          </SettingRow>
-                        )}
-                        {/* One labelled ROW per OTHER setting this node's model
+                          {agentEfforts.efforts.length === 0 ? null : (
+                            <SettingRow width="compact" label="Effort">
+                              <EffortSelect
+                                efforts={agentEfforts.efforts}
+                                levelsAreModelSpecific={
+                                  selected.model !== undefined
+                                }
+                                value={selected.effort ?? null}
+                                onChange={(effort) =>
+                                  patchSelected({ effort: effort ?? undefined })
+                                }
+                              />
+                            </SettingRow>
+                          )}
+                          {agentContextWindows.windows.length === 0 ? null : (
+                            <SettingRow width="compact" label="Context">
+                              <ContextWindowSelect
+                                windows={agentContextWindows.windows}
+                                value={selected.contextWindow ?? null}
+                                onChange={(contextWindow) =>
+                                  patchSelected({
+                                    contextWindow: contextWindow ?? undefined,
+                                  })
+                                }
+                              />
+                            </SettingRow>
+                          )}
+                          {/* One labelled ROW per OTHER setting this node's model
                             enumerates — the same set the composer draws, over
                             the node's own stored map, and a row apiece for the
                             reason the editor gives: a setting with no address of
@@ -1320,38 +1376,39 @@ export function Graphs({
                             `undefined` rather than an empty object when the last
                             one is cleared, so the YAML loses the key instead of
                             carrying `{}`. */}
-                        {agentModelParameters.parameters.map((parameter) => (
-                          <SettingRow
-                            key={parameter.id}
-                            width="compact"
-                            label={parameter.label}>
-                            <ModelParameterSelect
-                              parameter={parameter}
-                              // The row names the axis now, so the chip must not
-                              // name it too — `Optimize For    Optimize For ·
-                              // Balance` is the stutter the label column exists
-                              // to remove.
-                              showAxisName={false}
-                              value={
-                                selected.modelParameters?.[parameter.id] ?? null
-                              }
-                              onChange={(next) => {
-                                const merged = withModelParameter(
-                                  selected.modelParameters ?? {},
-                                  parameter.id,
-                                  next,
-                                );
-                                patchSelected({
-                                  modelParameters:
-                                    Object.keys(merged).length === 0
-                                      ? undefined
-                                      : merged,
-                                });
-                              }}
-                            />
-                          </SettingRow>
-                        ))}
-                        {/* Reported as "we should have a button there to show
+                          {agentModelParameters.parameters.map((parameter) => (
+                            <SettingRow
+                              key={parameter.id}
+                              width="compact"
+                              label={parameter.label}>
+                              <ModelParameterSelect
+                                parameter={parameter}
+                                // The row names the axis now, so the chip must not
+                                // name it too — `Optimize For    Optimize For ·
+                                // Balance` is the stutter the label column exists
+                                // to remove.
+                                showAxisName={false}
+                                value={
+                                  selected.modelParameters?.[parameter.id] ??
+                                  null
+                                }
+                                onChange={(next) => {
+                                  const merged = withModelParameter(
+                                    selected.modelParameters ?? {},
+                                    parameter.id,
+                                    next,
+                                  );
+                                  patchSelected({
+                                    modelParameters:
+                                      Object.keys(merged).length === 0
+                                        ? undefined
+                                        : merged,
+                                  });
+                                }}
+                              />
+                            </SettingRow>
+                          ))}
+                          {/* Reported as "we should have a button there to show
                             MCP, not just inline". It was a section standing
                             open in the panel — a header, a hint, up to ten
                             server rows and a paragraph of connection-failure
@@ -1369,113 +1426,157 @@ export function Graphs({
                             listing would restate the same sentence as if it
                             were a fact about the folder's servers, and there is
                             nothing behind it to show. */}
-                        {configDirError === null ? (
-                          <SettingRow width="compact" label="MCP">
-                            <McpDialogButton
-                              variant="chip"
-                              // The row says `MCP`; the control says how many.
-                              chipNamesItself={false}
-                              title={`MCP servers — ${selected.name ?? selected.id}`}
-                              open={mcpOpen}
-                              onOpenChange={setMcpOpen}
-                              listing={nodeMcp.listing}
-                              loading={nodeMcp.loading}
-                              hint={
-                                selected.configDir
-                                  ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs."
-                                  : 'Global servers. The run folder’s own project servers are added when it runs.'
-                              }
-                              onRefresh={nodeMcp.refresh}
-                            />
-                          </SettingRow>
-                        ) : null}
-                      </div>
-                      {/* The daemon's refusal is the ONLY thing that can tell
+                          {configDirError === null ? (
+                            <SettingRow width="compact" label="MCP">
+                              <McpDialogButton
+                                variant="chip"
+                                // The row says `MCP`; the control says how many.
+                                chipNamesItself={false}
+                                title={`MCP servers — ${selected.name ?? selected.id}`}
+                                open={mcpOpen}
+                                onOpenChange={setMcpOpen}
+                                listing={nodeMcp.listing}
+                                loading={nodeMcp.loading}
+                                hint={
+                                  // The second sentence is why there are no
+                                  // on/off switches here, said out loud: a
+                                  // control that simply vanishes is what got
+                                  // this dialog reported in the first place.
+                                  // Signing in IS offered — credentials are not
+                                  // folder-bound — so only the switch is named.
+                                  selected.configDir
+                                    ? "The servers configured in this node's own config directory. The run folder's own project servers are added when it runs. Switching one off is a per-folder choice, so it is made in a chat rather than here."
+                                    : 'Global servers. The run folder’s own project servers are added when it runs. Switching one off is a per-folder choice, so it is made in a chat rather than here.'
+                                }
+                                onRefresh={nodeMcp.refresh}
+                                onSignIn={(server) => {
+                                  void login.startMcp({
+                                    kind: selected.agent,
+                                    server,
+                                    // No cwd: the daemon signs in where it
+                                    // TOOK this listing — its own folderless
+                                    // directory — so the name resolves to the
+                                    // server the row is about.
+                                    configDir: selected.configDir ?? null,
+                                  });
+                                }}
+                                // Busy for the whole flow, both windows: the
+                                // daemon holds its first reply until the CLI
+                                // prints a URL, and `mcp login` then EXITS
+                                // while the user is still authorizing. A second
+                                // press in either opens a second challenge and
+                                // invalidates the first.
+                                signingIn={
+                                  login.starting?.server ??
+                                  login.login?.server ??
+                                  null
+                                }
+                                loginServer={login.login?.server ?? null}
+                                loginPanel={
+                                  login.login && login.login.server !== null ? (
+                                    <CliLoginProgress
+                                      session={login.login.session}
+                                      onSubmitCode={(code) =>
+                                        void login.submitCode(code)
+                                      }
+                                      onCancel={() => void login.cancel()}
+                                      onDismiss={login.dismiss}
+                                      error={login.error}
+                                      variant="inline"
+                                    />
+                                  ) : null
+                                }
+                              />
+                            </SettingRow>
+                          ) : null}
+                        </div>
+                        {/* The daemon's refusal is the ONLY thing that can tell
                           the user their path is wrong — claude CREATES a
                           directory it cannot find and then reports "Not logged
                           in" about it. Folded into the listing's
                           `unavailableReason` it rendered in the same muted span
                           as "No servers", which reads as a fact about the
                           profile rather than a typo. */}
-                      {/* `break-words` because this string is routinely ONE
+                        {/* `break-words` because this string is routinely ONE
                           unbroken token: the daemon's uniform error shape puts
                           the percent-encoded query string in it, and a 300px
                           panel cannot wrap that at a space it does not have —
                           unwrapped it did not widen the panel, it ran out past
                           its right edge and was unreadable from the URL on. */}
-                      {configDirError ? (
-                        <ErrorText
-                          id="node-config-dir-error"
-                          className="text-xs break-words">
-                          {configDirError}
-                        </ErrorText>
-                      ) : null}
-                      {/* A config directory this CLI will ignore. Only when the
+                        {configDirError ? (
+                          <ErrorText
+                            id="node-config-dir-error"
+                            className="text-xs break-words">
+                            {configDirError}
+                          </ErrorText>
+                        ) : null}
+                        {/* A config directory this CLI will ignore. Only when the
                           node actually carries one — a workflow imported from
                           YAML can, and with the chip absent the user had no way
                           to see what to remove. */}
-                      {selected.configDir &&
-                      configDirCapability.unavailableReasonFor(
-                        selected.agent,
-                      ) ? (
-                        <NoteBox
-                          aria-label="Config directory"
-                          className="text-xs">
-                          <span className="block">
-                            {configDirCapability.unavailableReasonFor(
-                              selected.agent,
-                            )}
-                          </span>
-                          <span className="block text-warning">
-                            This node names {selected.configDir}, which will be
-                            ignored when it runs.
-                          </span>
-                        </NoteBox>
-                      ) : null}
-                    </Field>
-                    <Field
-                      label="Description"
-                      htmlFor="node-description"
-                      hint="What this agent is for. Agents wired to call it see this — and nothing else about it — so they can route work here on their own.">
-                      <ExpandableTextarea
-                        id="node-description"
-                        title="Description"
-                        value={selected.description ?? ''}
-                        rows={3}
-                        placeholder="Reviews a diff or branch and reports findings by severity."
-                        onChange={(next) =>
-                          patchSelected({ description: next || undefined })
-                        }
-                      />
-                    </Field>
-                    <Field
-                      label="Role / system prompt"
-                      htmlFor="node-role"
-                      hint="Prepended to this node's turn. Private — no other agent ever reads it.">
-                      <ExpandableTextarea
-                        id="node-role"
-                        title="Role / system prompt"
-                        value={selected.role ?? ''}
-                        rows={5}
-                        onChange={(next) =>
-                          patchSelected({ role: next || undefined })
-                        }
-                      />
-                    </Field>
-                    {callInfo ? (
+                        {selected.configDir &&
+                        configDirCapability.unavailableReasonFor(
+                          selected.agent,
+                        ) ? (
+                          <NoteBox
+                            aria-label="Config directory"
+                            className="text-xs">
+                            <span className="block">
+                              {configDirCapability.unavailableReasonFor(
+                                selected.agent,
+                              )}
+                            </span>
+                            <span className="block text-warning">
+                              This node names {selected.configDir}, which will
+                              be ignored when it runs.
+                            </span>
+                          </NoteBox>
+                        ) : null}
+                      </Field>
                       <Field
-                        label="Agent calls"
-                        hint="This agent routes by each callee's Description — never their Role.">
-                        <AgentCallsCard
-                          info={callInfo}
-                          agentKind={selected.agent}
+                        label="Description"
+                        htmlFor="node-description"
+                        hint="What this agent is for. Agents wired to call it see this — and nothing else about it — so they can route work here on their own.">
+                        <ExpandableTextarea
+                          id="node-description"
+                          title="Description"
+                          value={selected.description ?? ''}
+                          rows={3}
+                          placeholder="Reviews a diff or branch and reports findings by severity."
+                          onChange={(next) =>
+                            patchSelected({ description: next || undefined })
+                          }
                         />
                       </Field>
-                    ) : null}
-                  </>
-                )}
+                      <Field
+                        label="Role / system prompt"
+                        htmlFor="node-role"
+                        hint="Prepended to this node's turn. Private — no other agent ever reads it.">
+                        <ExpandableTextarea
+                          id="node-role"
+                          title="Role / system prompt"
+                          value={selected.role ?? ''}
+                          rows={5}
+                          onChange={(next) =>
+                            patchSelected({ role: next || undefined })
+                          }
+                        />
+                      </Field>
+                      {callInfo ? (
+                        <Field
+                          label="Agent calls"
+                          hint="This agent routes by each callee's Description — never their Role.">
+                          <AgentCallsCard
+                            info={callInfo}
+                            agentKind={selected.agent}
+                          />
+                        </Field>
+                      ) : null}
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
+            </MenuAnchorContext.Provider>
           </aside>
         ) : null}
       </div>

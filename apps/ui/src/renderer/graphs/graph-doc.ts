@@ -179,11 +179,41 @@ export const NODE_WIDTH = 240;
 export const NODE_HEIGHT = 128;
 
 /**
+ * What one node card measures on the canvas right now, when React Flow has
+ * measured it. Keyed by node id; a missing entry falls back to the constants
+ * above.
+ */
+export type NodeSizes = ReadonlyMap<
+  string,
+  { width: number; height: number } | undefined
+>;
+
+/**
  * Auto-layout via ELK (layered, left→right — matches the producer→consumer
  * edge direction). Returns a fresh layout block; the caller applies it to the
  * canvas and it persists into the YAML on save.
+ *
+ * `sizes` is what each card ACTUALLY measures, and passing it is not an
+ * optimisation — it is the difference between the spacing below meaning
+ * anything and meaning nothing. ELK places boxes of the size it is told, so a
+ * card taller than its declared box overruns the gap left after it. Every node
+ * used to be declared {@link NODE_HEIGHT} (128) while a real agent card is
+ * 173px with a description and 231px carrying a wiring warning — measured in
+ * the running builder — so the 48px gap between siblings came out as **3px**,
+ * and any card past 176px overlapped the one below outright. REPORTED as
+ * "автолейаут работает некрасиво, то есть ноды вообще слишком близко находятся
+ * друг к другу и перекрывают все!".
+ *
+ * The constants stay as the FALLBACK rather than being raised to fit the
+ * tallest card: a node this canvas has not measured yet has no honest size,
+ * and padding every layout for the worst case would leave a graph of short
+ * nodes strewn across the screen. What a card measures is a fact only the
+ * canvas holds, which is why it is an argument rather than a bigger guess here.
  */
-export async function autoLayout(workflow: Workflow): Promise<WorkflowLayout> {
+export async function autoLayout(
+  workflow: Workflow,
+  sizes: NodeSizes = new Map(),
+): Promise<WorkflowLayout> {
   const elk = new ELK();
   const graph = await elk.layout({
     id: 'root',
@@ -195,8 +225,8 @@ export async function autoLayout(workflow: Workflow): Promise<WorkflowLayout> {
     },
     children: workflow.nodes.map((node) => ({
       id: node.id,
-      width: NODE_WIDTH,
-      height: NODE_HEIGHT,
+      width: sizes.get(node.id)?.width ?? NODE_WIDTH,
+      height: sizes.get(node.id)?.height ?? NODE_HEIGHT,
     })),
     edges: workflow.edges.map((edge) => ({
       id: edgeId(edge.from, edge.to, edge.kind),

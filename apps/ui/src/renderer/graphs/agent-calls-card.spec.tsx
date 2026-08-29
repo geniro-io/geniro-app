@@ -35,16 +35,24 @@ function render(
   return container;
 }
 
-/** The names as the reader sees them — one badge each, in order. */
-function badges(el: HTMLElement): string[] {
-  return [...el.querySelectorAll('[data-slot="badge"]')].map((b) =>
+/** The names as the reader sees them — one row each, in order. */
+function names(el: HTMLElement): string[] {
+  return [...el.querySelectorAll('[data-slot="call-name"]')].map((b) =>
     (b.textContent ?? '').trim(),
   );
 }
 
+function row(el: HTMLElement, name: string): Element | undefined {
+  return [...el.querySelectorAll('[data-slot="call-row"]')].find(
+    (b) =>
+      b.querySelector('[data-slot="call-name"]')?.textContent?.trim() === name,
+  );
+}
+
+/** Each direction's own heading — the list's `aria-label` names it. */
 function rowLabels(el: HTMLElement): string[] {
-  return [...el.querySelectorAll('[data-slot="setting-row"]')].map((row) =>
-    (row.children[0]?.textContent ?? '').trim(),
+  return [...el.querySelectorAll('ul[aria-label]')].map(
+    (list) => list.getAttribute('aria-label') ?? '',
   );
 }
 
@@ -66,41 +74,54 @@ describe('AgentCallsCard', () => {
     const el = render();
 
     expect(rowLabels(el)).toEqual(['Calls', 'Called by']);
-    expect(badges(el)).toEqual(['Engineer', 'Researcher', 'QA', 'Lead']);
+    expect(names(el)).toEqual(['Engineer', 'Researcher', 'QA', 'Lead']);
     // The prose is gone: it is the section's own one-line hint at the call
     // site now, not a wall re-read on every selection.
     expect(el.textContent).not.toContain('call_agent');
     expect(el.textContent).not.toContain('Call edges let this agent');
   });
 
-  it('draws only the half a node actually has', () => {
-    // A leaf callee has no callees of its own, and a row labelled `Calls` with
-    // nothing under it is a heading over a hole — the same rule every picker in
-    // this panel follows.
-    const el = render({ callees: [], undescribedCallees: [] });
+  it('gives every agent the avatar it wears everywhere else, and no card', () => {
+    // REPORTED: "нам не нужен белый фон… напротив каждого агента там можно его
+    // иконку даже поставить". A name in a pill is a name; the avatar is how
+    // this app identifies an agent on the canvas and in this panel's header, so
+    // the list is scanned rather than read. `bg-card` is the panel's one white
+    // surface and belongs to the settings band, whose rows are controls.
+    const el = render();
 
-    expect(rowLabels(el)).toEqual(['Called by']);
-    expect(badges(el)).toEqual(['Lead']);
+    // One avatar per row, carrying that agent's own initials.
+    expect(
+      [...el.querySelectorAll('[data-slot="call-row"]')].map(
+        (r) => r.firstElementChild?.textContent,
+      ),
+    ).toEqual(['EN', 'RE', 'QA', 'LE']);
+    expect(el.innerHTML).not.toContain('bg-card');
   });
 
-  it('MARKS the callee it cannot route to, on the badge that is about it', () => {
+  it('MARKS the callee it cannot route to, on the row that is about it', () => {
     // This replaced a sentence naming them in a list — "No description on QA —
     // this agent sees only their names and has nothing to route on". The mark
-    // is on the name it is about, and its reason is that badge's own hover, so
+    // is on the name it is about, and its reason is that row's own hover, so
     // a reader fixing it knows which node to open.
     const el = render({ undescribedCallees: ['QA'] });
 
-    const qa = [...el.querySelectorAll('[data-slot="badge"]')].find(
-      (b) => b.textContent?.trim() === 'QA',
-    );
+    const qa = row(el, 'QA');
     expect(qa?.getAttribute('title')).toContain('no description');
     expect(qa?.className).toContain('text-warning');
     // …and the ones it CAN route to carry neither.
-    const engineer = [...el.querySelectorAll('[data-slot="badge"]')].find(
-      (b) => b.textContent?.trim() === 'Engineer',
-    );
+    const engineer = row(el, 'Engineer');
     expect(engineer?.getAttribute('title')).toBeNull();
     expect(engineer?.className).not.toContain('text-warning');
+  });
+
+  it('draws only the half a node actually has', () => {
+    // A leaf callee has no callees of its own, and a heading labelled `Calls`
+    // with nothing under it is a heading over a hole — the same rule every
+    // picker in this panel follows.
+    const el = render({ callees: [], undescribedCallees: [] });
+
+    expect(rowLabels(el)).toEqual(['Called by']);
+    expect(names(el)).toEqual(['Lead']);
   });
 
   it('keeps the loop warning, which is true of this node and nothing else', () => {

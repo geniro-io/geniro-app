@@ -1,4 +1,10 @@
-import { type Dispatch, type SetStateAction, useEffect, useState } from 'react';
+import {
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 
 /**
  * A boolean the user SET and expects to find again — a panel folded shut, a
@@ -26,7 +32,16 @@ export function usePersistedFlag(
     return stored === null ? fallback : stored === '1';
   });
 
+  // Only a CHANGE is written. Writing on mount too would store the fallback
+  // under the key the moment the panel first rendered — turning "never chosen"
+  // into a choice nobody made, and making every later change of a fallback a
+  // no-op for everyone who had already opened that panel once.
+  const mounted = useRef(false);
   useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
     localStorage.setItem(storageKey, value ? '1' : '0');
   }, [storageKey, value]);
 

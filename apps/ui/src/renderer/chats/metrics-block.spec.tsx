@@ -86,7 +86,7 @@ describe('MetricsCard', () => {
     const el = render(<MetricsCard metrics={SPEC} />);
     const figures = [...el.querySelectorAll('[data-slot="metric"]')];
     const deltaClass = (index: number): string =>
-      figures[index]?.querySelector('span > span:nth-child(2)')?.className ??
+      figures[index]?.querySelector('[data-slot="metric-delta"]')?.className ??
       '';
     expect(figures[0]?.getAttribute('data-sentiment')).toBe('good');
     expect(deltaClass(0)).toContain('text-success');
@@ -112,7 +112,8 @@ describe('MetricsCard', () => {
       />,
     );
     const figure = el.querySelector('[data-slot="metric"]')!;
-    expect(figure.querySelectorAll('span > span')).toHaveLength(1);
+    expect(figure.querySelector('[data-slot="metric-value"]')).toBeTruthy();
+    expect(figure.querySelector('[data-slot="metric-delta"]')).toBeNull();
   });
 
   it('supplies its own heading when the agent named none', () => {

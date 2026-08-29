@@ -75,11 +75,16 @@ export interface CliLoginController {
    * Here rather than in a hook of its own precisely because the lifecycle is
    * identical: a second copy is where a cancel or a settle would come to be
    * handled two ways.
+   *
+   * `cwd` is where the CLI resolves the server NAME, so it must be the folder
+   * the LISTING the user pressed was taken in. Omitted means the daemon's
+   * folder-independent directory — the graph builder's case, whose node
+   * inspector lists exactly the servers that do not depend on a folder.
    */
   startMcp: (input: {
     kind: CliKind;
     server: string;
-    cwd: string;
+    cwd?: string;
     configDir?: string | null;
   }) => Promise<void>;
   submitCode: (code: string) => Promise<void>;
@@ -196,7 +201,7 @@ export function useCliLogin(
     async (input: {
       kind: CliKind;
       server: string;
-      cwd: string;
+      cwd?: string;
       configDir?: string | null;
     }): Promise<void> => {
       if (!apis) {
@@ -208,7 +213,9 @@ export function useCliLogin(
         const session = await apis.cliAuth.startMcpLogin({
           agent: input.kind as AgentKind,
           server: input.server,
-          cwd: input.cwd,
+          // Omitted rather than defaulted: the daemon reads an absent `cwd` as
+          // its own folderless directory, which is a place, not a fallback.
+          ...(input.cwd ? { cwd: input.cwd } : {}),
           ...(input.configDir ? { configDir: input.configDir } : {}),
         });
         setLogin({ kind: input.kind, session, server: input.server });

@@ -31,10 +31,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+/**
+ * Open every category block. The palette ships them CLOSED, so a test about
+ * tiles has to open them the way a user does — clicking the headers, rather
+ * than seeding the storage keys the component owns.
+ */
+function expandAll(): void {
+  Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+    .filter((b) => b.getAttribute('aria-expanded') === 'false')
+    .forEach(click);
+}
+
 function render(): void {
   act(() => {
     root.render(<NodePalette />);
   });
+  expandAll();
 }
 
 /** The draggable tiles (the fold/category buttons are not draggable). */
@@ -65,6 +77,38 @@ function dialog(): Element | null {
 }
 
 describe('NodePalette', () => {
+  it('opens with every category collapsed', () => {
+    // Reported: "by default all groups should be collapsed" — three expanded
+    // blocks fill the panel before the user has asked for any of them.
+    act(() => {
+      root.render(<NodePalette />);
+    });
+
+    const headers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).filter((b) => b.hasAttribute('aria-expanded'));
+    expect(headers).toHaveLength(3); // Triggers + Agents + Instructions
+    expect(headers.map((b) => b.getAttribute('aria-expanded'))).toEqual([
+      'false',
+      'false',
+      'false',
+    ]);
+    expect(tiles()).toHaveLength(0); // nothing under them until one is opened
+  });
+
+  it('remembers a category the user opened', () => {
+    // The default is a fallback, not a policy: an opened block survives the
+    // remount the builder performs on every nav change.
+    render(); // opens all three
+    act(() => root.unmount());
+
+    root = createRoot(container);
+    act(() => {
+      root.render(<NodePalette />);
+    });
+    expect(tiles()).toHaveLength(4);
+  });
+
   it('renders one draggable tile per trigger, agent and instruction block', () => {
     render();
     expect(tiles()).toHaveLength(4); // Manual + Claude + Cursor + Instructions
@@ -96,6 +140,7 @@ describe('NodePalette', () => {
     act(() => {
       root.render(<NodePalette onAdd={onAdd} />);
     });
+    expandAll();
     click(tileByLabel('Claude'));
 
     const add = Array.from(

@@ -43,7 +43,9 @@ describe('writeTurnMcpConfig', () => {
 
     expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
       mcpServers: {
-        geniro: {
+        // The endpoint's own per-run name: the user's servers load beside
+        // this one, so a shared key could shadow one of theirs.
+        [ENDPOINT.serverName]: {
           type: 'http',
           url: ENDPOINT.url,
           headers: { Authorization: `Bearer ${ENDPOINT.token}` },

@@ -6,7 +6,11 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
-import { HOST_QUESTION_TOOL } from '../../agents/chat.types';
+import {
+  HOST_FINDINGS_TOOL,
+  HOST_QUESTION_TOOL,
+} from '../../agents/chat.types';
+import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
@@ -43,8 +47,9 @@ function broker(): CallBroker {
 function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
+  findings = new FindingsReportBroker(),
 ): McpServerService {
-  return new McpServerService(callBroker, questions, {
+  return new McpServerService(callBroker, questions, findings, {
     token: 'launch',
     version: '9.9.9',
     startedAt: 0,
@@ -474,6 +479,206 @@ describe('McpServerService', () => {
     };
     expect(result.isError).toBe(true);
     expect(JSON.parse(result.content[0]!.text).error).toContain('INVALID_ARGS');
+  });
+
+  it('does not offer report_findings to a node with nowhere to draw a card', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_FINDINGS_TOOL);
+  });
+
+  it('offers report_findings once a turn has registered a reporter', async () => {
+    const findings = new FindingsReportBroker();
+    findings.register('run-1', 'agent', async () => ({
+      status: 'recorded',
+      count: 0,
+    }));
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_FINDINGS_TOOL);
+    expect(tool).toBeDefined();
+    // The advertised shape is claude's ReportFindings, snake_case included, so
+    // an agent that has learned that tool needs to learn nothing new here.
+    const items = (
+      tool!.inputSchema as {
+        properties: { findings: { items: { required: string[] } } };
+      }
+    ).properties.findings.items;
+    expect(items.required).toEqual(['file', 'summary', 'failure_scenario']);
+  });
+
+  it('tools/call report_findings hands the report over and answers with a receipt', async () => {
+    const findings = new FindingsReportBroker();
+    const recorded: unknown[] = [];
+    findings.register('run-1', 'agent', async (report) => {
+      recorded.push(report);
+      return { status: 'recorded', count: report.findings.length };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: {
+          level: 'high',
+          findings: [
+            {
+              file: 'src/queue/processor.ts',
+              line: 402,
+              summary: 'finalizeCompleted no longer checks generation',
+              short_summary: 'CAS guard weakened',
+              failure_scenario: 'A superseded worker wins the write.',
+              verdict: 'CONFIRMED',
+            },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(recorded).toEqual([
+      {
+        level: 'high',
+        findings: [
+          {
+            file: 'src/queue/processor.ts',
+            line: 402,
+            summary: 'finalizeCompleted no longer checks generation',
+            shortSummary: 'CAS guard weakened',
+            failureScenario: 'A superseded worker wins the write.',
+            verdict: 'CONFIRMED',
+          },
+        ],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the findings themselves — the card is how the user sees
+    // them, and echoing them here would spend the window on them twice.
+    expect(result.content[0]!.text).toBe(
+      '1 finding recorded and shown to the user.',
+    );
+    expect(result.content[0]!.text).not.toContain('finalizeCompleted');
+  });
+
+  it('accepts an empty report — nothing survived verification is an answer', async () => {
+    const findings = new FindingsReportBroker();
+    findings.register('run-1', 'agent', async (report) => ({
+      status: 'recorded',
+      count: report.findings.length,
+    }));
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: [] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toBe('No findings recorded.');
+  });
+
+  it('refuses a findings argument that is not an array', async () => {
+    const findings = new FindingsReportBroker();
+    let reports = 0;
+    findings.register('run-1', 'agent', async () => {
+      reports += 1;
+      return { status: 'recorded', count: 0 };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: 'three things' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(reports).toBe(0);
+  });
+
+  it('tells a call whose findings all failed to parse apart from an empty report', async () => {
+    // Answering "0 findings recorded" here would have the model believe it had
+    // reported and move on, when every finding it found was dropped at the edge.
+    const findings = new FindingsReportBroker();
+    let reports = 0;
+    findings.register('run-1', 'agent', async () => {
+      reports += 1;
+      return { status: 'recorded', count: 0 };
+    });
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker(), findings),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: { findings: [{ summary: 'a defect with no file' }] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(reports).toBe(0);
+  });
+
+  it('answers a report it cannot record without flagging a tool failure', async () => {
+    // The listing and the call are separate requests, so a turn can settle
+    // between them. The agent still holds the findings and can write them out.
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_FINDINGS_TOOL,
+        arguments: {
+          findings: [
+            {
+              file: 'a.ts',
+              summary: 'x',
+              failure_scenario: 'y',
+            },
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('could not be recorded');
+    expect(result.content[0]!.text).toContain('in your reply');
   });
 
   it('methodNotAllowed answers 405 with a JSON-RPC error body', () => {

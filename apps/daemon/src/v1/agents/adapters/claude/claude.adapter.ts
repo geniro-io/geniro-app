@@ -43,7 +43,6 @@ import type {
   TurnDriver,
   TurnImage,
 } from '../adapter.types';
-import { GENIRO_MCP_SERVER_KEY } from '../adapter.types';
 import { AgentAdapter } from '../agent-adapter';
 import { readFileSafe } from '../utils/fs-safe.utils';
 import { titlePrompt } from '../utils/title-prompt.utils';
@@ -114,7 +113,6 @@ import {
 } from './utils/claude-context-usage.utils';
 import { buildImageBlocks } from './utils/claude-images.utils';
 import {
-  definesGeniroServer,
   sweepStaleTurnMcpConfigs,
   writeTurnMcpConfig,
 } from './utils/claude-mcp-config.utils';
@@ -749,20 +747,10 @@ export class ClaudeAdapter extends AgentAdapter {
     };
     try {
       if (input.mcpEndpoint) {
-        // Refused BEFORE anything is written, so a rejected turn leaves no file
-        // behind. `--strict-mcp-config` is no longer passed, so the user's own
-        // servers load alongside the call surface: an entry under geniro's key
-        // would be silently dropped in favour of ours (probe-verified — ours
-        // wins), leaving the user's server missing with no word said.
-        const collision = definesGeniroServer(
-          input.cwd,
-          this.claudeOptions.homeDir,
-        );
-        if (collision !== null) {
-          throw new Error(
-            `${collision} defines a server named "${GENIRO_MCP_SERVER_KEY}", which is the name this run uses for its own agent-to-agent call surface. Rename it to run this node.`,
-          );
-        }
+        // No collision check: the endpoint's name carries this run's id, so it
+        // cannot be a name the user has already given one of their own servers
+        // — which is what the check that used to stand here was protecting
+        // them from, `--strict-mcp-config` not being passed.
         const path = writeTurnMcpConfig(dir, input.mcpEndpoint);
         this.mcpConfigPaths.set(input, path);
         written.push(path);
@@ -1260,9 +1248,9 @@ export class ClaudeAdapter extends AgentAdapter {
       // MCP servers a fresh claude session in that folder sees, PLUS geniro's
       // call surface — they combine. Restricting the turn to our config alone
       // would also make the MCP switch meaningless for a caller node, since
-      // there would be no project servers loaded to switch off. The collision
-      // guard in `prepareTurn` is what keeps the call surface unambiguous now
-      // that the project's own servers load beside it.
+      // there would be no project servers loaded to switch off. What keeps the
+      // two unambiguous is the NAME: geniro's server carries this run's id, so
+      // it cannot be one the user has already given a server of their own.
       args.push(CLAUDE_MCP_CONFIG_FLAG, mcpConfigPath);
     }
     return args;

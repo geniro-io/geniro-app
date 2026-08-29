@@ -9,12 +9,23 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
+  FINDING_LEVELS,
+  FINDING_OUTCOMES,
+  FINDING_VERDICTS,
+  HOST_FINDINGS_TOOL,
   HOST_QUESTION_TOOL,
   MAX_ANSWER_LENGTH,
+  MAX_FINDING_SHORT_SUMMARY_LENGTH,
+  MAX_HOST_FINDINGS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
 } from '../../agents/chat.types';
+import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import {
+  hostFindingsResultText,
+  readHostFindingsReport,
+} from '../../agents/utils/host-findings';
 import {
   hostQuestionResultText,
   readHostQuestions,
@@ -28,15 +39,21 @@ import { CallBroker } from './call-broker.service';
  * The MCP protocol host behind the per-run endpoint
  * (`POST /v1/mcp/<runId>/<nodeId>`, see McpController), serving the tools THIS
  * node can use over the streamable-http transport: the call surface
- * (call_agent / await_agent / answer_agent) to a node with callees, and
+ * (call_agent / await_agent / answer_agent) to a node with callees,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
- * own. The listing is composed per request rather than fixed, so a chat is
+ * own, and `report_findings` to a turn whose transcript can draw the card.
+ * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a graph node is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
  * SDK `Server` + transport pair (no session ids, plain JSON responses), so
  * nothing leaks between requests and the per-run call token in the guard is
- * the only session there is. Tool results are ALWAYS the broker's envelope
- * (`{status, result?, error?}`) serialized as text — never bare text.
+ * the only session there is.
+ *
+ * A CALL tool's result is always the broker's envelope
+ * (`{status, result?, error?}`) serialized as text — that envelope is a
+ * contract between two AGENTS. The two HOST tools answer in their own shapes
+ * instead, and deliberately: neither a question put to a person nor a card
+ * drawn in this app has a status, a call_id, or anything to collect later.
  *
  * Errors are answered in-protocol (JSON-RPC) inside this service: the global
  * ExceptionsFilter emits Nest-shaped `{statusCode, code, …}` bodies an MCP
@@ -49,6 +66,7 @@ export class McpServerService {
   constructor(
     private readonly broker: CallBroker,
     private readonly questions: UserQuestionBroker,
+    private readonly findings: FindingsReportBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -282,6 +300,81 @@ export class McpServerService {
           },
         });
       }
+      if (this.findings.canReport(runId, nodeId)) {
+        tools.push({
+          name: HOST_FINDINGS_TOOL,
+          description:
+            'Report code-review findings as a typed list so this app draws them for the user. ' +
+            'Use it when you have reviewed code and have concrete defects to hand back — call it ONCE with every ' +
+            'finding, most-severe first, and do not also print the findings as text: the user sees the rendered ' +
+            'list, so writing them out again shows the same findings twice. ' +
+            'An empty array is a valid report and means nothing survived your verification. ' +
+            'When you later fix findings you already reported, report them again with `outcome` set on each. ' +
+            'The result is a short receipt, never the findings themselves.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              level: {
+                type: 'string',
+                enum: [...FINDING_LEVELS],
+                description:
+                  'How deep the review that produced these findings ran. Optional.',
+              },
+              findings: {
+                type: 'array',
+                description: `The findings, most-severe first — at most ${MAX_HOST_FINDINGS}.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    file: {
+                      type: 'string',
+                      description:
+                        'Repo-relative path of the file the finding is in.',
+                    },
+                    line: {
+                      type: 'integer',
+                      description:
+                        'The 1-indexed line the finding anchors to. Omit rather than guessing — it is shown to the user as a location.',
+                    },
+                    summary: {
+                      type: 'string',
+                      description: 'One-sentence statement of the defect.',
+                    },
+                    short_summary: {
+                      type: 'string',
+                      description: `The claim alone, at most ${MAX_FINDING_SHORT_SUMMARY_LENGTH} characters — no rationale, no consequence clause. This is the collapsed row the user scans.`,
+                    },
+                    failure_scenario: {
+                      type: 'string',
+                      description:
+                        'Concrete inputs or state, and the wrong output or crash they produce.',
+                    },
+                    category: {
+                      type: 'string',
+                      description:
+                        'Short kebab-case slug of the finding type, e.g. "correctness", "security", "test-coverage". Optional.',
+                    },
+                    verdict: {
+                      type: 'string',
+                      enum: [...FINDING_VERDICTS],
+                      description:
+                        'Set only where a verification pass actually ran over this finding.',
+                    },
+                    outcome: {
+                      type: 'string',
+                      enum: [...FINDING_OUTCOMES],
+                      description:
+                        'Set ONLY when re-reporting after acting on the findings: what happened to this one.',
+                    },
+                  },
+                  required: ['file', 'summary', 'failure_scenario'],
+                },
+              },
+            },
+            required: ['findings'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -318,6 +411,44 @@ export class McpServerService {
           // unavailable channel are both answers the agent carries on from,
           // and flagging them as errors is how a model comes to retry a
           // question the user has already declined.
+          isError: false,
+        };
+      }
+      if (name === HOST_FINDINGS_TOOL) {
+        // Its own shape, for the question tool's reason: a card drawn in this
+        // app's transcript has no status and nothing to collect later.
+        if (!Array.isArray(args.findings)) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: 'findings' must be an array — pass an empty one to report that nothing survived verification.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const report = readHostFindingsReport(args);
+        // A non-empty array that parsed to nothing is a malformed call, not an
+        // empty report, and the two must not answer alike: told "0 findings
+        // recorded" the model believes it has reported and moves on, when in
+        // fact every finding it found was dropped at this edge.
+        if (args.findings.length > 0 && report.findings.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: no finding could be read — each entry needs a 'file' and a 'summary' string.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.findings.report(runId, nodeId, report);
+        return {
+          content: [{ type: 'text', text: hostFindingsResultText(outcome) }],
+          // An unavailable channel is an answer the agent carries on from —
+          // it still holds the findings and can write them in its reply.
           isError: false,
         };
       }

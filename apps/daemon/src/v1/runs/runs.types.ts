@@ -87,6 +87,15 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * is a dead control. The daemon says so explicitly rather than leaving the
  * renderer to infer staleness from a settled turn — an inference that has no
  * way to distinguish a request the CLI abandoned from one still in flight.
+ *
+ * `report_findings` is a list of code-review findings an agent handed the APP
+ * to draw — through geniro's own MCP tool, rather than printing them as prose
+ * a transcript can only show as prose. The payload IS the card: the tool call
+ * answers with a receipt alone, deliberately, so the findings never re-enter
+ * the model's context, which leaves this row as the only place they exist.
+ * Persisted rather than streamed for `task_list`'s reason — a reopened chat
+ * replays the transcript, and a card that lived only on the wire would be gone
+ * from every conversation the moment it was closed.
  */
 export const ItemKindSchema = z
   .enum([
@@ -112,6 +121,7 @@ export const ItemKindSchema = z
     'subagent_info',
     'task_list',
     'shell_info',
+    'report_findings',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

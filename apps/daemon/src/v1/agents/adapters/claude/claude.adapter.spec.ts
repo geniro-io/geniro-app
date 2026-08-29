@@ -1020,7 +1020,9 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
     // The token travels IN the file (0600), never in argv.
     expect(JSON.parse(readFileSync(configPath, 'utf8'))).toEqual({
       mcpServers: {
-        geniro: {
+        // The endpoint's own per-run name, not a shared key: the servers above
+        // load beside this one, so a shared name could shadow one of theirs.
+        [ENDPOINT.serverName]: {
           type: 'http',
           url: ENDPOINT.url,
           headers: { Authorization: 'Bearer call-token-1' },
@@ -2150,11 +2152,7 @@ describe('ClaudeAdapter — handing the conversation to the user', () => {
 describe('ClaudeAdapter — models', () => {
   const dirs: string[] = [];
 
-  afterEach(() => {
-    while (dirs.length > 0) {
-      rmSync(dirs.pop() as string, { recursive: true, force: true });
-    }
-  });
+  afterEach(() => {});
 
   function emptyHome(): string {
     const dir = mkdtempSync(join(tmpdir(), 'claude-no-cache-'));
@@ -2464,22 +2462,16 @@ describe('ClaudeAdapter — signing in to an MCP server', () => {
   });
 });
 
-describe('ClaudeAdapter geniro-key collision', () => {
+describe('ClaudeAdapter — geniro’s own MCP server name', () => {
   const ENDPOINT = {
     url: 'http://127.0.0.1:4870/v1/mcp/run-1/orch',
     token: 'call-token-1',
     serverName: 'geniro-run-1',
   };
-  const dirs: string[] = [];
   let cwd: string;
   /**
-   * An EMPTY home for every case here.
-   *
-   * The guard reads all three scopes a turn loads from, and the last two live
-   * in `~/.claude.json`. Left to the real home directory these specs consult a
-   * file the developer running them owns: a `geniro` entry in it turns every
-   * "allows" case red, and the two home-scope branches below could only ever
-   * pass by accident. The same isolation the models describe already uses.
+   * An EMPTY home for every case here, so these specs never consult the
+   * `~/.claude.json` the developer running them owns.
    */
   let homeDir: string;
 
@@ -2491,9 +2483,6 @@ describe('ClaudeAdapter geniro-key collision', () => {
   afterEach(() => {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(homeDir, { recursive: true, force: true });
-    while (dirs.length > 0) {
-      rmSync(dirs.pop() as string, { recursive: true, force: true });
-    }
   });
 
   /** Write `~/.claude.json` — the user- and local-scope source. */
@@ -2513,140 +2502,29 @@ describe('ClaudeAdapter geniro-key collision', () => {
     );
   }
 
-  it('refuses a caller turn when the project defines a server named geniro', () => {
-    // `--strict-mcp-config` is gone, so the project's own servers load beside
-    // the call surface. Ours wins the name (probe-verified), which means the
-    // user's server of that name silently disappears and the tool namespace
-    // becomes ambiguous. Failing visibly is the whole mitigation.
-    const { spawn } = fakeSpawn();
-    writeProjectMcp({ geniro: { command: 'node', args: ['x.js'] } });
-
-    expect(() =>
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-        () => {},
-      ),
-    ).toThrow(/geniro/);
-  });
-
-  it('does not spawn the turn it refused', () => {
+  it('publishes the call surface under the run’s OWN server name', () => {
+    // The name carries the run id, so a server the user has already named
+    // cannot be it. That is what replaced the collision refusal that used to
+    // stand here: `--strict-mcp-config` is still not passed, so the user's own
+    // servers load beside this one — they simply cannot be shadowed by it now.
     const { spawn, captured } = fakeSpawn();
-    writeProjectMcp({ geniro: {} });
-
-    try {
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-        () => {},
-      );
-    } catch {
-      // asserted above
-    }
-
-    expect(captured.args).toBeUndefined();
-  });
-
-  it('leaves no config file behind when it refuses', () => {
-    // The refusal happens before anything is written, so a rejected turn does
-    // not litter the config dir with a token-bearing file nothing disposes.
-    const { spawn } = fakeSpawn();
-    writeProjectMcp({ geniro: {} });
-    const dir = mkdtempSync(join(tmpdir(), 'claude-collision-dir-'));
-    dirs.push(dir);
-
-    try {
-      new ClaudeAdapter({ spawn, mcpConfigDir: dir }).start(
-        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-        () => {},
-      );
-    } catch {
-      // asserted above
-    }
-
-    expect(existsSync(dir) ? readdirSync(dir) : []).toEqual([]);
-  });
-
-  it('allows a caller turn when the project defines other servers', () => {
-    const { spawn, captured } = fakeSpawn();
-    writeProjectMcp({ sentry: {}, docs: {} });
-
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-      { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-      () => {},
-    );
-
-    expect(captured.args).toContain('--mcp-config');
-  });
-
-  it('allows a NON-caller turn even when the project defines geniro', () => {
-    // Without a call surface there is no name to collide with, so a plain chat
-    // in that folder must keep working.
-    const { spawn, captured } = fakeSpawn();
-    writeProjectMcp({ geniro: {} });
-
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-      { prompt: 'p', cwd },
-      () => {},
-    );
-
-    expect(captured.args).toContain('-p');
-  });
-
-  it('refuses when the USER-scope config defines geniro', () => {
-    // `~/.claude.json`'s root `mcpServers` — a scope the turn loads from and
-    // no test reached. Checking the project file alone refuses the narrow case
-    // and silently permits the wider one, which is the more dangerous half:
-    // a user-scope entry collides in EVERY folder.
-    const { spawn } = fakeSpawn();
     writeHomeConfig({ mcpServers: { geniro: { command: 'node' } } });
 
-    expect(() =>
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-        () => {},
-      ),
-    ).toThrow(/defines a server named "geniro"/);
-  });
-
-  it('refuses when the LOCAL-scope config defines geniro for this folder', () => {
-    // `~/.claude.json`'s `projects[<cwd>].mcpServers` — the third scope, keyed
-    // by the very folder the turn runs in.
-    const { spawn } = fakeSpawn();
-    writeHomeConfig({ projects: { [cwd]: { mcpServers: { geniro: {} } } } });
-
-    expect(() =>
-      new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-        { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-        () => {},
-      ),
-    ).toThrow(/defines a server named "geniro"/);
-  });
-
-  it('allows a caller turn when ANOTHER folder has a local-scope geniro', () => {
-    // The keying itself: `projects` is per folder, so an entry under a
-    // different path must not refuse this one. Dropping the `[cwd]` lookup for
-    // a scan of every project would make this red.
-    const { spawn, captured } = fakeSpawn();
-    writeHomeConfig({
-      projects: { '/some/other/project': { mcpServers: { geniro: {} } } },
-    });
-
     new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
       { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
       () => {},
     );
 
-    expect(captured.args).toContain('--mcp-config');
-  });
-
-  it('allows a caller turn when the folder has no .mcp.json at all', () => {
-    const { spawn, captured } = fakeSpawn();
-
-    new ClaudeAdapter({ spawn, mcpConfigDir: cwd, homeDir }).start(
-      { prompt: 'p', cwd, mcpEndpoint: ENDPOINT },
-      () => {},
+    const at = captured.args!.indexOf('--mcp-config');
+    expect(at).toBeGreaterThan(-1);
+    const written: unknown = JSON.parse(
+      readFileSync(captured.args![at + 1]!, 'utf8'),
     );
-
-    expect(captured.args).toContain('--mcp-config');
+    expect(
+      Object.keys(
+        (written as { mcpServers: Record<string, unknown> }).mcpServers,
+      ),
+    ).toEqual([ENDPOINT.serverName]);
   });
 });
 

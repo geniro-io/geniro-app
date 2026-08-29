@@ -2058,7 +2058,8 @@ export const ItemKind = {
     CallAnswer: 'call_answer',
     SubagentInfo: 'subagent_info',
     TaskList: 'task_list',
-    ShellInfo: 'shell_info'
+    ShellInfo: 'shell_info',
+    ReportFindings: 'report_findings'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

@@ -36,6 +36,7 @@ import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
+import { FindingsReportBroker } from './services/findings-report.broker';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -79,6 +80,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   providers: [
     ChatService,
     UserQuestionBroker,
+    FindingsReportBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -290,6 +292,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // `ask_user_question` tool through this broker, and the turn that can
     // actually put the card on screen registers here.
     UserQuestionBroker,
+    // Exported on the same terms: the MCP host serves `report_findings`
+    // through this broker, and the turn that can actually persist the row
+    // registers here.
+    FindingsReportBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

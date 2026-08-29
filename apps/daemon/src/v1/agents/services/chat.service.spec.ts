@@ -50,6 +50,7 @@ import { HOST_QUESTION_TOOL, SINGLE_AGENT_NODE } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { hostMcpServerName } from '../utils/host-question';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -61,6 +62,7 @@ import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
+import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
@@ -569,6 +571,12 @@ function setup(
   opts: {
     claudeModes?: ClaudeModesCapability;
     mcpSettingsFile?: string;
+    /**
+     * The daemon's bound port, or null for a launch that has none. Null is the
+     * case the endpoint guard exists for: with no port there is no URL to
+     * publish, so no token is minted either.
+     */
+    port?: number | null;
     /** What the sidebar's auto-filing rule answers for a new chat's cwd. */
     autoGroupId?: string | null;
     /**
@@ -630,6 +638,7 @@ function setup(
   );
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();
+  const findingsReports = new FindingsReportBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -726,8 +735,16 @@ function setup(
     // and the same verdict path a CLI-asked one does — is exactly what a
     // double would have to fake.
     userQuestions,
+    // Real, for the reason the question broker above is: what these tests
+    // observe through it is the row a report actually persists.
+    findingsReports,
     callTokens,
-    { token: 'launch', version: '0.0.0', startedAt: 0, port: 4870 },
+    {
+      token: 'launch',
+      version: '0.0.0',
+      startedAt: 0,
+      port: opts.port === undefined ? 4870 : opts.port,
+    },
     // Most tests toggle nothing, so the default points at a path that never
     // exists — a mkdtemp per setup() would leak one directory per TEST. The
     // tests that DO exercise the switch pass a real file.
@@ -741,6 +758,7 @@ function setup(
     partials,
     callTokens,
     userQuestions,
+    findingsReports,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -993,15 +1011,153 @@ describe('ChatService', () => {
       await settle(cursor);
     });
 
-    it('hands a claude turn neither — its model already has AskUserQuestion', async () => {
-      const { service, claude, userQuestions } = setup();
+    it('publishes no endpoint and mints no token when the daemon has no port', async () => {
+      // With nothing bound there is no URL to hand the CLI, so a token would be
+      // a credential nobody can present — registered as a redaction secret and
+      // held to run teardown for a route that does not exist.
+      const { service, claude, findingsReports, callTokens } = setup({
+        port: null,
+      });
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
       await service.sendMessage(run.id, 'hello');
 
       const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
       expect(startArg.mcpEndpoint ?? null).toBeNull();
+      expect(callTokens.get(run.id, SINGLE_AGENT_NODE)).toBeNull();
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await settle(claude);
+    });
+
+    it('hands a cursor turn the findings tool too — every chat can draw a card', async () => {
+      const { service, cursor, findingsReports } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+    });
+
+    it('hands a claude turn the endpoint for findings — but never a second question tool', async () => {
+      const { service, claude, userQuestions, findingsReports, callTokens } =
+        setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.mcpEndpoint?.url).toContain(
+        `/v1/mcp/${run.id}/${SINGLE_AGENT_NODE}`,
+      );
+      expect(startArg.mcpEndpoint?.token).toBe(
+        callTokens.get(run.id, SINGLE_AGENT_NODE),
+      );
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      // The invariant the grant has always carried, and the whole reason it is
+      // a union of reasons rather than one flag: claude's own model can ask, so
+      // geniro's question tool is never registered beside its own.
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
+    });
+
+    it('answers a report it could not write without naming the database', async () => {
+      // The reason reaches a model whose provider is off this machine, and a
+      // persist failure names an absolute database path — so it is logged here
+      // and replaced with a fixed sentence. The MCP host's own error path
+      // refuses to hand its message across for the same reason.
+      const { service, claude, findingsReports, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'report_findings';
+
+      const outcome = await findingsReports.report(run.id, SINGLE_AGENT_NODE, {
+        findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }],
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('records a findings report as one transcript row, and nothing else', async () => {
+      const { service, claude, findingsReports, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      // EVERY optional field, deliberately: the payload is `z.unknown()` on the
+      // wire, so no type spans this boundary and the renderer's reader
+      // (`chats/findings-payload.ts`) is an independent twin. A key that only
+      // one side spells is a field that silently vanishes from the card, and
+      // this literal is the one place both sides can be checked against the
+      // same worked example.
+      const outcome = await findingsReports.report(run.id, SINGLE_AGENT_NODE, {
+        level: 'high',
+        findings: [
+          {
+            file: 'src/a.ts',
+            line: 12,
+            summary: 'A guard was weakened',
+            shortSummary: 'guard weakened',
+            failureScenario: 'A late writer wins the race.',
+            category: 'correctness',
+            verdict: 'CONFIRMED',
+            outcome: 'fixed',
+          },
+        ],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'recorded', count: 1 });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'report_findings',
+      );
+      expect(rows).toHaveLength(1);
+      // "and nothing else", asserted rather than left to the title: a stray row
+      // of any other kind slips straight past a filtered count.
+      expect(itemDao.items).toHaveLength(before + 1);
+      // The payload IS the card — the tool call answers with a receipt alone,
+      // so anything missing here is missing from the transcript for good. Read
+      // back through JSON because that is how the row actually stores it, which
+      // is also the shape the renderer's twin parser has to survive.
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        level: 'high',
+        findings: [
+          {
+            file: 'src/a.ts',
+            line: 12,
+            summary: 'A guard was weakened',
+            shortSummary: 'guard weakened',
+            failureScenario: 'A late writer wins the race.',
+            category: 'correctness',
+            verdict: 'CONFIRMED',
+            outcome: 'fixed',
+          },
+        ],
+      });
+      await settle(claude);
+    });
+
+    it('stops accepting reports once the turn that could persist them is over', async () => {
+      const { service, claude, findingsReports } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        findingsReports.report(run.id, SINGLE_AGENT_NODE, { findings: [] }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could record them',
+      });
     });
 
     it('puts a card on screen and returns the verdict’s answer to the agent', async () => {
@@ -1690,7 +1846,7 @@ describe('ChatService', () => {
   });
 
   it('marks the run failed and releases its claim when adapter start throws', async () => {
-    const { service, runDao, registry, claude } = setup();
+    const { service, runDao, registry, claude, findingsReports } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
     claude.start.mockImplementationOnce(() => {
       throw new Error('spawn failed');
@@ -1702,6 +1858,11 @@ describe('ChatService', () => {
 
     expect((await runDao.getById(run.id))?.status).toBe('failed');
     expect(registry.has(run.id)).toBe(false);
+    // The host tools are registered BEFORE the spawn, and this is the only path
+    // that can take them down again — the turn finalizer never runs. Left
+    // registered, the tools stay listed on the run's own MCP endpoint with no
+    // turn behind them for the rest of the launch.
+    expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
   });
 
   it('rejects sendMessage for an unknown run', async () => {
@@ -3357,6 +3518,38 @@ describe('ChatService — approval modes (parity M1)', () => {
       {
         command: 'ls',
       },
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves a findings report on an ASK chat, under claude’s own spelling', async () => {
+    // The NAME is the load-bearing half, and the counterweight is the ASK-mode
+    // test directly below: claude spells an MCP tool `mcp__<server>__<tool>`,
+    // so the request never arrives as the bare tool name. `ask` is the default
+    // posture, so a predicate that missed this spelling would cost a permission
+    // card before every single report.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-findings',
+      toolName: `mcp__${hostMcpServerName(run.id)}__report_findings`,
+      input: { findings: [] },
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-findings',
+      true,
+      { findings: [] },
     );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,

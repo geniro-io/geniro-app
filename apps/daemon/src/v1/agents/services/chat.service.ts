@@ -29,6 +29,8 @@ import {
   type ChatApprovalMode,
   type ClaudeModesCapability,
   HOST_QUESTION_TOOL,
+  type HostFindingsOutcome,
+  type HostFindingsReport,
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
@@ -51,6 +53,7 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import { isHostFindingsCall } from '../utils/host-findings';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
 import {
@@ -72,6 +75,7 @@ import { AttachmentStoreService } from './attachment-store.service';
 import { CliSessionsService } from './cli-sessions.service';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
+import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
@@ -357,6 +361,7 @@ export class ChatService implements OnModuleInit {
     private readonly cliSessions: CliSessionsService,
     private readonly configDirPins: ConfigDirPinService,
     private readonly userQuestions: UserQuestionBroker,
+    private readonly findingsReports: FindingsReportBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2207,6 +2212,16 @@ export class ChatService implements OnModuleInit {
       // or the turn is already on its way out.
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
+    /**
+     * Take geniro's own host channels down, whatever ends the turn.
+     *
+     * Declared out here, ahead of the try, because the failure path that needs
+     * it most is the CATCH below: `startTurn` can throw synchronously, and a
+     * registration made inside the try would then have nothing left able to
+     * remove it — leaving the tools listed on the run's own MCP endpoint with
+     * no turn behind them. Reassigned once the registrations exist.
+     */
+    let disposeHostTools = (): void => {};
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -2258,23 +2273,33 @@ export class ChatService implements OnModuleInit {
        * a chip moved to `ask` after a turn ended go on auto-approving.
        */
       /**
-       * geniro's own MCP server for this run, when this CLI is being handed
-       * one.
+       * geniro's own MCP server for this run, per host tool that could ride it.
        *
-       * A FUNCTION rather than a value: `adapter` is resolved further down,
-       * and every reader of this runs later still. Computed here rather than
-       * read off the endpoint built below, because the permission gate needs
-       * it and the endpoint does not exist at that point.
+       * Two predicates because they answer two different questions. The
+       * QUESTION tool goes only to a CLI whose own model has no way to ask
+       * (`AdapterConfig.hostQuestionToolReason`) — claude has AskUserQuestion,
+       * and a second question tool beside it is a second way to do one thing.
+       * The FINDINGS tool goes to every chat: a host-rendered card is a
+       * property of THIS app's transcript, so there is no CLI that already has
+       * one of its own to be duplicated.
+       *
+       * The question one is a FUNCTION because it reads `adapter`, which is
+       * resolved further down while every reader of this runs later still. Both
+       * are computed here rather than read off the endpoint built below,
+       * because the permission gate needs them and the endpoint does not exist
+       * at that point.
        */
       const hostQuestionServer = (): string | null =>
         adapter.getConfig().hostQuestionToolReason === null
           ? null
           : hostMcpServerName(runId);
+      const hostFindingsServer = hostMcpServerName(runId);
       const autoApproves = (
         toolName: string,
         mode: ChatApprovalMode | undefined,
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
+        isHostFindingsCall(hostFindingsServer, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2704,35 +2729,95 @@ export class ChatService implements OnModuleInit {
           this.announceAwaiting(runId);
         });
       };
-      // Only a CLI that needs the tool is handed the endpoint at all — that is
-      // what `hostQuestionServer` being non-null says. An agent told about a
-      // server it has no use for pays for its tools in every prompt, and
-      // claude would be offered a second question tool beside its own.
+      /**
+       * geniro's own findings channel: the tool hands over an already-parsed
+       * report, this writes the one row the card is drawn from.
+       *
+       * Nothing is parked, unlike {@link askUser}: the agent is not waiting on
+       * a person, only on the row being durable. Resolving on the persist is
+       * also what keeps the receipt honest — it says the findings are on
+       * screen, and by then they are.
+       */
+      const reportFindings = async (
+        report: HostFindingsReport,
+      ): Promise<HostFindingsOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'report_findings',
+            null,
+            report,
+          );
+        } catch (err) {
+          // The row IS the card, so a row that was never written is a report
+          // nobody will ever see. Said so, rather than answered with a count
+          // the agent would take as delivery — but the REASON is logged here
+          // and kept here: a persist failure names an absolute database path,
+          // and this string is handed to a model whose provider is off this
+          // machine. The MCP host's own error path refuses the same thing.
+          this.logger.error(
+            `run ${runId} could not persist a findings report: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return { status: 'recorded', count: report.findings.length };
+      };
+      // The endpoint is granted for the UNION of reasons a host tool could be
+      // wanted here, and the listing itself stays composed per request, so an
+      // agent is only ever told about the tools it can actually use. What that
+      // works out to today is: every chat gets the endpoint, because the
+      // findings tool has a use in all of them, while the question tool is
+      // still registered only where `hostQuestionServer` is non-null — so
+      // claude is never offered a second question tool beside its own, which
+      // is the invariant this grant has always carried.
       //
       // The token is REUSED across a run's turns where one was already minted:
       // it is the run's credential for its own route, and re-minting per turn
       // would leave the previous turn's endpoint refused for no reason.
       const questionServer = hostQuestionServer();
+      // Only where there is a port to reach: a token nobody can present is a
+      // credential registered as a redaction secret and held to run teardown
+      // for nothing.
+      const port = this.runtime.port;
       const callToken =
-        questionServer === null
+        port === null
           ? null
           : (this.callTokens.get(runId, SINGLE_AGENT_NODE) ?? mintToken());
       if (callToken !== null) {
         this.callTokens.issue(runId, SINGLE_AGENT_NODE, callToken);
       }
       const mcpEndpoint =
-        callToken !== null &&
-        questionServer !== null &&
-        this.runtime.port !== null
+        port !== null && callToken !== null
           ? {
-              url: `http://127.0.0.1:${this.runtime.port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
+              url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
               token: callToken,
-              serverName: questionServer,
+              serverName: hostFindingsServer,
             }
           : null;
-      const disposeAsker = mcpEndpoint
-        ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
+      const disposeAsker =
+        mcpEndpoint && questionServer !== null
+          ? this.userQuestions.register(runId, SINGLE_AGENT_NODE, askUser)
+          : null;
+      const disposeReporter = mcpEndpoint
+        ? this.findingsReports.register(
+            runId,
+            SINGLE_AGENT_NODE,
+            reportFindings,
+          )
         : null;
+      // Idempotent by construction — each disposer only deletes the entry it
+      // installed — which is what lets the settle path call it for ORDERING
+      // (before the sweep) while the two failure paths call it for COVERAGE,
+      // without either having to know about the other.
+      disposeHostTools = (): void => {
+        disposeAsker?.();
+        disposeReporter?.();
+      };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -2757,10 +2842,10 @@ export class ChatService implements OnModuleInit {
           // words as they are written. Each adapter decides what that costs —
           // a CLI without either capability spawns exactly as before.
           allowUserQuestions: true,
-          // …and for a CLI whose own model has no way to ask, the endpoint
-          // carrying geniro's `ask_user_question`. Null for one that already
-          // has its own tool, so nothing is registered where it would only be
-          // a second way to do the same thing.
+          // …and geniro's own endpoint, carrying whichever host tools this
+          // turn registered — the findings tool always, the question tool only
+          // for a CLI whose own model has no way to ask. Null only where the
+          // daemon has no bound port to publish.
           ...(mcpEndpoint === null ? {} : { mcpEndpoint }),
           streamPartials,
           images: attachments.map((attachment) => ({
@@ -3386,8 +3471,11 @@ export class ChatService implements OnModuleInit {
           // The turn that could put a question on screen is over: take the
           // asker down FIRST, so a call arriving during the rest of this
           // finalizer is refused outright rather than parked on a card the
-          // sweep below is in the middle of closing.
-          disposeAsker?.();
+          // sweep below is in the middle of closing. The reporter goes with
+          // it, and for the same reason on its own terms — the persist chain
+          // has just been drained, so a report landing after this point would
+          // reserve a seq against a turn that has finished writing.
+          disposeHostTools();
           for (const settle of [...outstandingAsks]) {
             settle({
               status: 'unavailable',
@@ -3518,11 +3606,23 @@ export class ChatService implements OnModuleInit {
       // takes the plain persist-only path instead of writing into a dead
       // closure and reporting the change as live.
       void handle.done.finally(() => this.liveApproval.delete(runId));
+      // Attached to the FINALIZER, not to `handle.done`: the finalizer disposes
+      // them itself, in order, after the persist chain drains — hanging this off
+      // `handle.done` would run it first and move that teardown moment earlier
+      // for every ordinary settle. What it covers is the finalizer failing
+      // partway (`await chain` rejecting), where the registrations would
+      // otherwise outlive the turn and leave the tools listed on the run's
+      // endpoint with nothing able to serve them. `handle.done` itself never
+      // rejects, per `AgentTurnHandle.done`.
+      void finalized.finally(disposeHostTools);
 
       return userWire;
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
-      // so the run is not wedged as permanently busy.
+      // so the run is not wedged as permanently busy, and take the host tools
+      // down with it: `startTurn` can throw synchronously, and nothing else
+      // would ever unregister them.
+      disposeHostTools();
       await this.setRunStatus(em, runId, 'failed').catch(
         (statusErr: unknown) => {
           this.logger.error(

@@ -177,6 +177,96 @@ export type HostQuestionOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/findings-payload.ts — the reader over
+ * the `report_findings` item payload this tool produces.
+ *
+ * The second tool geniro registers on the run's own MCP server. It exists so an
+ * agent can hand the APP a typed list of findings and have the transcript draw
+ * them, instead of printing markdown the transcript shows as prose. The findings
+ * never re-enter the model's context: the call answers with a short receipt, and
+ * the data lives in the item the renderer reads.
+ *
+ * The ARGUMENT shape deliberately mirrors claude's own `ReportFindings` tool,
+ * snake_case field names included, so an agent that has learned one already
+ * knows this one. The daemon's own types are camelCase; `readHostFindingsReport`
+ * is the one place that seam is crossed.
+ *
+ * Unlike {@link HOST_QUESTION_TOOL} this is NOT registered only for a CLI that
+ * lacks its own: a host-rendered card is a property of THIS app's transcript,
+ * which no CLI can produce for itself.
+ */
+export const HOST_FINDINGS_TOOL = 'report_findings';
+
+/**
+ * Caps on one report. They TRUNCATE rather than refuse, on the same rule the
+ * question caps above follow: a model that found forty things has still done
+ * the work, and failing the call would leave it no way to report at all.
+ */
+export const MAX_HOST_FINDINGS = 32;
+export const MAX_FINDING_TEXT_LENGTH = 4000;
+export const MAX_FINDING_SHORT_SUMMARY_LENGTH = 60;
+export const MAX_FINDING_CATEGORY_LENGTH = 40;
+export const MAX_FINDING_PATH_LENGTH = 1024;
+
+export const FINDING_LEVELS = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+export type FindingLevel = (typeof FINDING_LEVELS)[number];
+
+export const FINDING_VERDICTS = ['CONFIRMED', 'PLAUSIBLE'] as const;
+export type FindingVerdict = (typeof FINDING_VERDICTS)[number];
+
+export const FINDING_OUTCOMES = [
+  'fixed',
+  'skipped',
+  'no_change_needed',
+] as const;
+export type FindingOutcome = (typeof FINDING_OUTCOMES)[number];
+
+/** One finding of a host-rendered report. */
+export interface HostFinding {
+  file: string;
+  line?: number;
+  summary: string;
+  /** The collapsed label — short because it shares one row with a badge. */
+  shortSummary?: string;
+  /**
+   * Optional here though the tool advertises it as required: the reader is
+   * defensive, and a finding that named a real defect without spelling out how
+   * it fails is worth a row rather than being dropped whole.
+   */
+  failureScenario?: string;
+  category?: string;
+  /** Present only where the agent ran a verification pass over the finding. */
+  verdict?: FindingVerdict;
+  /** Present only on a RE-report, after the agent acted on its own findings. */
+  outcome?: FindingOutcome;
+}
+
+/** One `report_findings` call, as the card will draw it. */
+export interface HostFindingsReport {
+  level?: FindingLevel;
+  findings: HostFinding[];
+}
+
+/**
+ * What a findings report resolves to.
+ *
+ * Two arms where a question has three: nothing here is put to the user, so
+ * there is no `declined`. `unavailable` is every way the report could not be
+ * RECORDED — no turn to file it against, the turn settled underneath it — and
+ * stays separate from `recorded` so the agent can tell a card nobody will see
+ * from one that is now on screen.
+ */
+export type HostFindingsOutcome =
+  | { status: 'recorded'; count: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

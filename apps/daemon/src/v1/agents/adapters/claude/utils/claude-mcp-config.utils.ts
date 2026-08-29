@@ -3,25 +3,17 @@ import {
   chmodSync,
   mkdirSync,
   readdirSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  type AgentTurnInput,
-  GENIRO_MCP_SERVER_KEY,
-} from '../../adapter.types';
+import { type AgentTurnInput } from '../../adapter.types';
 import {
   CLAUDE_MCP_CONFIG_FILE_MODE,
   CLAUDE_MCP_CONFIG_PREFIX,
   CLAUDE_MCP_CONFIG_SUFFIX,
-  CLAUDE_MODEL_CACHE_FILE,
-  CLAUDE_PROJECT_MCP_FILE,
 } from '../claude.const';
-import { parseProjectServerNames } from './claude-mcp-folder.utils';
 
 /**
  * Write ONE turn's `--mcp-config` file and return its path.
@@ -32,9 +24,14 @@ import { parseProjectServerNames } from './claude-mcp-folder.utils';
  * {@link sweepStaleTurnMcpConfigs} recognize the leftovers of a crashed launch
  * without knowing which turns existed.
  *
- * The server is published under geniro's OWN key — the same
- * {@link GENIRO_MCP_SERVER_KEY} the cursor `.cursor/mcp.json` merge writes, so
- * the two CLIs can never end up naming different servers.
+ * Published under the endpoint's OWN per-run name, the same value the ACP path
+ * uses verbatim. It was a fixed shared key until the name was made to carry the
+ * run, and the change is not cosmetic: `--strict-mcp-config` is not passed, so
+ * the user's own servers load alongside this one, and an entry of theirs under
+ * a shared key was silently dropped in favour of ours (probe-verified on
+ * 2.1.220 — ours wins), costing them a server with no word said. A name
+ * carrying the run id cannot be one a user has already chosen, so that
+ * collision class stops existing rather than being guarded against.
  */
 export function writeTurnMcpConfig(
   dir: string,
@@ -49,7 +46,7 @@ export function writeTurnMcpConfig(
     path,
     JSON.stringify({
       mcpServers: {
-        [GENIRO_MCP_SERVER_KEY]: {
+        [endpoint.serverName]: {
           type: 'http',
           url: endpoint.url,
           headers: { Authorization: `Bearer ${endpoint.token}` },
@@ -84,65 +81,6 @@ export function sweepStaleTurnMcpConfigs(dir: string): void {
 }
 
 /**
- * The config file defining a server under geniro's key for this folder, or null
- * when none does.
- *
- * A caller turn publishes its call surface under {@link GENIRO_MCP_SERVER_KEY},
- * and since `--strict-mcp-config` is no longer passed, the user's own servers
- * load alongside it. Probe-verified on 2.1.220: `--mcp-config` WINS that
- * collision against the project file, so the call surface is not hijacked — but
- * the user's server of that name silently disappears from the turn and the tool
- * namespace becomes ambiguous. The turn refuses instead, naming the file to fix.
- *
- * All THREE scopes a turn now loads from are checked, not just the project
- * file: user-scope servers live at `~/.claude.json` under a root `mcpServers`,
- * and local-scope ones under `projects[<cwd>].mcpServers`. Checking only the
- * project file would refuse the narrow case and silently permit the wider one.
- *
- * Read-only and synchronous: it runs inside `prepareTurn`, before the spawn.
- */
-export function definesGeniroServer(
-  cwd: string,
-  homeDir: string = homedir(),
-): string | null {
-  const projectFile = join(cwd, CLAUDE_PROJECT_MCP_FILE);
-  const projectSource = readOrNull(projectFile);
-  if (
-    projectSource !== null &&
-    parseProjectServerNames(projectSource).includes(GENIRO_MCP_SERVER_KEY)
-  ) {
-    return projectFile;
-  }
-  const homeFile = join(homeDir, CLAUDE_MODEL_CACHE_FILE);
-  const homeSource = readOrNull(homeFile);
-  if (homeSource === null) {
-    return null;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(homeSource);
-  } catch {
-    return null;
-  }
-  if (typeof parsed !== 'object' || parsed === null) {
-    return null;
-  }
-  const home = parsed as {
-    mcpServers?: unknown;
-    projects?: Record<string, { mcpServers?: unknown } | null>;
-  };
-  const named = (servers: unknown): boolean =>
-    typeof servers === 'object' &&
-    servers !== null &&
-    !Array.isArray(servers) &&
-    GENIRO_MCP_SERVER_KEY in servers;
-  if (named(home.mcpServers) || named(home.projects?.[cwd]?.mcpServers)) {
-    return homeFile;
-  }
-  return null;
-}
-
-/**
  * Create the per-turn secret directory 0700, tightening one that already
  * exists.
  *
@@ -159,14 +97,5 @@ function ensurePrivateDir(dir: string): void {
   } catch {
     // Not ours to tighten (a shared parent, an odd filesystem). The files
     // themselves are still written 0600, which is the part that matters.
-  }
-}
-
-/** A file's text, or null for absent / unreadable / a directory. */
-function readOrNull(path: string): string | null {
-  try {
-    return readFileSync(path, 'utf8');
-  } catch {
-    return null;
   }
 }

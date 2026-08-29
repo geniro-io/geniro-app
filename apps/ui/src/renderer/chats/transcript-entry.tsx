@@ -1,6 +1,7 @@
 import { memo, useContext } from 'react';
 
 import { CallBlock } from './call-block';
+import { FindingsCard } from './findings-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
 import { SubagentBlock } from './subagent-block';
@@ -108,6 +109,12 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
         chatAgentName={chatAgentName}
       />
     );
+  }
+  if (entry.type === 'findings') {
+    // No sender frame, for the task list's reason below: the card is a report
+    // the agent handed the app to draw, and the turn block around it already
+    // names who was working.
+    return <FindingsCard report={entry.report} />;
   }
   if (entry.type === 'task-list') {
     // No sender frame: the list is the AGENT's own bookkeeping about the work,

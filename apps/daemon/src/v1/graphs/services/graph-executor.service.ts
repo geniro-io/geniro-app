@@ -39,6 +39,7 @@ import {
   mapEventToItem,
   terminalStatus,
 } from '../../agents/utils/event-to-item';
+import { hostMcpServerName } from '../../agents/utils/host-question';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
@@ -1091,7 +1092,7 @@ export class GraphExecutorService {
         url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(node.id)}`,
         token,
         // Per-run — see `AgentTurnInput.mcpEndpoint.serverName` for why.
-        serverName: `geniro-${runId.slice(0, 8)}`,
+        serverName: hostMcpServerName(runId),
       };
     };
 

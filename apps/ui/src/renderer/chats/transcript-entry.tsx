@@ -2,6 +2,7 @@ import { memo, useContext } from 'react';
 
 import { CallBlock } from './call-block';
 import { ChartCard } from './chart-block';
+import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
 import { MetricsCard } from './metrics-block';
 import { formatClockTime } from './relative-time';
@@ -125,6 +126,10 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   if (entry.type === 'metrics') {
     // Same again — the figures are a card the agent handed over, not words.
     return <MetricsCard metrics={entry.metrics} />;
+  }
+  if (entry.type === 'comparison') {
+    // …and the table, for the same reason.
+    return <ComparisonCard comparison={entry.comparison} />;
   }
   if (entry.type === 'task-list') {
     // No sender frame: the list is the AGENT's own bookkeeping about the work,

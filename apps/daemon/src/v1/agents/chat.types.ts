@@ -397,12 +397,19 @@ export type HostChartOutcome =
 export const HOST_METRICS_TOOL = 'show_metrics';
 
 /**
- * What a figure's change MEANS, which is the one thing the card cannot work out
- * for itself. It governs colour and nothing else — `neutral` is the default and
- * a perfectly good answer for a figure that is simply a fact.
+ * Is this good news, bad news, or neither — the one question a card cannot work
+ * out for itself, so the agent states it. It governs COLOUR and nothing else,
+ * and `neutral` is both the default and a perfectly good answer.
+ *
+ * ONE vocabulary, shared by {@link HOST_METRICS_TOOL}'s deltas and
+ * {@link HOST_COMPARISON_TOOL}'s cells, because they ask the identical
+ * question of the host: which of three ways should this be painted. Named for
+ * the question rather than for either tool — it was `METRIC_SENTIMENTS` while
+ * only one tool asked — so the second caller did not have to choose between a
+ * misleading name, an alias, and a duplicate tuple free to drift.
  */
-export const METRIC_SENTIMENTS = ['good', 'bad', 'neutral'] as const;
-export type MetricSentiment = (typeof METRIC_SENTIMENTS)[number];
+export const SENTIMENTS = ['good', 'bad', 'neutral'] as const;
+export type Sentiment = (typeof SENTIMENTS)[number];
 
 /**
  * Caps on one scorecard. They TRUNCATE, like every cap in this family except
@@ -432,7 +439,7 @@ export interface HostMetric {
    * said neutral" from "the agent said nothing", which the card draws alike but
    * a future consumer may not want to.
    */
-  sentiment?: MetricSentiment;
+  sentiment?: Sentiment;
   /** One line of context under the figure, where the number needs one. */
   note?: string;
 }
@@ -454,6 +461,113 @@ export interface HostMetrics {
  */
 export type HostMetricsOutcome =
   | { status: 'drawn'; count: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * TWIN PARSER: apps/ui/src/renderer/chats/comparison-payload.ts — the reader
+ * over the `show_comparison` item payload this tool produces.
+ *
+ * The render family's DECISION TABLE: several options, judged against the same
+ * criteria, with a recommendation. What an agent reaches for when it has been
+ * asked "which of these should I use".
+ *
+ * **This one has to justify itself against markdown**, which its siblings do
+ * not, because a markdown table RENDERS in this transcript — an agent can
+ * already draw three columns of prose and it will look fine. So the card only
+ * earns its place by holding what a table cannot:
+ *
+ * 1. A per-cell VERDICT, on the shared {@link SENTIMENTS} vocabulary. That is
+ *    what makes the thing scannable — the winning option's column is visibly
+ *    greener — where a markdown table forces the reader through every cell to
+ *    work out the same answer.
+ * 2. A RECOMMENDATION, named and reasoned. A comparison that does not answer
+ *    the question it was asked has made the reader do the deciding, which is
+ *    the work they delegated. It is optional, because "these are genuinely
+ *    equivalent, it depends on X" is a real answer — but it is asked for.
+ *
+ * Take those two away and this tool should not exist; the agent should write a
+ * table. The tool description says so, so a model can tell the two apart.
+ *
+ * **The cells are POSITIONAL**, the chart's hazard again and handled the same
+ * way: a criterion's `cells` are matched to `options` BY INDEX, so nothing on
+ * either side of the wire may drop or reorder one list independently of the
+ * other. `readHostComparison` re-aligns every row to the option count — padding
+ * short rows with blanks, cutting long ones — rather than trusting the model to
+ * have counted, because that failure does not throw: it silently files one
+ * option's answer under another's name and still looks like a comparison.
+ */
+export const HOST_COMPARISON_TOOL = 'show_comparison';
+
+/**
+ * Caps on one comparison. They TRUNCATE, like the rest of this family bar the
+ * patch tool.
+ *
+ * FOUR options is where a side-by-side stops being side-by-side in a
+ * transcript column — the fifth is what makes the table scroll horizontally,
+ * and a comparison you have to scroll is a table again. The criteria cap is
+ * where the reader stops holding the whole grid at once.
+ */
+export const MAX_COMPARISON_OPTIONS = 4;
+export const MAX_COMPARISON_CRITERIA = 8;
+export const MAX_COMPARISON_LABEL_LENGTH = 60;
+export const MAX_COMPARISON_CELL_LENGTH = 120;
+/**
+ * The reason is the one PROSE field in this family — everywhere else a cap
+ * bounds a phrase, and here the model is asked for a sentence or two. So it is
+ * both roomier than its neighbours and cut differently: see `truncateWords`,
+ * which is what a live turn made necessary by ending a recommendation
+ * "…and where migrati".
+ */
+export const MAX_COMPARISON_REASON_LENGTH = 400;
+
+/** One option being compared — a column of the table. */
+export interface HostComparisonOption {
+  /** The option's name, as its column heading. */
+  name: string;
+  /** One line under the heading, where the name alone is not enough. */
+  note?: string;
+}
+
+/** One option's answer for one criterion. */
+export interface HostComparisonCell {
+  /** What this option does about this criterion, already worded. */
+  value: string;
+  /** How that reads for this option — colour only. Absent is `neutral`. */
+  verdict?: Sentiment;
+}
+
+/** One criterion — a row of the table, one cell per option, BY INDEX. */
+export interface HostComparisonCriterion {
+  label: string;
+  cells: HostComparisonCell[];
+}
+
+/** One `show_comparison` call, as the card will draw it. */
+export interface HostComparison {
+  /** What is being decided — the card's heading. */
+  title: string;
+  options: HostComparisonOption[];
+  criteria: HostComparisonCriterion[];
+  /**
+   * The answer, when there is one.
+   *
+   * `option` is matched to a column BY NAME rather than by index — a model
+   * writing "SQLite" is far more reliable than one writing `1`, and a name that
+   * matches nothing costs only the column highlight while the reason still
+   * reads. An index that pointed at the wrong column would be silently wrong.
+   */
+  recommendation?: { option: string; reason: string };
+}
+
+/**
+ * What a comparison resolves to.
+ *
+ * Two arms, like the other drawings: nothing is put to the user to decide, so
+ * there is no `declined`. The counts are in the receipt because the caps
+ * truncate silently otherwise.
+ */
+export type HostComparisonOutcome =
+  | { status: 'drawn'; options: number; criteria: number }
   | { status: 'unavailable'; reason: string };
 
 /**

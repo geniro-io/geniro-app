@@ -14,6 +14,7 @@ import {
   FINDING_OUTCOMES,
   FINDING_VERDICTS,
   HOST_CHART_TOOL,
+  HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
@@ -22,15 +23,18 @@ import {
   MAX_ANSWER_LENGTH,
   MAX_CHART_POINTS,
   MAX_CHART_SERIES,
+  MAX_COMPARISON_CRITERIA,
+  MAX_COMPARISON_OPTIONS,
   MAX_FINDING_SHORT_SUMMARY_LENGTH,
   MAX_HOST_FINDINGS,
   MAX_HOST_METRICS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
   MAX_PLAN_STEPS,
-  METRIC_SENTIMENTS,
+  SENTIMENTS,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
+import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
@@ -40,6 +44,10 @@ import {
   hostChartResultText,
   readHostChart,
 } from '../../agents/utils/host-chart';
+import {
+  hostComparisonResultText,
+  readHostComparison,
+} from '../../agents/utils/host-comparison';
 import {
   hostFindingsResultText,
   readHostFindingsReport,
@@ -69,7 +77,8 @@ import { CallBroker } from './call-broker.service';
  * (call_agent / await_agent / answer_agent) to a node with callees,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
  * own, and the RENDER family — `report_findings`, `show_chart`, `show_metrics`,
- * `propose_patch` and `propose_plan` — to a turn whose transcript can draw them.
+ * `show_comparison`, `propose_patch` and `propose_plan` — to a turn whose
+ * transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a graph node is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
@@ -99,6 +108,7 @@ export class McpServerService {
     private readonly patches: PatchBroker,
     private readonly plans: PlanBroker,
     private readonly metrics: MetricsBroker,
+    private readonly comparisons: ComparisonBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -524,7 +534,7 @@ export class McpServerService {
                     },
                     sentiment: {
                       type: 'string',
-                      enum: [...METRIC_SENTIMENTS],
+                      enum: [...SENTIMENTS],
                       description:
                         'Whether that change is good news or bad. Say it — it cannot be read off the sign, since ' +
                         '−40ms is good and −4 points of coverage is bad. Omit for a figure that is simply a fact.',
@@ -540,6 +550,114 @@ export class McpServerService {
               },
             },
             required: ['metrics'],
+          },
+        });
+      }
+      if (this.comparisons.canDraw(runId, nodeId)) {
+        tools.push({
+          name: HOST_COMPARISON_TOOL,
+          description:
+            'Lay several options side by side against the same criteria, as a table this app draws, and say which ' +
+            'one you would pick. ' +
+            'Use it when you have been asked to choose between alternatives — libraries, designs, storage engines, ' +
+            'approaches. ' +
+            'Prefer it over writing a markdown table, but ONLY because of two things a table cannot carry, and only ' +
+            'when you can supply them: a `verdict` on each cell, which is what lets the reader see at a glance which ' +
+            'column wins, and a `recommendation` naming the option you would take and why. If every cell would be ' +
+            'neutral and you have no recommendation, you have not compared anything — write a table instead. ' +
+            'Every criterion holds one cell per entry of `options`, matched BY POSITION — the first cell is the ' +
+            "first option's answer, and so on. " +
+            'Call it ONCE, and do not also write the table out: the user sees it. The result is a short receipt.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What is being decided, as the card\'s heading — e.g. "Local store for the daemon". State the ' +
+                  'decision, not the word "Comparison".',
+              },
+              options: {
+                type: 'array',
+                description: `The options being compared, in the order they should appear — at least 2, at most ${MAX_COMPARISON_OPTIONS}.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: {
+                      type: 'string',
+                      description:
+                        'The option, as its column heading — e.g. "SQLite".',
+                    },
+                    note: {
+                      type: 'string',
+                      description:
+                        'One line under the heading where the name alone is not enough — a version, a flavour. Optional.',
+                    },
+                  },
+                  required: ['name'],
+                },
+              },
+              criteria: {
+                type: 'array',
+                description: `What you are judging them on, one row each — at most ${MAX_COMPARISON_CRITERIA}. Pick the criteria that actually separate the options; a row where every answer is the same tells the reader nothing.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: {
+                      type: 'string',
+                      description:
+                        'The criterion — e.g. "Setup cost", "Concurrency".',
+                    },
+                    cells: {
+                      type: 'array',
+                      description:
+                        'One entry per option, in the SAME order as `options`.',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          value: {
+                            type: 'string',
+                            description:
+                              'What this option does about this criterion, in a few words — "none, it is a file", ' +
+                              '"needs a server". Not a paragraph.',
+                          },
+                          verdict: {
+                            type: 'string',
+                            enum: [...SENTIMENTS],
+                            description:
+                              'How that reads FOR THIS OPTION — good, bad, or neither. This is the column-scanning ' +
+                              'signal and the main reason to use this tool at all; omit it only where the answer ' +
+                              'genuinely is not better or worse.',
+                          },
+                        },
+                        required: ['value'],
+                      },
+                    },
+                  },
+                  required: ['label', 'cells'],
+                },
+              },
+              recommendation: {
+                type: 'object',
+                description:
+                  'Which option you would take, and why. Omit ONLY when the honest answer is that it depends on ' +
+                  'something you do not know — and then say so in your reply.',
+                properties: {
+                  option: {
+                    type: 'string',
+                    description:
+                      "The option's name, spelled exactly as in `options` so the card can mark that column.",
+                  },
+                  reason: {
+                    type: 'string',
+                    description:
+                      'One or two sentences on why, referring to what actually decides it for this user.',
+                  },
+                },
+                required: ['option', 'reason'],
+              },
+            },
+            required: ['title', 'options', 'criteria'],
           },
         });
       }
@@ -758,6 +876,31 @@ export class McpServerService {
           content: [{ type: 'text', text: hostMetricsResultText(outcome) }],
           // Same reading as its drawing siblings: an unavailable channel is an
           // answer, not a failure — the agent still holds the figures.
+          isError: false,
+        };
+      }
+      if (name === HOST_COMPARISON_TOOL) {
+        const comparison = readHostComparison(args);
+        // Null is the reader saying there is nothing to compare — fewer than
+        // two options, or no criterion. Answered as a malformed call on the
+        // chart's rule: an empty findings report is a real review outcome, a
+        // comparison of one thing is only ever a mistake.
+        if (comparison === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: nothing to compare — needs a 'title', at least TWO entries in 'options' each with a 'name', and at least one entry in 'criteria' with a 'label'.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.comparisons.draw(runId, nodeId, comparison);
+        return {
+          content: [{ type: 'text', text: hostComparisonResultText(outcome) }],
+          // Same reading as its drawing siblings: an unavailable channel is an
+          // answer, not a failure — the agent still holds the comparison.
           isError: false,
         };
       }

@@ -47,6 +47,7 @@ import type {
   RunStatusEvent,
 } from '../chat.types';
 import {
+  HOST_COMPARISON_TOOL,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -67,6 +68,7 @@ import type { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
+import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
@@ -653,6 +655,7 @@ function setup(
   const patches = new PatchBroker();
   const plans = new PlanBroker();
   const metrics = new MetricsBroker();
+  const comparisons = new ComparisonBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -761,6 +764,7 @@ function setup(
     // whole observable is the card it parks on and the words it settles with.
     plans,
     metrics,
+    comparisons,
     callTokens,
     {
       token: 'launch',
@@ -786,6 +790,7 @@ function setup(
     patches,
     plans,
     metrics,
+    comparisons,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1254,6 +1259,72 @@ describe('ChatService', () => {
         ],
       });
       await settle(claude);
+    });
+
+    it('persists a comparison as its own row, every field surviving', async () => {
+      // The worked example both twin parsers are checked against, like the
+      // findings, chart and scorecard literals above it.
+      const { service, claude, comparisons, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const outcome = await comparisons.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Local store for the daemon',
+        options: [{ name: 'SQLite', note: 'one file' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'SQLite', reason: 'local-first by rule' },
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', options: 2, criteria: 1 });
+      const rows = itemDao.items.filter(
+        (item) => item.kind === 'show_comparison',
+      );
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'Local store for the daemon',
+        options: [{ name: 'SQLite', note: 'one file' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'SQLite', reason: 'local-first by rule' },
+      });
+      await settle(claude);
+    });
+
+    it('stops accepting comparisons once the turn that could draw them is over', async () => {
+      const { service, claude, comparisons } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(comparisons.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        comparisons.draw(run.id, SINGLE_AGENT_NODE, {
+          title: 'Late',
+          options: [{ name: 'A' }, { name: 'B' }],
+          criteria: [{ label: 'r', cells: [{ value: 'a' }, { value: 'b' }] }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
     });
 
     it('stops accepting scorecards once the turn that could draw them is over', async () => {
@@ -3979,6 +4050,34 @@ describe('ChatService — approval modes (parity M1)', () => {
       input,
     );
     // No permission card of its own, and nothing parked for a human here.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the show_comparison CALL, like every drawing tool', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { title: 'A vs B' };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-cmp',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_COMPARISON_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-cmp',
+      true,
+      input,
+    );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

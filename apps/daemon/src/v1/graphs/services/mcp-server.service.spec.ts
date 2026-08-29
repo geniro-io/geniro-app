@@ -13,6 +13,7 @@ import {
   HOST_QUESTION_TOOL,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
+import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
@@ -58,6 +59,7 @@ function service(
   patches = new PatchBroker(),
   plans = new PlanBroker(),
   metrics = new MetricsBroker(),
+  comparisons = new ComparisonBroker(),
 ): McpServerService {
   return new McpServerService(
     callBroker,
@@ -67,6 +69,7 @@ function service(
     patches,
     plans,
     metrics,
+    comparisons,
     {
       token: 'launch',
       version: '9.9.9',

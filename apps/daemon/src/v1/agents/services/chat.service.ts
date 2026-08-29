@@ -33,6 +33,8 @@ import {
   HOST_QUESTION_TOOL,
   type HostChart,
   type HostChartOutcome,
+  type HostComparison,
+  type HostComparisonOutcome,
   type HostFindingsOutcome,
   type HostFindingsReport,
   type HostMetrics,
@@ -65,6 +67,7 @@ import {
   terminalStatus,
 } from '../utils/event-to-item';
 import { isHostChartCall } from '../utils/host-chart';
+import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostPatchCall } from '../utils/host-patch';
@@ -89,6 +92,7 @@ import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
 import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
+import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
@@ -385,6 +389,7 @@ export class ChatService implements OnModuleInit {
     private readonly patches: PatchBroker,
     private readonly plans: PlanBroker,
     private readonly metrics: MetricsBroker,
+    private readonly comparisons: ComparisonBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2345,6 +2350,7 @@ export class ChatService implements OnModuleInit {
         // approve the asking.
         isHostPlanCall(hostServerName, toolName) ||
         isHostMetricsCall(hostServerName, toolName) ||
+        isHostComparisonCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2901,6 +2907,40 @@ export class ChatService implements OnModuleInit {
         return { status: 'drawn', count: metrics.metrics.length };
       };
       /**
+       * geniro's own comparison channel — the third of the drawing twins, and
+       * its structural copy for the reason spelled out at {@link drawChart}.
+       */
+      const drawComparison = async (
+        comparison: HostComparison,
+      ): Promise<HostComparisonOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_comparison',
+            null,
+            comparison,
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a comparison: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return {
+          status: 'drawn',
+          options: comparison.options.length,
+          criteria: comparison.criteria.length,
+        };
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -3168,6 +3208,9 @@ export class ChatService implements OnModuleInit {
       const disposeScorer = mcpEndpoint
         ? this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics)
         : null;
+      const disposeComparer = mcpEndpoint
+        ? this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -3179,6 +3222,7 @@ export class ChatService implements OnModuleInit {
         disposeProposer?.();
         disposePlanner?.();
         disposeScorer?.();
+        disposeComparer?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same

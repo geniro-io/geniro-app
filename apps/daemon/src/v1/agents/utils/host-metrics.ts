@@ -7,8 +7,8 @@ import {
   MAX_METRIC_LABEL_LENGTH,
   MAX_METRIC_NOTE_LENGTH,
   MAX_METRIC_VALUE_LENGTH,
-  METRIC_SENTIMENTS,
-  type MetricSentiment,
+  type Sentiment,
+  SENTIMENTS,
 } from '../chat.types';
 import { isHostToolCall } from './host-tool';
 
@@ -72,8 +72,8 @@ function readMetric(entry: unknown): HostMetric | null {
   // red. `neutral` is what the card draws for an absent one anyway.
   const sentiment =
     typeof raw.sentiment === 'string' &&
-    (METRIC_SENTIMENTS as readonly string[]).includes(raw.sentiment)
-      ? (raw.sentiment as MetricSentiment)
+    (SENTIMENTS as readonly string[]).includes(raw.sentiment)
+      ? (raw.sentiment as Sentiment)
       : undefined;
   return {
     label,

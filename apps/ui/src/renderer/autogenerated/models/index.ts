@@ -2061,7 +2061,8 @@ export const ItemKind = {
     ShellInfo: 'shell_info',
     ReportFindings: 'report_findings',
     ShowChart: 'show_chart',
-    ShowMetrics: 'show_metrics'
+    ShowMetrics: 'show_metrics',
+    ShowComparison: 'show_comparison'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

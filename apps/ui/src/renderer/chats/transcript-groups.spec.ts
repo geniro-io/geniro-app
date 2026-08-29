@@ -343,6 +343,72 @@ describe('groupTranscript', () => {
     expect(countTools(entries)).toBe(2);
   });
 
+  it('folds a show_comparison row into its own card, hiding the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_comparison', 't1', { title: 'x' }),
+      result('t1', 'Comparison drawn for the user: 2 options over 1 criteria.'),
+      item('show_comparison', {
+        title: 'Local store',
+        options: [{ name: 'SQLite' }, { name: 'Postgres' }],
+        criteria: [
+          {
+            label: 'Setup cost',
+            cells: [
+              { value: 'none', verdict: 'good' },
+              { value: 'a server', verdict: 'bad' },
+            ],
+          },
+        ],
+        recommendation: { option: 'sqlite', reason: 'local-first' },
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['comparison']);
+    const card = entries[0] as {
+      comparison: { title: string; recommendedIndex: number | null };
+    };
+    expect(card.comparison.title).toBe('Local store');
+    // Matched case-insensitively back to its column.
+    expect(card.comparison.recommendedIndex).toBe(0);
+  });
+
+  it('drops a show_comparison row that compares fewer than two options', () => {
+    expect(
+      groupTranscript([
+        item('show_comparison', {
+          title: 'T',
+          options: [{ name: 'only' }],
+          criteria: [{ label: 'row', cells: [{ value: 'a' }] }],
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('counts a comparison as a CARD everywhere the other four are', () => {
+    // The `isCardEntry` contract. Adding this fifth kind to the predicate but
+    // not to its union stopped five call sites compiling, which is the trade
+    // that abstraction makes — this drives the two it governs at runtime: the
+    // tool count (a card holds no invocations to open) and the group break.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_comparison', {
+        title: 'T',
+        options: [{ name: 'A' }, { name: 'B' }],
+        criteria: [{ label: 'row', cells: [{ value: 'a' }, { value: 'b' }] }],
+      }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'tools',
+      'comparison',
+      'tools',
+    ]);
+    expect(countTools(entries)).toBe(2);
+  });
+
   it('an orphan tool_result (no known call) stays a plain item entry', () => {
     const entries = groupTranscript([result('mystery', 'out')]);
     expect(entries.map((e) => e.type)).toEqual(['item']);

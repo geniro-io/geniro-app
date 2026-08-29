@@ -33,6 +33,7 @@ import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
+import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
@@ -87,6 +88,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    ComparisonBroker,
     MetricsBroker,
     PlanBroker,
     CacheResetService,
@@ -307,6 +309,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    ComparisonBroker,
     MetricsBroker,
     PlanBroker,
     PartialStreamService,

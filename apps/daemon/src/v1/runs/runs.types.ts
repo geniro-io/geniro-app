@@ -113,6 +113,14 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * displays and never computes. The one thing the host cannot infer is whether a
  * change is good news: lower is better for a latency and worse for a coverage,
  * so the SENTIMENT is stated by the agent rather than read off the sign.
+ *
+ * `show_comparison` is a DECISION TABLE: several options judged against the
+ * same criteria, with a recommendation. Alone in this family it has to justify
+ * itself against markdown, since a table RENDERS in this transcript — it earns
+ * its place on the two things a table cannot hold, a per-cell VERDICT that makes
+ * the winning column visibly greener and a NAMED recommendation. Its cells are
+ * POSITIONAL against `options`, the chart's hazard again and handled the same
+ * way.
  */
 export const ItemKindSchema = z
   .enum([
@@ -141,6 +149,7 @@ export const ItemKindSchema = z
     'report_findings',
     'show_chart',
     'show_metrics',
+    'show_comparison',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

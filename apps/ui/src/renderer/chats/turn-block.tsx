@@ -4,6 +4,7 @@ import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
 import { ChartCard } from './chart-block';
+import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
@@ -109,6 +110,9 @@ export const TurnBlock = memo(function TurnBlock({
     }
     if (entry.type === 'metrics') {
       return <MetricsCard key={entry.id} metrics={entry.metrics} />;
+    }
+    if (entry.type === 'comparison') {
+      return <ComparisonCard key={entry.id} comparison={entry.comparison} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

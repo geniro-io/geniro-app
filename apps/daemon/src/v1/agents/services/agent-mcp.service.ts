@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
@@ -17,6 +15,10 @@ import type {
 import type { AgentAdapter } from '../adapters/agent-adapter';
 import type { AgentMcpListingWire } from '../chat.types';
 import { childProcessHandle } from '../utils/child-handle';
+import {
+  ensureFolderlessDir,
+  folderlessDirPath,
+} from '../utils/folderless-dir';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
@@ -78,23 +80,6 @@ export const BLOCKING_LIST_TIMEOUT_MS = 45_000;
  * case where nobody can guess what happened from the sentence alone.
  */
 const MCP_LIST_FAILED_REASON = 'could not read MCP servers';
-
-/**
- * The directory a FOLDER-INDEPENDENT listing runs in, under userData.
- *
- * The graph builder has no folder: a workflow is edited long before it is run
- * in one. What it can honestly show is the set that does NOT depend on a
- * folder — the user's global servers plus whatever the node's own profile
- * directory brings — and the way to get that from the CLI is to ask it
- * somewhere with no project config of its own, because a project `.mcp.json`
- * is visible ONLY from its own folder (probe-verified on claude 2.1.220).
- *
- * geniro owns this directory and keeps it empty, so "no project servers here"
- * is a property of the path rather than a hope about the user's disk. The
- * listing writes nothing — not even a `~/.claude.json` project entry
- * (probe-verified: that file's checksum is unchanged across one).
- */
-const FOLDERLESS_DIR_NAME = 'mcp-folderless';
 
 /**
  * The cache key. Four dimensions, and dropping any one of them serves a
@@ -300,19 +285,17 @@ export class AgentMcpService {
     this.resolveVersionFn =
       options.resolveVersionFn ??
       ((kind, opts) => versions.resolve(kind, opts));
-    this.folderlessDirPath =
-      options.folderlessDir ??
-      join(environment.userDataDir, FOLDERLESS_DIR_NAME);
+    this.folderlessDirPath = options.folderlessDir ?? folderlessDirPath();
   }
 
   /**
    * The empty directory a folder-independent listing runs in, created on
-   * first use. Memoized only in the sense that `mkdirSync` with `recursive`
-   * is a no-op once it exists.
+   * first use — see `utils/folderless-dir.ts` for what makes it the honest
+   * answer here, and why the MCP SIGN-IN resolves the same one while the
+   * per-folder toggle must not.
    */
   private folderlessDir(): string {
-    mkdirSync(this.folderlessDirPath, { recursive: true });
-    return this.folderlessDirPath;
+    return ensureFolderlessDir(this.folderlessDirPath);
   }
 
   /**

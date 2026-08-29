@@ -23,10 +23,16 @@ export class CliAuthQueryDto extends createZodDto(AgentQuerySchema) {}
 /**
  * Which MCP server to sign in to, and where from.
  *
- * `cwd` is REQUIRED, unlike the account query's absent one, for the reason the
- * handoff route's is: the CLI resolves a server NAME against the folder it runs
- * in, so a sign-in started anywhere else authenticates a different server or
- * none at all.
+ * `cwd` matters because the CLI resolves a server NAME against the folder it
+ * runs in, so a sign-in started somewhere else authenticates a different server
+ * or none at all. OMITTING it is not "anywhere" — it is the one other folder a
+ * caller can mean: geniro's own empty directory, which is where a
+ * folder-independent LISTING is taken (`v1/agents/utils/folderless-dir.ts`).
+ * The graph builder is that caller: a workflow is edited before it runs
+ * anywhere, so its node inspector lists the servers that do not depend on a
+ * folder, and a name it shows resolves in that same directory and nowhere else.
+ * Reading an absent `cwd` as anything the CLI happened to be started in is what
+ * this must not become.
  *
  * `server` is the shared {@link cliPositionalArgSchema} — see its doc block
  * for why a leading dash is refused; sharing it with `mcp.dto.ts`'s toggle
@@ -34,7 +40,7 @@ export class CliAuthQueryDto extends createZodDto(AgentQuerySchema) {}
  * argv shape.
  */
 export const mcpLoginQuerySchema = AgentQuerySchema.extend({
-  cwd: z.string().trim().min(1),
+  cwd: z.string().trim().min(1).optional(),
   server: cliPositionalArgSchema,
 });
 export class McpLoginQueryDto extends createZodDto(mcpLoginQuerySchema) {}

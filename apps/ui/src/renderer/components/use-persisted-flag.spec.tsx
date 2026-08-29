@@ -82,4 +82,18 @@ describe('usePersistedFlag', () => {
   it('falls back only when the key has never been written', () => {
     expect(mount(<Flag storageKey="unset" fallback />).textContent).toBe('on');
   });
+
+  it('does not write the fallback — mounting is not a choice', () => {
+    // Writing on mount records the fallback as though the user had picked it,
+    // which makes every later change of a default a no-op for anyone who had
+    // already rendered that panel once. The palette's collapse-by-default hit
+    // exactly this: the key already said '1'.
+    mount(<Flag storageKey="k" fallback />);
+    expect(localStorage.getItem('k')).toBeNull();
+
+    unmount();
+    expect(mount(<Flag storageKey="k" fallback={false} />).textContent).toBe(
+      'off', // the new fallback, because nothing was ever stored
+    );
+  });
 });

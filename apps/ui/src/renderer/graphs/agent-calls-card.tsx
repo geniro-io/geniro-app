@@ -1,26 +1,32 @@
 import { TriangleAlert } from 'lucide-react';
 
-import { SettingRow } from '../components/setting-row';
-import { Badge } from '../components/ui/badge';
+import { cn } from '../components/ui/utils';
+import { AgentAvatar } from './agent-avatar';
 import type { AgentCallInfo } from './node-validate';
 
 /**
- * Who this node may call, and who may call it — the call wiring as a BAND of
- * labelled rows, matching the Agent settings card directly above it.
+ * Who this node may call, and who may call it — one ROW per agent, each wearing
+ * the same round initials avatar that agent wears on the canvas and in this
+ * panel's own header.
  *
- * It was a `NoteBox` of seven stacked sentences: a heading, `May call: a, b, c`,
- * `Callable by: …`, a loop warning, two paragraphs explaining what a call edge
- * IS, a warning naming every callee with no description, and a per-CLI note
- * about questions. Nine lines of prose to state one fact a reader comes for.
- * REPORTED as "уберём этот блок, просто текстовый. Уберём лишнее, оставим
- * только то, что нужно… но как-то красиво это сделаем и компактно".
+ * It began as a `NoteBox` of seven stacked sentences and became a band of
+ * labelled rows whose values were badges. REPORTED against that band: "нам не
+ * нужен белый фон… напротив каждого агента там можно его иконку даже
+ * поставить". Two things behind it. The card was `bg-card` — the one WHITE
+ * surface in a panel whose ground is warm muted, sitting under the Agent
+ * settings band that has a reason to be a card (its rows are CONTROLS). This
+ * section is read-only, so the frame was drawing a box around nothing.
  *
- * What went is the PROSE, not a fact. Two of those paragraphs said the same
- * thing about every node in every workflow, so they are the section's own
- * one-line hint at the call site rather than a wall re-read on each selection;
- * the claude question sentence went with them, because it describes the
- * behaviour a reader would assume. Everything TRUE OF THIS NODE stayed, and
- * two of them read better as marks than as sentences (below).
+ * And a name in a pill is a name: three of them read as a row of small buttons
+ * with no way to tell which agent is which without reading each one. The avatar
+ * is the app's existing answer to that — `AgentAvatar` is what the node card
+ * and this panel's header already identify an agent by — so a callee is
+ * recognised here the same way it is recognised everywhere else, and the list
+ * became something scanned rather than read.
+ *
+ * What did NOT change is which facts appear: everything true of THIS node
+ * stayed, the undescribed-callee mark included (it is now the row's own amber
+ * treatment rather than a pill's).
  */
 export function AgentCallsCard({
   info,
@@ -33,21 +39,15 @@ export function AgentCallsCard({
   // Every name it can reach, plus which of them it cannot route to.
   const undescribed = new Set(info.undescribedCallees);
   return (
-    // `@container` for the same reason the settings band above carries one: the
-    // rows fit themselves to THIS card, whose width is a drag handle's.
-    <div className="@container flex flex-col divide-y divide-border rounded-md border border-border bg-card">
+    <div className="flex flex-col gap-3">
       {info.callees.length > 0 ? (
-        <SettingRow width="compact" label="Calls">
-          <NameBadges names={info.callees} warn={undescribed} />
-        </SettingRow>
+        <NameList label="Calls" names={info.callees} warn={undescribed} />
       ) : null}
       {info.callers.length > 0 ? (
-        <SettingRow width="compact" label="Called by">
-          <NameBadges names={info.callers} warn={EMPTY} />
-        </SettingRow>
+        <NameList label="Called by" names={info.callers} warn={EMPTY} />
       ) : null}
       {info.inCycle ? (
-        <p className="px-3 py-2 text-xs text-warning">
+        <p className="text-xs text-warning">
           In a call loop — runtime calls are depth-capped.
         </p>
       ) : null}
@@ -57,7 +57,7 @@ export function AgentCallsCard({
           the user. claude's path is the one a reader would assume, so saying it
           bought a line and told them nothing. */}
       {info.callees.length > 0 && agentKind === 'cursor-agent' ? (
-        <p className="px-3 py-2 text-xs text-warning">
+        <p className="text-xs text-warning">
           Cannot escalate a callee&apos;s question to you — one it cannot answer
           itself times the call out.
         </p>
@@ -69,49 +69,69 @@ export function AgentCallsCard({
 const EMPTY: ReadonlySet<string> = new Set();
 
 /**
- * One badge per name, wrapping.
+ * One direction of the wiring: a micro-label over a row per agent.
  *
- * A badge rather than a comma-joined line, and that is the compactness: three
- * names in prose are read as a sentence, three pills are counted at a glance —
- * and a pill is the one shape that can carry a MARK, which is what turns the
- * old "No description on QA, Researcher — this agent sees only their names"
- * sentence into the two badges it is about. The reason rides each marked
- * badge's own hover, where it is about that node instead of about a list.
+ * The label is the panel's own micro-label shape (the one `MenuGroup` uses),
+ * not a `SettingRow`'s label COLUMN — a column costs a third of a 300px panel
+ * to say one word, and buys alignment with controls this section does not have.
+ * The count rides it because it is free there and the list may wrap past the
+ * fold on a node wired to many.
  */
-function NameBadges({
+function NameList({
+  label,
   names,
   warn,
 }: {
+  label: string;
   names: readonly string[];
   warn: ReadonlySet<string>;
 }): React.JSX.Element {
   return (
-    <div className="flex flex-wrap gap-1">
-      {names.map((name) => {
-        const marked = warn.has(name);
-        return (
-          <Badge
-            key={name}
-            // `muted`, not the caramel `secondary`: a callee list is three or
-            // four names, and filled pills at that count read as a row of
-            // buttons on this warm palette — measured against the real panel.
-            // Quiet pills leave the MARKED one as the only thing that draws the
-            // eye, which is the right hierarchy: the actionable half is the
-            // callee this agent cannot route to.
-            variant={marked ? 'outline' : 'muted'}
-            className={marked ? 'border-warning/40 text-warning' : undefined}
-            title={
-              marked
-                ? `${name} has no description — this agent sees only the name and has nothing to route on.`
-                : undefined
-            }>
-            {/* Colour is not the only carrier: the mark has to survive a
-                reader who cannot tell amber from grey. */}
-            {marked ? <TriangleAlert aria-hidden="true" /> : null}
-            {name}
-          </Badge>
-        );
-      })}
-    </div>
+    <section className="flex flex-col gap-1">
+      <h4 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+        {label}
+        <span className="tabular-nums normal-case">{names.length}</span>
+      </h4>
+      <ul aria-label={label} className="flex flex-col gap-0.5">
+        {names.map((name) => {
+          const marked = warn.has(name);
+          return (
+            <li
+              key={name}
+              data-slot="call-row"
+              className={cn(
+                'flex items-center gap-2 rounded-md px-1.5 py-1 text-sm',
+                marked && 'text-warning',
+              )}
+              title={
+                marked
+                  ? `${name} has no description — this agent sees only the name and has nothing to route on.`
+                  : undefined
+              }>
+              <AgentAvatar
+                label={name}
+                className={cn(
+                  'size-5 text-[9px]',
+                  // The mark reaches the avatar too: at 20px it is the part of
+                  // the row the eye lands on first.
+                  marked && 'bg-warning/15 text-warning',
+                )}
+              />
+              <span data-slot="call-name" className="min-w-0 truncate">
+                {name}
+              </span>
+              {/* Colour is not the only carrier: the mark has to survive a
+                  reader who cannot tell amber from grey. */}
+              {marked ? (
+                <TriangleAlert
+                  aria-hidden="true"
+                  className="ml-auto size-3.5 shrink-0"
+                />
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
   );
 }

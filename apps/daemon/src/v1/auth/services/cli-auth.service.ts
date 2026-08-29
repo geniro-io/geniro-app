@@ -9,6 +9,7 @@ import { AgentSessionRegistry } from '../../agents/services/agent-session.regist
 import { ModelVocabularyStore } from '../../agents/services/model-vocabulary.store';
 import { ProcessRegistry } from '../../agents/services/process-registry';
 import { childProcessHandle } from '../../agents/utils/child-handle';
+import { ensureFolderlessDir } from '../../agents/utils/folderless-dir';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
 import type { AgentKind } from '../../runs/runs.types';
@@ -242,7 +243,12 @@ export class CliAuthService {
   async startMcpLogin(input: {
     agent: AgentKind;
     server: string;
-    cwd: string;
+    /**
+     * Omitted means the folder-independent directory the graph builder's own
+     * listing was taken in — see {@link mcpLoginQuerySchema}. Never "wherever
+     * this process happens to be".
+     */
+    cwd?: string;
     configDir?: string;
   }): Promise<LoginSession> {
     const adapter = this.adapters.for(input.agent);
@@ -254,7 +260,10 @@ export class CliAuthService {
           `${input.agent} cannot sign in to an MCP server`,
       );
     }
-    const projectDir = resolveValidCwd(input.cwd);
+    const projectDir =
+      input.cwd === undefined
+        ? ensureFolderlessDir()
+        : resolveValidCwd(input.cwd);
     const id = randomUUID();
     const run: LoginRun = {
       session: {

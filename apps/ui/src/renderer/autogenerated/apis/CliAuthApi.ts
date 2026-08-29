@@ -41,9 +41,9 @@ export interface CliAuthApiStartCliLoginRequest {
 
 export interface CliAuthApiStartMcpLoginRequest {
     agent: AgentKind;
-    cwd: string;
     server: string;
     configDir?: string;
+    cwd?: string;
 }
 
 export interface CliAuthApiSubmitCliLoginCodeRequest {
@@ -258,13 +258,6 @@ export class CliAuthApi extends runtime.BaseAPI {
             throw new runtime.RequiredError(
                 'agent',
                 'Required parameter "agent" was null or undefined when calling startMcpLogin().'
-            );
-        }
-
-        if (requestParameters['cwd'] == null) {
-            throw new runtime.RequiredError(
-                'cwd',
-                'Required parameter "cwd" was null or undefined when calling startMcpLogin().'
             );
         }
 

@@ -206,6 +206,39 @@ describe('autoLayout', () => {
     expect(Object.keys(layout).sort()).toEqual(['coder', 'reviewer']);
     expect(layout.coder!.x).toBeLessThan(layout.reviewer!.x);
   });
+
+  it('leaves a real gap between siblings as tall as they measure', async () => {
+    // THE REPORTED DEFECT: ELK places boxes of the size it is TOLD, and every
+    // node used to be declared NODE_HEIGHT (128) while a real agent card is
+    // 173px — so the 48px gap between siblings came out as 3px on the canvas,
+    // and a card past 176px overlapped the one below outright.
+    //
+    // Two siblings fanning out of one producer, so the layout stacks them.
+    const FAN: Workflow = {
+      name: 'fan',
+      nodes: [
+        { id: 'lead', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'lead', to: 'a', kind: 'data' },
+        { from: 'lead', to: 'b', kind: 'data' },
+      ],
+    };
+    const TALL = 231; // an agent card carrying a wiring warning, measured
+    const sizes = new Map(
+      ['lead', 'a', 'b'].map((id) => [id, { width: 240, height: TALL }]),
+    );
+
+    const layout = await autoLayout(FAN, sizes);
+    const [upper, lower] = [layout.a!, layout.b!].sort((p, q) => p.y - q.y);
+
+    // The gap is measured against what the cards ACTUALLY are, which is the
+    // whole point: told 128, ELK would leave 176 between origins and the 231px
+    // cards would overlap by 55.
+    expect(lower!.y - upper!.y).toBeGreaterThanOrEqual(TALL);
+  });
 });
 
 describe('instruction blocks on the canvas', () => {

@@ -165,9 +165,14 @@ function partnersOf(kind: NodeKind): string[] {
 // on every nav change so component state alone would reset the width + fold).
 const LS_WIDTH = 'geniro.builder.paletteWidth';
 const LS_COLLAPSED = 'geniro.builder.paletteCollapsed';
-const LS_AGENTS_OPEN = 'geniro.builder.paletteAgentsOpen';
-const LS_TRIGGERS_OPEN = 'geniro.builder.paletteTriggersOpen';
-const LS_INSTRUCTIONS_OPEN = 'geniro.builder.paletteInstructionsOpen';
+// The three category folds are stored under NEW keys. The old ones
+// (`…paletteAgentsOpen` and friends) hold a `'1'` that was never a choice:
+// `usePersistedFlag` used to write its fallback on mount, so every install that
+// has ever opened the builder recorded "expanded" under those names and would
+// go on reading it forever, whatever this file's default says.
+const LS_AGENTS_OPEN = 'geniro.builder.agentsOpen';
+const LS_TRIGGERS_OPEN = 'geniro.builder.triggersOpen';
+const LS_INSTRUCTIONS_OPEN = 'geniro.builder.instructionsOpen';
 
 /**
  * One connection rule row in the info dialog: the port dot (input/output
@@ -305,7 +310,8 @@ function CategoryBlock({
  * The builder's left palette — mirrors geniro's `TemplateSidebar`: collapsible
  * category blocks (Triggers + Agents), a fold control that shrinks the whole
  * panel to a slim rail, and a drag-to-resize right edge. Panel width, fold
- * state, and each block's open state persist in localStorage. Nodes are added
+ * state, and each block's open state persist in localStorage — the blocks
+ * start collapsed until the user opens one. Nodes are added
  * by dragging a tile onto the canvas OR from the tile's info dialog ("Add to
  * canvas" — the keyboard path); clicking a tile opens that dialog.
  */
@@ -323,14 +329,18 @@ export function NodePalette({
     maxWidth: 400,
     handleEdge: 'right',
   });
-  const [agentsOpen, setAgentsOpen] = usePersistedFlag(LS_AGENTS_OPEN, true);
+  // Every category starts CLOSED: the palette's job on open is to show what
+  // kinds of node exist, and three expanded blocks push the last one under the
+  // fold on a short window. The open state is still the user's once they touch
+  // it — `usePersistedFlag` only falls back to this with nothing stored.
+  const [agentsOpen, setAgentsOpen] = usePersistedFlag(LS_AGENTS_OPEN, false);
   const [triggersOpen, setTriggersOpen] = usePersistedFlag(
     LS_TRIGGERS_OPEN,
-    true,
+    false,
   );
   const [instructionsOpen, setInstructionsOpen] = usePersistedFlag(
     LS_INSTRUCTIONS_OPEN,
-    true,
+    false,
   );
   const [infoItem, setInfoItem] = useState<PaletteItem | null>(null);
 

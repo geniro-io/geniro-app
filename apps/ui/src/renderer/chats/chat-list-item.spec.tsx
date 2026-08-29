@@ -84,6 +84,65 @@ describe('ChatListItem', () => {
     expect(container.textContent).toContain('5m');
   });
 
+  it('names the pull request the thread’s folder is on', async () => {
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          pullRequest: {
+            number: 70,
+            title: 'builder polish',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'fix/builder',
+            isCrossRepository: false,
+            headRepositoryOwner: 'someone',
+            author: 'someone',
+            url: 'https://github.com/o/r/pull/70',
+            updatedAt: '2026-08-01T00:00:00Z',
+          },
+        })}
+      />,
+    );
+
+    const line = container.querySelector('[data-slot="current-pull-request"]');
+    expect(line?.textContent).toContain('#70');
+    expect(line?.textContent).toContain('builder polish');
+  });
+
+  it('draws the pull request as TEXT, never as a nested link', async () => {
+    // The row is itself activatable: an anchor inside one is invalid markup
+    // AND takes the row's click, so pressing the thread would open GitHub
+    // instead of the chat the user aimed at.
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          pullRequest: {
+            number: 70,
+            title: 'builder polish',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'fix/builder',
+            isCrossRepository: false,
+            headRepositoryOwner: 'someone',
+            author: 'someone',
+            url: 'https://github.com/o/r/pull/70',
+            updatedAt: '2026-08-01T00:00:00Z',
+          },
+        })}
+      />,
+    );
+
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('draws no pull-request line when the folder has none', async () => {
+    const container = await mount(<ChatListItem {...props()} />);
+
+    expect(
+      container.querySelector('[data-slot="current-pull-request"]'),
+    ).toBeNull();
+  });
+
   it('spins the status icon and HIDES the activity time while running', async () => {
     const container = await mount(
       <ChatListItem {...props({ status: 'running' })} />,

@@ -2,13 +2,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Download,
-  ExternalLink,
   FileText,
   Terminal as TerminalIcon,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { CliKind } from '../../shared/contracts';
+import type { CliKind, PullRequestInfo } from '../../shared/contracts';
 import type {
   AgentMcpListingDto as AgentMcpListing,
   HandoffTargetDto,
@@ -16,7 +15,9 @@ import type {
 import { CopyButton } from '../components/copy-button';
 import { ErrorBanner } from '../components/error-banner';
 import { McpDialogButton } from '../components/mcp-dialog-button';
+import { PanelLinkRow } from '../components/panel-link-row';
 import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
+import { PanelSection } from '../components/panel-section';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Popover } from '../components/ui/popover';
@@ -29,6 +30,8 @@ import {
 } from './agent-activity';
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
+import { splitPullRequests } from './pull-request';
+import { PullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import type { ShellRun } from './shell-activity';
 import { ShellIcon, ShellRows } from './shell-list';
@@ -336,9 +339,78 @@ function ThreadRow({
   );
 }
 
+function PullRequestList({
+  pullRequests,
+}: {
+  pullRequests: readonly PullRequestInfo[];
+}): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+      {pullRequests.map((pullRequest) => (
+        <li key={pullRequest.number}>
+          <PullRequestRow pullRequest={pullRequest} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The pull requests on the repo this run's folder belongs to — open ones
+ * listed, finished ones behind a fold that is shut by default.
+ *
+ * The fold is persisted rather than component state for the reason the panel's
+ * own collapse is: `Chats.tsx` keys this panel by run id, so `useState` would
+ * forget the choice on the next chat opened.
+ */
+function PullRequestsSection({
+  pullRequests,
+}: {
+  pullRequests: readonly PullRequestInfo[];
+}): React.JSX.Element {
+  const { open, settled } = splitPullRequests(pullRequests);
+  const [settledOpen, setSettledOpen] = usePersistedFlag(
+    'chats.pullRequestsSettledOpen',
+    false,
+  );
+  return (
+    <PanelSection label="Pull requests">
+      {open.length === 0 ? (
+        <span className="text-xs text-muted-foreground">
+          Nothing open right now
+        </span>
+      ) : (
+        <PullRequestList pullRequests={open} />
+      )}
+      {settled.length > 0 ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={settledOpen}
+            className="h-6 w-fit gap-1 px-1 text-xs text-muted-foreground"
+            onClick={() => setSettledOpen((wasOpen) => !wasOpen)}>
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                'size-3 shrink-0 transition-transform',
+                settledOpen && 'rotate-90',
+              )}
+            />
+            Merged &amp; closed · {settled.length}
+          </Button>
+          {settledOpen ? <PullRequestList pullRequests={settled} /> : null}
+        </>
+      ) : null}
+    </PanelSection>
+  );
+}
+
 export function AgentsPanel({
   agents,
   artifacts = [],
+  pullRequests = [],
   tasksByAgent,
   shellsByAgent,
   onOpenShell,
@@ -372,6 +444,14 @@ export function AgentsPanel({
    * nothing at all.
    */
   artifacts?: readonly RunArtifact[];
+  /**
+   * Every pull request on the repo this run's folder belongs to, newest first.
+   *
+   * Empty whenever `gh` cannot answer — no `gh`, a logged-out one, or a folder
+   * that is not a GitHub checkout — and the section then draws nothing at all,
+   * the same rule {@link artifacts} follows.
+   */
+  pullRequests?: readonly PullRequestInfo[];
   /**
    * The chat whose expanded context readout this panel may offer, or null.
    *
@@ -1096,35 +1176,25 @@ export function AgentsPanel({
           "agents, then artifact, then agent". Below the scroller and outside
           it, so it keeps its place while the agent list scrolls. */}
         {artifacts.length > 0 ? (
-          <section
-            aria-label="Artifacts"
-            className="flex shrink-0 flex-col gap-1 border-t border-border px-3 py-2">
-            <span className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
-              Artifacts
-            </span>
+          <PanelSection label="Artifacts">
             <ul className="m-0 flex list-none flex-col gap-1 p-0">
               {artifacts.map((artifact) => (
                 <li key={artifact.id}>
-                  {/* A plain anchor, opened by the SHELL: main's window-open
-                    handler hands an https target to the user's browser and
-                    denies everything else, so this needs no IPC of its own and
-                    cannot be pointed at a scheme that would run something. */}
-                  <a
+                  <PanelLinkRow
                     href={artifact.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={artifact.url}
-                    className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-sm shadow-panel-sm hover:bg-sidebar-accent">
-                    <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate">
-                      {artifact.title}
-                    </span>
-                    <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-                  </a>
+                    title={artifact.title}
+                    tooltip={artifact.url}
+                    icon={
+                      <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+                    }
+                  />
                 </li>
               ))}
             </ul>
-          </section>
+          </PanelSection>
+        ) : null}
+        {pullRequests.length > 0 ? (
+          <PullRequestsSection pullRequests={pullRequests} />
         ) : null}
       </div>
     </aside>

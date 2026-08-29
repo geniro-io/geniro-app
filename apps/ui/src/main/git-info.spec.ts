@@ -15,6 +15,7 @@ import {
   pullBranch,
   pullStashIsOurs,
   readGitInfo,
+  readOriginOwner,
   switchBranch,
 } from './git-info';
 
@@ -179,6 +180,42 @@ describe('readGitInfo', () => {
     expect(info.worktrees).toEqual([
       { branch: 'feat/elsewhere', path: realpathSync(other) },
     ]);
+  });
+});
+
+describe('readOriginOwner', () => {
+  // Both URL forms git writes, because which one a checkout carries is the
+  // user's clone choice — and the owner is what tells THEIR fork's pull request
+  // apart from a stranger's.
+  it('reads the owner from an ssh remote', async () => {
+    initRepo();
+    run(['remote', 'add', 'origin', 'git@github.com:acme/widgets.git']);
+
+    expect(await readOriginOwner(dir)).toBe('acme');
+  });
+
+  it('reads the owner from an https remote', async () => {
+    initRepo();
+    run(['remote', 'add', 'origin', 'https://github.com/acme/widgets.git']);
+
+    expect(await readOriginOwner(dir)).toBe('acme');
+  });
+
+  it('reads the owner from a url with no .git suffix', async () => {
+    initRepo();
+    run(['remote', 'add', 'origin', 'https://github.com/acme/widgets']);
+
+    expect(await readOriginOwner(dir)).toBe('acme');
+  });
+
+  it('answers null when the folder has no origin', async () => {
+    initRepo();
+
+    expect(await readOriginOwner(dir)).toBeNull();
+  });
+
+  it('answers null for a plain folder', async () => {
+    expect(await readOriginOwner(dir)).toBeNull();
   });
 });
 

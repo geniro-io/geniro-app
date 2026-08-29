@@ -102,6 +102,8 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
+import { currentPullRequest } from './pull-request';
+import { CurrentPullRequestLine } from './pull-request-row';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -202,6 +204,7 @@ import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
+import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import { useUnseenRuns } from './use-unseen-runs';
 
 /**
@@ -3188,6 +3191,67 @@ export function Chats({
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
 
+  /**
+   * Every distinct folder the chat list names, so pull requests are read once
+   * per CHECKOUT rather than once per thread — threads share folders, and each
+   * read is a `gh` process talking to GitHub.
+   *
+   * Sorted, because the hook keys its work on the content of this list and the
+   * sidebar reorders itself as runs report activity: unsorted, that reordering
+   * alone would look like a new set of folders.
+   */
+  const pullRequestFolders = useMemo(
+    () =>
+      [
+        ...new Set(
+          runs
+            .map((run) => run.cwd)
+            .filter(
+              (cwd): cwd is string => typeof cwd === 'string' && cwd !== '',
+            ),
+        ),
+      ].sort(),
+    [runs],
+  );
+  const { byDir: pullRequestsByDir, refresh: refreshPullRequests } =
+    usePullRequests(pullRequestFolders);
+  const activePullRequests = pullRequestsIn(
+    pullRequestsByDir,
+    activeRun?.cwd ?? null,
+  );
+  /**
+   * Each folder's own current pull request, resolved once per read rather than
+   * once per row per render — the composer's text lives in this component, so
+   * the sidebar's row map re-runs on every keystroke.
+   */
+  const currentPullRequestByDir = useMemo(
+    () =>
+      new Map(
+        pullRequestFolders.map((dir) => [
+          dir,
+          currentPullRequest(pullRequestsIn(pullRequestsByDir, dir)),
+        ]),
+      ),
+    [pullRequestFolders, pullRequestsByDir],
+  );
+  const activePullRequest =
+    activeRun?.cwd == null
+      ? null
+      : (currentPullRequestByDir.get(activeRun.cwd) ?? null);
+  /**
+   * A branch move changes which pull request is that folder's. Nothing else
+   * re-reads it — the hook's own refresh is on window focus, and an in-app
+   * switch never loses focus.
+   */
+  const refreshPullRequestsFor = useCallback(
+    (target: string | null): void => {
+      if (target !== null && target !== '') {
+        refreshPullRequests(target);
+      }
+    },
+    [refreshPullRequests],
+  );
+
   // Push the open thread's name up to the shell's title bar. An effect rather
   // than a render-time call because it writes to a parent's state, and it runs
   // on the LABEL rather than on the run object so a rename re-reports without
@@ -3506,6 +3570,7 @@ export function Chats({
       // re-reading the PREVIOUS folder — `chooseFolder` above set React state
       // this callback cannot see.
       await git.refresh(applied.cwd);
+      refreshPullRequestsFor(applied.cwd);
     },
     [
       newChat,
@@ -3516,6 +3581,7 @@ export function Chats({
       changeModel,
       changeEffort,
       git,
+      refreshPullRequestsFor,
     ],
   );
 
@@ -5221,6 +5287,12 @@ export function Chats({
                               lastActivityAt={run.updatedAt}
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
+                              pullRequest={
+                                run.cwd === null
+                                  ? null
+                                  : (currentPullRequestByDir.get(run.cwd) ??
+                                    null)
+                              }
                               dragging={
                                 drag?.kind === 'run' && drag.id === run.id
                               }
@@ -5431,7 +5503,11 @@ export function Chats({
                               <BranchSelect
                                 info={git.info}
                                 switching={git.switching}
-                                onSwitch={(branch) => void git.switchTo(branch)}
+                                onSwitch={(branch) => {
+                                  void git
+                                    .switchTo(branch)
+                                    .then(() => refreshPullRequestsFor(folder));
+                                }}
                               />
                               {!workflowSlug ? (
                                 // The optional config directory (account / profile)
@@ -5654,7 +5730,13 @@ export function Chats({
                                     className="h-auto shrink-0 p-0 text-xs text-warning underline decoration-warning/40 underline-offset-4 hover:decoration-warning"
                                     disabled={git.pulling}
                                     title="Stash your changes, fast-forward this branch, then put the changes back"
-                                    onClick={() => void git.pull()}>
+                                    onClick={() => {
+                                      void git
+                                        .pull()
+                                        .then(() =>
+                                          refreshPullRequestsFor(folder),
+                                        );
+                                    }}>
                                     {git.pulling ? 'Pulling…' : 'Pull latest'}
                                   </Button>
                                 ) : null
@@ -5964,6 +6046,19 @@ export function Chats({
                         onReorder={reorderQueued}
                         onSteer={(id) => void steerQueued(id)}
                       />
+
+                      {/* Its own band beside the queued strip, NOT a sixth chip
+                          in the row below: that row deliberately does not wrap,
+                          and a pull-request title is user data of any length —
+                          it would take width from the folder and branch chips
+                          every time. */}
+                      {activePullRequest ? (
+                        <CurrentPullRequestLine
+                          pullRequest={activePullRequest}
+                          interactive
+                          className="px-1"
+                        />
+                      ) : null}
 
                       {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
@@ -6335,6 +6430,7 @@ export function Chats({
                     key={activeRun?.id ?? 'no-run'}
                     agents={agents}
                     artifacts={artifacts}
+                    pullRequests={activePullRequests.pullRequests}
                     tasksByAgent={tasksByAgent}
                     shellsByAgent={shellsByAgent}
                     onOpenShell={setOpenShell}

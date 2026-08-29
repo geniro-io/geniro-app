@@ -17,11 +17,11 @@ import * as runtime from '../runtime';
 import type {
   AttachmentDataDto,
   CancelledDto,
+  ChatDeletedDto,
   ChatExportDto,
   ChatMetricsDto,
   ChatTotalsDto,
   CreateChatDto,
-  DeletedDto,
   ForgottenInstructionsDto,
   ItemDto,
   LocalImageDto,
@@ -199,7 +199,7 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteChatRaw(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+    async deleteChatRaw(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatDeletedDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
                 'runId',
@@ -236,7 +236,7 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+    async deleteChat(requestParameters: ChatsApiDeleteChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatDeletedDto> {
         const response = await this.deleteChatRaw(requestParameters, initOverrides);
         return await response.value();
     }

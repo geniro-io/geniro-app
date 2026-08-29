@@ -323,11 +323,16 @@ export class ForgottenInstructionsDto extends createZodDto(
 ) {}
 
 /**
- * Acknowledgement of a delete. Mirrors the workflow route's own `DeletedDto`
- * rather than sharing it: they belong to different modules' contracts, and the
- * generated client names one class per tag.
+ * Acknowledgement of a delete. Mirrors the workflow route's own
+ * `WorkflowDeletedDto` rather than sharing it: they belong to different
+ * modules' contracts, and the generated client names one class per tag.
+ *
+ * Prefixed because the OpenAPI component namespace is GLOBAL — two classes both
+ * called `DeletedDto` land on one component name with two different bodies,
+ * which @nestjs/swagger reports as a duplicate DTO today and will throw on in
+ * its next major.
  */
-export class DeletedDto extends createZodDto(
+export class ChatDeletedDto extends createZodDto(
   z.object({
     deleted: z
       .boolean()

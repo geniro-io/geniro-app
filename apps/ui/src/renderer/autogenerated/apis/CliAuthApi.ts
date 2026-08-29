@@ -17,8 +17,8 @@ import * as runtime from '../runtime';
 import type {
   AgentKind,
   LoginCodeBodyDto,
-  LoginSession,
-  LogoutResult,
+  LoginSessionDto,
+  LogoutResultDto,
 } from '../models/index';
 
 export interface CliAuthApiCancelCliLoginRequest {
@@ -59,7 +59,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async cancelCliLoginRaw(requestParameters: CliAuthApiCancelCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+    async cancelCliLoginRaw(requestParameters: CliAuthApiCancelCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSessionDto>> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
@@ -96,7 +96,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async cancelCliLogin(requestParameters: CliAuthApiCancelCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+    async cancelCliLogin(requestParameters: CliAuthApiCancelCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSessionDto> {
         const response = await this.cancelCliLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -104,7 +104,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async cliLogoutRaw(requestParameters: CliAuthApiCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LogoutResult>> {
+    async cliLogoutRaw(requestParameters: CliAuthApiCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LogoutResultDto>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
                 'agent',
@@ -148,7 +148,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async cliLogout(requestParameters: CliAuthApiCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LogoutResult> {
+    async cliLogout(requestParameters: CliAuthApiCliLogoutRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LogoutResultDto> {
         const response = await this.cliLogoutRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -156,7 +156,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async getCliLoginRaw(requestParameters: CliAuthApiGetCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+    async getCliLoginRaw(requestParameters: CliAuthApiGetCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSessionDto>> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
@@ -193,7 +193,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async getCliLogin(requestParameters: CliAuthApiGetCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+    async getCliLogin(requestParameters: CliAuthApiGetCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSessionDto> {
         const response = await this.getCliLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -201,7 +201,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async startCliLoginRaw(requestParameters: CliAuthApiStartCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+    async startCliLoginRaw(requestParameters: CliAuthApiStartCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSessionDto>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
                 'agent',
@@ -245,7 +245,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async startCliLogin(requestParameters: CliAuthApiStartCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+    async startCliLogin(requestParameters: CliAuthApiStartCliLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSessionDto> {
         const response = await this.startCliLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -253,7 +253,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async startMcpLoginRaw(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+    async startMcpLoginRaw(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSessionDto>> {
         if (requestParameters['agent'] == null) {
             throw new runtime.RequiredError(
                 'agent',
@@ -312,7 +312,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async startMcpLogin(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+    async startMcpLogin(requestParameters: CliAuthApiStartMcpLoginRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSessionDto> {
         const response = await this.startMcpLoginRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -320,7 +320,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async submitCliLoginCodeRaw(requestParameters: CliAuthApiSubmitCliLoginCodeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSession>> {
+    async submitCliLoginCodeRaw(requestParameters: CliAuthApiSubmitCliLoginCodeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LoginSessionDto>> {
         if (requestParameters['id'] == null) {
             throw new runtime.RequiredError(
                 'id',
@@ -367,7 +367,7 @@ export class CliAuthApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async submitCliLoginCode(requestParameters: CliAuthApiSubmitCliLoginCodeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSession> {
+    async submitCliLoginCode(requestParameters: CliAuthApiSubmitCliLoginCodeRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LoginSessionDto> {
         const response = await this.submitCliLoginCodeRaw(requestParameters, initOverrides);
         return await response.value();
     }

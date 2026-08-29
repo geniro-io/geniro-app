@@ -17,7 +17,6 @@ import * as runtime from '../runtime';
 import type {
   CancelledDto,
   CreateWorkflowDto,
-  DeletedDto,
   ExportWorkflowDto,
   ExportedDto,
   ImportWorkflowDto,
@@ -25,6 +24,7 @@ import type {
   RunDto,
   RunWorkflowDto,
   SaveWorkflowDto,
+  WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
 } from '../models/index';
@@ -172,7 +172,7 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteWorkflowRaw(requestParameters: WorkflowsApiDeleteWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+    async deleteWorkflowRaw(requestParameters: WorkflowsApiDeleteWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<WorkflowDeletedDto>> {
         if (requestParameters['slug'] == null) {
             throw new runtime.RequiredError(
                 'slug',
@@ -209,7 +209,7 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteWorkflow(requestParameters: WorkflowsApiDeleteWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+    async deleteWorkflow(requestParameters: WorkflowsApiDeleteWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowDeletedDto> {
         const response = await this.deleteWorkflowRaw(requestParameters, initOverrides);
         return await response.value();
     }
@@ -217,7 +217,7 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteWorkflowRunRaw(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<DeletedDto>> {
+    async deleteWorkflowRunRaw(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<WorkflowDeletedDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
                 'runId',
@@ -254,7 +254,7 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async deleteWorkflowRun(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<DeletedDto> {
+    async deleteWorkflowRun(requestParameters: WorkflowsApiDeleteWorkflowRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowDeletedDto> {
         const response = await this.deleteWorkflowRunRaw(requestParameters, initOverrides);
         return await response.value();
     }

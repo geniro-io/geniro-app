@@ -42,31 +42,37 @@ export type LoginStatus = z.infer<typeof LoginStatusSchema>;
  * where the browser did not open, or opened in the wrong profile. It is
  * surfaced, never auto-opened a second time: two browser tabs for one flow, one
  * of them with a stale challenge, is worse than none.
+ *
+ * Deliberately carries NO `.meta({ id })`, and neither does {@link
+ * LogoutResultSchema}: both are the ROOT of a response DTO
+ * (`LoginSessionDto` / `LogoutResultDto`), and nestjs-zod then names the DTO's
+ * own component after the zod id AND registers the id's component under that
+ * same name — two different bodies under one name. nestjs-zod 5.5 throws on
+ * that (`[cleanupOpenApiDoc] Found multiple schemas with name
+ * \`LogoutResult_Output\``) and the daemon never finishes booting, which is
+ * how a shipped release lost its whole API. An id belongs on the nested and
+ * shared schemas only — `AgentKindSchema` below still has one.
  */
-export const LoginSessionSchema = z
-  .object({
-    id: z.string(),
-    agent: AgentKindSchema,
-    status: LoginStatusSchema,
-    /** The sign-in URL the CLI printed, or null before it has printed one. */
-    url: z.string().nullable(),
-    /**
-     * What to show the user about this attempt — the CLI's own last meaningful
-     * line, or the reason it failed. Never the raw output: a sign-in's stdout is
-     * the one place a code or a token could appear.
-     */
-    message: z.string().nullable(),
-  })
-  .meta({ id: 'LoginSession' });
+export const LoginSessionSchema = z.object({
+  id: z.string(),
+  agent: AgentKindSchema,
+  status: LoginStatusSchema,
+  /** The sign-in URL the CLI printed, or null before it has printed one. */
+  url: z.string().nullable(),
+  /**
+   * What to show the user about this attempt — the CLI's own last meaningful
+   * line, or the reason it failed. Never the raw output: a sign-in's stdout is
+   * the one place a code or a token could appear.
+   */
+  message: z.string().nullable(),
+});
 export type LoginSession = z.infer<typeof LoginSessionSchema>;
 
 /** The answer to a sign-out, which is over as soon as the CLI exits. */
-export const LogoutResultSchema = z
-  .object({
-    agent: AgentKindSchema,
-    ok: z.boolean(),
-    /** Why it could not be done here, or null on success. */
-    unavailableReason: z.string().nullable(),
-  })
-  .meta({ id: 'LogoutResult' });
+export const LogoutResultSchema = z.object({
+  agent: AgentKindSchema,
+  ok: z.boolean(),
+  /** Why it could not be done here, or null on success. */
+  unavailableReason: z.string().nullable(),
+});
 export type LogoutResult = z.infer<typeof LogoutResultSchema>;

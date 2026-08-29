@@ -797,6 +797,19 @@ export type ChatApprovalMode = typeof ChatApprovalMode[keyof typeof ChatApproval
 /**
  * 
  * @export
+ * @interface ChatDeletedDto
+ */
+export interface ChatDeletedDto {
+    /**
+     * True when the chat and everything it owned were removed
+     * @type {boolean}
+     * @memberof ChatDeletedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
  * @interface ChatExportDto
  */
 export interface ChatExportDto {
@@ -1668,19 +1681,6 @@ export interface DebugSettingsDto {
 /**
  * 
  * @export
- * @interface DeletedDto
- */
-export interface DeletedDto {
-    /**
-     * 
-     * @type {boolean}
-     * @memberof DeletedDto
-     */
-    deleted: boolean;
-}
-/**
- * 
- * @export
  * @interface DiagnosticsReportDto
  */
 export interface DiagnosticsReportDto {
@@ -2109,37 +2109,37 @@ export interface LoginCodeBodyDto {
 /**
  * 
  * @export
- * @interface LoginSession
+ * @interface LoginSessionDto
  */
-export interface LoginSession {
+export interface LoginSessionDto {
     /**
      * 
      * @type {string}
-     * @memberof LoginSession
+     * @memberof LoginSessionDto
      */
     id: string;
     /**
      * 
      * @type {AgentKind}
-     * @memberof LoginSession
+     * @memberof LoginSessionDto
      */
     agent: AgentKind;
     /**
      * 
      * @type {string}
-     * @memberof LoginSession
+     * @memberof LoginSessionDto
      */
-    status: LoginSessionStatusEnum;
+    status: LoginSessionDtoStatusEnum;
     /**
      * 
      * @type {string}
-     * @memberof LoginSession
+     * @memberof LoginSessionDto
      */
     url: string | null;
     /**
      * 
      * @type {string}
-     * @memberof LoginSession
+     * @memberof LoginSessionDto
      */
     message: string | null;
 }
@@ -2148,37 +2148,37 @@ export interface LoginSession {
 /**
  * @export
  */
-export const LoginSessionStatusEnum = {
+export const LoginSessionDtoStatusEnum = {
     Waiting: 'waiting',
     NeedsCode: 'needs_code',
     Succeeded: 'succeeded',
     Failed: 'failed',
     Cancelled: 'cancelled'
 } as const;
-export type LoginSessionStatusEnum = typeof LoginSessionStatusEnum[keyof typeof LoginSessionStatusEnum];
+export type LoginSessionDtoStatusEnum = typeof LoginSessionDtoStatusEnum[keyof typeof LoginSessionDtoStatusEnum];
 
 /**
  * 
  * @export
- * @interface LogoutResult
+ * @interface LogoutResultDto
  */
-export interface LogoutResult {
+export interface LogoutResultDto {
     /**
      * 
      * @type {AgentKind}
-     * @memberof LogoutResult
+     * @memberof LogoutResultDto
      */
     agent: AgentKind;
     /**
      * 
      * @type {boolean}
-     * @memberof LogoutResult
+     * @memberof LogoutResultDto
      */
     ok: boolean;
     /**
      * 
      * @type {string}
-     * @memberof LogoutResult
+     * @memberof LogoutResultDto
      */
     unavailableReason: string | null;
 }
@@ -3120,6 +3120,19 @@ export const WorkflowAgentNodeKindEnum = {
 } as const;
 export type WorkflowAgentNodeKindEnum = typeof WorkflowAgentNodeKindEnum[keyof typeof WorkflowAgentNodeKindEnum];
 
+/**
+ * 
+ * @export
+ * @interface WorkflowDeletedDto
+ */
+export interface WorkflowDeletedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof WorkflowDeletedDto
+     */
+    deleted: boolean;
+}
 /**
  * 
  * @export

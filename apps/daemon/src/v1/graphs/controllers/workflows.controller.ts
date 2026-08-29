@@ -14,13 +14,13 @@ import type { RunWire } from '../../agents/chat.types';
 import { CancelledDto, RunDto } from '../../agents/dto/chat.dto';
 import {
   CreateWorkflowDto,
-  DeletedDto,
   ExportedDto,
   ExportWorkflowDto,
   ImportWorkflowDto,
   NodeStateDto,
   RunWorkflowDto,
   SaveWorkflowDto,
+  WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
 } from '../dto/workflows.dto';
@@ -79,7 +79,7 @@ export class WorkflowsController {
    */
   @Delete('runs/:runId')
   @ApiOperation({ operationId: 'deleteWorkflowRun' })
-  @ZodResponse({ status: 200, type: DeletedDto })
+  @ZodResponse({ status: 200, type: WorkflowDeletedDto })
   deleteRun(@Param('runId') runId: string): Promise<{ deleted: boolean }> {
     return this.executor.deleteRun(runId);
   }
@@ -124,7 +124,7 @@ export class WorkflowsController {
 
   @Delete(':slug')
   @ApiOperation({ operationId: 'deleteWorkflow' })
-  @ZodResponse({ status: 200, type: DeletedDto })
+  @ZodResponse({ status: 200, type: WorkflowDeletedDto })
   async delete(@Param('slug') slug: string): Promise<{ deleted: boolean }> {
     await this.store.delete(slug);
     return { deleted: true };

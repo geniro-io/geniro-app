@@ -10,7 +10,7 @@ import { Input } from '../components/ui/input';
 import { type OptionArity, OptionList } from '../components/ui/option-list';
 import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
-import { DiffView, editDiffOf } from './diff-view';
+import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
@@ -906,6 +906,17 @@ function PermissionCard({
   // word `null` in the card, which reads as a value the agent supplied. The
   // predicate is shared with the transcript row so the two surfaces cannot give
   // different answers about whether arguments exist.
+  // geniro's own patch proposal says what it DOES, and the card leads with it.
+  // Scoped to that tool rather than to any input carrying a `summary` key: the
+  // word is generic enough that another tool's arguments could hold one meaning
+  // something else entirely, and this line replaces the card's whole heading.
+  const proposal =
+    toolName === PROPOSE_PATCH &&
+    input &&
+    typeof input === 'object' &&
+    typeof (input as { summary?: unknown }).summary === 'string'
+      ? (input as { summary: string }).summary
+      : null;
   const showsInput = disclosesInput(input);
   let inputPreview: string;
   try {
@@ -920,8 +931,18 @@ function PermissionCard({
           aria-hidden="true"
           className="size-4 shrink-0 text-primary"
         />
-        <span className="text-sm font-medium">Agent asks to run a tool</span>
-        <Badge variant="secondary">{toolName}</Badge>
+        {/* A proposal is not a request to RUN something — approving it applies
+            a change — so it leads with what the change does, and falls back to
+            saying that much when the agent named no summary. Every other tool
+            keeps the wording it has always had. */}
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          {toolName === PROPOSE_PATCH
+            ? (proposal ?? 'Agent proposes a change')
+            : 'Agent asks to run a tool'}
+        </span>
+        <Badge variant="secondary" className="shrink-0">
+          {toolName}
+        </Badge>
       </div>
       {diff ? (
         <div className="flex flex-col gap-1.5">

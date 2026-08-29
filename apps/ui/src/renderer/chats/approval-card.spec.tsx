@@ -1567,4 +1567,57 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     expect(onRespond).not.toHaveBeenCalled();
     expect(tabsOf(el)[1]!.getAttribute('aria-selected')).toBe('true');
   });
+
+  it('leads a PROPOSAL with what the change does, not "asks to run a tool"', () => {
+    // The tool tells the model its `summary` is shown as the card's heading.
+    // It was collected, stored, and never rendered — a promise the interface
+    // did not keep, found by looking at a real card.
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{
+          file_path: 'processor.ts',
+          old_string: 'const t = 30;',
+          new_string: 'const t = 60;',
+          summary: 'Raise the queue timeout from 30s to 60s',
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Raise the queue timeout from 30s to 60s');
+    // Approving this APPLIES a change; it is not a request to run something.
+    expect(el.textContent).not.toContain('asks to run a tool');
+    expect(el.textContent).toContain('processor.ts');
+  });
+
+  it('still names a proposal when the agent wrote no summary', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{ file_path: 'a.ts', new_string: 'x' }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('Agent proposes a change');
+  });
+
+  it('leaves every OTHER tool’s heading alone, summary or not', () => {
+    // Scoped to the tool name rather than to any input carrying a `summary`
+    // key: the word is generic, and this line replaces the whole heading.
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'ls', summary: 'not mine' }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    // The HEADING is what this pins — the raw-JSON body below it still prints
+    // every argument verbatim, `summary` included, exactly as it always has.
+    expect(el.querySelector('span')?.textContent).toBe(
+      'Agent asks to run a tool',
+    );
+  });
 });

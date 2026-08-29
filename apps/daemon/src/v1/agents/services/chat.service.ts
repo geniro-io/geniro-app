@@ -28,11 +28,14 @@ import {
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
   type ClaudeModesCapability,
+  HOST_PATCH_TOOL,
   HOST_QUESTION_TOOL,
   type HostChart,
   type HostChartOutcome,
   type HostFindingsOutcome,
   type HostFindingsReport,
+  type HostPatch,
+  type HostPatchOutcome,
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
@@ -43,6 +46,7 @@ import {
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { applyHostPatch } from '../utils/apply-patch';
 import {
   answerFoldsInto,
   foldApprovalAnswer,
@@ -57,6 +61,7 @@ import {
 } from '../utils/event-to-item';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostFindingsCall } from '../utils/host-findings';
+import { isHostPatchCall } from '../utils/host-patch';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
 import {
@@ -83,6 +88,7 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
+import { PatchBroker } from './patch.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -367,6 +373,7 @@ export class ChatService implements OnModuleInit {
     private readonly userQuestions: UserQuestionBroker,
     private readonly findingsReports: FindingsReportBroker,
     private readonly charts: ChartBroker,
+    private readonly patches: PatchBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2311,6 +2318,16 @@ export class ChatService implements OnModuleInit {
         isHostQuestionCall(hostQuestionServer(), toolName) ||
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
+        // The patch tool auto-approves TOO, and the reason is worth stating
+        // because the opposite looks right: this tool writes to disk, so surely
+        // it should be gated? It IS — by its own card. Two different gates were
+        // being confused. Approving the CALL applies nothing; all it does is
+        // put a diff on screen with Apply and Reject, and the write happens
+        // only behind that second press. Measured on a live turn before this
+        // arm existed: the user got a meaningless "allow propose_patch?" card
+        // first and the patch card second, and answering the first decided
+        // nothing at all.
+        isHostPatchCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2642,6 +2659,20 @@ export class ChatService implements OnModuleInit {
         (outcome: HostQuestionOutcome) => boolean
       >();
       /**
+       * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
+       * widening of the one above.
+       *
+       * Both hold promises parked on a card, and both are swept the same way
+       * when the turn settles — but the sentence each is swept with is what the
+       * agent reads, and "the turn ended before the question was answered" is
+       * the wrong thing to tell one that proposed a patch. One set with one
+       * generic sentence would save four lines and cost both tools the ability
+       * to say what actually happened.
+       */
+      const outstandingPatches = new Set<
+        (outcome: HostPatchOutcome) => boolean
+      >();
+      /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
        *
@@ -2817,6 +2848,123 @@ export class ChatService implements OnModuleInit {
           points: chart.labels.length,
         };
       };
+      /**
+       * geniro's own patch channel: the agent proposes a change it has NOT
+       * made, the user sees the diff with Apply and Reject, and this writes the
+       * file if they accept.
+       *
+       * PARKS, unlike its two drawing siblings and exactly like {@link askUser}
+       * — and, like it, rides an ordinary `approval_request` row rather than a
+       * second card channel, so the card, the verdict route, the WS gateway and
+       * the settle-time sweep all serve it unchanged. The `input` is spelled in
+       * `Edit`'s own field names so the renderer's `editDiffOf` draws the diff
+       * it already knows how to draw.
+       *
+       * `question: false`: this IS a tool held at a permission gate, which is
+       * what the badge says — the agent is not asking the user something, it is
+       * asking to change their files.
+       *
+       * THIS card appears even in `auto` approval mode, and deliberately. Mode
+       * governs `autoApproves`, which is the path the CLI's request to CALL the
+       * tool takes — and that one is auto-approved, since calling it writes
+       * nothing. Nothing here goes through that path: a proposal whose whole
+       * purpose is the gate would be pointless auto-applied, and
+       * `ask_user_question` already behaves this way for the same reason.
+       */
+      const proposePatch = async (
+        patch: HostPatch,
+      ): Promise<HostPatchOutcome> => {
+        const requestId = randomUUID();
+        const input = {
+          file_path: patch.filePath,
+          ...(patch.oldString === undefined
+            ? {}
+            : { old_string: patch.oldString }),
+          new_string: patch.newString,
+          ...(patch.summary === undefined ? {} : { summary: patch.summary }),
+        };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: HOST_PATCH_TOOL, input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was never
+          // written is a patch nobody can accept — said so rather than left
+          // parked forever on a verdict that cannot arrive. The reason is
+          // logged and NOT returned: a persist failure names an absolute
+          // database path.
+          this.logger.error(
+            `run ${runId} could not persist a patch proposal: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the card could not be written',
+          };
+        }
+        return await new Promise<HostPatchOutcome>((resolve) => {
+          const settle = (outcome: HostPatchOutcome): boolean => {
+            if (!outstandingPatches.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          outstandingPatches.add(settle);
+          this.approvals.track({
+            runId,
+            nodeId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: HOST_PATCH_TOOL,
+            input,
+            question: false,
+            respond: (allow) => {
+              // Liveness is answered SYNCHRONOUSLY, because that is what the
+              // registry's contract returns — while the write itself is async,
+              // so it is queued and the promise settles after it.
+              if (!outstandingPatches.has(settle)) {
+                return false;
+              }
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              enqueue(async () => {
+                const outcome: HostPatchOutcome = allow
+                  ? await applyHostPatch(cwd, patch)
+                  : { status: 'declined' };
+                // Settled first, so the agent is released the moment the write
+                // is done rather than behind the row.
+                const delivered = settle(outcome);
+                await this.persist(
+                  em,
+                  runId,
+                  await this.seqs.reserve(runId),
+                  'approval_verdict',
+                  null,
+                  {
+                    id: requestId,
+                    allow,
+                    // Written even when `delivered` is false. The turn can be
+                    // cancelled between the press and the write completing, and
+                    // in that window the FILE HAS CHANGED — a transcript that
+                    // recorded nothing would leave the user with an edited
+                    // working tree and no row saying who edited it.
+                    ...(outcome.status === 'applied'
+                      ? { answer: `applied to ${outcome.path}` }
+                      : {}),
+                  },
+                );
+              });
+              return true;
+            },
+          });
+        });
+      };
       // The endpoint is granted for the UNION of reasons a host tool could be
       // wanted here, and the listing itself stays composed per request, so an
       // agent is only ever told about the tools it can actually use. What that
@@ -2863,6 +3011,9 @@ export class ChatService implements OnModuleInit {
       const disposeDrawer = mcpEndpoint
         ? this.charts.register(runId, SINGLE_AGENT_NODE, drawChart)
         : null;
+      const disposeProposer = mcpEndpoint
+        ? this.patches.register(runId, SINGLE_AGENT_NODE, proposePatch)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -2871,6 +3022,7 @@ export class ChatService implements OnModuleInit {
         disposeAsker?.();
         disposeReporter?.();
         disposeDrawer?.();
+        disposeProposer?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
@@ -3534,6 +3686,12 @@ export class ChatService implements OnModuleInit {
             settle({
               status: 'unavailable',
               reason: 'the turn ended before the question was answered',
+            });
+          }
+          for (const settle of [...outstandingPatches]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the patch was answered',
             });
           }
           // Sweep BEFORE the branches below — the failure path early-returns,

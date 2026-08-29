@@ -361,6 +361,82 @@ export type HostChartOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * The render family's third tool, and the first that is not only a drawing.
+ *
+ * An agent proposes a change it has NOT made: the transcript shows the diff
+ * with Apply and Reject, and geniro writes the file if the user presses Apply.
+ * That is the whole point of it — an agent working under `ask` can hand over a
+ * fix without holding a write gate open, and an agent that is not allowed to
+ * edit at all can still be useful.
+ *
+ * THREE ways this one is not like its siblings, each load-bearing:
+ *
+ * 1. It PARKS. `report_findings` and `show_chart` are fire-and-forget; this one
+ *    resolves only when the user answers, so it uses the same parked-promise
+ *    machinery as {@link HOST_QUESTION_TOOL} — and, like it, rides an ordinary
+ *    `approval_request` row rather than inventing a second card channel.
+ * 2. It carries a REAL gate, and exactly one. The tool CALL auto-approves like
+ *    its siblings' — calling it writes nothing, it only puts a diff on screen —
+ *    while the Apply press on that diff is what reaches the disk. Getting this
+ *    backwards puts a meaningless "allow propose_patch?" card in front of the
+ *    meaningful one, which is what a live turn did before the auto-approve arm
+ *    existed.
+ * 3. Its caps REFUSE rather than truncate. Every cap above truncates, because a
+ *    model that found forty things has still done the work. Truncating a patch
+ *    would write a TRUNCATED FILE — the one place where taking the first N
+ *    characters is worse than answering "too large".
+ *
+ * The argument names are `Edit`'s (`file_path` / `old_string` / `new_string`)
+ * and deliberately so: an agent that knows that tool needs to learn nothing,
+ * and the renderer's `editDiffOf` already draws exactly this shape, so the card
+ * gets its diff without a second diff renderer.
+ */
+export const HOST_PATCH_TOOL = 'propose_patch';
+
+/**
+ * Refusal thresholds, not truncation points — see (3) above.
+ *
+ * The text cap is per side and generous: it has to hold a whole new file, since
+ * a patch with no `old_string` IS a file creation.
+ */
+export const MAX_PATCH_TEXT_LENGTH = 200_000;
+export const MAX_PATCH_PATH_LENGTH = 1024;
+export const MAX_PATCH_SUMMARY_LENGTH = 200;
+
+/** One `propose_patch` call, as the card will show it. */
+export interface HostPatch {
+  /** Where the change goes, resolved against the run's own cwd. */
+  filePath: string;
+  /**
+   * The exact text being replaced, or absent to write the file WHOLE.
+   *
+   * Absent is `Write`'s shape — a new file, or a deliberate full rewrite — and
+   * the renderer already draws that as additions only.
+   */
+  oldString?: string;
+  newString: string;
+  /** One line saying what the change does; the card's heading. */
+  summary?: string;
+}
+
+/**
+ * What a proposed patch resolves to.
+ *
+ * Four arms, and `stale` is the one that earns its place: the user said YES and
+ * the write still could not happen — the file no longer holds the text the
+ * agent matched on, it holds it twice, or the path is one this app will not
+ * write to. Folding that into `declined` would tell the agent its fix was
+ * rejected when it was in fact accepted, and folding it into `unavailable`
+ * would hide that the right move is to look at the file again and re-propose.
+ * The `reason` is what separates the cases.
+ */
+export type HostPatchOutcome =
+  | { status: 'applied'; path: string }
+  | { status: 'declined' }
+  | { status: 'stale'; reason: string }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

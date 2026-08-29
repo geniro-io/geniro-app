@@ -15,6 +15,7 @@ import {
   FINDING_VERDICTS,
   HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_PATCH_TOOL,
   HOST_QUESTION_TOOL,
   MAX_ANSWER_LENGTH,
   MAX_CHART_POINTS,
@@ -26,6 +27,7 @@ import {
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { PatchBroker } from '../../agents/services/patch.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import {
   hostChartResultText,
@@ -35,6 +37,10 @@ import {
   hostFindingsResultText,
   readHostFindingsReport,
 } from '../../agents/utils/host-findings';
+import {
+  hostPatchResultText,
+  readHostPatch,
+} from '../../agents/utils/host-patch';
 import {
   hostQuestionResultText,
   readHostQuestions,
@@ -78,6 +84,7 @@ export class McpServerService {
     private readonly questions: UserQuestionBroker,
     private readonly findings: FindingsReportBroker,
     private readonly charts: ChartBroker,
+    private readonly patches: PatchBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -455,6 +462,48 @@ export class McpServerService {
           },
         });
       }
+      if (this.patches.canPropose(runId, nodeId)) {
+        tools.push({
+          name: HOST_PATCH_TOOL,
+          description:
+            'Propose a change to ONE file without making it. The user sees the diff with Apply and Reject, and this ' +
+            'app writes the file only if they accept. ' +
+            'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
+            'write the file yourself: if the user accepts, the change is already on disk. ' +
+            'One file per call; call it again for the next one. ' +
+            'The result tells you what happened, and the four outcomes mean different things: applied (it is on disk), ' +
+            'rejected (do not route around it — ask what they would prefer), and stale (they ACCEPTED but the file no ' +
+            'longer matches, so re-read it and propose again).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              file_path: {
+                type: 'string',
+                description:
+                  'The file to change, relative to the working folder. It must be inside that folder.',
+              },
+              old_string: {
+                type: 'string',
+                description:
+                  'The exact text to replace. It must appear EXACTLY ONCE in the file — include enough surrounding ' +
+                  'lines to make it unique, or the patch is refused rather than applied to a guess. Omit this ' +
+                  'field entirely to write the whole file (a new file, or a deliberate full rewrite).',
+              },
+              new_string: {
+                type: 'string',
+                description:
+                  'The replacement text. Use an empty string to delete the matched text.',
+              },
+              summary: {
+                type: 'string',
+                description:
+                  'One line saying what the change does, shown as the card\'s heading — e.g. "Raise the queue timeout to 60s".',
+              },
+            },
+            required: ['file_path', 'new_string', 'summary'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -554,6 +603,27 @@ export class McpServerService {
           content: [{ type: 'text', text: hostChartResultText(outcome) }],
           // Same reading as the findings tool: an unavailable channel is an
           // answer, not a failure — the agent still holds the numbers.
+          isError: false,
+        };
+      }
+      if (name === HOST_PATCH_TOOL) {
+        const read = readHostPatch(args);
+        // The reader answers with a SENTENCE rather than a bare null, because
+        // every refusal here names something the agent can fix and retry.
+        if (!read.ok) {
+          return {
+            content: [{ type: 'text', text: `INVALID_ARGS: ${read.reason}` }],
+            isError: true,
+          };
+        }
+        // This one BLOCKS until the user answers the card — the only tool on
+        // this endpoint besides `ask_user_question` that does.
+        const outcome = await this.patches.propose(runId, nodeId, read.patch);
+        return {
+          content: [{ type: 'text', text: hostPatchResultText(outcome) }],
+          // A rejection is not a tool failure: the user exercised the gate this
+          // tool exists to offer them, and flagging it as an error is how a
+          // model comes to retry a change that was just turned down.
           isError: false,
         };
       }

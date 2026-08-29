@@ -9,10 +9,12 @@ import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_PATCH_TOOL,
   HOST_QUESTION_TOOL,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { PatchBroker } from '../../agents/services/patch.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
@@ -51,13 +53,38 @@ function service(
   questions = new UserQuestionBroker(),
   findings = new FindingsReportBroker(),
   charts = new ChartBroker(),
+  patches = new PatchBroker(),
 ): McpServerService {
-  return new McpServerService(callBroker, questions, findings, charts, {
-    token: 'launch',
-    version: '9.9.9',
-    startedAt: 0,
-    port: 4870,
-  });
+  return new McpServerService(
+    callBroker,
+    questions,
+    findings,
+    charts,
+    patches,
+    {
+      token: 'launch',
+      version: '9.9.9',
+      startedAt: 0,
+      port: 4870,
+    },
+  );
+}
+
+/**
+ * A service whose only registered host tool is the patch one.
+ *
+ * Named rather than spelled out at five call sites: `propose_patch` is the
+ * fifth positional argument, so reaching it means naming four empty brokers,
+ * and a reader would have to count them to see which tool a test is about.
+ */
+function patchService(patches: PatchBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    new UserQuestionBroker(),
+    new FindingsReportBroker(),
+    new ChartBroker(),
+    patches,
+  );
 }
 
 /**
@@ -834,6 +861,140 @@ describe('McpServerService', () => {
     expect(result.isError).toBe(false);
     expect(result.content[0]!.text).toContain('could not be drawn');
     expect(result.content[0]!.text).toContain('in your reply');
+  });
+
+  it('does not offer propose_patch to a node with nobody to accept it', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_PATCH_TOOL);
+  });
+
+  it('offers propose_patch with Edit’s own field names', async () => {
+    // Not cosmetic: the renderer's `editDiffOf` reads exactly these, so the
+    // card draws the diff with no second diff renderer.
+    const patches = new PatchBroker();
+    patches.register('run-1', 'agent', async () => ({
+      status: 'declined',
+    }));
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_PATCH_TOOL);
+    expect(tool).toBeDefined();
+    const schema = tool!.inputSchema as {
+      properties: Record<string, unknown>;
+      required: string[];
+    };
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      'file_path',
+      'new_string',
+      'old_string',
+      'summary',
+    ]);
+    // `old_string` is NOT required — omitting it is how a whole file is written.
+    expect(schema.required).not.toContain('old_string');
+  });
+
+  it('tools/call propose_patch hands the patch over and answers the verdict', async () => {
+    const patches = new PatchBroker();
+    const seen: unknown[] = [];
+    patches.register('run-1', 'agent', async (patch) => {
+      seen.push(patch);
+      return { status: 'applied', path: 'src/a.ts' };
+    });
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: {
+          file_path: 'src/a.ts',
+          old_string: 'const timeout = 30;',
+          new_string: 'const timeout = 60;',
+          summary: 'Raise the timeout',
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(seen).toEqual([
+      {
+        filePath: 'src/a.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Applied to src/a.ts');
+    expect(result.content[0]!.text).toContain('do not write it again');
+  });
+
+  it('a REJECTION is not a tool error — the user used the gate', async () => {
+    // Flagged as an error, a model reads its own call as malformed and retries
+    // the change the user just turned down.
+    const patches = new PatchBroker();
+    patches.register('run-1', 'agent', async () => ({ status: 'declined' }));
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: { file_path: 'a.ts', new_string: 'x' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Do not apply it another way');
+  });
+
+  it('refuses a malformed patch by NAMING the field, without asking anybody', async () => {
+    const patches = new PatchBroker();
+    const seen: unknown[] = [];
+    patches.register('run-1', 'agent', async (patch) => {
+      seen.push(patch);
+      return { status: 'declined' };
+    });
+    const { json } = await post(
+      patchService(patches),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_PATCH_TOOL,
+        arguments: {
+          file_path: 'a.ts',
+          old_string: 'same',
+          new_string: 'same',
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('identical');
+    expect(seen).toEqual([]);
   });
 
   it('methodNotAllowed answers 405 with a JSON-RPC error body', () => {

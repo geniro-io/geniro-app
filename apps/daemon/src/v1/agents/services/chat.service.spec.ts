@@ -46,7 +46,11 @@ import type {
   RunItemEvent,
   RunStatusEvent,
 } from '../chat.types';
-import { HOST_QUESTION_TOOL, SINGLE_AGENT_NODE } from '../chat.types';
+import {
+  HOST_PATCH_TOOL,
+  HOST_QUESTION_TOOL,
+  SINGLE_AGENT_NODE,
+} from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -67,6 +71,7 @@ import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
+import { PatchBroker } from './patch.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -641,6 +646,7 @@ function setup(
   const userQuestions = new UserQuestionBroker();
   const findingsReports = new FindingsReportBroker();
   const charts = new ChartBroker();
+  const patches = new PatchBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -742,6 +748,9 @@ function setup(
     findingsReports,
     // And its twin on the same reasoning — the row a chart actually persists.
     charts,
+    // Real for a stronger reason still: what these tests observe through it is
+    // whether a file on disk actually changed.
+    patches,
     callTokens,
     {
       token: 'launch',
@@ -764,6 +773,7 @@ function setup(
     userQuestions,
     findingsReports,
     charts,
+    patches,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1234,6 +1244,120 @@ describe('ChatService', () => {
         status: 'unavailable',
         reason: 'no turn is running that could draw it',
       });
+    });
+
+    it('puts a patch on the SAME card machinery, flagged as a gate not a question', async () => {
+      const { service, claude, patches, approvals, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'a.ts'), 'const timeout = 30;\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'a.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+        summary: 'Raise the timeout',
+      });
+      await drain();
+
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(card?.payload).toContain(HOST_PATCH_TOOL);
+      // The renderer's `editDiffOf` reads Edit's field names, so the card gets
+      // its diff with no second diff renderer — which only holds if the payload
+      // actually spells them.
+      expect(card?.payload).toContain('old_string');
+      expect(card?.payload).toContain('new_string');
+      const pending = approvals.listByRun(run.id);
+      expect(pending).toHaveLength(1);
+      // NOT a question: the agent is not asking the user something, it is
+      // asking to change their files, and the badge says so.
+      expect(pending[0]?.question).toBe(false);
+
+      expect(approvals.resolve(run.id, pending[0]!.requestId, true)).toBe(true);
+      await drain();
+      await expect(proposed).resolves.toEqual({
+        status: 'applied',
+        path: 'a.ts',
+      });
+      expect(readFileSync(join(dir, 'a.ts'), 'utf8')).toBe(
+        'const timeout = 60;\n',
+      );
+      await settle(claude);
+    });
+
+    it('writes NOTHING when the user rejects', async () => {
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'b.ts'), 'keep me\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'b.ts',
+        oldString: 'keep me',
+        newString: 'gone',
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      expect(approvals.resolve(run.id, pending[0]!.requestId, false)).toBe(
+        true,
+      );
+      await drain();
+
+      await expect(proposed).resolves.toEqual({ status: 'declined' });
+      expect(readFileSync(join(dir, 'b.ts'), 'utf8')).toBe('keep me\n');
+      await settle(claude);
+    });
+
+    it('answers an ACCEPTED patch that no longer fits as stale, not as a refusal', async () => {
+      // The distinction the fourth outcome arm exists for: told "rejected", an
+      // agent argues with the user; told "stale", it re-reads the file.
+      const { service, claude, patches, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      writeFileSync(join(dir, 'c.ts'), 'somebody else changed this\n', 'utf8');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'c.ts',
+        oldString: 'const timeout = 30;',
+        newString: 'const timeout = 60;',
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      approvals.resolve(run.id, pending[0]!.requestId, true);
+      await drain();
+
+      await expect(proposed).resolves.toEqual({
+        status: 'stale',
+        reason: 'the text to replace is no longer in the file',
+      });
+      expect(readFileSync(join(dir, 'c.ts'), 'utf8')).toBe(
+        'somebody else changed this\n',
+      );
+      await settle(claude);
+    });
+
+    it('sweeps a parked patch with its OWN sentence when the turn ends', async () => {
+      // Its own set, and its own wording: "the question was answered" is the
+      // wrong thing to tell an agent that proposed a patch.
+      const { service, claude, patches } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = patches.propose(run.id, SINGLE_AGENT_NODE, {
+        filePath: 'd.ts',
+        newString: 'export const x = 1;\n',
+      });
+      await drain();
+      await settle(claude);
+
+      await expect(proposed).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the patch was answered',
+      });
+      // Nothing written: the turn died before anybody accepted.
+      expect(existsSync(join(dir, 'd.ts'))).toBe(false);
     });
 
     it('stops accepting reports once the turn that could persist them is over', async () => {
@@ -3644,6 +3768,42 @@ describe('ChatService — approval modes (parity M1)', () => {
       true,
       { findings: [] },
     );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the propose_patch CALL — the gate is its own card, not this one', async () => {
+    // The mistake this pins, caught on a live turn: refusing to auto-approve
+    // here looks like the safe choice, because this is the one host tool that
+    // reaches the disk. It is not. Approving the CALL applies nothing — the
+    // tool only puts a diff on screen — so the card it costs sits IN FRONT of
+    // the meaningful one and decides nothing. The write stays behind Apply on
+    // the proposal card, which `proposePatch` raises separately and which the
+    // tests above pin.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { file_path: 'a.ts', new_string: 'x' };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-patch',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_PATCH_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-patch',
+      true,
+      input,
+    );
+    // No permission card of its own, and nothing parked for a human here.
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

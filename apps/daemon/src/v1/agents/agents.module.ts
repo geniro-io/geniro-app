@@ -45,6 +45,7 @@ import { ModelParametersService } from './services/model-parameters.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
+import { PatchBroker } from './services/patch.broker';
 import { ProcessRegistry } from './services/process-registry';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
@@ -83,6 +84,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     UserQuestionBroker,
     FindingsReportBroker,
     ChartBroker,
+    PatchBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -295,10 +297,12 @@ import { defaultSpawn } from './utils/spawn-cli';
     // actually put the card on screen registers here.
     UserQuestionBroker,
     // Exported on the same terms: the MCP host serves the RENDER family —
-    // `report_findings` and `show_chart` — through these brokers, and the turn
-    // that can actually persist the row registers here.
+    // `report_findings`, `show_chart` and `propose_patch` — through these
+    // brokers, and the turn that can actually persist the row (and, for a
+    // patch, write the file) registers here.
     FindingsReportBroker,
     ChartBroker,
+    PatchBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

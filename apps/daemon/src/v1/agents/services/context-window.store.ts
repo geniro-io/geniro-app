@@ -1,11 +1,10 @@
-import { readFileSync, statSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { Injectable, Logger } from '@nestjs/common';
 
 import { environment } from '../../../environments';
-import { atomicWrite } from '../../../utils/atomic-file';
+import { atomicWriteSync } from '../../../utils/atomic-file';
 
 /**
  * Defensive bound. One entry per (agent, model) the user has ever run; a
@@ -140,7 +139,7 @@ export class ContextWindowStore {
       return;
     }
     records.set(key, window);
-    void this.save(records);
+    this.save(records);
   }
 
   private load(): Map<string, number> {
@@ -187,14 +186,21 @@ export class ContextWindowStore {
     return records;
   }
 
-  private async save(records: Map<string, number>): Promise<void> {
+  /**
+   * Write the map out, SYNCHRONOUSLY — for the reasons spelled out on
+   * `ModelVocabularyStore.save`, which had the same floating promise and the
+   * same two consequences: an older snapshot could win the rename race between
+   * two `remember` calls in one tick, and nothing could know when the write was
+   * over. This store is the cheaper of the two to write (a number per entry).
+   */
+  private save(records: Map<string, number>): void {
     // The in-memory map is updated before the write, so a disk failure leaves
     // this daemon scaling the meter correctly while warning that the knowledge
     // will not survive a restart.
     this.records = records;
     try {
-      await mkdir(dirname(this.file), { recursive: true });
-      await atomicWrite(
+      mkdirSync(dirname(this.file), { recursive: true });
+      atomicWriteSync(
         this.file,
         JSON.stringify(Object.fromEntries(records), null, 2),
       );

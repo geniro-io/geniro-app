@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GeniroApi } from '../../shared/contracts';
+import type { GeniroApi, PullRequestsResult } from '../../shared/contracts';
 import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
@@ -531,6 +531,12 @@ beforeEach(() => {
       branches: [],
       dirty: false,
       worktrees: [],
+    }),
+    // Default to a folder `gh` cannot speak for, matching the non-git default
+    // above: no pull-request surface is drawn unless a test opts into one.
+    getPullRequests: vi.fn().mockResolvedValue({
+      branch: null,
+      pullRequests: [],
     }),
     switchBranch: vi
       .fn()
@@ -10976,5 +10982,127 @@ describe('Chats — starting from a saved configuration', () => {
     expect(window.geniro.updateSettings).not.toHaveBeenCalledWith(
       expect.objectContaining({ lastChatTarget: 'agent-from-the-future' }),
     );
+  });
+});
+
+describe('Chats — the pull request above the composer', () => {
+  const openPullRequest = {
+    number: 70,
+    title: 'builder polish',
+    state: 'open' as const,
+    isDraft: false,
+    headRefName: 'fix/builder',
+    isCrossRepository: false,
+    headRepositoryOwner: 'someone',
+    author: 'someone',
+    url: 'https://github.com/o/r/pull/70',
+    updatedAt: '2026-08-01T00:00:00Z',
+  };
+
+  async function openMyChat(result: PullRequestsResult): Promise<HTMLElement> {
+    window.geniro.getPullRequests = vi.fn().mockResolvedValue(result);
+    api.listChats.mockResolvedValue([run1]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    // The read is an effect over the run list; one more flush lets it land
+    // before the assertions rather than racing them.
+    await act(async () => {});
+    return container;
+  }
+
+  it('names the thread’s pull request as a LINK above the textarea', async () => {
+    // The third surface the task names, and the one a user looks at most while
+    // working. The sidebar row states the same fact as plain text, so this
+    // asserts the anchor specifically.
+    const container = await openMyChat({
+      branch: 'fix/builder',
+      originOwner: null,
+      pullRequests: [openPullRequest],
+    });
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      'a[data-slot="current-pull-request"]',
+    );
+    expect(link?.textContent).toContain('#70');
+    expect(link?.textContent).toContain('builder polish');
+    expect(link?.getAttribute('href')).toBe('https://github.com/o/r/pull/70');
+  });
+
+  it('re-reads the folder after an in-app branch switch', async () => {
+    // The window never loses focus during an in-app switch, so the focus
+    // refresh cannot cover it: without the explicit re-read the composer band
+    // and every sidebar row would go on naming the PREVIOUS branch's pull
+    // request. Scope: this drives the composer's branch CHIP, so it pins that
+    // one call site — the saved-configuration and Pull-latest sites are wired
+    // the same way but are not covered here.
+    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
+      isRepo: true,
+      branch: 'main',
+      branches: ['main', 'dev'],
+      dirty: false,
+      worktrees: [],
+    });
+    window.geniro.switchBranch = vi.fn().mockResolvedValue({
+      ok: true,
+      branch: 'dev',
+      error: null,
+      dirty: false,
+      worktree: null,
+    });
+    const reads = vi
+      .fn()
+      .mockResolvedValue({ branch: 'dev', pullRequests: [] });
+    window.geniro.getPullRequests = reads;
+    api.listChats.mockResolvedValue([run1]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    const before = reads.mock.calls.length;
+
+    const branch = [
+      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
+    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
+    await pickMenuRow(container, branch, 'dev');
+
+    expect(reads.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  it('keeps another branch’s pull request off the panel as well', async () => {
+    // The panel is THIS thread's work, not the repo's. It used to list every
+    // pull request in the repo, which on a busy one buried the branch's own
+    // under fifty of other people's. End-to-end here rather than on the fold
+    // alone: the scoping is wiring in this component, so a panel handed the
+    // unfiltered list would pass every unit test underneath it.
+    const container = await openMyChat({
+      branch: 'fix/builder',
+      originOwner: null,
+      pullRequests: [
+        openPullRequest,
+        {
+          ...openPullRequest,
+          number: 71,
+          title: 'unrelated work',
+          headRefName: 'feat/other',
+        },
+      ],
+    });
+
+    expect(container.textContent).toContain('builder polish');
+    expect(container.textContent).not.toContain('unrelated work');
+  });
+
+  it('draws nothing when no pull request is on the folder’s branch', async () => {
+    // The end-to-end half of the branch match: a repo full of pull requests
+    // none of which is this thread's must not put someone else's on its
+    // composer.
+    const container = await openMyChat({
+      branch: 'main',
+      originOwner: null,
+      pullRequests: [openPullRequest],
+    });
+
+    expect(
+      container.querySelector('[data-slot="current-pull-request"]'),
+    ).toBeNull();
   });
 });

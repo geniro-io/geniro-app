@@ -87,6 +87,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitInfo, dir) as ReturnType<
       GeniroApi['getGitInfo']
     >,
+  getPullRequests: (dir) =>
+    ipcRenderer.invoke(IPC.getPullRequests, dir) as ReturnType<
+      GeniroApi['getPullRequests']
+    >,
   openInTerminal: (input) =>
     ipcRenderer.invoke(IPC.openInTerminal, input) as ReturnType<
       GeniroApi['openInTerminal']

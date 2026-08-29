@@ -88,6 +88,11 @@ paths:
      nav change; the agents panel is keyed by run id), which is exactly when
      `useState` silently forgets. A stored `'0'` is a CHOICE, not an absent
      key — that distinction is the hook's, so no call site re-derives it.
+   - `panel-section` + `panel-link-row` are the side panel's titled block and
+     its outward-link row (Artifacts, Pull requests). The row is a plain
+     anchor opened by the SHELL — main's window-open handler routes https to
+     the browser and denies every other scheme — so a new panel block composes
+     these rather than copying their class strings.
    - `nav-list-item` is an activatable sidebar row; its `suspendActivation`
      prop drops the full-row overlay while a nested control — the chat row's
      inline rename field — owns the row's clicks and focus.

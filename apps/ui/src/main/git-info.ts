@@ -379,3 +379,33 @@ async function runGit(dir: string, args: string[]): Promise<true | string> {
       : (stderr.split('\n').find((line) => line.trim() !== '') ?? 'git failed');
   }
 }
+
+/**
+ * The folder's checked-out branch, or null for a non-repo and for a detached
+ * HEAD — neither of which names one.
+ *
+ * Its own read rather than a field off {@link readGitInfo}: `github-prs.ts`
+ * wants the branch and nothing else, and that function spends five git
+ * subprocesses collecting the branch list, the dirty flag and every sibling
+ * worktree.
+ */
+export async function readHeadBranch(dir: string): Promise<string | null> {
+  const head = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
+  return head === null || head === 'HEAD' ? null : head;
+}
+
+/** `owner` out of both URL forms git writes for a GitHub remote. */
+const ORIGIN_OWNER = /[:/]([^/:]+)\/[^/]+?(?:\.git)?$/;
+
+/**
+ * The GitHub owner of this folder's `origin` remote, or null.
+ *
+ * Parsed from the remote URL rather than asked of `gh`, and that is the whole
+ * point: `gh` answers for the BASE repo, which on a fork clone carrying an
+ * `upstream` remote is the upstream owner — the opposite of what a caller
+ * asking "is this pull request mine" needs.
+ */
+export async function readOriginOwner(dir: string): Promise<string | null> {
+  const url = await git(dir, ['remote', 'get-url', 'origin']);
+  return url === null ? null : (ORIGIN_OWNER.exec(url.trim())?.[1] ?? null);
+}

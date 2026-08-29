@@ -68,8 +68,22 @@ const ALL_KEYS: readonly string[] = [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS];
  * agent's token.
  */
 export function probeEnv(kind: CliKind): NodeJS.ProcessEnv {
-  const own = OWN_KEYS[kind];
-  const withheld = ALL_KEYS.filter((key) => !own.includes(key));
+  return withoutKeys(ALL_KEYS.filter((key) => !OWN_KEYS[kind].includes(key)));
+}
+
+/**
+ * The environment for a child that is entitled to NONE of these credentials —
+ * a third-party binary that is not one of the agents at all.
+ *
+ * `gh` is the case it was written for: it makes an authenticated call to GitHub,
+ * so by {@link probeEnv}'s own rule it must not be holding an Anthropic or
+ * Cursor token, and unlike the two CLIs it owns nothing on the list to keep.
+ */
+export function neutralEnv(): NodeJS.ProcessEnv {
+  return withoutKeys(ALL_KEYS);
+}
+
+function withoutKeys(withheld: readonly string[]): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (!withheld.includes(key)) {

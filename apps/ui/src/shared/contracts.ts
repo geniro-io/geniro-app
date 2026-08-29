@@ -684,6 +684,68 @@ export interface BranchPullResult {
   stashLeft: string | null;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Pull requests (read from the folder a run works in, through the user's own gh)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What GitHub says a pull request is doing — `gh`'s own three states. */
+export type PullRequestState = 'open' | 'merged' | 'closed';
+
+/** One pull request on the repo a folder belongs to. */
+export interface PullRequestInfo {
+  number: number;
+  title: string;
+  state: PullRequestState;
+  /** Open, but not yet asking for review — a state of its own on screen. */
+  isDraft: boolean;
+  /**
+   * The branch it merges FROM. This is what ties a PR to a folder: the "current
+   * PR" of a run is the one whose head branch is that folder's checked-out
+   * branch, which is why no branch is stored on the run itself.
+   */
+  headRefName: string;
+  /**
+   * It comes from a FORK, so {@link headRefName} names a branch in someone
+   * else's repository — see `chats/pull-request.ts`, which is where that
+   * matters.
+   */
+  isCrossRepository: boolean;
+  /**
+   * GitHub login owning the repo {@link headRefName} lives in, or null when
+   * that repo is gone — a deleted fork, which GitHub's own schema allows and
+   * which must still be listed rather than dropped. See `chats/pull-request.ts`.
+   */
+  headRepositoryOwner: string | null;
+  /** GitHub login of whoever opened it. */
+  author: string;
+  url: string;
+  updatedAt: string;
+}
+
+/**
+ * The pull requests on a folder's checked-out branch, newest first.
+ *
+ * Head-filtered at the query — every surface in the app is scoped to the thread
+ * (`chats/pull-request.ts`), so the repo's other branches are never fetched.
+ *
+ * There is no "did it work" flag, deliberately. Every failure — no `gh` on the
+ * machine, a `gh` that is not signed in, a folder that is not a GitHub checkout,
+ * a query that errored — arrives as the empty list, because the answer to all of
+ * them is the same: draw no pull-request surfaces at all, the way
+ * {@link GitInfo} `isRepo: false` hides the branch chip. An error banner about a
+ * CLI the user may have no intention of installing would be worse than silence.
+ */
+export interface PullRequestsResult {
+  /** The folder's checked-out branch — the key "current PR" is matched on. */
+  branch: string | null;
+  /**
+   * GitHub login owning this folder's `origin` remote — the second half of the
+   * "current PR" key; see `chats/pull-request.ts`.
+   */
+  originOwner: string | null;
+  pullRequests: PullRequestInfo[];
+}
+
 /**
  * Where a chat export ended up — or that the user closed the dialog.
  *
@@ -857,6 +919,15 @@ export interface GeniroApi {
    */
   pullBranch(dir: string): Promise<BranchPullResult>;
   /**
+   * Every pull request on the repo this folder belongs to, plus the branch it
+   * currently has checked out.
+   *
+   * Both halves on one channel because a PR list is only useful here paired
+   * with the branch that says which of them is THIS folder's — asking twice
+   * would let the two answers come from either side of a branch switch.
+   */
+  getPullRequests(dir: string): Promise<PullRequestsResult>;
+  /**
    * Show one of the daemon's own files in Finder — the debug log.
    *
    * Deliberately narrow: it REVEALS (selects in a file manager) rather than
@@ -976,6 +1047,7 @@ export const IPC = {
   saveChatExport: 'geniro:saveChatExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
+  getPullRequests: 'geniro:getPullRequests',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',

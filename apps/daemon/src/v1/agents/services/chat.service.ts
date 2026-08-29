@@ -35,6 +35,8 @@ import {
   type HostChartOutcome,
   type HostFindingsOutcome,
   type HostFindingsReport,
+  type HostMetrics,
+  type HostMetricsOutcome,
   type HostPatch,
   type HostPatchOutcome,
   type HostPlan,
@@ -64,6 +66,7 @@ import {
 } from '../utils/event-to-item';
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostFindingsCall } from '../utils/host-findings';
+import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
@@ -91,6 +94,7 @@ import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
+import { MetricsBroker } from './metrics.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -380,6 +384,7 @@ export class ChatService implements OnModuleInit {
     private readonly charts: ChartBroker,
     private readonly patches: PatchBroker,
     private readonly plans: PlanBroker,
+    private readonly metrics: MetricsBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2339,6 +2344,7 @@ export class ChatService implements OnModuleInit {
         // is the gate; a permission card in front of it would ask the user to
         // approve the asking.
         isHostPlanCall(hostServerName, toolName) ||
+        isHostMetricsCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2862,6 +2868,39 @@ export class ChatService implements OnModuleInit {
         };
       };
       /**
+       * geniro's own scorecard channel — {@link drawChart}'s twin, and its
+       * structural copy for the reason spelled out there: what the drawing
+       * tools share is the SINK contract, which `HostSinkBroker` already holds,
+       * while the item kind, the payload and the receipt's count belong to each
+       * tool alone.
+       */
+      const drawMetrics = async (
+        metrics: HostMetrics,
+      ): Promise<HostMetricsOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_metrics',
+            null,
+            metrics,
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a scorecard: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return { status: 'drawn', count: metrics.metrics.length };
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -2952,7 +2991,7 @@ export class ChatService implements OnModuleInit {
                   : { status: 'declined' };
                 // Settled first, so the agent is released the moment the write
                 // is done rather than behind the row.
-                const delivered = settle(outcome);
+                settle(outcome);
                 await this.persist(
                   em,
                   runId,
@@ -2962,7 +3001,7 @@ export class ChatService implements OnModuleInit {
                   {
                     id: requestId,
                     allow,
-                    // Written even when `delivered` is false. The turn can be
+                    // Written even when the settle found nobody. The turn can be
                     // cancelled between the press and the write completing, and
                     // in that window the FILE HAS CHANGED — a transcript that
                     // recorded nothing would leave the user with an edited
@@ -3126,6 +3165,9 @@ export class ChatService implements OnModuleInit {
       const disposePlanner = mcpEndpoint
         ? this.plans.register(runId, SINGLE_AGENT_NODE, proposePlan)
         : null;
+      const disposeScorer = mcpEndpoint
+        ? this.metrics.register(runId, SINGLE_AGENT_NODE, drawMetrics)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -3136,6 +3178,7 @@ export class ChatService implements OnModuleInit {
         disposeDrawer?.();
         disposeProposer?.();
         disposePlanner?.();
+        disposeScorer?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same

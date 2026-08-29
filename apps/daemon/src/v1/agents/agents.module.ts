@@ -41,6 +41,7 @@ import { FindingsReportBroker } from './services/findings-report.broker';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
+import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
@@ -86,6 +87,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    MetricsBroker,
     PlanBroker,
     CacheResetService,
     AgentAdapterRegistry,
@@ -305,6 +307,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    MetricsBroker,
     PlanBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed

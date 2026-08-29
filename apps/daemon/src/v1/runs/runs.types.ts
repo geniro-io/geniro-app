@@ -103,6 +103,16 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * What is its own: the payload is POSITIONAL. Every series holds one value per
  * entry of `labels`, aligned by index, so a reader that drops or reorders
  * either list silently re-attributes measurements instead of failing.
+ *
+ * `show_metrics` is a SCORECARD — a handful of headline figures with their
+ * changes, the row an agent reaches for when it has measured a few things and
+ * would otherwise write them into a sentence. Everything said above holds; what
+ * is its own is that every figure arrives ALREADY FORMATTED, as a string. Only
+ * the agent knows whether `0.82` should read `82%` and whether `1258291` is
+ * `1.2 MB` or `1,258,291`, so formatting host-side would be guessing — this row
+ * displays and never computes. The one thing the host cannot infer is whether a
+ * change is good news: lower is better for a latency and worse for a coverage,
+ * so the SENTIMENT is stated by the agent rather than read off the sign.
  */
 export const ItemKindSchema = z
   .enum([
@@ -130,6 +140,7 @@ export const ItemKindSchema = z
     'shell_info',
     'report_findings',
     'show_chart',
+    'show_metrics',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

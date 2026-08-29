@@ -8,6 +8,7 @@ import { readChart } from './chart-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
+import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
   type BackgroundOutcome,
   mergeSubagentDeclarations,
@@ -52,8 +53,8 @@ function groupKey(item: ChatItem): string {
  * already tell that story in a readable form — the raw envelope JSON rows
  * are pure duplication, so they are hidden from the transcript. Every host tool
  * rides it for the same reason: each draws its own card — a findings table, a
- * chart, a diff with Apply, a plan with Approve — and the raw call beside it is
- * the same row twice.
+ * chart, a scorecard, a diff with Apply, a plan with Approve — and the raw
+ * call beside it is the same row twice.
  *
  * A row STORED before geniro's server was renamed per run — claude published it
  * under this fixed key then, so old transcripts carry `mcp__geniro__<tool>` and
@@ -74,11 +75,12 @@ const GENIRO_TOOL_NAMES = [
   'answer_agent',
   'ask_user_question',
   'report_findings',
-  // None of these three was ever published under the legacy fixed key — the
+  // None of these four was ever published under the legacy fixed key — the
   // per-run rename shipped first — but they are listed with their siblings so
   // this list and the daemon's cannot drift, and so a transcript exported from
   // a build in between still hides them.
   'show_chart',
+  'show_metrics',
   'propose_patch',
   'propose_plan',
 ] as const;
@@ -448,6 +450,25 @@ export interface ChartEntry {
   chart: ChartSpec;
 }
 
+/**
+ * One scorecard an agent handed over — a handful of headline figures.
+ *
+ * A row each, on {@link FindingsEntry}'s reasoning: it arrives whole, so two
+ * scorecards are two cards rather than one that rewrites itself under a reader
+ * who has already scrolled past it.
+ */
+export interface MetricsEntry {
+  type: 'metrics';
+  id: string;
+  createdAt: string;
+  seq: number;
+  nodeId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
+   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  parentToolUseId: string | null;
+  metrics: MetricsSpec;
+}
+
 export type TranscriptEntry =
   | ItemEntry
   | ToolGroupEntry
@@ -456,7 +477,37 @@ export type TranscriptEntry =
   | SubagentBlockEntry
   | TaskListEntry
   | FindingsEntry
-  | ChartEntry;
+  | ChartEntry
+  | MetricsEntry;
+
+/**
+ * A CARD entry: a folded row that stands on its own — not a raw item, not a
+ * block enclosing other rows.
+ *
+ * The four share one shape (`id`/`createdAt`/`seq`/`nodeId`/`parentToolUseId`)
+ * and, more to the point, share how six separate readers below have to treat
+ * them: who owns it, which thread it belongs to, its `seq` for ordering nested
+ * work, its `createdAt` for "has anything spoken since", and the fact that it
+ * holds no tool invocations to count.
+ *
+ * Extracted at the FOURTH one. Each of those six readers spelled the same
+ * three-arm `entry.type === …` chain, so a new card kind was six edits, every
+ * one of them silent when missed — a card left out of the `lastRowAt` fold does
+ * not fail, it just stops a spinner from noticing that work has happened. One
+ * predicate makes the fifth card a single line, and makes forgetting impossible
+ * rather than merely unlikely.
+ */
+export type CardEntry =
+  TaskListEntry | FindingsEntry | ChartEntry | MetricsEntry;
+
+export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
+  return (
+    entry.type === 'task-list' ||
+    entry.type === 'findings' ||
+    entry.type === 'chart' ||
+    entry.type === 'metrics'
+  );
+}
 
 /** Sentinel: entry has no agent owner and breaks a turn block. */
 const NO_OWNER = Symbol('no-owner');
@@ -494,11 +545,7 @@ function ownerOf(entry: TranscriptEntry): EntryOwner | typeof NO_OWNER {
   if (entry.type === 'turn-block') {
     return { nodeId: entry.nodeId, subagentId: null };
   }
-  if (
-    entry.type === 'task-list' ||
-    entry.type === 'findings' ||
-    entry.type === 'chart'
-  ) {
+  if (isCardEntry(entry)) {
     return { nodeId: entry.nodeId, subagentId: entry.parentToolUseId };
   }
   const item = entry.item;
@@ -590,11 +637,7 @@ function subagentOwnerOf(entry: TranscriptEntry): string | null {
   if (entry.type === 'turn-block') {
     return entry.subagentId;
   }
-  if (
-    entry.type === 'task-list' ||
-    entry.type === 'findings' ||
-    entry.type === 'chart'
-  ) {
+  if (isCardEntry(entry)) {
     return entry.parentToolUseId;
   }
   // A call block is a NODE-to-node call and a sub-agent block is already an
@@ -627,11 +670,7 @@ function maxSeqOf(list: readonly TranscriptEntry[]): number {
       }
       continue;
     }
-    if (
-      entry.type === 'task-list' ||
-      entry.type === 'findings' ||
-      entry.type === 'chart'
-    ) {
+    if (isCardEntry(entry)) {
       max = Math.max(max, entry.seq);
       continue;
     }
@@ -672,11 +711,7 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
       }
       continue;
     }
-    if (
-      entry.type === 'task-list' ||
-      entry.type === 'findings' ||
-      entry.type === 'chart'
-    ) {
+    if (isCardEntry(entry)) {
       consider(entry.createdAt);
       continue;
     }
@@ -860,12 +895,7 @@ export function countTools(entries: readonly TranscriptEntry[]): number {
     if (entry.type === 'tools') {
       return sum + entry.pairs.length;
     }
-    if (
-      entry.type === 'item' ||
-      entry.type === 'task-list' ||
-      entry.type === 'findings' ||
-      entry.type === 'chart'
-    ) {
+    if (entry.type === 'item' || isCardEntry(entry)) {
       // None of these cards holds tool invocations: the calls that produced
       // them are hidden BY them, and counting those would report work with no
       // row to open.
@@ -1455,6 +1485,25 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         nodeId: item.nodeId,
         parentToolUseId: subagentIdOf(item),
         chart,
+      });
+      continue;
+    }
+    if (item.kind === 'show_metrics') {
+      const metrics = readMetrics(item);
+      if (metrics === null) {
+        continue;
+      }
+      // Closes both open runs, for the reason the findings card does.
+      openGroups.delete(groupKey(item));
+      openTaskCards.delete(groupKey(item));
+      entries.push({
+        type: 'metrics',
+        id: item.id,
+        createdAt: item.createdAt,
+        seq: item.seq,
+        nodeId: item.nodeId,
+        parentToolUseId: subagentIdOf(item),
+        metrics,
       });
       continue;
     }
@@ -2259,11 +2308,7 @@ function lastMainThreadRowAt(
         }
         continue;
       }
-      if (
-        entry.type === 'task-list' ||
-        entry.type === 'findings' ||
-        entry.type === 'chart'
-      ) {
+      if (isCardEntry(entry)) {
         consider(entry.createdAt);
         continue;
       }

@@ -1,6 +1,7 @@
 import {
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -35,12 +36,27 @@ afterEach(() => {
 });
 
 /**
- * Wait for the store's fire-and-forget write to reach disk — `remember` is
+ * Wait for the store's fire-and-forget writes to reach disk — `remember` is
  * synchronous and the save is a floating promise several ticks long. Polling is
  * what makes this deterministic rather than a race against a fixed delay.
+ *
+ * Waits for QUIESCENCE, not merely for the file to exist, and the difference is
+ * a real flake this spec was carrying: a test that calls `remember` twice fires
+ * two saves, existence returns on the first one's rename, and the second is
+ * still staging. `atomicWrite` stages beside its destination, so that second
+ * `.tmp` appears inside `dir` while `afterEach`'s `rmSync` is walking it —
+ * `ENOTEMPTY, Directory not empty`, from a teardown, blaming a test that had
+ * already passed. Observed on a full-suite run.
+ *
+ * Fixed by waiting for the right thing rather than by retrying the removal: an
+ * empty staging set means every floating write has committed AND unlinked, so
+ * there is nothing left in flight to race.
  */
 async function waitForFile(): Promise<void> {
-  for (let i = 0; i < 200 && !existsSync(file); i += 1) {
+  const settled = (): boolean =>
+    existsSync(file) &&
+    readdirSync(dir).every((entry) => !entry.endsWith('.tmp'));
+  for (let i = 0; i < 200 && !settled(); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }

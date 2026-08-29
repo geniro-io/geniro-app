@@ -290,6 +290,59 @@ describe('groupTranscript', () => {
     ).toEqual([]);
   });
 
+  it('folds a show_metrics row into its own card, and hides the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_metrics', 't1', { metrics: [] }),
+      result('t1', 'Scorecard drawn for the user: 2 figures.'),
+      item('show_metrics', {
+        title: 'After the caching change',
+        metrics: [
+          { label: 'Coverage', value: '82%', delta: '+4 pts' },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['metrics']);
+    const card = entries[0] as {
+      metrics: { title: string | null; metrics: { label: string }[] };
+    };
+    expect(card.metrics.title).toBe('After the caching change');
+    expect(card.metrics.metrics.map((m) => m.label)).toEqual([
+      'Coverage',
+      'Flaky tests',
+    ]);
+  });
+
+  it('drops a show_metrics row whose payload holds no readable figure', () => {
+    expect(groupTranscript([item('show_metrics', { metrics: [] })])).toEqual(
+      [],
+    );
+    // The invariant the twin parser exists for: a bare number is not a value.
+    expect(
+      groupTranscript([
+        item('show_metrics', { metrics: [{ label: 'Coverage', value: 0.82 }] }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('counts a scorecard as a CARD everywhere the other three are', () => {
+    // What `isCardEntry` bought: six readers used to spell a three-arm chain
+    // each, so a new card kind was six edits and every miss was silent. This
+    // drives the two that would otherwise have gone wrong — the tool count (a
+    // card holds no invocations to open) and the surrounding group break.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_metrics', { metrics: [{ label: 'Coverage', value: '82%' }] }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'metrics', 'tools']);
+    expect(countTools(entries)).toBe(2);
+  });
+
   it('an orphan tool_result (no known call) stays a plain item entry', () => {
     const entries = groupTranscript([result('mystery', 'out')]);
     expect(entries.map((e) => e.type)).toEqual(['item']);

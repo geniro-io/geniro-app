@@ -361,6 +361,102 @@ export type HostChartOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/metrics-payload.ts — the reader over
+ * the `show_metrics` item payload this tool produces.
+ *
+ * The render family's SCORECARD: a handful of headline figures with their
+ * changes, for the agent that has just measured a few things and would
+ * otherwise write them into a sentence nobody can scan. Same bargain as its
+ * siblings — the payload is the card, the call answers with a receipt, and the
+ * figures never re-enter the model's context.
+ *
+ * The line against {@link HOST_CHART_TOOL} is worth stating, because an agent
+ * with numbers in hand has to choose: a chart shows a SHAPE — a trend, or one
+ * quantity across several categories — and needs several points per series to
+ * show anything at all. A scorecard shows the CURRENT VALUE of unrelated
+ * quantities, which a chart cannot do: coverage, bundle size and test count
+ * share no axis, and plotting them together produces one enormous bar and two
+ * invisible ones. So: several readings of ONE thing is a chart; one reading
+ * each of several things is this.
+ *
+ * TWO facts about the shape are load-bearing.
+ *
+ * 1. **Every figure arrives ALREADY FORMATTED, as a string.** Only the agent
+ *    knows whether `0.82` reads `82%` and whether `1258291` is `1.2 MB` or
+ *    `1,258,291`, so formatting host-side would be guessing — and a scorecard
+ *    that guesses wrong is worse than no scorecard, because it looks
+ *    authoritative. This row displays; it never computes. That is also why
+ *    there is no `unit` field beside the value: a unit is part of how a figure
+ *    reads, and splitting it out only invites the two to be joined wrong.
+ * 2. **The sentiment is STATED, never derived.** Whether a change is good news
+ *    is not a property of its sign: `-40ms` is good and `-4% coverage` is bad.
+ *    A host that coloured by sign would be confidently wrong half the time, and
+ *    a `higherIsBetter` flag only moves the same guess one step away. The agent
+ *    knows what it measured, so it says.
+ */
+export const HOST_METRICS_TOOL = 'show_metrics';
+
+/**
+ * What a figure's change MEANS, which is the one thing the card cannot work out
+ * for itself. It governs colour and nothing else — `neutral` is the default and
+ * a perfectly good answer for a figure that is simply a fact.
+ */
+export const METRIC_SENTIMENTS = ['good', 'bad', 'neutral'] as const;
+export type MetricSentiment = (typeof METRIC_SENTIMENTS)[number];
+
+/**
+ * Caps on one scorecard. They TRUNCATE, like every cap in this family except
+ * the patch tool's.
+ *
+ * The count is where a scorecard stops being scannable at a glance, which is
+ * the only thing it does better than a sentence — past that the figures want a
+ * table, and a card claiming to be the headline numbers while listing twenty of
+ * them is a worse table.
+ */
+export const MAX_HOST_METRICS = 8;
+export const MAX_METRIC_LABEL_LENGTH = 60;
+export const MAX_METRIC_VALUE_LENGTH = 24;
+export const MAX_METRIC_NOTE_LENGTH = 120;
+
+/** One figure on the scorecard. */
+export interface HostMetric {
+  /** What is being measured — the caption under the figure. */
+  label: string;
+  /** The figure AS IT SHOULD READ. Formatted by the agent; see above. */
+  value: string;
+  /** The change, also already formatted (`+4 pts`, `−120 kB`). Absent = none. */
+  delta?: string;
+  /**
+   * What that change means. Absent is `neutral` — said as an absence rather
+   * than a default written in, so the reader of a payload can tell "the agent
+   * said neutral" from "the agent said nothing", which the card draws alike but
+   * a future consumer may not want to.
+   */
+  sentiment?: MetricSentiment;
+  /** One line of context under the figure, where the number needs one. */
+  note?: string;
+}
+
+/** One `show_metrics` call, as the card will draw it. */
+export interface HostMetrics {
+  /** What the figures are ABOUT — the card's heading. */
+  title?: string;
+  metrics: HostMetric[];
+}
+
+/**
+ * What a scorecard resolves to.
+ *
+ * Two arms, like the findings report and the chart: nothing is put to the user
+ * to decide, so there is no `declined`. The count is in the receipt because the
+ * cap above truncates silently otherwise — an agent that sent twelve figures
+ * and reads back "8 figures" learns what happened without them being echoed.
+ */
+export type HostMetricsOutcome =
+  | { status: 'drawn'; count: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff

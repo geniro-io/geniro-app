@@ -47,6 +47,7 @@ import type {
   RunStatusEvent,
 } from '../chat.types';
 import {
+  HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -71,6 +72,7 @@ import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
+import { MetricsBroker } from './metrics.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -650,6 +652,7 @@ function setup(
   const charts = new ChartBroker();
   const patches = new PatchBroker();
   const plans = new PlanBroker();
+  const metrics = new MetricsBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -757,6 +760,7 @@ function setup(
     // Real like the rest, and for the plainest reason of the four: a plan's
     // whole observable is the card it parks on and the words it settles with.
     plans,
+    metrics,
     callTokens,
     {
       token: 'launch',
@@ -781,6 +785,7 @@ function setup(
     charts,
     patches,
     plans,
+    metrics,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1204,6 +1209,70 @@ describe('ChatService', () => {
         series: [{ name: 'unit', values: [12.1, null] }],
       });
       await settle(claude);
+    });
+
+    it('persists a scorecard as its own row, every field surviving', async () => {
+      // EVERY optional field, for the reason the two literals above spell out:
+      // the payload is `z.unknown()` on the wire, so the renderer's reader
+      // (`chats/metrics-payload.ts`) is an independent twin, and this literal
+      // is the one worked example both sides can be checked against.
+      const { service, claude, metrics, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      const outcome = await metrics.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'After the caching change',
+        metrics: [
+          {
+            label: 'Coverage',
+            value: '82%',
+            delta: '+4 pts',
+            sentiment: 'good',
+            note: 'lines, not branches',
+          },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', count: 2 });
+      const rows = itemDao.items.filter((item) => item.kind === 'show_metrics');
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'After the caching change',
+        metrics: [
+          {
+            label: 'Coverage',
+            value: '82%',
+            delta: '+4 pts',
+            sentiment: 'good',
+            note: 'lines, not branches',
+          },
+          { label: 'Flaky tests', value: '0' },
+        ],
+      });
+      await settle(claude);
+    });
+
+    it('stops accepting scorecards once the turn that could draw them is over', async () => {
+      const { service, claude, metrics } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(metrics.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        metrics.draw(run.id, SINGLE_AGENT_NODE, {
+          metrics: [{ label: 'Late', value: '1' }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
     });
 
     it('answers a chart it could not write without naming the database', async () => {
@@ -3910,6 +3979,34 @@ describe('ChatService — approval modes (parity M1)', () => {
       input,
     );
     // No permission card of its own, and nothing parked for a human here.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the show_metrics CALL, like every drawing tool', async () => {
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { metrics: [{ label: 'Coverage', value: '82%' }] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-metrics',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_METRICS_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-metrics',
+      true,
+      input,
+    );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

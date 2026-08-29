@@ -2060,7 +2060,8 @@ export const ItemKind = {
     TaskList: 'task_list',
     ShellInfo: 'shell_info',
     ReportFindings: 'report_findings',
-    ShowChart: 'show_chart'
+    ShowChart: 'show_chart',
+    ShowMetrics: 'show_metrics'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

@@ -14,6 +14,7 @@ import {
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -56,6 +57,7 @@ function service(
   charts = new ChartBroker(),
   patches = new PatchBroker(),
   plans = new PlanBroker(),
+  metrics = new MetricsBroker(),
 ): McpServerService {
   return new McpServerService(
     callBroker,
@@ -64,6 +66,7 @@ function service(
     charts,
     patches,
     plans,
+    metrics,
     {
       token: 'launch',
       version: '9.9.9',

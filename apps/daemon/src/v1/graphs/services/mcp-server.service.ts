@@ -15,6 +15,7 @@ import {
   FINDING_VERDICTS,
   HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -23,12 +24,15 @@ import {
   MAX_CHART_SERIES,
   MAX_FINDING_SHORT_SUMMARY_LENGTH,
   MAX_HOST_FINDINGS,
+  MAX_HOST_METRICS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
   MAX_PLAN_STEPS,
+  METRIC_SENTIMENTS,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -40,6 +44,10 @@ import {
   hostFindingsResultText,
   readHostFindingsReport,
 } from '../../agents/utils/host-findings';
+import {
+  hostMetricsResultText,
+  readHostMetrics,
+} from '../../agents/utils/host-metrics';
 import {
   hostPatchResultText,
   readHostPatch,
@@ -60,8 +68,8 @@ import { CallBroker } from './call-broker.service';
  * node can use over the streamable-http transport: the call surface
  * (call_agent / await_agent / answer_agent) to a node with callees,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
- * own, and the RENDER family — `report_findings` and `show_chart` — to a turn
- * whose transcript can draw them.
+ * own, and the RENDER family — `report_findings`, `show_chart`, `show_metrics`,
+ * `propose_patch` and `propose_plan` — to a turn whose transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a graph node is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
@@ -90,6 +98,7 @@ export class McpServerService {
     private readonly charts: ChartBroker,
     private readonly patches: PatchBroker,
     private readonly plans: PlanBroker,
+    private readonly metrics: MetricsBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -467,6 +476,73 @@ export class McpServerService {
           },
         });
       }
+      if (this.metrics.canDraw(runId, nodeId)) {
+        tools.push({
+          name: HOST_METRICS_TOOL,
+          description:
+            'Show a few headline figures as a scorecard this app draws for the user. ' +
+            'Use it when you have measured a handful of separate things worth seeing at a glance — coverage, bundle ' +
+            'size, test count, a timing, a spend — instead of writing them into a sentence the reader has to pick ' +
+            'apart. ' +
+            'Choose between this and show_chart by what the numbers ARE: several readings of ONE thing over time or ' +
+            'across categories is a chart; one current reading each of SEVERAL unrelated things is this. They share ' +
+            'no axis, so a chart of them is one huge bar and two invisible ones. ' +
+            'Every figure must arrive ALREADY FORMATTED, as a string — "82%", "1.2 MB", "4m 12s" — because only you ' +
+            'know how it should read; this app displays it and never reformats. ' +
+            'Call it ONCE, and do not also write the numbers out: the user sees them. Say what they MEAN in your ' +
+            'reply. The result is a short receipt, never the figures.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What the figures are about, as the card\'s heading — e.g. "After the caching change". Optional.',
+              },
+              metrics: {
+                type: 'array',
+                description: `The figures, in the order they should read — at most ${MAX_HOST_METRICS}, and fewer is better. Lead with the one that answers the question you were asked.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: {
+                      type: 'string',
+                      description:
+                        'What this figure measures, as its caption — e.g. "Coverage", "Bundle size".',
+                    },
+                    value: {
+                      type: 'string',
+                      description:
+                        'The figure exactly as it should read, units included — "82%", "1.2 MB", "0". A string, ' +
+                        'never a bare number: you decide the formatting.',
+                    },
+                    delta: {
+                      type: 'string',
+                      description:
+                        'The change, also already formatted — "+4 pts", "−120 kB". Omit when there is nothing to ' +
+                        'compare against.',
+                    },
+                    sentiment: {
+                      type: 'string',
+                      enum: [...METRIC_SENTIMENTS],
+                      description:
+                        'Whether that change is good news or bad. Say it — it cannot be read off the sign, since ' +
+                        '−40ms is good and −4 points of coverage is bad. Omit for a figure that is simply a fact.',
+                    },
+                    note: {
+                      type: 'string',
+                      description:
+                        'One line of context under the figure, where the number needs one. Optional.',
+                    },
+                  },
+                  required: ['label', 'value'],
+                },
+              },
+            },
+            required: ['metrics'],
+          },
+        });
+      }
       if (this.patches.canPropose(runId, nodeId)) {
         tools.push({
           name: HOST_PATCH_TOOL,
@@ -656,6 +732,32 @@ export class McpServerService {
           content: [{ type: 'text', text: hostChartResultText(outcome) }],
           // Same reading as the findings tool: an unavailable channel is an
           // answer, not a failure — the agent still holds the numbers.
+          isError: false,
+        };
+      }
+      if (name === HOST_METRICS_TOOL) {
+        const metrics = readHostMetrics(args);
+        // Null is the reader saying there is no figure here at all, answered as
+        // a malformed call for the CHART's reason rather than the findings
+        // tool's: an empty findings report is a real review outcome, while a
+        // scorecard with nothing on it is only ever a mistake, and answering it
+        // as drawn would have the agent believe its numbers are on screen.
+        if (metrics === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: no figure could be read — 'metrics' must be a non-empty array, and each entry needs a 'label' and a 'value', both STRINGS (format the number yourself: \"82%\", not 0.82).",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.metrics.draw(runId, nodeId, metrics);
+        return {
+          content: [{ type: 'text', text: hostMetricsResultText(outcome) }],
+          // Same reading as its drawing siblings: an unavailable channel is an
+          // answer, not a failure — the agent still holds the figures.
           isError: false,
         };
       }

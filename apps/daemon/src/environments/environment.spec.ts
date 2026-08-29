@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { DAEMON_PREFERRED_PORT } from '../utils/handshake';
 import { environment as devEnvironment } from './environment.dev';

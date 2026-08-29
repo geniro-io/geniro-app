@@ -50,24 +50,6 @@ const CURSOR_WINDOWS = [
   { id: '1m', label: '1m' },
 ];
 
-/**
- * The daemon's four live `unavailableReason` sentences, as
- * `cursor-acp.adapter.ts` and `claude.adapter.ts` produce them.
- *
- * The sentence is PROSE the user reads on hover; it is NOT what the chip
- * branches on. `unavailableKind` is — which is exactly what these tests pin,
- * by pairing each sentence with its kind and asserting the LABEL follows the
- * kind. Before the discriminator existed the component matched the no-model
- * sentence literally, so rewording it on the daemon side silently reverted
- * the label here.
- */
-const REASON_NO_MODEL =
-  'pick a model to see the context-window sizes it offers';
-const REASON_PROBE_FAILED =
-  'cursor-agent could not be asked which context windows this model offers';
-const REASON_NO_AXIS =
-  'claude runs each model at its own context window — pick a different model to change it';
-
 describe('ContextWindowSelect', () => {
   it('renders NOTHING whenever there is no size to choose', () => {
     // Every empty case is the same on screen now, whichever of the four it is

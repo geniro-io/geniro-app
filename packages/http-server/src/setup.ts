@@ -16,7 +16,6 @@ import {
 } from '@nestjs/platform-fastify';
 import {
   DocumentBuilder,
-  type OpenAPIObject,
   type SwaggerCustomOptions,
   SwaggerModule,
 } from '@nestjs/swagger';

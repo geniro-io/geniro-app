@@ -2494,14 +2494,6 @@ describe('ClaudeAdapter — geniro’s own MCP server name', () => {
     );
   }
 
-  function writeProjectMcp(servers: Record<string, unknown>): void {
-    writeFileSync(
-      join(cwd, '.mcp.json'),
-      JSON.stringify({ mcpServers: servers }),
-      'utf8',
-    );
-  }
-
   it('publishes the call surface under the run’s OWN server name', () => {
     // The name carries the run id, so a server the user has already named
     // cannot be it. That is what replaced the collision refusal that used to

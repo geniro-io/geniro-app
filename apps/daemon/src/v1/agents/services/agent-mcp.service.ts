@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import { environment } from '../../../environments';
 import type { AgentKind } from '../../runs/runs.types';
 import type {
   AgentMcpFolderFacts,

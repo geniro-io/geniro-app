@@ -8126,34 +8126,6 @@ describe('Chats — the MCP read waits to be asked, on every chat', () => {
 });
 
 describe('Chats — the open thread lays its composer out differently', () => {
-  /**
-   * Document-order index of an element, so a test can state "A comes before B"
-   * about controls that live in different rows of the composer. Reading the
-   * ORDER is the only way to pin this: every one of these controls renders
-   * either way, so an existence check passes with the layout reverted.
-   */
-  function order(
-    container: HTMLElement,
-    el: Element | null | undefined,
-  ): number {
-    const all = [...container.querySelectorAll('*')];
-    const index = el ? all.indexOf(el) : -1;
-    expect(index, 'element not found in the composer').toBeGreaterThanOrEqual(
-      0,
-    );
-    return index;
-  }
-
-  const approvalTrigger = (
-    container: HTMLElement,
-  ): HTMLButtonElement | undefined =>
-    [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-    ].find((t) => t.getAttribute('aria-label') === 'Tool-approval mode');
-
-  const contextRing = (container: HTMLElement): HTMLElement | null =>
-    container.querySelector<HTMLElement>('button[aria-label^="Context "]');
-
   it('offers approval INSIDE the model settings panel, with no chip of its own', async () => {
     // It was a chip between the model settings and the context ring. ASKED FOR
     // as "add auto-approve option to model settings popover instead" — on

@@ -350,6 +350,10 @@ export class McpServerService {
             'Use it when you have reviewed code and have concrete defects to hand back — call it ONCE with every ' +
             'finding, most-severe first, and do not also print the findings as text: the user sees the rendered ' +
             'list, so writing them out again shows the same findings twice. ' +
+            'Do NOT use it for a single problem you found while doing something else, or to narrate work in ' +
+            'progress — a one-row review card says less than the sentence it replaces. ' +
+            'If you also have a tool of your own named ReportFindings, this is the same job and takes the same ' +
+            'arguments; prefer THIS one, because only this one draws the findings in the app the user is looking at. ' +
             'An empty array is a valid report and means nothing survived your verification. ' +
             'When you later fix findings you already reported, report them again with `outcome` set on each. ' +
             'The result is a short receipt, never the findings themselves.',
@@ -422,8 +426,11 @@ export class McpServerService {
           name: HOST_CHART_TOOL,
           description:
             'Plot numbers as a chart this app draws for the user. ' +
-            'Use it whenever you have a handful of numbers worth comparing or worth seeing a trend in — timings, ' +
-            'sizes, counts, coverage, spend — instead of writing them out as a table or an ASCII bar chart. ' +
+            'Use it when you have SEVERAL readings of one thing — a trend over time, or one quantity across ' +
+            'categories — instead of writing them out as a table or an ASCII bar chart. ' +
+            'Choose between this and show_metrics by what the numbers ARE: several readings of ONE thing is a ' +
+            'chart; one current reading each of SEVERAL unrelated things (coverage, bundle size, test count) is a ' +
+            'scorecard — they share no axis, so a chart of them is one huge bar and two invisible ones. ' +
             'Call it ONCE per chart, and do not also print the same numbers as text: the user sees the plot, so ' +
             'writing them out again shows the same data twice. Say what the chart shows in your reply; do not ' +
             'restate the figures. ' +
@@ -670,9 +677,11 @@ export class McpServerService {
             'Use it when you have a concrete fix and would rather hand it over than edit directly — and do NOT also ' +
             'write the file yourself: if the user accepts, the change is already on disk. ' +
             'One file per call; call it again for the next one. ' +
-            'The result tells you what happened, and the four outcomes mean different things: applied (it is on disk), ' +
-            'rejected (do not route around it — ask what they would prefer), and stale (they ACCEPTED but the file no ' +
-            'longer matches, so re-read it and propose again).',
+            'The result tells you what happened, and the four outcomes mean different things: applied (it is on ' +
+            'disk, do not write it again), rejected (do NOT route around it — ask what they would prefer), stale ' +
+            '(they ACCEPTED but the file no longer matches, so re-read it and propose again — this is not a ' +
+            'refusal), and unavailable (the card could not be shown at all, so describe the change in your reply ' +
+            'instead).',
           inputSchema: {
             type: 'object',
             properties: {
@@ -712,6 +721,9 @@ export class McpServerService {
             'than one way, or when you are about to touch something wide — a rename across files, a dependency, a ' +
             'schema, anything hard to undo. Do not use it for work you have already been told to do, or for a ' +
             'one-line change: a plan for something obvious is a card in the way. ' +
+            'If you have a plan mode of your own (an ExitPlanMode tool, or similar), use EITHER that or this, never ' +
+            'both for the same piece of work — two approval cards for one plan is a gate the user has to answer ' +
+            'twice. Prefer this one when it is offered: its card is the one rendered in the app they are watching. ' +
             'Call it ONCE, before the work, and do not also write the steps out as text — the user sees the card. ' +
             'The call blocks until they answer, and the result is what to do next: approved (carry it out), or ' +
             'rejected (do NOT do it another way). Either verdict may carry a note from the user — when it does, that ' +

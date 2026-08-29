@@ -8,8 +8,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
   HOST_CHART_TOOL,
+  HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
@@ -86,6 +89,55 @@ function service(
  * fifth positional argument, so reaching it means naming four empty brokers,
  * and a reader would have to count them to see which tool a test is about.
  */
+/**
+ * A service with EVERY host sink registered, so `tools/list` returns the whole
+ * render family at once. What the description tests below are written against:
+ * a model reads these as one list, not one tool at a time, which is exactly how
+ * the boundary claims came to be missing from one side of a pair.
+ */
+async function everyHostTool(): Promise<
+  { name: string; description: string }[]
+> {
+  const noop = async (): Promise<never> => {
+    throw new Error('not called');
+  };
+  const questions = new UserQuestionBroker();
+  const findings = new FindingsReportBroker();
+  const charts = new ChartBroker();
+  const patches = new PatchBroker();
+  const plans = new PlanBroker();
+  const metrics = new MetricsBroker();
+  const comparisons = new ComparisonBroker();
+  for (const broker of [
+    questions,
+    findings,
+    charts,
+    patches,
+    plans,
+    metrics,
+    comparisons,
+  ]) {
+    broker.register('run-1', 'agent', noop as never);
+  }
+  const { json } = await post(
+    service(
+      new CallBroker(),
+      questions,
+      findings,
+      charts,
+      patches,
+      plans,
+      metrics,
+      comparisons,
+    ),
+    'run-1',
+    'agent',
+    rpc('tools/list', {}),
+  );
+  return (json().result as { tools: { name: string; description: string }[] })
+    .tools;
+}
+
 function patchService(patches: PatchBroker): McpServerService {
   return service(
     new CallBroker(),
@@ -1016,5 +1068,104 @@ describe('McpServerService', () => {
     expect(send).toHaveBeenCalledWith(
       expect.objectContaining({ jsonrpc: '2.0' }),
     );
+  });
+});
+
+/**
+ * The tool DESCRIPTIONS, which are the routing logic — the only thing that
+ * decides which of six near-neighbours a model reaches for. They were written
+ * one tool at a time and audited only later as a set, which is how `show_chart`
+ * came to describe the scorecard case without ever naming `show_metrics`, and
+ * how `propose_patch` came to promise "the four outcomes" and list three.
+ *
+ * Asserted on the tools/list RESPONSE rather than on the source string: that is
+ * the text a model actually receives.
+ */
+describe('McpServerService — what the descriptions tell a model', () => {
+  const find = (
+    tools: { name: string; description: string }[],
+    name: string,
+  ): string => {
+    const tool = tools.find((t) => t.name === name);
+    expect(tool, `${name} was not listed`).toBeDefined();
+    return tool!.description;
+  };
+
+  it('makes BOTH sides of the chart/scorecard boundary name the other', async () => {
+    // The pair that actually collides: a model with numbers in hand must pick
+    // one. Stating the rule on one side only leaves a model reading top-down —
+    // which hits show_chart first — with nothing to send it onward.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_CHART_TOOL)).toContain('show_metrics');
+    expect(find(tools, HOST_METRICS_TOOL)).toContain('show_chart');
+  });
+
+  it('names ALL FOUR patch outcomes it promises', async () => {
+    // It said "the four outcomes mean different things" and listed three,
+    // leaving `unavailable` — the one where nothing was decided at all — for
+    // the model to guess at.
+    const description = find(await everyHostTool(), HOST_PATCH_TOOL);
+    expect(description).toContain('four outcomes');
+    for (const outcome of ['applied', 'rejected', 'stale', 'unavailable']) {
+      expect(description, `outcome ${outcome} unmentioned`).toContain(outcome);
+    }
+  });
+
+  it('disambiguates the two tools claude ships its own version of', async () => {
+    // Measured in the claude 2.1.247 binary: `ReportFindings` and
+    // `ExitPlanMode` are both in there. `ExitPlanMode` is REACHABLE from
+    // geniro, since `plan` is one of the four approval modes a chat can run
+    // under — so a model can genuinely hold both tools at once.
+    const tools = await everyHostTool();
+    expect(find(tools, HOST_FINDINGS_TOOL)).toContain('ReportFindings');
+    expect(find(tools, HOST_PLAN_TOOL)).toContain('ExitPlanMode');
+  });
+
+  it('tells every DRAWING tool to call once and not restate the data', async () => {
+    // The bargain the whole family makes: the payload is the card and the
+    // result is a receipt, so a model that also writes the data out has put it
+    // on screen twice and spent its context for the privilege.
+    const tools = await everyHostTool();
+    for (const name of [
+      HOST_FINDINGS_TOOL,
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+    ]) {
+      const description = find(tools, name);
+      expect(description, `${name} never says ONCE`).toContain('ONCE');
+      expect(description, `${name} never says "do not also"`).toContain(
+        'do not also',
+      );
+    }
+  });
+
+  it('gives every host tool a WHEN — and every card tool a WHEN NOT', async () => {
+    // A description that only says what a tool does gets called whenever it
+    // could apply rather than when it should.
+    const tools = await everyHostTool();
+    for (const name of [
+      HOST_QUESTION_TOOL,
+      HOST_FINDINGS_TOOL,
+      HOST_CHART_TOOL,
+      HOST_METRICS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_PATCH_TOOL,
+      HOST_PLAN_TOOL,
+    ]) {
+      expect(find(tools, name), `${name} never says when`).toMatch(
+        /Use it (when|whenever)/,
+      );
+    }
+    for (const name of [
+      HOST_QUESTION_TOOL,
+      HOST_FINDINGS_TOOL,
+      HOST_COMPARISON_TOOL,
+      HOST_PLAN_TOOL,
+    ]) {
+      expect(find(tools, name), `${name} never says when NOT`).toMatch(
+        /(Do NOT use it|Do not use it|instead\.|write a table instead)/,
+      );
+    }
   });
 });

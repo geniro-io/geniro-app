@@ -48,6 +48,7 @@ import type {
 } from '../chat.types';
 import {
   HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
@@ -72,6 +73,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
+import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -647,6 +649,7 @@ function setup(
   const findingsReports = new FindingsReportBroker();
   const charts = new ChartBroker();
   const patches = new PatchBroker();
+  const plans = new PlanBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -751,6 +754,9 @@ function setup(
     // Real for a stronger reason still: what these tests observe through it is
     // whether a file on disk actually changed.
     patches,
+    // Real like the rest, and for the plainest reason of the four: a plan's
+    // whole observable is the card it parks on and the words it settles with.
+    plans,
     callTokens,
     {
       token: 'launch',
@@ -774,6 +780,7 @@ function setup(
     findingsReports,
     charts,
     patches,
+    plans,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1358,6 +1365,105 @@ describe('ChatService', () => {
       });
       // Nothing written: the turn died before anybody accepted.
       expect(existsSync(join(dir, 'd.ts'))).toBe(false);
+    });
+
+    it('parks a plan on the same card machinery and answers with the verdict', async () => {
+      const { service, claude, plans, approvals, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Make the queue test deterministic',
+        steps: [{ title: 'Reproduce it', detail: 'run with --seed' }],
+      });
+      await drain();
+
+      const card = itemDao.items.find(
+        (item) => item.kind === 'approval_request',
+      );
+      expect(card?.payload).toContain(HOST_PLAN_TOOL);
+      // The card reads the steps straight off this payload, so they have to be
+      // there in full rather than summarized into the heading.
+      expect(card?.payload).toContain('Reproduce it');
+      expect(card?.payload).toContain('run with --seed');
+      const pending = approvals.listByRun(run.id);
+      // A gate, not a question — the badge reads "waiting for approval", which
+      // is what a card whose controls are Approve and Reject wants.
+      expect(pending[0]?.question).toBe(false);
+
+      expect(approvals.resolve(run.id, pending[0]!.requestId, true)).toBe(true);
+      await drain();
+      await expect(proposed).resolves.toEqual({ status: 'approved' });
+      await settle(claude);
+    });
+
+    it('carries the user’s NOTE to the agent, on either verdict', async () => {
+      // The reason this tool beats a bare yes/no: a refusal that says what to
+      // do instead saves the round trip asking. Both halves are pinned — the
+      // words reaching the agent, and the words landing in the transcript.
+      for (const allow of [true, false]) {
+        const { service, claude, plans, approvals, itemDao } = setup();
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hello');
+        const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+          title: 'Rework the parser',
+          steps: [{ title: 'Rewrite the tokenizer' }],
+        });
+        await drain();
+        const pending = approvals.listByRun(run.id);
+        approvals.resolve(
+          run.id,
+          pending[0]!.requestId,
+          allow,
+          '  leave the parser alone  ',
+        );
+        await drain();
+
+        await expect(proposed).resolves.toEqual({
+          status: allow ? 'approved' : 'declined',
+          note: 'leave the parser alone',
+        });
+        const verdict = itemDao.items.find(
+          (item) => item.kind === 'approval_verdict',
+        );
+        expect(verdict?.payload).toContain('leave the parser alone');
+        await settle(claude);
+      }
+    });
+
+    it('normalizes a BLANK note away rather than quoting silence back', async () => {
+      const { service, claude, plans, approvals } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Do the thing',
+        steps: [{ title: 'Do it' }],
+      });
+      await drain();
+      const pending = approvals.listByRun(run.id);
+      approvals.resolve(run.id, pending[0]!.requestId, true, '   ');
+      await drain();
+
+      await expect(proposed).resolves.toEqual({ status: 'approved' });
+      await settle(claude);
+    });
+
+    it('sweeps a parked plan with its OWN sentence when the turn ends', async () => {
+      const { service, claude, plans } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+
+      const proposed = plans.propose(run.id, SINGLE_AGENT_NODE, {
+        title: 'Never answered',
+        steps: [{ title: 'Wait' }],
+      });
+      await drain();
+      await settle(claude);
+
+      await expect(proposed).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'the turn ended before the plan was answered',
+      });
     });
 
     it('stops accepting reports once the turn that could persist them is over', async () => {
@@ -3804,6 +3910,37 @@ describe('ChatService — approval modes (parity M1)', () => {
       input,
     );
     // No permission card of its own, and nothing parked for a human here.
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the propose_plan CALL — the gate is its own card too', async () => {
+    // One step further from the disk than the patch tool: proposing a plan
+    // does not even offer to change a file, so a permission card here would
+    // ask the user to approve the asking.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { title: 'A plan', steps: [{ title: 'Step one' }] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-plan',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_PLAN_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-plan',
+      true,
+      input,
+    );
     expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
       false,
     );

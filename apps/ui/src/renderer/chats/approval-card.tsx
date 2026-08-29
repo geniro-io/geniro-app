@@ -12,8 +12,10 @@ import { cn } from '../components/ui/utils';
 import { AttachmentStrip } from './attachment-strip';
 import { DiffView, editDiffOf, PROPOSE_PATCH } from './diff-view';
 import { insertPastedFilePaths } from './paste-file-paths';
+import { PlanCard, PROPOSE_PLAN, readPlan } from './plan-card';
 import { disclosesInput } from './tool-render';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useOneShotVerdict } from './use-one-shot-verdict';
 
 /** One parsed AskUserQuestion entry (defensive — bad shapes are dropped). */
 interface ParsedQuestion {
@@ -33,9 +35,6 @@ const MAX_ANSWER_LENGTH = 32_768;
  * strip has no truncation of its own.
  */
 const MAX_QUESTION_HEADER_LENGTH = 64;
-
-/** How long "Sending…" holds before the one-shot freeze re-arms for a retry. */
-const RESPONDED_RETRY_MS = 10_000;
 
 /**
  * The sentence under a question saying how many of its options may be picked.
@@ -234,71 +233,6 @@ function readQuestions(input: unknown): ParsedQuestion[] {
     });
   }
   return parsed;
-}
-
-/**
- * The one-shot verdict channel both card bodies share.
- *
- * Freeze the card the moment an answer is sent, until the persisted verdict
- * item (or expiry) round-trips — a double-click, or Approve-then-Deny, would
- * emit a conflicting verdict the daemon silently drops. The freeze must not be
- * forever though: if the verdict item never arrives (its write failed, or the
- * ack was 'invalid') the controls re-arm, because the daemon settles a request
- * exactly once and a retry is therefore safe.
- *
- * Shared rather than written twice: the question card and the permission card
- * are separate components with the same contract, and a fix to this timing on
- * one of them has to reach both.
- */
-function useOneShotVerdict(
-  verdict: boolean | null,
-  expired: boolean,
-  onRespond: (
-    allow: boolean,
-    answer?: string,
-    images?: SendMessageDtoImagesInner[],
-  ) => void,
-): {
-  responded: boolean;
-  sending: boolean;
-  respond: (
-    allow: boolean,
-    answer?: string,
-    images?: SendMessageDtoImagesInner[],
-  ) => void;
-} {
-  const [responded, setResponded] = useState(false);
-  useEffect(() => {
-    if (!responded || verdict !== null || expired) {
-      return;
-    }
-    const timer = setTimeout(() => setResponded(false), RESPONDED_RETRY_MS);
-    return () => clearTimeout(timer);
-  }, [responded, verdict, expired]);
-  const respond = (
-    allow: boolean,
-    answer?: string,
-    images?: SendMessageDtoImagesInner[],
-  ): void => {
-    if (responded) {
-      return;
-    }
-    setResponded(true);
-    // Preserve the caller-visible arity: a plain approve/deny stays a
-    // one-argument call, and an answer with no attachment a two-argument one.
-    if (answer === undefined) {
-      onRespond(allow);
-    } else if (images === undefined || images.length === 0) {
-      onRespond(allow, answer);
-    } else {
-      onRespond(allow, answer, images);
-    }
-  };
-  return {
-    responded,
-    sending: responded && verdict === null && !expired,
-    respond,
-  };
 }
 
 /**
@@ -1018,11 +952,12 @@ export function ApprovalCard({
   /**
    * The words that answer carried, read back from the same verdict item.
    *
-   * Only the QUESTION body can show one, and only that body can produce one:
-   * the daemon records an answer solely where it folded it into the CLI's own
-   * question tool, and a permission card's verdict is a yes or a no with
-   * nothing said. Defaulted so a caller with nothing to read back — a card
-   * still pending — need not pass it.
+   * TWO bodies can show one, and they are exactly the two that can produce
+   * one: the QUESTION card, whose answer the daemon folds into the CLI's own
+   * question tool, and the PLAN card, whose optional note rides the same
+   * `answer` field to the agent. A permission card's verdict stays a yes or a
+   * no with nothing said. Defaulted so a caller with nothing to read back — a
+   * card still pending — need not pass it.
    */
   answer?: string | null;
   /** The turn ended before an answer — no verdict can apply anymore. */
@@ -1059,6 +994,22 @@ export function ApprovalCard({
       : toolName === 'cursor/ask_question'
         ? readCursorQuestions(input)
         : [];
+  // geniro's own plan proposal, gated on the name for the reason above and
+  // falling back to the permission body when nothing readable is there — the
+  // same rule an AskUserQuestion whose payload parses to nothing obeys, so a
+  // malformed call is still answerable rather than an empty card.
+  const plan = toolName === PROPOSE_PLAN ? readPlan(input) : null;
+  if (plan !== null) {
+    return (
+      <PlanCard
+        plan={plan}
+        verdict={verdict}
+        note={answer}
+        expired={expired}
+        onRespond={onRespond}
+      />
+    );
+  }
   return questions.length > 0 ? (
     <QuestionCard
       questions={questions}

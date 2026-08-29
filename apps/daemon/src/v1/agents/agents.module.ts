@@ -46,6 +46,7 @@ import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
+import { PlanBroker } from './services/plan.broker';
 import { ProcessRegistry } from './services/process-registry';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
@@ -85,6 +86,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    PlanBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -303,6 +305,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     FindingsReportBroker,
     ChartBroker,
     PatchBroker,
+    PlanBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

@@ -50,10 +50,10 @@ function groupKey(item: ChatItem): string {
  * tool_call/tool_result items too, but the dedicated call kinds
  * (call_started/call_result/call_question/call_answer/await_collected)
  * already tell that story in a readable form — the raw envelope JSON rows
- * are pure duplication, so they are hidden from the transcript. The host tools
- * (`ask_user_question`, `report_findings`, `show_chart`) ride it for the same
- * reason: each draws its own card, and the raw call beside it is the same row
- * twice.
+ * are pure duplication, so they are hidden from the transcript. Every host tool
+ * rides it for the same reason: each draws its own card — a findings table, a
+ * chart, a diff with Apply, a plan with Approve — and the raw call beside it is
+ * the same row twice.
  *
  * A row STORED before geniro's server was renamed per run — claude published it
  * under this fixed key then, so old transcripts carry `mcp__geniro__<tool>` and
@@ -74,10 +74,13 @@ const GENIRO_TOOL_NAMES = [
   'answer_agent',
   'ask_user_question',
   'report_findings',
-  // Never published under the legacy fixed key — the per-run rename shipped
-  // first — but listed with its siblings so the two lists cannot drift, and so
-  // a transcript exported from a build in between still hides it.
+  // None of these three was ever published under the legacy fixed key — the
+  // per-run rename shipped first — but they are listed with their siblings so
+  // this list and the daemon's cannot drift, and so a transcript exported from
+  // a build in between still hides them.
   'show_chart',
+  'propose_patch',
+  'propose_plan',
 ] as const;
 
 /**

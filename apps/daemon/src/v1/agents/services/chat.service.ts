@@ -29,6 +29,7 @@ import {
   type ChatApprovalMode,
   type ClaudeModesCapability,
   HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
   type HostChart,
   type HostChartOutcome,
@@ -36,6 +37,8 @@ import {
   type HostFindingsReport,
   type HostPatch,
   type HostPatchOutcome,
+  type HostPlan,
+  type HostPlanOutcome,
   type HostQuestion,
   type HostQuestionOutcome,
   type ItemWire,
@@ -62,6 +65,7 @@ import {
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostPatchCall } from '../utils/host-patch';
+import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
 import {
@@ -89,6 +93,7 @@ import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
+import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
@@ -374,6 +379,7 @@ export class ChatService implements OnModuleInit {
     private readonly findingsReports: FindingsReportBroker,
     private readonly charts: ChartBroker,
     private readonly patches: PatchBroker,
+    private readonly plans: PlanBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2328,6 +2334,11 @@ export class ChatService implements OnModuleInit {
         // first and the patch card second, and answering the first decided
         // nothing at all.
         isHostPatchCall(hostServerName, toolName) ||
+        // The plan tool, on the same reading and one step further from the
+        // disk: proposing a plan does not even offer to change a file. Its card
+        // is the gate; a permission card in front of it would ask the user to
+        // approve the asking.
+        isHostPlanCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2672,6 +2683,8 @@ export class ChatService implements OnModuleInit {
       const outstandingPatches = new Set<
         (outcome: HostPatchOutcome) => boolean
       >();
+      /** The same again for {@link HOST_PLAN_TOOL}, on the reason just above. */
+      const outstandingPlans = new Set<(outcome: HostPlanOutcome) => boolean>();
       /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
@@ -2965,6 +2978,102 @@ export class ChatService implements OnModuleInit {
           });
         });
       };
+      /**
+       * geniro's own plan channel: the agent shows how it means to carry a
+       * request out, and waits.
+       *
+       * {@link proposePatch}'s twin structurally — an ordinary
+       * `approval_request` row, `question: false`, parked until the press — and
+       * simpler in the one way that matters: approving performs NO action, so
+       * there is nothing to run inside the responder and nothing that can fail
+       * between the press and the effect. The verdict IS the answer.
+       *
+       * What it adds is the NOTE. `respond` already carries the user's words
+       * for question cards, so a plan approved with a caveat or refused with a
+       * redirection reaches the agent in the same press rather than costing a
+       * round trip to ask what they meant. Blank is normalized away here rather
+       * than at the card: an empty string travelling as a note would have the
+       * agent quoting silence back at the user.
+       */
+      const proposePlan = async (plan: HostPlan): Promise<HostPlanOutcome> => {
+        const requestId = randomUUID();
+        const input = { title: plan.title, steps: plan.steps };
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'approval_request',
+            null,
+            { id: requestId, toolName: HOST_PLAN_TOOL, input },
+          );
+        } catch (err) {
+          // The card is what the user answers through, so a card that was never
+          // written is a plan nobody can approve. The reason is logged and NOT
+          // returned: a persist failure names an absolute database path, and
+          // this string is handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a plan proposal: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the card could not be written',
+          };
+        }
+        return await new Promise<HostPlanOutcome>((resolve) => {
+          const settle = (outcome: HostPlanOutcome): boolean => {
+            if (!outstandingPlans.delete(settle)) {
+              return false;
+            }
+            resolve(outcome);
+            return true;
+          };
+          outstandingPlans.add(settle);
+          this.approvals.track({
+            runId,
+            nodeId: SINGLE_AGENT_NODE,
+            requestId,
+            toolName: HOST_PLAN_TOOL,
+            input,
+            question: false,
+            respond: (allow, answer) => {
+              const note =
+                answer !== undefined && answer.trim().length > 0
+                  ? answer.trim()
+                  : undefined;
+              const delivered = settle({
+                status: allow ? 'approved' : 'declined',
+                ...(note === undefined ? {} : { note }),
+              });
+              this.announceAwaiting(
+                runId,
+                runningToolActivity() ?? idleActivity(),
+              );
+              if (delivered) {
+                enqueue(async () => {
+                  await this.persist(
+                    em,
+                    runId,
+                    await this.seqs.reserve(runId),
+                    'approval_verdict',
+                    null,
+                    {
+                      id: requestId,
+                      allow,
+                      // Recorded whenever there was a note, on either verdict:
+                      // it reached the agent, so it belongs in the transcript
+                      // beside the yes or no it qualified.
+                      ...(note === undefined ? {} : { answer: note }),
+                    },
+                  );
+                });
+              }
+              return delivered;
+            },
+          });
+          this.announceAwaiting(runId);
+        });
+      };
       // The endpoint is granted for the UNION of reasons a host tool could be
       // wanted here, and the listing itself stays composed per request, so an
       // agent is only ever told about the tools it can actually use. What that
@@ -3014,6 +3123,9 @@ export class ChatService implements OnModuleInit {
       const disposeProposer = mcpEndpoint
         ? this.patches.register(runId, SINGLE_AGENT_NODE, proposePatch)
         : null;
+      const disposePlanner = mcpEndpoint
+        ? this.plans.register(runId, SINGLE_AGENT_NODE, proposePlan)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -3023,6 +3135,7 @@ export class ChatService implements OnModuleInit {
         disposeReporter?.();
         disposeDrawer?.();
         disposeProposer?.();
+        disposePlanner?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
@@ -3692,6 +3805,12 @@ export class ChatService implements OnModuleInit {
             settle({
               status: 'unavailable',
               reason: 'the turn ended before the patch was answered',
+            });
+          }
+          for (const settle of [...outstandingPlans]) {
+            settle({
+              status: 'unavailable',
+              reason: 'the turn ended before the plan was answered',
             });
           }
           // Sweep BEFORE the branches below — the failure path early-returns,

@@ -437,6 +437,77 @@ export type HostPatchOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * The render family's fourth tool: a plan put to the user BEFORE the work.
+ *
+ * An agent that has understood a request and worked out how it intends to carry
+ * it out shows the steps and waits for a go-ahead. What that buys is the
+ * cheapest correction there is — a plan is redirected in one sentence, while
+ * the same misunderstanding found after the edits costs a revert.
+ *
+ * Structurally this is {@link HOST_PATCH_TOOL}'s twin: it PARKS on an ordinary
+ * `approval_request` row, its CALL auto-approves (proposing changes nothing), and
+ * the press on the card is the only gate. Three things are its own:
+ *
+ * 1. Approving performs NO action. A patch's Apply writes a file; a plan's
+ *    Approve is the answer itself, and the work that follows is the agent's own
+ *    ordinary turn. So there is no `stale` arm — nothing can have moved
+ *    underneath a decision that touches nothing.
+ * 2. Both verdicts carry an optional NOTE, and that is where most of this tool's
+ *    value is. "No" alone tells an agent nothing and costs a round trip to ask
+ *    what the user would rather have; "no — leave the parser alone, just fix the
+ *    cap" redirects it in the same press. It rides the `answer` field the
+ *    approval channel already carries for questions.
+ * 3. It is not a question, and is tracked as `question: false` like the patch
+ *    tool. The badge then reads "waiting for approval", which is what a card
+ *    whose primary controls are Approve and Reject actually wants — the note is
+ *    an addition to a verdict, not the verdict itself.
+ *
+ * Deliberately NOT a to-do list: nothing here is ticked off as the agent works.
+ * A live checklist is a different feature with its own update channel, and
+ * pretending this one is that would leave every plan frozen at step one.
+ */
+export const HOST_PLAN_TOOL = 'propose_plan';
+
+/**
+ * Truncation points, on the findings tool's rule rather than the patch tool's:
+ * a plan that overran is still a plan, and showing fifteen of its steps beats
+ * refusing the call. The step cap is where a plan stops being readable at a
+ * glance, which is the only thing this card is better at than prose.
+ */
+export const MAX_PLAN_STEPS = 15;
+export const MAX_PLAN_TITLE_LENGTH = 200;
+export const MAX_PLAN_STEP_TITLE_LENGTH = 200;
+export const MAX_PLAN_STEP_DETAIL_LENGTH = 600;
+
+/** One step of a proposed plan, as its own row on the card. */
+export interface HostPlanStep {
+  /** What the step does, in one line — the row's own text. */
+  title: string;
+  /** The sentence or two under it, where one is worth reading. */
+  detail?: string;
+}
+
+/** One `propose_plan` call, as the card will show it. */
+export interface HostPlan {
+  /** What the plan is FOR — the card's heading. */
+  title: string;
+  steps: HostPlanStep[];
+}
+
+/**
+ * What a proposed plan resolves to.
+ *
+ * Three arms, one fewer than the patch tool's: approving a plan performs no
+ * action, so nothing can go `stale` between the press and the effect. The note
+ * hangs off BOTH verdicts because a user who approves with a caveat is telling
+ * the agent something it must not lose.
+ */
+export type HostPlanOutcome =
+  | { status: 'approved'; note?: string }
+  | { status: 'declined'; note?: string }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

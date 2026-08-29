@@ -16,6 +16,7 @@ import {
   HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_PATCH_TOOL,
+  HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
   MAX_ANSWER_LENGTH,
   MAX_CHART_POINTS,
@@ -24,10 +25,12 @@ import {
   MAX_HOST_FINDINGS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
+  MAX_PLAN_STEPS,
 } from '../../agents/chat.types';
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
+import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import {
   hostChartResultText,
@@ -41,6 +44,7 @@ import {
   hostPatchResultText,
   readHostPatch,
 } from '../../agents/utils/host-patch';
+import { hostPlanResultText, readHostPlan } from '../../agents/utils/host-plan';
 import {
   hostQuestionResultText,
   readHostQuestions,
@@ -85,6 +89,7 @@ export class McpServerService {
     private readonly findings: FindingsReportBroker,
     private readonly charts: ChartBroker,
     private readonly patches: PatchBroker,
+    private readonly plans: PlanBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -504,6 +509,54 @@ export class McpServerService {
           },
         });
       }
+      if (this.plans.canPropose(runId, nodeId)) {
+        tools.push({
+          name: HOST_PLAN_TOOL,
+          description:
+            'Show the user how you intend to carry out a request, and WAIT for them to approve it before you start. ' +
+            'Use it when the work is worth more than a couple of edits, when a request could reasonably be read more ' +
+            'than one way, or when you are about to touch something wide — a rename across files, a dependency, a ' +
+            'schema, anything hard to undo. Do not use it for work you have already been told to do, or for a ' +
+            'one-line change: a plan for something obvious is a card in the way. ' +
+            'Call it ONCE, before the work, and do not also write the steps out as text — the user sees the card. ' +
+            'The call blocks until they answer, and the result is what to do next: approved (carry it out), or ' +
+            'rejected (do NOT do it another way). Either verdict may carry a note from the user — when it does, that ' +
+            'note outranks the plan you proposed.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What the plan is FOR, as the card\'s heading — e.g. "Make the queue test deterministic". Say the ' +
+                  'goal, not "Plan".',
+              },
+              steps: {
+                type: 'array',
+                description: `The steps in the order you would do them — at most ${MAX_PLAN_STEPS}, and fewer is better. Each is one thing you will do, not a category of work.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    title: {
+                      type: 'string',
+                      description:
+                        'The step in one line, starting with a verb — e.g. "Replace the sleep with a wait-for".',
+                    },
+                    detail: {
+                      type: 'string',
+                      description:
+                        'A sentence or two where the step needs it — the file it touches, the risk, the thing you ' +
+                        'are unsure about. Optional, and better omitted than padded.',
+                    },
+                  },
+                  required: ['title'],
+                },
+              },
+            },
+            required: ['title', 'steps'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -624,6 +677,27 @@ export class McpServerService {
           // A rejection is not a tool failure: the user exercised the gate this
           // tool exists to offer them, and flagging it as an error is how a
           // model comes to retry a change that was just turned down.
+          isError: false,
+        };
+      }
+      if (name === HOST_PLAN_TOOL) {
+        const read = readHostPlan(args);
+        // A sentence, like the patch reader's: every refusal here names
+        // something the agent can fix and send again.
+        if (!read.ok) {
+          return {
+            content: [{ type: 'text', text: `INVALID_ARGS: ${read.reason}` }],
+            isError: true,
+          };
+        }
+        // BLOCKS until the user answers the card, like `propose_patch` and
+        // `ask_user_question` and unlike the two drawing tools.
+        const outcome = await this.plans.propose(runId, nodeId, read.plan);
+        return {
+          content: [{ type: 'text', text: hostPlanResultText(outcome) }],
+          // A rejection is not a tool failure: the user exercised the gate this
+          // tool exists to offer them, and flagging it as an error is how a
+          // model comes to re-propose a plan that was just turned down.
           isError: false,
         };
       }

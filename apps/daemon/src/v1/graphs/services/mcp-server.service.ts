@@ -9,19 +9,28 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { RUNTIME_TOKEN, type RuntimeInfo } from '../../../auth/runtime';
 import {
+  CHART_KINDS,
   FINDING_LEVELS,
   FINDING_OUTCOMES,
   FINDING_VERDICTS,
+  HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_QUESTION_TOOL,
   MAX_ANSWER_LENGTH,
+  MAX_CHART_POINTS,
+  MAX_CHART_SERIES,
   MAX_FINDING_SHORT_SUMMARY_LENGTH,
   MAX_HOST_FINDINGS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
 } from '../../agents/chat.types';
+import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
+import {
+  hostChartResultText,
+  readHostChart,
+} from '../../agents/utils/host-chart';
 import {
   hostFindingsResultText,
   readHostFindingsReport,
@@ -41,7 +50,8 @@ import { CallBroker } from './call-broker.service';
  * node can use over the streamable-http transport: the call surface
  * (call_agent / await_agent / answer_agent) to a node with callees,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
- * own, and `report_findings` to a turn whose transcript can draw the card.
+ * own, and the RENDER family — `report_findings` and `show_chart` — to a turn
+ * whose transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a graph node is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
@@ -67,6 +77,7 @@ export class McpServerService {
     private readonly broker: CallBroker,
     private readonly questions: UserQuestionBroker,
     private readonly findings: FindingsReportBroker,
+    private readonly charts: ChartBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -375,6 +386,75 @@ export class McpServerService {
           },
         });
       }
+      if (this.charts.canDraw(runId, nodeId)) {
+        tools.push({
+          name: HOST_CHART_TOOL,
+          description:
+            'Plot numbers as a chart this app draws for the user. ' +
+            'Use it whenever you have a handful of numbers worth comparing or worth seeing a trend in — timings, ' +
+            'sizes, counts, coverage, spend — instead of writing them out as a table or an ASCII bar chart. ' +
+            'Call it ONCE per chart, and do not also print the same numbers as text: the user sees the plot, so ' +
+            'writing them out again shows the same data twice. Say what the chart shows in your reply; do not ' +
+            'restate the figures. ' +
+            'Every series holds one value per entry of `labels`, matched BY POSITION — the first value belongs to ' +
+            'the first label, and so on. Use null for a point you did not measure; it is drawn as a gap. ' +
+            'The result is a short receipt, never the numbers themselves.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What the chart shows, as the card\'s heading — e.g. "Test suite duration by commit".',
+              },
+              kind: {
+                type: 'string',
+                enum: [...CHART_KINDS],
+                description:
+                  'line for a trend over an ordered axis, bar to compare separate categories, area for a total ' +
+                  'made of stacked parts.',
+              },
+              x_label: {
+                type: 'string',
+                description: 'Caption for the x axis. Optional.',
+              },
+              y_label: {
+                type: 'string',
+                description:
+                  'Caption for the y axis, naming the UNIT — "seconds", "kB", "%". Optional but rarely worth ' +
+                  'omitting: a number with no unit is not a measurement.',
+              },
+              labels: {
+                type: 'array',
+                items: { type: 'string' },
+                description: `The x-axis categories, in the order they should be plotted — at most ${MAX_CHART_POINTS}.`,
+              },
+              series: {
+                type: 'array',
+                description: `The plotted series — at most ${MAX_CHART_SERIES}, because that is how many colours the legend can tell apart.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: {
+                      type: 'string',
+                      description:
+                        'What this series is, as its legend entry — e.g. "unit", "integration".',
+                    },
+                    values: {
+                      type: 'array',
+                      items: { type: ['number', 'null'] },
+                      description:
+                        'One number per entry of `labels`, in the same order. Null for a point you did not measure.',
+                    },
+                  },
+                  required: ['name', 'values'],
+                },
+              },
+            },
+            required: ['title', 'kind', 'labels', 'series'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -449,6 +529,31 @@ export class McpServerService {
           content: [{ type: 'text', text: hostFindingsResultText(outcome) }],
           // An unavailable channel is an answer the agent carries on from —
           // it still holds the findings and can write them in its reply.
+          isError: false,
+        };
+      }
+      if (name === HOST_CHART_TOOL) {
+        const chart = readHostChart(args);
+        // Null is the reader saying there is nothing plottable here at all.
+        // Unlike an empty findings report — which is a real review outcome — a
+        // chart of nothing is only ever a mistake, so it is answered as a
+        // malformed call rather than as a drawn chart with no data.
+        if (chart === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: nothing plottable — 'labels' must be a non-empty array, and 'series' must hold at least one entry with a 'name' and one measured number in 'values'.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.charts.draw(runId, nodeId, chart);
+        return {
+          content: [{ type: 'text', text: hostChartResultText(outcome) }],
+          // Same reading as the findings tool: an unavailable channel is an
+          // answer, not a failure — the agent still holds the numbers.
           isError: false,
         };
       }

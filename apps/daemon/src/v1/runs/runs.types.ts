@@ -96,6 +96,13 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * Persisted rather than streamed for `task_list`'s reason — a reopened chat
  * replays the transcript, and a card that lived only on the wire would be gone
  * from every conversation the moment it was closed.
+ *
+ * `show_chart` is the second row of that same RENDER family, and everything
+ * said about `report_findings` above holds unchanged — the payload is the card,
+ * the call answers with a receipt, the row is the only place the data exists.
+ * What is its own: the payload is POSITIONAL. Every series holds one value per
+ * entry of `labels`, aligned by index, so a reader that drops or reorders
+ * either list silently re-attributes measurements instead of failing.
  */
 export const ItemKindSchema = z
   .enum([
@@ -122,6 +129,7 @@ export const ItemKindSchema = z
     'task_list',
     'shell_info',
     'report_findings',
+    'show_chart',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

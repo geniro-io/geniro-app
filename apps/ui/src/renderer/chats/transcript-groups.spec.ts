@@ -236,6 +236,60 @@ describe('groupTranscript', () => {
     expect(entries).toEqual([]);
   });
 
+  it('drops the chart tool’s own row under BOTH CLIs’ spellings', () => {
+    // The per-run name is the live one for both now, so this is the spelling
+    // that actually arrives — the raw call beside the plot is the same row
+    // twice.
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_chart', 't1', { labels: [] }),
+      result('t1', 'Chart drawn for the user: 1 series over 2 points.'),
+      call('geniro-run-1: show_chart', 't2', { labels: [] }),
+      result('t2', 'Chart drawn for the user: 1 series over 2 points.'),
+    ]);
+
+    expect(entries).toEqual([]);
+  });
+
+  it('folds a show_chart row into its own card entry', () => {
+    const entries = groupTranscript([
+      item('show_chart', {
+        title: 'Test suite duration',
+        kind: 'bar',
+        labels: ['a', 'b'],
+        series: [{ name: 'unit', values: [1, 2] }],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['chart']);
+    const card = entries[0] as {
+      chart: { kind: string; title: string | null };
+    };
+    expect(card.chart.kind).toBe('bar');
+    expect(card.chart.title).toBe('Test suite duration');
+  });
+
+  it('gives each chart its own card — a redraw is a step, not a rewrite', () => {
+    const one = {
+      title: 'Before',
+      kind: 'line',
+      labels: ['a', 'b'],
+      series: [{ name: 'unit', values: [1, 2] }],
+    };
+    const entries = groupTranscript([
+      item('show_chart', one),
+      item('show_chart', { ...one, title: 'After' }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['chart', 'chart']);
+  });
+
+  it('drops a show_chart row whose payload does not read as a chart', () => {
+    expect(groupTranscript([item('show_chart', { labels: [] })])).toEqual([]);
+    expect(
+      groupTranscript([item('show_chart', { labels: ['a'], series: 3 })]),
+    ).toEqual([]);
+  });
+
   it('an orphan tool_result (no known call) stays a plain item entry', () => {
     const entries = groupTranscript([result('mystery', 'out')]);
     expect(entries.map((e) => e.type)).toEqual(['item']);
@@ -2204,6 +2258,36 @@ describe('groupTranscript task lists', () => {
     ]);
     // Two separate groups, not one of two calls folded across the card.
     expect(entries.map((e) => e.type)).toEqual(['tools', 'findings', 'tools']);
+  });
+
+  it('a chart card closes both open runs and counts as no tool work either', () => {
+    // The second card of the family gets its own pass rather than riding the
+    // findings tests: the recursion stops at it by TYPE, so a missed arm throws
+    // here instead of quietly miscounting.
+    const chart = {
+      title: 'Duration',
+      kind: 'line',
+      labels: ['a', 'b'],
+      series: [{ name: 'unit', values: [1, 2] }],
+    };
+    const entries = groupTranscript([
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'pending' }]),
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_chart', chart),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+      tasks('snapshot', [{ id: '1', title: 'first', status: 'completed' }]),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual([
+      'task-list',
+      'tools',
+      'chart',
+      'tools',
+      'task-list',
+    ]);
+    expect(countTools(entries)).toBe(2);
   });
 });
 

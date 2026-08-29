@@ -29,6 +29,8 @@ import {
   type ChatApprovalMode,
   type ClaudeModesCapability,
   HOST_QUESTION_TOOL,
+  type HostChart,
+  type HostChartOutcome,
   type HostFindingsOutcome,
   type HostFindingsReport,
   type HostQuestion,
@@ -53,6 +55,7 @@ import {
   offTurnActivity,
   terminalStatus,
 } from '../utils/event-to-item';
+import { isHostChartCall } from '../utils/host-chart';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
 import { messageTextOf } from '../utils/message-preview';
@@ -72,6 +75,7 @@ import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
 import { ApprovalRegistry } from './approval-registry';
 import { AttachmentStoreService } from './attachment-store.service';
+import { ChartBroker } from './chart.broker';
 import { CliSessionsService } from './cli-sessions.service';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
@@ -362,6 +366,7 @@ export class ChatService implements OnModuleInit {
     private readonly configDirPins: ConfigDirPinService,
     private readonly userQuestions: UserQuestionBroker,
     private readonly findingsReports: FindingsReportBroker,
+    private readonly charts: ChartBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2293,13 +2298,19 @@ export class ChatService implements OnModuleInit {
         adapter.getConfig().hostQuestionToolReason === null
           ? null
           : hostMcpServerName(runId);
-      const hostFindingsServer = hostMcpServerName(runId);
+      // The one name the run's own MCP server is published under, and so the
+      // name every host tool is matched against. Unconditional where
+      // `hostQuestionServer` is not: the RENDER tools are registered for every
+      // chat, because a transcript that can draw is a property of this app
+      // rather than of the CLI behind it.
+      const hostServerName = hostMcpServerName(runId);
       const autoApproves = (
         toolName: string,
         mode: ChatApprovalMode | undefined,
       ): boolean =>
         isHostQuestionCall(hostQuestionServer(), toolName) ||
-        isHostFindingsCall(hostFindingsServer, toolName) ||
+        isHostFindingsCall(hostServerName, toolName) ||
+        isHostChartCall(hostServerName, toolName) ||
         (mode === 'auto' &&
           !isUserQuestion(adapter.getConfig().questionToolName, toolName));
       const model = settings.model ?? undefined;
@@ -2767,11 +2778,50 @@ export class ChatService implements OnModuleInit {
         }
         return { status: 'recorded', count: report.findings.length };
       };
+      /**
+       * geniro's own chart channel — {@link reportFindings}'s twin, and
+       * deliberately its structural copy rather than a shared helper: what the
+       * two share is the SINK contract, which {@link HostSinkBroker} already
+       * holds, while the item kind, the payload and the receipt's counts are
+       * each tool's own. Folding them together would buy four lines and cost
+       * the ability to give either one a different failure.
+       */
+      const drawChart = async (chart: HostChart): Promise<HostChartOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_chart',
+            null,
+            chart,
+          );
+        } catch (err) {
+          // Logged here and kept here, for the reason spelled out above: a
+          // persist failure names an absolute database path, and the string
+          // this returns is handed to a model whose provider is off this
+          // machine.
+          this.logger.error(
+            `run ${runId} could not persist a chart: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return {
+          status: 'drawn',
+          series: chart.series.length,
+          // The labels ARE the points: every series was aligned to them at the
+          // reader, so this is the x-axis length rather than any one series'.
+          points: chart.labels.length,
+        };
+      };
       // The endpoint is granted for the UNION of reasons a host tool could be
       // wanted here, and the listing itself stays composed per request, so an
       // agent is only ever told about the tools it can actually use. What that
-      // works out to today is: every chat gets the endpoint, because the
-      // findings tool has a use in all of them, while the question tool is
+      // works out to today is: every chat gets the endpoint, because the RENDER
+      // tools have a use in all of them, while the question tool is
       // still registered only where `hostQuestionServer` is non-null — so
       // claude is never offered a second question tool beside its own, which
       // is the invariant this grant has always carried.
@@ -2796,7 +2846,7 @@ export class ChatService implements OnModuleInit {
           ? {
               url: `http://127.0.0.1:${port}/v1/mcp/${encodeURIComponent(runId)}/${encodeURIComponent(SINGLE_AGENT_NODE)}`,
               token: callToken,
-              serverName: hostFindingsServer,
+              serverName: hostServerName,
             }
           : null;
       const disposeAsker =
@@ -2810,6 +2860,9 @@ export class ChatService implements OnModuleInit {
             reportFindings,
           )
         : null;
+      const disposeDrawer = mcpEndpoint
+        ? this.charts.register(runId, SINGLE_AGENT_NODE, drawChart)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -2817,6 +2870,7 @@ export class ChatService implements OnModuleInit {
       disposeHostTools = (): void => {
         disposeAsker?.();
         disposeReporter?.();
+        disposeDrawer?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same

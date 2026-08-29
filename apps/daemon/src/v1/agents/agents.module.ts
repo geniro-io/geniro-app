@@ -27,6 +27,7 @@ import { AgentVersionService } from './services/agent-version.service';
 import { ApprovalRegistry } from './services/approval-registry';
 import { AttachmentStoreService } from './services/attachment-store.service';
 import { CacheResetService } from './services/cache-reset.service';
+import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
@@ -81,6 +82,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatService,
     UserQuestionBroker,
     FindingsReportBroker,
+    ChartBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -292,10 +294,11 @@ import { defaultSpawn } from './utils/spawn-cli';
     // `ask_user_question` tool through this broker, and the turn that can
     // actually put the card on screen registers here.
     UserQuestionBroker,
-    // Exported on the same terms: the MCP host serves `report_findings`
-    // through this broker, and the turn that can actually persist the row
-    // registers here.
+    // Exported on the same terms: the MCP host serves the RENDER family —
+    // `report_findings` and `show_chart` — through these brokers, and the turn
+    // that can actually persist the row registers here.
     FindingsReportBroker,
+    ChartBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

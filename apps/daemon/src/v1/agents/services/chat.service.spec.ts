@@ -58,6 +58,7 @@ import { AgentSessionRegistry } from './agent-session.registry';
 import { AgentVersionService } from './agent-version.service';
 import { ApprovalRegistry } from './approval-registry';
 import type { AttachmentStoreService } from './attachment-store.service';
+import { ChartBroker } from './chart.broker';
 import { ChatService } from './chat.service';
 import type { CliSessionsService } from './cli-sessions.service';
 import { ConfigDirPinService } from './config-dir-pin.service';
@@ -639,6 +640,7 @@ function setup(
   const callTokens = new CallTokenRegistry();
   const userQuestions = new UserQuestionBroker();
   const findingsReports = new FindingsReportBroker();
+  const charts = new ChartBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -738,6 +740,8 @@ function setup(
     // Real, for the reason the question broker above is: what these tests
     // observe through it is the row a report actually persists.
     findingsReports,
+    // And its twin on the same reasoning — the row a chart actually persists.
+    charts,
     callTokens,
     {
       token: 'launch',
@@ -759,6 +763,7 @@ function setup(
     callTokens,
     userQuestions,
     findingsReports,
+    charts,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1015,7 +1020,7 @@ describe('ChatService', () => {
       // With nothing bound there is no URL to hand the CLI, so a token would be
       // a credential nobody can present — registered as a redaction secret and
       // held to run teardown for a route that does not exist.
-      const { service, claude, findingsReports, callTokens } = setup({
+      const { service, claude, findingsReports, charts, callTokens } = setup({
         port: null,
       });
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -1024,7 +1029,10 @@ describe('ChatService', () => {
       const startArg = claude.start.mock.calls[0]?.[0] as AgentTurnInput;
       expect(startArg.mcpEndpoint ?? null).toBeNull();
       expect(callTokens.get(run.id, SINGLE_AGENT_NODE)).toBeNull();
+      // Both render tools, not just the one: they are registered off the same
+      // endpoint, so a grant that leaked would leak both.
       expect(findingsReports.canReport(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
       await settle(claude);
     });
 
@@ -1141,6 +1149,91 @@ describe('ChatService', () => {
         ],
       });
       await settle(claude);
+    });
+
+    it('records a chart as one transcript row, and nothing else', async () => {
+      const { service, claude, charts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      // EVERY optional field, for the reason the findings literal above spells
+      // out: the payload is `z.unknown()` on the wire, so the renderer's reader
+      // (`chats/chart-payload.ts`) is an independent twin, and this literal is
+      // the one worked example both sides can be checked against.
+      const outcome = await charts.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Test suite duration',
+        kind: 'line',
+        xLabel: 'commit',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        // A null among the numbers, deliberately: a gap has to survive JSON and
+        // the twin parser as a gap, because the alternative reading — zero — is
+        // a measurement the agent never made.
+        series: [{ name: 'unit', values: [12.1, null] }],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', series: 1, points: 2 });
+      const rows = itemDao.items.filter((item) => item.kind === 'show_chart');
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'Test suite duration',
+        kind: 'line',
+        xLabel: 'commit',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        series: [{ name: 'unit', values: [12.1, null] }],
+      });
+      await settle(claude);
+    });
+
+    it('answers a chart it could not write without naming the database', async () => {
+      // Same rule as the findings row: a persist failure names an absolute
+      // database path, and this string is handed to a model whose provider is
+      // off this machine.
+      const { service, claude, charts, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'show_chart';
+
+      const outcome = await charts.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Nope',
+        kind: 'bar',
+        labels: ['a'],
+        series: [{ name: 'unit', values: [1] }],
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('stops accepting charts once the turn that could draw them is over', async () => {
+      const { service, claude, charts } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(charts.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        charts.draw(run.id, SINGLE_AGENT_NODE, {
+          title: 'Late',
+          kind: 'line',
+          labels: ['a'],
+          series: [{ name: 'unit', values: [1] }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could draw it',
+      });
     });
 
     it('stops accepting reports once the turn that could persist them is over', async () => {

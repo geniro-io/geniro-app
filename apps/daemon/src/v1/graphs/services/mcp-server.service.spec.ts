@@ -7,9 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { GENIRO_MCP_CALL_TOOLS } from '../../agents/adapters/adapter.types';
 import {
+  HOST_CHART_TOOL,
   HOST_FINDINGS_TOOL,
   HOST_QUESTION_TOOL,
 } from '../../agents/chat.types';
+import { ChartBroker } from '../../agents/services/chart.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
 import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
@@ -48,8 +50,9 @@ function service(
   callBroker = broker(),
   questions = new UserQuestionBroker(),
   findings = new FindingsReportBroker(),
+  charts = new ChartBroker(),
 ): McpServerService {
-  return new McpServerService(callBroker, questions, findings, {
+  return new McpServerService(callBroker, questions, findings, charts, {
     token: 'launch',
     version: '9.9.9',
     startedAt: 0,
@@ -678,6 +681,158 @@ describe('McpServerService', () => {
     };
     expect(result.isError).toBe(false);
     expect(result.content[0]!.text).toContain('could not be recorded');
+    expect(result.content[0]!.text).toContain('in your reply');
+  });
+
+  it('does not offer show_chart to a node with nowhere to draw one', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_CHART_TOOL);
+  });
+
+  it('offers show_chart once a turn has registered a drawer', async () => {
+    const charts = new ChartBroker();
+    charts.register('run-1', 'agent', async () => ({
+      status: 'drawn',
+      series: 1,
+      points: 1,
+    }));
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: { name: string; inputSchema: Record<string, unknown> }[];
+      }
+    ).tools;
+    const tool = tools.find((t) => t.name === HOST_CHART_TOOL);
+    expect(tool).toBeDefined();
+    // The kinds the card can actually draw, and no more: an enum the model can
+    // read is what keeps `kind` from arriving as "sunburst".
+    const kind = (
+      tool!.inputSchema as { properties: { kind: { enum: string[] } } }
+    ).properties.kind;
+    expect(kind.enum).toEqual(['line', 'bar', 'area']);
+  });
+
+  it('tools/call show_chart hands the chart over and answers with a receipt', async () => {
+    const charts = new ChartBroker();
+    const drawn: unknown[] = [];
+    charts.register('run-1', 'agent', async (chart) => {
+      drawn.push(chart);
+      return {
+        status: 'drawn',
+        series: chart.series.length,
+        points: chart.labels.length,
+      };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: {
+          title: 'Test suite duration',
+          kind: 'line',
+          y_label: 'seconds',
+          labels: ['a1b2', 'c3d4'],
+          series: [{ name: 'unit', values: [12.1, 13.4] }],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(drawn).toEqual([
+      {
+        title: 'Test suite duration',
+        kind: 'line',
+        yLabel: 'seconds',
+        labels: ['a1b2', 'c3d4'],
+        series: [{ name: 'unit', values: [12.1, 13.4] }],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the numbers — same bargain as the findings tool.
+    expect(result.content[0]!.text).toBe(
+      'Chart drawn for the user: 1 series over 2 points.',
+    );
+    expect(result.content[0]!.text).not.toContain('12.1');
+  });
+
+  it('refuses a chart with nothing plottable, without reaching the drawer', async () => {
+    // Unlike an empty findings report — a real review outcome — a chart of
+    // nothing is only ever a mistake, so it is answered as a malformed call.
+    const charts = new ChartBroker();
+    const drawn: unknown[] = [];
+    charts.register('run-1', 'agent', async (chart) => {
+      drawn.push(chart);
+      return { status: 'drawn', series: 0, points: 0 };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        new UserQuestionBroker(),
+        new FindingsReportBroker(),
+        charts,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: { title: 'Nothing', kind: 'bar', labels: [], series: [] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(drawn).toEqual([]);
+  });
+
+  it('answers a chart it cannot draw without flagging a tool failure', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_CHART_TOOL,
+        arguments: {
+          title: 'Late',
+          kind: 'line',
+          labels: ['a'],
+          series: [{ name: 'unit', values: [1] }],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('could not be drawn');
     expect(result.content[0]!.text).toContain('in your reply');
   });
 

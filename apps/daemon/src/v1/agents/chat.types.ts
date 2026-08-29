@@ -267,6 +267,100 @@ export type HostFindingsOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/chart-payload.ts — the reader over the
+ * `show_chart` item payload this tool produces.
+ *
+ * The third tool geniro registers on the run's own MCP server, and the second
+ * of the RENDER family — an agent hands over typed numbers and this app plots
+ * them, instead of spending its output on an ASCII bar chart or a markdown table
+ * the reader has to hold in their head. Same bargain as the findings tool: the
+ * data goes to the screen, the call answers with a receipt, and nothing
+ * re-enters the model's context.
+ *
+ * Nothing here mirrors a claude tool, because claude has none — this is
+ * geniro's own shape, and the snake_case argument names exist only for
+ * consistency with the tool beside it. {@link readHostChart} is again the one
+ * place that seam is crossed.
+ */
+export const HOST_CHART_TOOL = 'show_chart';
+
+/**
+ * The plot kinds the card can draw.
+ *
+ * Three, and no pie. A pie encodes magnitude as angle, which is the hardest
+ * encoding to compare by eye, and everything it is reached for — "share of the
+ * bundle by package" — reads better as the bar chart already here. Adding a
+ * kind later is a line in this tuple plus a branch in the card; adding one now
+ * that nobody asked for is a worse chart nobody can un-draw.
+ */
+export const CHART_KINDS = ['line', 'bar', 'area'] as const;
+export type ChartKind = (typeof CHART_KINDS)[number];
+
+/**
+ * Caps on one chart. They TRUNCATE rather than refuse, like every cap above.
+ *
+ * `MAX_CHART_SERIES` is 5 because the palette is five tokens
+ * (`--chart-1..5`) and `categoryToken` WRAPS past the end. Wrapping is right
+ * where each row carries its own label, which is what that helper was written
+ * for; on a multi-series plot colour is the only thing tying a curve to its
+ * legend entry, so a sixth series would be a second curve claiming the first
+ * one's colour. Truncating is the honest failure: five plotted and said so,
+ * rather than six drawn ambiguously.
+ */
+export const MAX_CHART_SERIES = 5;
+export const MAX_CHART_POINTS = 200;
+export const MAX_CHART_TITLE_LENGTH = 120;
+export const MAX_CHART_LABEL_LENGTH = 40;
+
+/**
+ * One plotted series: a name, and one value per x label.
+ *
+ * `values` is positional against {@link HostChart.labels} rather than a list of
+ * `{x, y}` pairs, and that is the whole reason this shape was chosen: a model
+ * filling parallel arrays cannot silently disagree with itself about the
+ * x axis, and a length mismatch is mechanically detectable where a set of
+ * pair-lists with drifting x values is not.
+ *
+ * A null is a GAP — a point that was not measured — and is drawn as a break in
+ * the curve rather than as zero, which would read as a measurement of nothing.
+ */
+export interface HostChartSeries {
+  name: string;
+  values: (number | null)[];
+}
+
+/** One `show_chart` call, as the card will plot it. */
+export interface HostChart {
+  /**
+   * Optional here though the tool advertises it as required, on the reasoning
+   * {@link HostFinding.failureScenario} follows: a plot of real numbers is
+   * worth drawing under a generic heading, where dropping it over a missing
+   * caption would throw away the measurement itself.
+   */
+  title?: string;
+  kind: ChartKind;
+  /** The x-axis categories; every series is read positionally against these. */
+  labels: string[];
+  series: HostChartSeries[];
+  /** Axis captions. Absent where the numbers speak for themselves. */
+  xLabel?: string;
+  yLabel?: string;
+}
+
+/**
+ * What a chart resolves to.
+ *
+ * Two arms, like the findings report and for the same reason — nothing is put
+ * to the user, so there is no `declined`. The counts are in the receipt because
+ * the caps above TRUNCATE silently otherwise: an agent that sent seven series
+ * and reads back "5 series" learns what happened without the findings ever
+ * being echoed.
+ */
+export type HostChartOutcome =
+  | { status: 'drawn'; series: number; points: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * Image types a pasted attachment may carry. Restricted to what the model APIs
  * behind both CLIs accept, so an unsupported paste is refused at the daemon
  * edge with a clear error rather than reaching an agent that silently ignores

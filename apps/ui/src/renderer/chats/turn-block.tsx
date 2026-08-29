@@ -3,6 +3,7 @@ import { memo, useContext } from 'react';
 import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
+import { ChartCard } from './chart-block';
 import { FindingsCard } from './findings-block';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
@@ -101,6 +102,9 @@ export const TurnBlock = memo(function TurnBlock({
     }
     if (entry.type === 'findings') {
       return <FindingsCard key={entry.id} report={entry.report} />;
+    }
+    if (entry.type === 'chart') {
+      return <ChartCard key={entry.id} chart={entry.chart} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

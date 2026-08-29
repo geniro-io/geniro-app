@@ -2059,7 +2059,8 @@ export const ItemKind = {
     SubagentInfo: 'subagent_info',
     TaskList: 'task_list',
     ShellInfo: 'shell_info',
-    ReportFindings: 'report_findings'
+    ReportFindings: 'report_findings',
+    ShowChart: 'show_chart'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

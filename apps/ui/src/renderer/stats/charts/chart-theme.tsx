@@ -70,6 +70,17 @@ export const CHART_MARGIN = { top: 8, right: 24, bottom: 0, left: 8 } as const;
 export interface SeriesKey {
   label: string;
   color: string;
+  /**
+   * The series' stroke pattern, where it has one — an SVG `stroke-dasharray`.
+   *
+   * Optional, and absent for every chart on this page: a legend entry is a
+   * swatch, and a swatch only needs to show a pattern the CURVE has. It exists
+   * because the transcript's chart card gives multi-series lines a dash on top
+   * of their colour (the ramp is five shades of one hue, which is not five
+   * identities), and a legend that answered such a chart with plain dots would
+   * show the reader a key they cannot match to anything on the plot.
+   */
+  dash?: string | undefined;
 }
 
 /**
@@ -90,11 +101,33 @@ export function SeriesLegend({
         <li
           key={entry.label}
           className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span
-            aria-hidden="true"
-            className="size-2 shrink-0 rounded-full"
-            style={{ backgroundColor: entry.color }}
-          />
+          {entry.dash === undefined ? (
+            <span
+              aria-hidden="true"
+              className="size-2 shrink-0 rounded-full"
+              style={{ backgroundColor: entry.color }}
+            />
+          ) : (
+            // A short piece of the actual line, drawn with the actual pattern —
+            // the swatch has to be the thing it stands for, or it is a second
+            // code the reader has to learn.
+            <svg
+              aria-hidden="true"
+              width="14"
+              height="8"
+              className="shrink-0"
+              viewBox="0 0 14 8">
+              <line
+                x1="0"
+                y1="4"
+                x2="14"
+                y2="4"
+                stroke={entry.color}
+                strokeWidth="2"
+                strokeDasharray={entry.dash}
+              />
+            </svg>
+          )}
           {entry.label}
         </li>
       ))}

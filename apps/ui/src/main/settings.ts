@@ -128,10 +128,10 @@ function salvageCliPaths(value: unknown): Settings['cliPaths'] | undefined {
 /**
  * Same per-entry salvage as {@link salvageCliPaths}, for the three HAND-MANAGED
  * lists — the saved run configurations, the fast actions, and the named agent
- * configurations. Zod rejects an
- * ARRAY wholesale on one bad element, and the blast radius here is the user's
- * whole set of them, each hand-written and unrecoverable. Order is preserved:
- * it is the order the user arranged, not an MRU this file is free to re-sort.
+ * configurations. Zod rejects an ARRAY wholesale on one bad element, and the
+ * blast radius here is the user's whole set of them, each hand-written and
+ * unrecoverable. Order is preserved: it is the order the user arranged, not an
+ * MRU this file is free to re-sort.
  *
  * ONE function over all three rather than a copy each. They are different
  * features and must never be folded together in the UI — but this rule is about

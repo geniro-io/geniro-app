@@ -180,6 +180,43 @@ describe('ConfigProfileList', () => {
     expect(changes).toHaveLength(0);
   });
 
+  it('refuses to RE-POINT a row at a directory another row already stands for', async () => {
+    // The same invariant as the test above, on the other path that can set a
+    // directory. Enforced on the add alone, the row's own directory button was
+    // free to aim at a folder already in the list — two names for one account,
+    // reached by the control that exists to change one.
+    const { el, changes } = render(
+      [profile(), profile({ id: 'p2', name: 'Lab', dir: '/Users/x/.lab' })],
+      async () => '/Users/x/.claude-work',
+    );
+
+    await act(async () => {
+      byLabel(el, 'Change the directory for Lab').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(changes).toHaveLength(0);
+  });
+
+  it('lets a row be re-picked onto the directory it is already on', async () => {
+    // The guard is about OTHER rows: a row that refused itself would make
+    // re-confirming the same folder look like a broken button.
+    const { el, changes } = render(
+      [profile()],
+      async () => '/Users/x/.claude-work',
+    );
+
+    await act(async () => {
+      byLabel(el, 'Change the directory for Work').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(changes).toHaveLength(1);
+    expect(changes[0]![0]!.dir).toBe('/Users/x/.claude-work');
+  });
+
   it('writes nothing when the picker is cancelled', async () => {
     const { el, changes } = render([]);
     await act(async () => {

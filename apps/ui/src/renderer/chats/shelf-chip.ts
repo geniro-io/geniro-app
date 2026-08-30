@@ -41,7 +41,7 @@
  * different heights are merely misaligned, while two segments of one card leave
  * a visible step in that card's own outline.
  */
-export const SHELF_ITEM_HEIGHT = 'h-[26px]';
+const SHELF_ITEM_HEIGHT = 'h-[26px]';
 
 /**
  * The CARD — the small white surface with a hairline and a soft lift.
@@ -73,6 +73,28 @@ const SHELF_BODY = `flex ${SHELF_ITEM_HEIGHT} min-w-0 items-center gap-1.5 text-
 
 /** A chip standing on its own — the default, and what most of the row is. */
 export const SHELF_CHIP_CLASS = `${SHELF_BODY} px-2 ${SHELF_CARD}`;
+
+/**
+ * What a `HoverPopover` chip puts on its WRAPPER, and what it puts on the
+ * trigger inside it — the pair, because they do different jobs and only one of
+ * them is obvious.
+ *
+ * `HoverPopover` renders a wrapper span around its trigger, and the WRAPPER is
+ * what the shelf lays out; the trigger is a flex child of it. With `shrink-0`
+ * on the trigger alone the wrapper collapsed under a crowded row while the
+ * button inside refused to, so the button spilled out of its own box and the
+ * next chip was placed against the collapsed one. REPORTED as "terminals chip
+ * have some problems with margin" and measured at a 430px shelf: the
+ * sub-agents span ran 725–810 against its own button's 725–837, with the
+ * terminals span beginning at 816 — 21px INSIDE its neighbour. The gap does
+ * not shrink there; it vanishes and the chips overlap.
+ *
+ * Stated once and shared by all three counter chips, which are otherwise
+ * identical in this respect: three copies of the class pair is three chances
+ * to fix one of them and leave the others overlapping.
+ */
+export const SHELF_CHIP_WRAPPER_CLASS = 'shrink-0';
+export const SHELF_CHIP_TRIGGER_CLASS = `${SHELF_CHIP_CLASS} shrink-0`;
 
 /**
  * ONE segment of {@link SHELF_GROUP_CLASS}.

@@ -9,9 +9,9 @@ import {
   type ProfileColor,
 } from '../../shared/contracts';
 import { shortenPath } from '../chats/directory-select';
-import { PALETTE_DOT_CLASS, PALETTE_LABEL } from '../components/palette';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { PALETTE_DOT_CLASS, PALETTE_LABEL } from '../components/ui/palette';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
 
@@ -76,16 +76,26 @@ export function ConfigProfileList({
     );
   };
 
+  /**
+   * Whether some OTHER entry already stands for this directory.
+   *
+   * The DIRECTORY is the identity, so the same one twice would be two names for
+   * one account with nothing able to say which a run was using. Both ways of
+   * setting one go through this — adding a new entry and re-pointing an
+   * existing one — because an invariant enforced on one of two paths is not an
+   * invariant: the row's own directory button could otherwise be aimed at a
+   * folder already in the list. `exceptId` is what lets a row be re-picked onto
+   * the folder it is already on without refusing itself.
+   *
+   * Silently ignoring the pick is the right refusal here: the user chose a
+   * folder that is already in the list, and the list is showing it.
+   */
+  const alreadyListed = (dir: string, exceptId?: string): boolean =>
+    profiles.some((profile) => profile.dir === dir && profile.id !== exceptId);
+
   const add = async (): Promise<void> => {
     const dir = await onPickDirectory();
-    if (dir === null) {
-      return;
-    }
-    // The DIRECTORY is the identity, so the same one twice would be two names
-    // for one account with nothing able to say which a run was using. Silently
-    // ignoring the second is the right refusal here: the user picked a folder
-    // that is already in the list, and the list already shows it.
-    if (profiles.some((profile) => profile.dir === dir)) {
+    if (dir === null || alreadyListed(dir)) {
       return;
     }
     if (profiles.length >= MAX_CONFIG_PROFILES) {
@@ -189,7 +199,7 @@ export function ConfigProfileList({
                 className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-xs font-normal text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 onClick={() => {
                   void onPickDirectory().then((dir) => {
-                    if (dir !== null) {
+                    if (dir !== null && !alreadyListed(dir, profile.id)) {
                       replace(profile.id, { dir });
                     }
                   });

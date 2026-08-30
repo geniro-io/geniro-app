@@ -1,4 +1,4 @@
-import { type ProfileColor } from '../../shared/contracts';
+import { type ProfileColor } from '../../../shared/contracts';
 
 /**
  * The app's ONE colour palette, as classes — the eight `--color-group-*` tokens
@@ -10,6 +10,11 @@ import { type ProfileColor } from '../../shared/contracts';
  * `chats/run-group.ts` (where it started) a second caller would have had to
  * import a chats module from Settings or write the eight class names again —
  * and a second copy is how one palette comes to have a colour the other lacks.
+ *
+ * In `components/ui/` and not `components/`, because `menu.tsx` reads it: a
+ * PRIMITIVE may not depend on the app-level layer above it (see
+ * `.claude/rules/renderer-components.md`), and token classes are exactly what
+ * that layer is for.
  *
  * A LOOKUP rather than `bg-group-${color}`: Tailwind scans source text for
  * whole class names, so an interpolated one is never emitted and every swatch

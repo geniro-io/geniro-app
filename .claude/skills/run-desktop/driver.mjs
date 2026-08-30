@@ -177,6 +177,13 @@ function stubScript(handle) {
   const recentConfigDirs = process.env.GENIRO_RUN_CONFIG_DIR
     ? `[${configDir}]`
     : '[]';
+  // The thread's pull requests, keyed by URL, read from a JSON file at
+  // `GENIRO_RUN_PRS` — see `getPullRequestsByRef` below.
+  const seededPullRequests = JSON.stringify(
+    process.env.GENIRO_RUN_PRS
+      ? JSON.parse(fs.readFileSync(process.env.GENIRO_RUN_PRS, 'utf8'))
+      : {},
+  );
   // Extra settings keys the stub should answer with, read from a JSON file at
   // `GENIRO_RUN_SETTINGS`. The stub's own object is a minimal fixture, so any
   // feature whose data lives in settings.json (saved run configurations, fast
@@ -184,12 +191,6 @@ function stubScript(handle) {
   // command means pasting the whole list into a REPL line, which jams tmux at
   // a few hundred characters. It seeds the SAME `window.__geniroSettings` the
   // stub already merges, so a write from the app still wins over it.
-  // Pull requests keyed by URL, for `getPullRequestsByRef` below.
-  const seededPullRequests = JSON.stringify(
-    process.env.GENIRO_RUN_PRS
-      ? JSON.parse(fs.readFileSync(process.env.GENIRO_RUN_PRS, 'utf8'))
-      : {},
-  );
   const seededSettings = JSON.stringify(
     process.env.GENIRO_RUN_SETTINGS
       ? JSON.parse(fs.readFileSync(process.env.GENIRO_RUN_SETTINGS, 'utf8'))

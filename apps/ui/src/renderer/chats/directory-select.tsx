@@ -150,14 +150,12 @@ export function DirectorySelect({
                   label: shortenPath(path),
                   title: path,
                   icon,
-                  // Spread rather than `accent: accents?.get(path)`, because an
-                  // explicit `undefined` is still a key: the row would then be
-                  // drawing the absent case through the same branch as the
-                  // present one, which is exactly the distinction `MenuItem`
-                  // documents.
-                  ...(accents?.get(path) === undefined
-                    ? {}
-                    : { accent: accents.get(path) }),
+                  // Undefined for a directory the user has not named, which is
+                  // exactly what `MenuItem.accent` reads as "no colour" — the
+                  // absent and the explicitly-undefined case are one branch
+                  // there, so neither this nor a conditional spread would draw
+                  // anything.
+                  accent: accents?.get(path),
                 })),
               },
             ]

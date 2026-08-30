@@ -2,7 +2,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
-import { PALETTE_BORDER_CLASS } from '../palette';
+import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
 import { cn } from './utils';
 

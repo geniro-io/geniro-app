@@ -163,7 +163,7 @@ export const MAX_CONFIG_PROFILE_NAME = 40;
  * ELECTRON-internal and holds no daemon shapes (see the renderer rules), while
  * a profile's colour lives in settings.json and never reaches the daemon at
  * all. The renderer is where the two meet, and it maps both through one lookup
- * (`components/palette.ts`) so the classes cannot drift even though the unions
+ * (`components/ui/palette.ts`) so the classes cannot drift even though the unions
  * must stay separate.
  */
 export const PROFILE_COLORS = [

@@ -149,6 +149,20 @@ const SECTION_LABEL: Record<SettingsSection, string> = {
   'fast-actions': 'Fast actions',
 };
 
+/**
+ * The one line under each section's heading — a RECORD beside the labels
+ * rather than a ternary at the call site, so adding a section is one row here
+ * instead of another branch in a chain that already had three arms.
+ */
+const SECTION_NOTE: Record<SettingsSection, string> = {
+  general:
+    'Configure the CLI agents Geniro drives. Changes are saved automatically.',
+  'run-configurations':
+    'Saved new-chat setups — folder, branch, agent and its options. Start one from the + above the chat list; this is where you keep them in order.',
+  'fast-actions':
+    'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.',
+};
+
 /** Nav order — General first, because it is what Settings has always been. */
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'general',
@@ -718,11 +732,6 @@ export function Settings({
       capabilities ? (approvalModesByAgent.get(kind) ?? []) : null,
     [capabilities, approvalModesByAgent],
   );
-  const configDirReasonFor = useCallback(
-    (kind: CliKind): string | null | undefined =>
-      configDirCapability.unavailableReasonFor(kind),
-    [configDirCapability],
-  );
 
   /**
    * Sign one CLI in, IN PLACE — the daemon runs it and this screen shows the
@@ -957,11 +966,7 @@ export function Settings({
               ) : null}
             </div>
             <p className="text-sm text-muted-foreground">
-              {section === 'fast-actions'
-                ? 'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.'
-                : section === 'run-configurations'
-                  ? 'Saved new-chat setups — folder, branch, agent and its options. Start one from the + above the chat list; this is where you keep them in order.'
-                  : 'Configure the CLI agents Geniro drives. Changes are saved automatically.'}
+              {SECTION_NOTE[section]}
             </p>
           </header>
 
@@ -985,7 +990,10 @@ export function Settings({
               recentFolders={recentFolders}
               recentConfigDirs={recentConfigDirs}
               approvalModesFor={approvalModesFor}
-              configDirReasonFor={configDirReasonFor}
+              // Passed straight through: `configDirCapabilityFrom` is a plain
+              // call rather than a hook, so it builds a fresh object every
+              // render and a `useCallback` over it would memoize nothing.
+              configDirReasonFor={configDirCapability.unavailableReasonFor}
               planSupported={capabilities?.claudeModes.plan === 'pass'}
               // Settings has no composer to read, so a new configuration starts
               // from the blank draft rather than from chips that are not on

@@ -151,7 +151,7 @@ export function PullRequestBadge({
  * otherwise: prefixing every row in a single-repository thread is noise that
  * pushes the title out.
  */
-export function pullRequestLabel(
+function pullRequestLabel(
   ref: { repo: string; number: number },
   showRepo: boolean,
 ): string {

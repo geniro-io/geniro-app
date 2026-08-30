@@ -11,6 +11,8 @@ import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
 import {
   SHELF_CHIP_CLASS,
+  SHELF_CHIP_TRIGGER_CLASS,
+  SHELF_CHIP_WRAPPER_CLASS,
   SHELF_GROUP_CLASS,
   SHELF_SEGMENT_CLASS,
 } from './shelf-chip';
@@ -222,19 +224,8 @@ export function RunningShellChips({
       panelLabel="Shells"
       side="top"
       align="start"
-      // `shrink-0` on BOTH, and they do different jobs — the pair is the fix
-      // for a REPORTED "terminals chip have some problems with margin".
-      // `HoverPopover` renders a WRAPPER span around its trigger, and that
-      // wrapper is what the shelf lays out; the trigger is a flex child of the
-      // wrapper. With the class on the trigger alone the wrapper collapsed
-      // under a crowded row while the button inside it refused to, so the
-      // button spilled out of its own box and the next chip was placed against
-      // the collapsed one — measured at a 430px shelf: this span 725–810
-      // against its button 725–837, with the terminals span starting at 816,
-      // i.e. 21px INSIDE its neighbour. The gap does not shrink; it vanishes
-      // and the chips overlap.
-      className="shrink-0"
-      triggerClassName={cn(SHELF_CHIP_CLASS, 'shrink-0')}
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as in the header: a fan-out can hold a dozen,
       // and the rows are long — a command, not a name.
       panelClassName="max-h-64 w-[22rem] overflow-y-auto"
@@ -313,19 +304,8 @@ export function RunningSubagentChips({
       panelLabel="Sub-agents"
       side="top"
       align="start"
-      // `shrink-0` on BOTH, and they do different jobs — the pair is the fix
-      // for a REPORTED "terminals chip have some problems with margin".
-      // `HoverPopover` renders a WRAPPER span around its trigger, and that
-      // wrapper is what the shelf lays out; the trigger is a flex child of the
-      // wrapper. With the class on the trigger alone the wrapper collapsed
-      // under a crowded row while the button inside it refused to, so the
-      // button spilled out of its own box and the next chip was placed against
-      // the collapsed one — measured at a 430px shelf: this span 725–810
-      // against its button 725–837, with the terminals span starting at 816,
-      // i.e. 21px INSIDE its neighbour. The gap does not shrink; it vanishes
-      // and the chips overlap.
-      className="shrink-0"
-      triggerClassName={cn(SHELF_CHIP_CLASS, 'shrink-0')}
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
       // hold a dozen live and forty finished, and a panel that grows with them
       // runs off the top of the window.
@@ -389,19 +369,8 @@ export function TaskListChip({
       panelLabel="Task list"
       side="top"
       align="start"
-      // `shrink-0` on BOTH, and they do different jobs — the pair is the fix
-      // for a REPORTED "terminals chip have some problems with margin".
-      // `HoverPopover` renders a WRAPPER span around its trigger, and that
-      // wrapper is what the shelf lays out; the trigger is a flex child of the
-      // wrapper. With the class on the trigger alone the wrapper collapsed
-      // under a crowded row while the button inside it refused to, so the
-      // button spilled out of its own box and the next chip was placed against
-      // the collapsed one — measured at a 430px shelf: this span 725–810
-      // against its button 725–837, with the terminals span starting at 816,
-      // i.e. 21px INSIDE its neighbour. The gap does not shrink; it vanishes
-      // and the chips overlap.
-      className="shrink-0"
-      triggerClassName={cn(SHELF_CHIP_CLASS, 'shrink-0')}
+      className={SHELF_CHIP_WRAPPER_CLASS}
+      triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       panelClassName="w-[20rem]"
       trigger={
         <>

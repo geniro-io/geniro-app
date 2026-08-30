@@ -5,10 +5,9 @@ import { Select } from '../components/ui/select';
  * Display labels for the chat approval modes (order = menu order).
  *
  * EXPORTED because the composer now offers this axis inside the model-settings
- * popover (`ModelSettingsSelect`) while this chip still serves the two surfaces
- * that are not a chip row — the run-configuration editor and the graph node
- * inspector. One list, so the two renderings cannot come to spell `auto` two
- * different ways.
+ * popover (`ModelSettingsSelect`) while this chip still serves the surface that
+ * is not a chip row — the graph node inspector. One list, so the two renderings
+ * cannot come to spell `auto` two different ways.
  */
 export const MODE_LABELS: readonly {
   value: ChatApprovalMode;

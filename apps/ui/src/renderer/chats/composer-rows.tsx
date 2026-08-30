@@ -113,9 +113,8 @@ export function ComposerBottomRow({
           the chips was rejected because it "truncated their chevrons away", and
           it does not — `Select`'s trigger keeps its icon and its chevron
           `shrink-0` and gives up the LABEL, which is `truncate`d. (That is the
-          same arrangement the `flexible` prop already ships for the
-          run-configuration editor's rows; what was missing here was the second
-          half of it.) So the chips narrow in place instead of stacking, and the
+          same arrangement the `flexible` prop already ships for a label
+          column's rows; what was missing here was the second half of it.) So the chips narrow in place instead of stacking, and the
           row's height stops depending on how many of them a run happens to
           show.
 

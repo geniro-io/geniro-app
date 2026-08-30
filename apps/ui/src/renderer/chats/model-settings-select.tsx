@@ -335,10 +335,9 @@ export function ModelSettingsSelect({
      * did — the composer row was a queue of pickers, and this panel is where a
      * setting gets a name and a stated value instead of a bare word.
      *
-     * It LEADS, ahead of approval, which is the order the run-configuration
-     * editor teaches: profile, approval, then the model and everything the
-     * model offers. Two screens with a label column should not teach two
-     * orders.
+     * It LEADS, ahead of approval, which is the order the graph node inspector
+     * teaches: profile, approval, then the model and everything the model
+     * offers. Two surfaces with a label column should not teach two orders.
      *
      * ABSENT — not disabled — for a CLI that reads no config directory, and
      * absent while the daemon has not said either way: the standing "a picker

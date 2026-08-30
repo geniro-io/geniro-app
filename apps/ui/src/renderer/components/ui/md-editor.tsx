@@ -3,6 +3,7 @@ import '@uiw/react-md-editor/markdown-editor.css';
 import type { MDEditorProps } from '@uiw/react-md-editor';
 import MDEditor from '@uiw/react-md-editor';
 
+import { useThemeAppearance } from '../../theme/apply-theme';
 import { cn } from './utils';
 
 /**
@@ -12,8 +13,15 @@ import { cn } from './utils';
  *
  * The upstream chrome paints itself from GitHub Primer variables under
  * `data-color-mode`; `.md-editor-surface` in `styles/global.css` remaps those
- * few variables onto our tokens, so the editor reads as part of the app
- * instead of a white GitHub panel dropped into the cream theme.
+ * few variables onto our tokens, so the editor reads as part of the app instead
+ * of a GitHub panel dropped into it.
+ *
+ * `data-color-mode` still has to be told which way round the theme is, even
+ * though the retint covers the variables that matter: it is what the vendor
+ * keys every rule this app does NOT override on. The retint wins in both arms
+ * on specificity — its strongest selector is (0,3,0) against the vendor's
+ * (0,2,0) for `light` and `dark` alike, and both are unlayered, so source order
+ * never has to decide.
  */
 export function MdEditor({
   value,
@@ -34,7 +42,9 @@ export function MdEditor({
   className?: string;
 }): React.JSX.Element {
   return (
-    <div data-color-mode="light" className={cn('md-editor-surface', className)}>
+    <div
+      data-color-mode={useThemeAppearance()}
+      className={cn('md-editor-surface', className)}>
       <MDEditor
         value={value}
         onChange={(next) => onChange?.(next ?? '')}

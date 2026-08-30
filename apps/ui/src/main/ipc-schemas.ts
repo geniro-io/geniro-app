@@ -11,6 +11,7 @@ import {
   MAX_FAST_ACTION_TEXT,
   MAX_FAST_ACTIONS,
 } from '../shared/contracts';
+import { THEME_PREFERENCES } from '../shared/themes';
 
 /**
  * Runtime validation for IPC payloads. The renderer is the only caller today,
@@ -152,6 +153,11 @@ export const settingsPatchSchema = z.strictObject({
       'must not contain control characters',
     )
     .optional(),
+  // ENUMERATED, unlike the CLI-vocabulary fields above, because this
+  // vocabulary is the app's own: a theme is a file this repo ships, so a value
+  // outside the list names nothing that can be painted. `THEME_PREFERENCES` is
+  // the same tuple the picker is built from, so the two cannot drift.
+  theme: z.enum(THEME_PREFERENCES).optional(),
   // Nullable, not just optional: `null` is the "unchosen, resolve per build"
   // state, and it must be writable so a user can hand the choice back.
   daemonInspect: z.boolean().nullable().optional(),

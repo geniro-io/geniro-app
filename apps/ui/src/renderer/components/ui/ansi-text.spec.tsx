@@ -46,6 +46,24 @@ describe('AnsiText', () => {
     expect(el.innerHTML).not.toContain('#');
   });
 
+  it('draws the BRIGHT half in its own token class, not the normal one', () => {
+    // The two are separate tokens precisely so a theme can answer them
+    // differently — drawing a bright run in `text-ansi-green` would put the
+    // decision back in the parser, where CSS cannot reach it.
+    const el = render(<AnsiText text={`${ESC}[92mok${ESC}[32mplain`} />);
+
+    const [bright, normal] = el.querySelectorAll('[data-slot="ansi-span"]');
+    expect(bright?.textContent).toBe('ok');
+    expect(bright?.className).toContain('text-ansi-bright-green');
+    expect(bright?.className).not.toContain('text-ansi-green');
+    expect(bright?.hasAttribute('data-ansi-bright')).toBe(true);
+
+    expect(normal?.textContent).toBe('plain');
+    expect(normal?.className).toContain('text-ansi-green');
+    expect(normal?.className).not.toContain('bright');
+    expect(normal?.hasAttribute('data-ansi-bright')).toBe(false);
+  });
+
   it('carries weight, dimming, italics and underline', () => {
     const el = render(<AnsiText text={`${ESC}[1;2;3;4mstyled`} />);
 

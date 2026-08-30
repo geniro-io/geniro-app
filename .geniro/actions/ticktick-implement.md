@@ -85,7 +85,8 @@ Both are shown to the user, and the run does not move to the next item without t
       before the first edit — after the fix it cannot be recovered.
    b. Implement item N in this repo. Use `codegraph explore "<symbols>"` to locate code before
       grep/Read. Honour the renderer design system: colours come from tokens in
-      `apps/ui/src/renderer/styles/global.css`, never hardcoded, and shared UI is reused from
+      `apps/ui/src/renderer/styles/themes/<id>.css` (one file per theme — a new token goes
+      into EVERY one of them), never hardcoded, and shared UI is reused from
       `components/ui/` rather than re-implemented.
    c. Rebuild and relaunch the dev app so the running instance is the code just written
       (`pnpm build`, then kill the Electron process and repeat step 5's launch), then capture

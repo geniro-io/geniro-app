@@ -11,11 +11,17 @@ import { cn } from './utils';
  * line looks like. It is the reading half of {@link parseAnsi}: that decides
  * WHAT the bytes say, this decides what it looks like here.
  *
- * Every colour is a TOKEN (`--ansi-*` in `styles/global.css`), never a value
- * from the stream. A terminal's own palette is built for a black background and
- * putting `#00ff00` on this cream card would be unreadable — so the eight names
- * are mapped to hues already proven on this surface, and the mapping lives in
- * the one file colours are allowed to live in.
+ * Every colour is a TOKEN (`--ansi-*` in `styles/themes/<id>.css`), never a
+ * value from the stream. A terminal's own palette is built for a black
+ * background and putting `#00ff00` on this cream card would be unreadable — so
+ * the eight names are mapped to hues already proven on this surface, and the
+ * mapping lives in the one file colours are allowed to live in.
+ *
+ * That is also the whole reason BRIGHT is resolved here as a class rather than
+ * in the parser as a lightened value: what "brighter" should look like is a
+ * fact about the THEME, and the two answer it differently. On the dark theme
+ * all eight brights are genuinely lifted; on the light one only the greys move,
+ * because a brighter ink on cream is a fainter one.
  */
 
 /** The eight names, as the token classes that draw them. */
@@ -28,6 +34,18 @@ const COLOR_CLASS: Record<AnsiColor, string> = {
   magenta: 'text-ansi-magenta',
   cyan: 'text-ansi-cyan',
   white: 'text-ansi-white',
+};
+
+/** The same eight from the bright half of the range (90–97). */
+const BRIGHT_COLOR_CLASS: Record<AnsiColor, string> = {
+  black: 'text-ansi-bright-black',
+  red: 'text-ansi-bright-red',
+  green: 'text-ansi-bright-green',
+  yellow: 'text-ansi-bright-yellow',
+  blue: 'text-ansi-bright-blue',
+  magenta: 'text-ansi-bright-magenta',
+  cyan: 'text-ansi-bright-cyan',
+  white: 'text-ansi-bright-white',
 };
 
 export function AnsiText({
@@ -62,8 +80,12 @@ export function AnsiText({
             key={index}
             data-slot="ansi-span"
             data-ansi-color={span.color ?? undefined}
+            data-ansi-bright={span.bright ? '' : undefined}
             className={cn(
-              span.color !== null && COLOR_CLASS[span.color],
+              span.color !== null &&
+                (span.bright
+                  ? BRIGHT_COLOR_CLASS[span.color]
+                  : COLOR_CLASS[span.color]),
               span.bold && 'font-bold',
               // `dim` is what a terminal draws at half intensity. Opacity
               // rather than a second set of muted tokens: it composes with all

@@ -3,13 +3,18 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
-import { TRAFFIC_LIGHT_INSET, WINDOW_BACKGROUND } from '../shared/contracts';
+import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { installContextMenu } from './context-menu';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
-import { applyNativeAppearance } from './native-appearance';
+import {
+  applyTheme,
+  resolvedTheme,
+  watchSystemAppearance,
+} from './native-appearance';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
@@ -135,6 +140,11 @@ async function loadDevToolsExtension(): Promise<void> {
 }
 
 function createWindow(): void {
+  // Asked, not applied: `themeSource` is already current (set at launch and by
+  // every theme change), so this path only needs to KNOW what is being painted.
+  // It runs on macOS `activate` too, which can reopen a window long after the
+  // theme was last changed.
+  const theme = resolvedTheme(readSettings().theme);
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -144,8 +154,9 @@ function createWindow(): void {
     minHeight: 640,
     show: false,
     // The ground the window paints where the page has not (yet). Unset it is
-    // WHITE — see {@link WINDOW_BACKGROUND} for the band that produced.
-    backgroundColor: WINDOW_BACKGROUND,
+    // WHITE — see {@link ThemeDescriptor.windowBackground} for the band that
+    // produced, and why it is per-theme.
+    backgroundColor: themeWindowBackground(theme),
     title: 'Geniro',
     icon: existsSync(ICON_PATH) ? ICON_PATH : undefined,
     /**
@@ -341,8 +352,14 @@ function main(): void {
 
   void app.whenReady().then(async () => {
     // Before the window, and before the menu: it decides how macOS draws every
-    // surface this app does not paint itself, the window buttons included.
-    applyNativeAppearance();
+    // surface this app does not paint itself, the window buttons included —
+    // and, through `prefers-color-scheme`, what the renderer paints too, which
+    // is what keeps the first frame from flashing the wrong theme.
+    applyTheme(readSettings().theme);
+    // The one theme change that arrives through no settings write: the user
+    // flips the OS appearance while `system` is selected. The renderer follows
+    // on its own (its media query moves); the window's own ground does not.
+    watchSystemAppearance(() => readSettings().theme);
 
     // In dev the Dock shows Electron's default icon; override it with the Geniro
     // mascot. A packaged build gets its icon from the bundled .icns (M4), so this

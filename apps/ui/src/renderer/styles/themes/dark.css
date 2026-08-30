@@ -1,0 +1,202 @@
+/*
+ * Dark — the warm dark grey counterpart of `light.css`.
+ *
+ * Warm charcoal rather than true black, and that is the whole character of it:
+ * the light theme is a warm cream, so its dark sibling is the same hue family
+ * at the other end rather than a neutral or an OLED black. Pure black also
+ * takes the elevation system with it — a shadow needs a surface lighter than
+ * itself to fall on, and on #000 every panel edge would have to be drawn as a
+ * border, which is the wireframe look `--shadow-lg` exists to avoid.
+ *
+ * Three rules decide the values below, and a palette that breaks any of them
+ * was REPORTED as "I don't think all colors look good together".
+ *
+ * 1. THE WARMTH LIVES IN THE ACCENT, NOT IN THE SURFACES. A dark surface
+ *    carrying the light theme's chroma reads as BROWN, not as warm, and the
+ *    whole window goes muddy. These greys sit at roughly 4% saturation — a warm
+ *    neutral rather than a brown — and the caramel does every bit of the
+ *    warming.
+ * 2. EVERY ELEVATION STEP IS VISIBLE. background -> card -> popover/muted ->
+ *    accent -> secondary climbs in steps of ~7-11 rather than the ~5 that
+ *    leaves panels unable to lift off the page. Read the ramp down the file:
+ *    23 -> 34 -> 41 -> 51 -> 61 (the red channel; the other two track it).
+ * 3. STATUS AND AVATAR HUES BELONG TO THIS PALETTE. The light theme's success
+ *    is a muted olive and its destructive a brick, deliberately. A spring green
+ *    and a salmon pink clear the contrast bar just as well and still read as
+ *    foreign colours dropped into a warm room, so the green here is an
+ *    olive-sage, the red a terracotta, and the avatar hues sit well off full
+ *    saturation.
+ *
+ * Every token `light.css` defines is defined here. A token present there and
+ * missing here would silently fall through to the `:root` arm and paint a
+ * light value into a dark window.
+ *
+ * Contrast figures are computed WCAG 2.1 ratios against the surface each token
+ * is actually read on, the same bar `light.css` documents for its own.
+ */
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --font-size: 15px;
+  --font-family-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    monospace;
+
+  /* TWIN PARSER: `shared/themes.ts`'s `windowBackground` for this theme is
+     this same value — see the twin note in `light.css`. */
+  --background: #171615;
+  --foreground: #ece8e1;
+  --card: #222120;
+  --card-foreground: #ece8e1;
+  --popover: #292725;
+  --popover-foreground: #ece8e1;
+  /* The light theme darkens its caramel until white text clears AA on it; a
+     dark theme has to go the other way — the fill is lightened until DARK text
+     clears AA, which is why every `*-foreground` on a saturated fill below is
+     near-black where the light theme's is white. The caramel itself is the one
+     place chroma is NOT pulled back: it is what carries the theme's warmth now
+     that the surfaces do not. */
+  --primary: #dda765;
+  --primary-foreground: #201c17;
+  /* Unlike the light theme's, this --secondary is a raised warm surface rather
+     than a second caramel: at this end of the range a saturated secondary fill
+     sits within a few percent of --primary and the two stop reading as
+     different things. It is also the top of the elevation ladder, so it has to
+     clear --accent by a visible step rather than a measurable one. */
+  --secondary: #3d3a37;
+  --secondary-foreground: #ece8e1;
+  --muted: #2a2827;
+  --muted-foreground: #ada396;
+  --accent: #333130;
+  --accent-foreground: #ece8e1;
+  /* Status colours, contrast-checked as TEXT on --card (the surface they are
+     read on) and with their own foreground on them for the button/badge fills.
+     Olive-sage and terracotta rather than a spring green and a salmon, per
+     rule 3 above. */
+  --destructive: #d98268;
+  --destructive-foreground: #201c17;
+  --success: #a5bc80;
+  --success-foreground: #201c17;
+  --warning: #dcb268;
+  --warning-foreground: #201c17;
+  /* Syntax palette, contrast-checked as TEXT on --muted (#2a2827), the code
+     surface — the same bar and the same surface `light.css` uses. Punctuation
+     again sits at AA-large only, by the same argument: it is structural noise
+     the eye skips, never content. Note the direction flips with the theme —
+     on cream, "recedes" means LIGHTER than the comment tone; here it means
+     darker. */
+  --code-comment: #9a9186;
+  --code-keyword: #dd8f72;
+  --code-string: #aec288;
+  --code-number: #dcb47c;
+  --code-function: #c4a6cf;
+  --code-operator: #c0b5a7;
+  --code-punctuation: #837a6f;
+  --code-variable: #8bb8c9;
+
+  /* Terminal (ANSI) palette — aliases of the semantic and code palettes on the
+     rule `light.css` states. The cyan is again the one literal, for the same
+     reason: nothing else in the palette carries the hue.
+
+     One thing about this end of the range that is NOT a bug: `--ansi-black`
+     stays the foreground and `--ansi-white` the muted foreground, so on a dark
+     ground "black" renders pale and "white" renders dim — the two are aliases
+     for DEFAULT and DIM rather than for the ink they are named after, and a
+     literal black here would be a shell writing invisible text. */
+  --ansi-black: var(--foreground);
+  --ansi-red: var(--destructive);
+  --ansi-green: var(--success);
+  --ansi-yellow: var(--warning);
+  --ansi-blue: var(--code-variable);
+  --ansi-magenta: var(--code-function);
+  --ansi-cyan: #6fb8bb;
+  --ansi-white: var(--muted-foreground);
+
+  /* The BRIGHT half (90–97), and unlike `light.css` this theme uses all eight:
+     a dark ground is the one where "brighter" and "more legible" are the same
+     direction, so the six chromatic brights are their normal twin lifted about
+     15% in luminance with the hue held. They stay inside the warm room rule the
+     header states — lifted, never re-saturated — and each clears AA on --card
+     by a wide margin (7.4–10.4:1) while sitting a visible step above its
+     normal, which is the whole point of having them: 5.6 -> 7.4 red, 7.7 ->
+     10.0 green, 8.1 -> 10.4 yellow, 7.5 -> 9.6 blue, 7.4 -> 9.6 magenta,
+     7.1 -> 9.3 cyan.
+
+     The GREYS are roles rather than lifts, the same inversion the block above
+     documents, and they sort into four distinct steps: bright-black is the
+     faintest ink (what `ESC[90m` actually means everywhere it is used — git,
+     npm and pnpm all reach for it for timestamps), then white (dim), then
+     black (default), then bright-white (the strongest ink on the surface).
+     bright-black sits at 3.81:1 on --card, on the AA-large bar
+     `--code-punctuation` already carries: it is structural text the eye skips,
+     never content. */
+  --ansi-bright-black: var(--code-punctuation);
+  --ansi-bright-red: #eb9d85;
+  --ansi-bright-green: #bed49b;
+  --ansi-bright-yellow: #f0cb87;
+  --ansi-bright-blue: #a8cedd;
+  --ansi-bright-magenta: #d9bfe2;
+  --ansi-bright-cyan: #8fd0d3;
+  --ansi-bright-white: #faf7f2;
+
+  /* Agent avatar palette. The light theme takes tailwind's 500s, which are
+     built to sit on a white card; the 400s that replaced them were still
+     candy-bright against a warm ground, so these sit well off full saturation
+     — far enough apart to identify an agent at a glance, close enough in
+     temperature to belong to this room. */
+  --avatar-1: #7ba4d8;
+  --avatar-2: #b294d3;
+  --avatar-3: #8bc292;
+  --avatar-4: #e09c68;
+  --avatar-5: #dd8ea9;
+  --avatar-6: #9199d4;
+  --avatar-7: #6bbcb0;
+  --avatar-8: #dd8880;
+  --avatar-user: #99928a;
+
+  --group-blue: var(--avatar-1);
+  --group-purple: var(--avatar-2);
+  --group-green: var(--avatar-3);
+  --group-orange: var(--avatar-4);
+  --group-pink: var(--avatar-5);
+  --group-indigo: var(--avatar-6);
+  --group-teal: var(--avatar-7);
+  --group-red: var(--avatar-8);
+  --border: #423f3c;
+  --input: transparent;
+  --input-background: #222120;
+  --switch-background: #524d47;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #dda765;
+  --chart-1: #dda765;
+  --chart-2: #e9c194;
+  --chart-3: #b98a5f;
+  --chart-4: #9c8a6d;
+  --chart-5: #c9a781;
+  --radius: 0.5rem;
+
+  /* Elevation. The light theme tints its shadows with the foreground brown at
+     6–13% alpha; here they are near-black and much stronger, because a shadow
+     is a DARKENING and there is far less headroom below a dark surface — the
+     light theme's alphas over this ground are invisible. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-lg:
+    0 2px 6px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --sidebar: #1c1b19;
+  --sidebar-foreground: #ece8e1;
+  --sidebar-primary: #dda765;
+  /* The ACTIVE nav label/icon, read on --sidebar-accent. Unlike the light
+     theme — where --sidebar-primary reads 2.43:1 there and this token exists to
+     rescue it — --sidebar-primary already clears AA here; the lighter step is
+     kept for the stronger active state the light theme intends. */
+  --sidebar-primary-strong: #e8ba84;
+  --sidebar-primary-foreground: #201c17;
+  --sidebar-accent: #2b2927;
+  --sidebar-accent-foreground: #ece8e1;
+  --sidebar-border: #423f3c;
+  --sidebar-ring: #dda765;
+}

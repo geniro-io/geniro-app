@@ -130,6 +130,7 @@ export function runToWire(
     groupId: run.groupId,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
+    archivedAt: run.archivedAt?.toISOString() ?? null,
     lastMessage,
     // Read off the row rather than passed in like the four live readings above:
     // this one IS a column, written by the capture pass, so a caller that

@@ -37,25 +37,6 @@ export function threadPullRequests(
 }
 
 /**
- * The ONE of {@link threadPullRequests} the thread is about — the sidebar row
- * and the composer band each name a single pull request.
- *
- * An OPEN one outranks a settled one from the same branch. Reusing a branch
- * after its pull request merged is routine, and naming the merged one as this
- * thread's would describe work that is already over. Otherwise the newest,
- * which is the order the list arrives in.
- */
-export function currentPullRequest(
-  pullRequests: readonly PullRequestInfo[],
-): PullRequestInfo | null {
-  return (
-    pullRequests.find((pullRequest) => pullRequest.state === 'open') ??
-    pullRequests[0] ??
-    null
-  );
-}
-
-/**
  * Whether this pull request's head branch is the one THIS checkout has.
  *
  * A same-repo pull request always is. A cross-repository one is only when its

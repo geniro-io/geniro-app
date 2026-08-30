@@ -10986,22 +10986,31 @@ describe('Chats — the pull request above the composer', () => {
     return container;
   }
 
-  it('names the thread’s pull request as a LINK above the textarea', async () => {
-    // The third surface the task names, and the one a user looks at most while
-    // working. The sidebar row states the same fact as plain text, so this
-    // asserts the anchor specifically.
+  it('puts NOTHING above the textarea for a thread that opened none', async () => {
+    // Reported on a chat one message old: it showed a pull request "которого
+    // там не должно быть". The branch's list answers a different question —
+    // a checkout routinely sits on a branch somebody else opened a pull
+    // request for — and the shelf claims the conversation produced what it
+    // holds. The sidebar row still states the branch fact, as plain text.
     const container = await openMyChat({
       branch: 'fix/builder',
       originOwner: null,
       pullRequests: [openPullRequest],
     });
 
-    const link = container.querySelector<HTMLAnchorElement>(
-      'a[data-slot="current-pull-request"]',
-    );
-    expect(link?.textContent).toContain('#70');
-    expect(link?.textContent).toContain('builder polish');
-    expect(link?.getAttribute('href')).toBe('https://github.com/o/r/pull/70');
+    const shelf = container.querySelector('[data-slot="composer-shelf"]');
+    expect(shelf).not.toBeNull();
+    expect(shelf?.children).toHaveLength(0);
+    // Nor on the sidebar row, which made the same claim about every chat that
+    // happened to share the checkout — two unrelated conversations both naming
+    // #70. It is still on screen where it is NAMED as the branch's.
+    expect(
+      container.querySelector('[data-slot="current-pull-request"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('section[aria-label="Pull requests"]')
+        ?.textContent,
+    ).toContain('builder polish');
   });
 
   it('re-reads the folder after an in-app branch switch', async () => {

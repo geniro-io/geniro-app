@@ -104,8 +104,7 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
-import { currentPullRequest, threadPullRequests } from './pull-request';
-import { CurrentPullRequestLine } from './pull-request-row';
+import { threadPullRequests } from './pull-request';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -3244,25 +3243,10 @@ export function Chats({
       ),
     [pullRequestFolders, pullRequestsByDir],
   );
-  /** The one each folder's sidebar row and composer band name. */
-  const currentPullRequestByDir = useMemo(
-    () =>
-      new Map(
-        [...threadPullRequestsByDir].map(([dir, pullRequests]) => [
-          dir,
-          currentPullRequest(pullRequests),
-        ]),
-      ),
-    [threadPullRequestsByDir],
-  );
   const activePullRequests =
     activeRun?.cwd == null
       ? EMPTY_PULL_REQUESTS
       : (threadPullRequestsByDir.get(activeRun.cwd) ?? EMPTY_PULL_REQUESTS);
-  const activePullRequest =
-    activeRun?.cwd == null
-      ? null
-      : (currentPullRequestByDir.get(activeRun.cwd) ?? null);
   /**
    * What each thread OPENED, as GitHub currently has it.
    *
@@ -5345,11 +5329,7 @@ export function Chats({
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
                               pullRequest={
-                                rowPullRequestByRun.get(run.id) ??
-                                (run.cwd === null
-                                  ? null
-                                  : (currentPullRequestByDir.get(run.cwd) ??
-                                    null))
+                                rowPullRequestByRun.get(run.id) ?? null
                               }
                               dragging={
                                 drag?.kind === 'run' && drag.id === run.id
@@ -6111,23 +6091,17 @@ export function Chats({
                           it would take width from the folder and branch chips
                           every time.
 
-                          What this thread OPENED comes first and is the whole
-                          shelf when there is any: those are addressed by URL,
-                          so they are still this thread's after a branch switch
-                          and across repositories. The branch's own pull request
-                          is the fallback for a thread that opened none itself —
-                          the case where the user opened one by hand. */}
+                          ONLY what this thread OPENED. The branch's own pull
+                          request used to fill this space for a thread that
+                          opened none, and it was wrong twice over: the shelf
+                          says "what this conversation produced", and a checkout
+                          routinely sits on a branch whose pull request somebody
+                          else opened. That list keeps its own captioned section
+                          in the panel, where it is named as the branch's. */}
                       <ComposerShelf>
-                        {openedByActiveThread.length > 0 ? (
-                          <ThreadPullRequestChips
-                            results={openedByActiveThread}
-                          />
-                        ) : activePullRequest ? (
-                          <CurrentPullRequestLine
-                            pullRequest={activePullRequest}
-                            interactive
-                          />
-                        ) : null}
+                        <ThreadPullRequestChips
+                          results={openedByActiveThread}
+                        />
                       </ComposerShelf>
 
                       {/* The SAME composer card as the new-run screen, with the run's

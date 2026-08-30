@@ -60,6 +60,44 @@ export interface BackgroundUnitUsage {
 }
 
 /**
+ * How ONE agent inside a dynamic workflow is doing, in this app's own words.
+ *
+ * Three states where the CLI reports four: its `start` and `progress` both mean
+ * the agent is out working and differ only in whether a first tool call has
+ * come back, which is a distinction the card has nothing to draw and no reader
+ * asked for. `done` and `error` map straight across. Translated in the adapter,
+ * on the rule {@link BackgroundUnitOutcome} follows.
+ */
+export type WorkflowAgentState = 'running' | 'done' | 'failed';
+
+/**
+ * One row of a workflow's agent roster, as of the snapshot carrying it.
+ *
+ * A SNAPSHOT, never a delta: the CLI re-sends the whole roster keyed by
+ * {@link index} (it merges by that key itself before emitting), so a consumer
+ * takes the newest array wholesale rather than folding — which is what lets a
+ * client replaying a transcript from a cursor read only the last row and still
+ * be right.
+ */
+export interface WorkflowAgentSnapshot {
+  /** The agent's 1-based position in the workflow's own numbering. */
+  index: number;
+  /** The label the script gave it (`opts.label`), or its prompt's opening. */
+  label: string | null;
+  /** The phase it belongs to, when the script declared phases. */
+  phase: string | null;
+  state: WorkflowAgentState;
+  /** The model it ran, once the workflow has resolved one. */
+  model: string | null;
+  /** What it spent — reported as it finishes, null while it is out. */
+  tokens: number | null;
+  toolCalls: number | null;
+  durationMs: number | null;
+  /** Why it failed, when it did. */
+  error: string | null;
+}
+
+/**
  * Token/cost accounting for a completed turn. Fields are nullable because not
  * every CLI version reports every figure — the defensive mappers fill what the
  * stream provides and leave the rest null.
@@ -831,6 +869,56 @@ type AgentEventBody =
       toolCallId: string | null;
       /** The CLI's own id for the unit (claude's `task_id`, e.g. `bash_1`). */
       workId: string;
+    }
+  | {
+      /**
+       * WHAT a dynamic workflow launched from this turn is doing — how many
+       * agents it has out, what they are spending, and how far through its
+       * phases it is.
+       *
+       * A workflow is one tool call that fans out into dozens of agents the
+       * main stream never sees: they run inside the CLI's own orchestrator with
+       * their own transcripts, so nothing about them reaches the conversation.
+       * Without this the transcript can only say `running Workflow · 20m 34s` —
+       * an opaque row for what is usually the most expensive thing in the chat.
+       *
+       * Probed live on claude 2.1.251 (`-p --output-format stream-json
+       * --verbose`, a two-agent script). The launch announces itself as
+       * `system/task_started` with `task_type:'local_workflow'` and carries the
+       * workflow's NAME; progress arrives as `system/task_progress` on the same
+       * `tool_use_id`, carrying the running totals every time and the full agent
+       * roster whenever one of them changes state (and at most every 10s
+       * otherwise — the CLI's own throttle).
+       *
+       * {@link id} is the LAUNCHING TOOL CALL's id, on exactly the rule
+       * `subagent_info` follows: this is a row ABOUT the workflow written by the
+       * main thread, never one the workflow produced, so it must not travel as
+       * {@link AgentEventOrigin.parentToolUseId}.
+       *
+       * Emitted many times per workflow BY DESIGN — an anchor at launch and a
+       * row per roster change after it — so every field is nullable and the
+       * consumer prefers the last non-null value it saw. {@link agents} is the
+       * one exception to the merge and is taken WHOLESALE when present: the CLI
+       * re-sends the entire roster, so folding two snapshots would resurrect an
+       * agent a later one had dropped.
+       */
+      type: 'workflow_info';
+      /** The launching tool call's id. */
+      id: string;
+      /** The workflow's own name — its script's `meta.name`. */
+      name: string | null;
+      /** Its one-line description — the script's `meta.description`. */
+      title: string | null;
+      /** What it is doing right now, as the CLI phrases it: `Phase: label`. */
+      activity: string | null;
+      /** Every token its agents have spent so far, summed by the CLI. */
+      tokens: number | null;
+      /** Every tool call they have made. */
+      toolUses: number | null;
+      /** How long the workflow has been running. */
+      durationMs: number | null;
+      /** The whole roster as of this line, or null when it carried none. */
+      agents: WorkflowAgentSnapshot[] | null;
     }
   | {
       /**

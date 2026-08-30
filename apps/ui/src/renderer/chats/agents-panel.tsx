@@ -45,7 +45,9 @@ import type { ShellRun } from './shell-activity';
 import { ShellIcon, ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
+import type { WorkflowEntry } from './transcript-groups';
 import { mcpScopeKey } from './use-agent-mcp';
+import { WorkflowPanelRow } from './workflow-block';
 
 /**
  * The right side panel: every agent of the active run with its live status,
@@ -510,11 +512,42 @@ function PullRequestsSection({
   );
 }
 
+/**
+ * The dynamic workflows this run launched, newest first, each a press away from
+ * its own card in the transcript.
+ *
+ * Newest first because a running one is what a reader opens this for and it is
+ * always the newest — the reverse of the launch order `workflowCardsOf` hands
+ * over. No fold under it, unlike its pull-request neighbour: a thread launches
+ * workflows in ones and twos where it opens pull requests in thirties.
+ */
+function WorkflowsSection({
+  workflows,
+  onReveal,
+}: {
+  workflows: readonly WorkflowEntry[];
+  onReveal: (workflowId: string) => void;
+}): React.JSX.Element {
+  return (
+    <PanelSection label="Workflows">
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {[...workflows].reverse().map((entry) => (
+          <li key={entry.id}>
+            <WorkflowPanelRow entry={entry} onReveal={onReveal} />
+          </li>
+        ))}
+      </ul>
+    </PanelSection>
+  );
+}
+
 export function AgentsPanel({
   agents,
   artifacts = [],
   pullRequests = [],
   threadPullRequests = [],
+  workflows = [],
+  onRevealWorkflow,
   tasksByAgent,
   shellsByAgent,
   onOpenShell,
@@ -567,6 +600,17 @@ export function AgentsPanel({
    * thirty-one were invisible.
    */
   threadPullRequests?: readonly PullRequestRefResult[];
+  /**
+   * The dynamic workflows this run launched, in launch order.
+   *
+   * The SAME reading the transcript's cards are built from
+   * (`transcript-groups.ts`'s `workflowCardsOf`), handed over rather than
+   * re-folded here: a panel that counted its own agents would sooner or later
+   * say `28 agents` beside a card saying 29.
+   */
+  workflows?: readonly WorkflowEntry[];
+  /** Take the reader to one workflow's card in the transcript. */
+  onRevealWorkflow?: (workflowId: string) => void;
   /**
    * The chat whose expanded context readout this panel may offer, or null.
    *
@@ -1307,6 +1351,9 @@ export function AgentsPanel({
               ))}
             </ul>
           </PanelSection>
+        ) : null}
+        {workflows.length > 0 && onRevealWorkflow !== undefined ? (
+          <WorkflowsSection workflows={workflows} onReveal={onRevealWorkflow} />
         ) : null}
         {threadPullRequests.length > 0 ? (
           <ThreadPullRequestsSection results={threadPullRequests} />

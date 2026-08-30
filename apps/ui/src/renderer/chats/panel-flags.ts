@@ -20,3 +20,15 @@ export function revealThreadPullRequests(): void {
   setPersistedFlag(AGENTS_PANEL_COLLAPSED_FLAG, false);
   setPersistedFlag(THREAD_PULL_REQUESTS_SETTLED_FLAG, true);
 }
+
+/**
+ * Show every workflow this thread launched — in the PANEL, for the reason
+ * above: the shelf is one line and names the one that is running.
+ *
+ * No second flag, unlike its neighbour: the workflow list has no fold to open,
+ * because a thread launches workflows in ones and twos where it opens pull
+ * requests in thirties.
+ */
+export function revealWorkflows(): void {
+  setPersistedFlag(AGENTS_PANEL_COLLAPSED_FLAG, false);
+}

@@ -21,6 +21,7 @@ import {
   TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
+import { WorkflowCard } from './workflow-block';
 
 /**
  * One agent's contiguous run of work as ONE avatar-framed block — the
@@ -113,6 +114,9 @@ export const TurnBlock = memo(function TurnBlock({
     }
     if (entry.type === 'comparison') {
       return <ComparisonCard key={entry.id} comparison={entry.comparison} />;
+    }
+    if (entry.type === 'workflow') {
+      return <WorkflowCard key={entry.id} entry={entry} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

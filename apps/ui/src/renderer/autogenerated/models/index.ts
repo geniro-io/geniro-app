@@ -2057,6 +2057,7 @@ export const ItemKind = {
     CallQuestion: 'call_question',
     CallAnswer: 'call_answer',
     SubagentInfo: 'subagent_info',
+    WorkflowInfo: 'workflow_info',
     TaskList: 'task_list',
     ShellInfo: 'shell_info',
     ReportFindings: 'report_findings',

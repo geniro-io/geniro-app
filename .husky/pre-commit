@@ -16,6 +16,15 @@
 # skips binary input and never sees the NUL at all — leaving the gate inert with
 # nothing to show it did nothing. `tr -d` is byte-exact and has no such mode.
 #
+# `LC_ALL=C` on that `tr`, and it is what MAKES it byte-exact: `head -c 8000`
+# cuts at a byte, so a multibyte character straddling the boundary reaches `tr`
+# as half a sequence, and BSD `tr` under a UTF-8 locale answers `Illegal byte
+# sequence` and drops it — one byte short of the size, which reads here as a
+# NUL. Measured on `chats/Chats.tsx`, whose 8000th byte is the first half of a
+# Cyrillic letter: the hook refused a commit whose staged blob contains no NUL
+# at all, and the offending line was an import added 170 lines above it. In the
+# C locale every byte is its own character and the count is exact.
+#
 # The STAGED blob rather than the pair diff: `--numstat` prints `-` when EITHER
 # side is binary, so a hook built on it refuses the very commit that repairs an
 # already-binary file. Judging the new blob alone lets a fix through and still
@@ -41,7 +50,7 @@ offenders=$(
 				exit 0
 			fi
 			size=$(git show ":0:$path" | head -c 8000 | wc -c)
-			text=$(git show ":0:$path" | head -c 8000 | tr -d "\000" | wc -c)
+			text=$(git show ":0:$path" | head -c 8000 | LC_ALL=C tr -d "\000" | wc -c)
 			[ "$size" -eq "$text" ] || printf "  %s\n" "$path"
 		' _ {}
 )

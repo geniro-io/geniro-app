@@ -415,6 +415,63 @@ describe('mapEventToItem — the sub-agent declaration', () => {
     });
   });
 
+  it('persists a workflow row whole — the only record its fleet ever ran', () => {
+    // A workflow's agents emit nothing onto this stream: they run inside the
+    // CLI's own orchestrator with transcripts of their own. So unlike every
+    // other row here, this one is not a second telling of something already in
+    // the transcript — drop a field and the fact is simply gone.
+    expect(
+      mapEventToItem({
+        type: 'workflow_info',
+        id: 'toolu_01F7',
+        name: 'probe-run',
+        title: 'Two trivial agents',
+        activity: 'Probe: probe-2',
+        tokens: 27559,
+        toolUses: 4,
+        durationMs: 2432,
+        agents: [
+          {
+            index: 1,
+            label: 'probe-1',
+            phase: 'Probe',
+            state: 'done',
+            model: 'claude-haiku-4-5-20251001',
+            tokens: 13779,
+            toolCalls: 2,
+            durationMs: 1303,
+            error: null,
+          },
+        ],
+      }),
+    ).toEqual({
+      kind: 'workflow_info',
+      role: null,
+      payload: {
+        id: 'toolu_01F7',
+        name: 'probe-run',
+        title: 'Two trivial agents',
+        activity: 'Probe: probe-2',
+        tokens: 27559,
+        toolUses: 4,
+        durationMs: 2432,
+        agents: [
+          {
+            index: 1,
+            label: 'probe-1',
+            phase: 'Probe',
+            state: 'done',
+            model: 'claude-haiku-4-5-20251001',
+            tokens: 13779,
+            toolCalls: 2,
+            durationMs: 1303,
+            error: null,
+          },
+        ],
+      },
+    });
+  });
+
   it('anchors on the payload’s own `id`, never on a sub-agent ORIGIN', () => {
     // The distinction the whole feature rests on: this row is one the MAIN
     // thread produced ABOUT a delegate, not one the delegate produced. Stamped

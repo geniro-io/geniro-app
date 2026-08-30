@@ -18,6 +18,7 @@ import {
   type TranscriptNodeMeta,
 } from './transcript-item';
 import { TurnBlock } from './turn-block';
+import { WorkflowCard } from './workflow-block';
 
 /** Item kinds that read as a MESSAGE from someone (avatar + name + time). */
 const SENDER_KINDS = new Set([
@@ -136,6 +137,11 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
     // not something it said, and the surrounding turn block already names who
     // is working.
     return <TaskListCard entry={entry} />;
+  }
+  if (entry.type === 'workflow') {
+    // Same rule as the sub-agent block: the card names the workflow itself, so
+    // a sender frame around it would attribute the fleet to the main agent.
+    return <WorkflowCard entry={entry} />;
   }
 
   const item = entry.item;

@@ -1759,3 +1759,191 @@ describe('an api-error assistant line', () => {
     ).toEqual([{ type: 'text', text: 'API Error: is what I would say' }]);
   });
 });
+
+describe('mapClaudeMessage — dynamic workflows', () => {
+  // Every line below is captured verbatim from a live 2.1.251 workflow run
+  // (`-p --output-format stream-json --verbose`, a two-agent script) and
+  // trimmed to the fields the mapper reads. See
+  // `CLAUDE_TASK_PROGRESS_SUBTYPE` for the full capture.
+  const ledger = (): ClaudeSessionCostLedger => new ClaudeSessionCostLedger();
+
+  it('names the workflow on its launch line, where the name only ever appears', () => {
+    // The progress lines after it carry `summary` (the description) and never
+    // `workflow_name`, so a card built from those alone could say what the
+    // workflow does and never what it IS.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'w23o3h707',
+          tool_use_id: 'toolu_01F7',
+          task_type: 'local_workflow',
+          workflow_name: 'probe-run',
+          description: 'Two trivial agents, for a wire probe',
+          prompt: 'export const meta = …',
+        },
+        ledger(),
+      ),
+    ).toEqual([
+      {
+        type: 'background_work',
+        id: 'w23o3h707',
+        phase: 'started',
+        // NOT a delegate: `local_workflow` is neither `local_agent` nor a
+        // shell, and announcing it as one would put a phantom sub-agent block
+        // in the transcript beside the workflow's own card.
+        unit: 'other',
+        toolCallId: 'toolu_01F7',
+      },
+      {
+        type: 'workflow_info',
+        id: 'toolu_01F7',
+        name: 'probe-run',
+        title: 'Two trivial agents, for a wire probe',
+        activity: null,
+        tokens: null,
+        toolUses: null,
+        durationMs: null,
+        agents: null,
+      },
+    ]);
+  });
+
+  it('reads the roster and the running bill off a progress line', () => {
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 'w23o3h707',
+          tool_use_id: 'toolu_01F7',
+          description: 'Probe: probe-1',
+          usage: { total_tokens: 13779, tool_uses: 2, duration_ms: 1328 },
+          summary: 'Two trivial agents, for a wire probe',
+          workflow_progress: [
+            { type: 'workflow_phase', index: 1, title: 'Probe' },
+            {
+              type: 'workflow_agent',
+              index: 1,
+              label: 'probe-1',
+              phaseTitle: 'Probe',
+              model: 'claude-haiku-4-5-20251001',
+              state: 'done',
+              tokens: 13779,
+              toolCalls: 2,
+              durationMs: 1303,
+              resultPreview: 'ok1',
+            },
+            {
+              type: 'workflow_agent',
+              index: 2,
+              label: 'probe-2',
+              phaseTitle: 'Probe',
+              model: 'claude-haiku-4-5-20251001',
+              state: 'start',
+            },
+          ],
+        },
+        ledger(),
+      ),
+    ).toEqual([
+      {
+        type: 'workflow_info',
+        id: 'toolu_01F7',
+        // A progress line never carries the name — only the anchor does.
+        name: null,
+        title: 'Two trivial agents, for a wire probe',
+        activity: 'Probe: probe-1',
+        tokens: 13779,
+        toolUses: 2,
+        durationMs: 1328,
+        agents: [
+          {
+            index: 1,
+            label: 'probe-1',
+            phase: 'Probe',
+            state: 'done',
+            model: 'claude-haiku-4-5-20251001',
+            tokens: 13779,
+            toolCalls: 2,
+            durationMs: 1303,
+            error: null,
+          },
+          {
+            index: 2,
+            label: 'probe-2',
+            phase: 'Probe',
+            // `start` is an agent that is OUT, not a fourth state anything
+            // downstream has to learn.
+            state: 'running',
+            model: 'claude-haiku-4-5-20251001',
+            tokens: null,
+            toolCalls: null,
+            durationMs: null,
+            error: null,
+          },
+        ],
+      },
+    ]);
+    // The `workflow_phase` entry is dropped: every agent row already repeats
+    // its title, so keeping it would mean a second list to join against for a
+    // string already in hand.
+  });
+
+  it('ignores a DELEGATE’s progress line, which rides the same subtype', () => {
+    // The roster is the only discriminator on the wire — a delegate's progress
+    // names a `subagent_type` and carries none. Without this the transcript
+    // would grow a workflow card for every Task call.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_progress',
+          task_id: 'ad83f0a35d8a3dfc9',
+          tool_use_id: 'toolu_01LW',
+          description: 'Delayed sleep echo task',
+          subagent_type: 'general-purpose',
+          usage: { total_tokens: 26124, tool_uses: 0, duration_ms: 2029 },
+        },
+        ledger(),
+      ),
+    ).toEqual([]);
+  });
+
+  it('keeps an unrecognised agent state OUT working rather than finished', () => {
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'task_progress',
+        tool_use_id: 'toolu_01F7',
+        workflow_progress: [
+          { type: 'workflow_agent', index: 1, state: 'quantum-superposed' },
+        ],
+      },
+      ledger(),
+    );
+    // Guessing `done` would show a workflow as complete while it works, and the
+    // roster is where the card's "3 running" comes from.
+    expect(event).toMatchObject({
+      type: 'workflow_info',
+      agents: [{ index: 1, state: 'running' }],
+    });
+  });
+
+  it('drops a roster row that names no agent index', () => {
+    // The index is the CLI's own merge key and the roster's identity; a row
+    // without one cannot be placed, ordered, or told apart from its neighbour.
+    expect(
+      mapClaudeMessage(
+        {
+          type: 'system',
+          subtype: 'task_progress',
+          tool_use_id: 'toolu_01F7',
+          workflow_progress: [{ type: 'workflow_agent', state: 'done' }],
+        },
+        ledger(),
+      ),
+    ).toEqual([expect.objectContaining({ type: 'workflow_info', agents: [] })]);
+  });
+});

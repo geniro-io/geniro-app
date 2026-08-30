@@ -14,7 +14,10 @@
  * away from the shape that gives it meaning.
  */
 
-import type { BackgroundUnitOutcome } from '../adapter.types';
+import type {
+  BackgroundUnitOutcome,
+  WorkflowAgentState,
+} from '../adapter.types';
 
 // ── Turn argv ─────────────────────────────────────────────────────────────
 
@@ -1163,6 +1166,76 @@ export const CLAUDE_TASK_NOTIFICATION_SUBTYPE = 'task_notification';
  * outlive; only the first is a sub-agent anything should count or draw.
  */
 export const CLAUDE_TASK_TYPE_AGENT = 'local_agent';
+
+// ── Dynamic workflows (one tool call, a fleet of agents) ──────────────────
+
+/**
+ * The `system` subtype carrying a background unit's LIVE state, and the two
+ * values that say the unit is a dynamic workflow rather than a delegate.
+ *
+ * `task_progress` is shared: a delegate's progress line names its
+ * `subagent_type` and carries no roster, while a workflow's carries
+ * `workflow_progress` — which is the discriminator the mapper uses, since
+ * nothing else on the line says which kind of work it describes.
+ *
+ * Probed live on 2.1.251 (`-p --output-format stream-json --verbose`, a
+ * two-agent script). One workflow produced, in order:
+ *
+ * ```
+ * {"type":"system","subtype":"task_started","task_id":"w23o3h707",
+ *  "tool_use_id":"toolu_01F7…","task_type":"local_workflow",
+ *  "workflow_name":"probe-run","description":"Two trivial agents…","prompt":"<script>"}
+ * {"type":"system","subtype":"task_progress","task_id":"w23o3h707",
+ *  "tool_use_id":"toolu_01F7…","description":"Probe: probe-1",
+ *  "usage":{"total_tokens":0,"tool_uses":0,"duration_ms":19},
+ *  "last_tool_name":"probe-1","summary":"Two trivial agents…",
+ *  "workflow_progress":[{"type":"workflow_phase","index":1,"title":"Probe"},
+ *    {"type":"workflow_agent","index":1,"label":"probe-1","phaseIndex":1,
+ *     "phaseTitle":"Probe","agentId":"a8e7…","model":"claude-haiku-4-5-20251001",
+ *     "state":"start","startedAt":1788074260283,"attempt":1,
+ *     "promptPreview":"Reply with exactly…","lastProgressAt":1788074260283}]}
+ * …
+ * {"type":"system","subtype":"task_progress", … "usage":{"total_tokens":27559,…},
+ *  "workflow_progress":[…,{"…","state":"done","tokens":13780,"toolCalls":0,
+ *     "durationMs":1560,"resultPreview":"ok2"}]}
+ * {"type":"system","subtype":"task_updated","patch":{"status":"completed",…}}
+ * {"type":"system","subtype":"task_notification","status":"completed",
+ *  "usage":{"total_tokens":27559,"tool_uses":0,"duration_ms":2432}}
+ * ```
+ *
+ * Two facts from that capture the mapper depends on. `usage.total_tokens` is
+ * the sum over the ROSTER (13779 + 13780 = 27559), not the turn's spend — so it
+ * is the workflow's own bill and nothing else's. And a roster only rides a line
+ * when an agent CHANGED STATE, or at most every ten seconds otherwise; since an
+ * agent's tokens are reported as it finishes, every line that moves the totals
+ * carries the roster with it, which is what makes "persist the lines that carry
+ * a roster" lossless rather than a sampling.
+ */
+export const CLAUDE_TASK_PROGRESS_SUBTYPE = 'task_progress';
+/** @see CLAUDE_TASK_PROGRESS_SUBTYPE */
+export const CLAUDE_TASK_TYPE_WORKFLOW = 'local_workflow';
+/** @see CLAUDE_TASK_PROGRESS_SUBTYPE */
+export const CLAUDE_WORKFLOW_AGENT_ENTRY = 'workflow_agent';
+
+/**
+ * This CLI's four agent states, in the app's own three-word vocabulary.
+ *
+ * A map rather than a set for {@link CLAUDE_TASK_TERMINAL_STATUSES}' reason:
+ * the vendor's spelling is translated once, here, so no consumer downstream
+ * learns that `start` and `progress` are the same thing to a reader. Anything
+ * unrecognised reads as `running` — an agent the roster still lists has not
+ * been said to be finished, and guessing `done` would show a workflow as
+ * complete while it works.
+ */
+export const CLAUDE_WORKFLOW_AGENT_STATES: ReadonlyMap<
+  string,
+  WorkflowAgentState
+> = new Map([
+  ['start', 'running'],
+  ['progress', 'running'],
+  ['done', 'done'],
+  ['error', 'failed'],
+]);
 
 /**
  * Task statuses meaning the work is OVER, each mapped to WHAT that ending was.

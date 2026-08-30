@@ -88,10 +88,7 @@
 
      Tuned for THIS background rather than taken from a terminal's own defaults:
      a terminal's #00ff00 on black is unreadable on cream, and these are the
-     values already proven legible on `--card` by the syntax highlighter.
-     BRIGHT variants (90–97) deliberately map to the same values — on a light
-     background "brighter" means less contrast, and the weight carried by
-     `ESC[1m` says the same thing legibly. */
+     values already proven legible on `--card` by the syntax highlighter. */
   --ansi-black: var(--foreground);
   --ansi-red: var(--destructive);
   --ansi-green: var(--success);
@@ -103,6 +100,29 @@
      against this cream it reads as a highlight rather than as text. */
   --ansi-cyan: #2a7175;
   --ansi-white: var(--muted-foreground);
+
+  /* The BRIGHT half (90–97). On cream the six CHROMATIC brights alias their
+     normal twin, and that is the original argument kept: "brighter" on a light
+     ground means less contrast, and the weight `ESC[1m` carries says the same
+     thing legibly. The two GREYS do not alias, and that is the correction —
+     `ESC[90m` is by far the most common bright code in real output (git, npm,
+     pnpm and cargo all reach for it for timestamps and secondary prose), it
+     means DIM, and aliasing it onto `--ansi-black` was drawing it at full
+     foreground strength, the exact opposite of what the program asked for. It
+     is the palette's faintest ink (4.05:1 on --card, 3.31 on --muted) on the
+     bar `--code-punctuation` already documents: this is structural text the
+     eye skips, never content. `--ansi-bright-white` and `--ansi-black` do
+     coincide, and there is nowhere else for them to go — on a light ground
+     "white ink" is the dim channel and "brightest ink" is simply full
+     strength. */
+  --ansi-bright-black: var(--code-punctuation);
+  --ansi-bright-red: var(--ansi-red);
+  --ansi-bright-green: var(--ansi-green);
+  --ansi-bright-yellow: var(--ansi-yellow);
+  --ansi-bright-blue: var(--ansi-blue);
+  --ansi-bright-magenta: var(--ansi-magenta);
+  --ansi-bright-cyan: var(--ansi-cyan);
+  --ansi-bright-white: var(--foreground);
 
   /* Agent avatar palette — mirrors geniro web's AGENT_AVATAR_COLORS
      (tailwind 500s), hashed deterministically per node id. */

@@ -99,16 +99,11 @@
      rule `light.css` states. The cyan is again the one literal, for the same
      reason: nothing else in the palette carries the hue.
 
-     Two things about this end of the range that are NOT bugs. `--ansi-black`
+     One thing about this end of the range that is NOT a bug: `--ansi-black`
      stays the foreground and `--ansi-white` the muted foreground, so on a dark
      ground "black" renders pale and "white" renders dim — the two are aliases
      for DEFAULT and DIM rather than for the ink they are named after, and a
-     literal black here would be a shell writing invisible text. And the BRIGHT
-     range (90–97) still maps onto these same eight in `components/ui/ansi.ts`,
-     so bright and normal are indistinguishable — true on the light theme for
-     the reason `light.css` gives, and merely unexploited here, where a dark
-     ground could carry a genuinely brighter set. Adding one is eight more
-     tokens and a change to that mapping, not to this file alone. */
+     literal black here would be a shell writing invisible text. */
   --ansi-black: var(--foreground);
   --ansi-red: var(--destructive);
   --ansi-green: var(--success);
@@ -117,6 +112,33 @@
   --ansi-magenta: var(--code-function);
   --ansi-cyan: #6fb8bb;
   --ansi-white: var(--muted-foreground);
+
+  /* The BRIGHT half (90–97), and unlike `light.css` this theme uses all eight:
+     a dark ground is the one where "brighter" and "more legible" are the same
+     direction, so the six chromatic brights are their normal twin lifted about
+     15% in luminance with the hue held. They stay inside the warm room rule the
+     header states — lifted, never re-saturated — and each clears AA on --card
+     by a wide margin (7.4–10.4:1) while sitting a visible step above its
+     normal, which is the whole point of having them: 5.6 -> 7.4 red, 7.7 ->
+     10.0 green, 8.1 -> 10.4 yellow, 7.5 -> 9.6 blue, 7.4 -> 9.6 magenta,
+     7.1 -> 9.3 cyan.
+
+     The GREYS are roles rather than lifts, the same inversion the block above
+     documents, and they sort into four distinct steps: bright-black is the
+     faintest ink (what `ESC[90m` actually means everywhere it is used — git,
+     npm and pnpm all reach for it for timestamps), then white (dim), then
+     black (default), then bright-white (the strongest ink on the surface).
+     bright-black sits at 3.81:1 on --card, on the AA-large bar
+     `--code-punctuation` already carries: it is structural text the eye skips,
+     never content. */
+  --ansi-bright-black: var(--code-punctuation);
+  --ansi-bright-red: #eb9d85;
+  --ansi-bright-green: #bed49b;
+  --ansi-bright-yellow: #f0cb87;
+  --ansi-bright-blue: #a8cedd;
+  --ansi-bright-magenta: #d9bfe2;
+  --ansi-bright-cyan: #8fd0d3;
+  --ansi-bright-white: #faf7f2;
 
   /* Agent avatar palette. The light theme takes tailwind's 500s, which are
      built to sit on a white card; the 400s that replaced them were still

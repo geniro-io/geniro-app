@@ -40,7 +40,10 @@ paths:
      coloured log reads as corrupted. Colours come from the `--ansi-*` tokens
      (never from the stream — a terminal palette is built for a black
      background), and anything that shows command output uses this rather than
-     re-deriving which sequences to honour.
+     re-deriving which sequences to honour. The parser reports BRIGHTNESS as a
+     flag beside the colour name and the component resolves it to a
+     `--ansi-bright-*` token: what "brighter" looks like belongs to the theme,
+     so it must not be computed as a lightened value in TypeScript.
    - `option-list` is the ONE way a set of pickable answer options is drawn,
      and its `arity` (`many` / `one` / `none`) is what decides the drawing —
      square boxes in a column for a checklist, round dots in a flow for a

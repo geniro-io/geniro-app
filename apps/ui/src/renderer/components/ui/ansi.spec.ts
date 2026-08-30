@@ -12,6 +12,7 @@ describe('parseAnsi', () => {
       {
         text: 'Ready in 812ms\n',
         color: null,
+        bright: false,
         bold: false,
         dim: false,
         italic: false,
@@ -48,17 +49,58 @@ describe('parseAnsi', () => {
     ]);
   });
 
-  it('reads the BRIGHT half as the same eight colours', () => {
-    expect(parseAnsi(`${sgr('92')}green`)[0]?.color).toBe('green');
+  it('reads the BRIGHT half as the same eight names, FLAGGED bright', () => {
+    // The name is shared and the brightness is a separate axis, because what
+    // "brighter" looks like is a fact about the theme — the light theme lifts
+    // only its greys, the dark theme all eight.
+    expect(parseAnsi(`${sgr('92')}green`)[0]).toMatchObject({
+      color: 'green',
+      bright: true,
+    });
+    expect(parseAnsi(`${sgr('32')}green`)[0]).toMatchObject({
+      color: 'green',
+      bright: false,
+    });
+  });
+
+  it('takes brightness off again with the colour that carried it', () => {
+    // A stream that goes bright and then normal in the same colour must not
+    // leave the brightness standing — `ESC[90m…ESC[30m` is what a tool emits
+    // around a dimmed prefix, and a sticky flag would dim the rest of the line.
+    const [, normal] = parseAnsi(`${sgr('92')}a${sgr('32')}b`);
+    expect(normal).toMatchObject({ text: 'b', color: 'green', bright: false });
+    const [, cleared] = parseAnsi(`${sgr('92')}a${sgr('39')}b`);
+    expect(cleared).toMatchObject({ text: 'b', color: null, bright: false });
+  });
+
+  it('keeps a bright run and its normal twin as SEPARATE spans', () => {
+    // They share the colour NAME, so a merge that compares only the name would
+    // fold `ESC[90m12:04ESC[39;32m ok` into one span and draw the timestamp at
+    // full strength — the exact defect the bright tokens exist to fix.
+    const spans = parseAnsi(`${sgr('92')}bright${sgr('32')}normal`);
+    expect(spans.map((s) => [s.text, s.bright])).toEqual([
+      ['bright', true],
+      ['normal', false],
+    ]);
   });
 
   it('reads the first sixteen of the 256-colour palette, and no further', () => {
-    expect(parseAnsi(`${ESC}[38;5;2mgreen`)[0]?.color).toBe('green');
+    expect(parseAnsi(`${ESC}[38;5;2mgreen`)[0]).toMatchObject({
+      color: 'green',
+      bright: false,
+    });
+    // 8–15 are the SAME eight again, bright — the palette's own layout, which
+    // is why this is one index shift rather than a second table.
+    expect(parseAnsi(`${ESC}[38;5;10mgreen`)[0]).toMatchObject({
+      color: 'green',
+      bright: true,
+    });
     // The colour cube has no token to be drawn in, so the run takes the
     // surface's colour — and the parameters are still consumed, or `;208m`
     // would print as text.
     const [span] = parseAnsi(`${ESC}[38;5;208morange`);
     expect(span?.color).toBeNull();
+    expect(span?.bright).toBe(false);
     expect(span?.text).toBe('orange');
   });
 

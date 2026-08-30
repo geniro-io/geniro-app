@@ -97,6 +97,14 @@
   --color-ansi-magenta: var(--ansi-magenta);
   --color-ansi-cyan: var(--ansi-cyan);
   --color-ansi-white: var(--ansi-white);
+  --color-ansi-bright-black: var(--ansi-bright-black);
+  --color-ansi-bright-red: var(--ansi-bright-red);
+  --color-ansi-bright-green: var(--ansi-bright-green);
+  --color-ansi-bright-yellow: var(--ansi-bright-yellow);
+  --color-ansi-bright-blue: var(--ansi-bright-blue);
+  --color-ansi-bright-magenta: var(--ansi-bright-magenta);
+  --color-ansi-bright-cyan: var(--ansi-bright-cyan);
+  --color-ansi-bright-white: var(--ansi-bright-white);
   --color-avatar-1: var(--avatar-1);
   --color-avatar-2: var(--avatar-2);
   --color-avatar-3: var(--avatar-3);

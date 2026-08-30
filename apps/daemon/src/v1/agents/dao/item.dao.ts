@@ -348,6 +348,42 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /**
+   * Tool RESULTS newer than `afterSeq` whose text could name a pull request —
+   * the candidate set the capture pass reads (`utils/pull-request-capture.ts`).
+   *
+   * The `LIKE` is a pre-filter, not the parser: it narrows thousands of rows to
+   * the handful worth running a regex over, and everything it lets through is
+   * checked properly upstream (a `…/pull/new/<branch>` push hint matches this
+   * and is not a pull request). Bounded by `seq` so the pass is INCREMENTAL —
+   * the `(run_id, seq)` index serves the range directly, so a settled run whose
+   * marker is current reads no payloads at all.
+   *
+   * Results only. The tool CALL that produced one is fetched by id through
+   * {@link findToolCallPair}, because a call and its result can straddle the
+   * scanned boundary — the call was persisted on the previous pass and only its
+   * result is new.
+   */
+  async pullRequestCandidates(
+    runId: string,
+    afterSeq: number,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        seq: { $gt: afterSeq },
+        kind: 'tool_result',
+        payload: { $like: '%/pull/%' },
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

@@ -35,6 +35,18 @@
  *   here that produces a visibly broken transcript: the renderer's CSP is
  *   `img-src 'self' data:`, so an `http(s):` source is refused outright.
  *
+ * The image bullet says "a picture you already have" for a reason that only
+ * appeared once the host RENDER tools shipped (`show_chart` and its family):
+ * as first written it told an agent with numbers in hand to render a chart to
+ * a file and embed it, which is the same job one of those tools does properly —
+ * a live card instead of a picture of one. The preamble leads the instruction
+ * stack, so its phrasing is the default habit, and a default that competes with
+ * a tool wins by being read first. It still names no tool: this text is not
+ * gated on the MCP endpoint having been delivered (on ACP it is said once per
+ * session and never repeated), so it must stay true on a turn where none of
+ * them is registered — hence "where a tool is offered", which is a condition
+ * the agent can check and geniro cannot.
+ *
  * Two things it deliberately does NOT say. It never claims the model can emit
  * an image CONTENT BLOCK — the Messages API allows `image` request-side only,
  * so markdown in text is the only form available to it. And it says nothing
@@ -52,7 +64,7 @@ You are running inside Geniro, a desktop app. Your replies are rendered in a cha
 
 Renders:
 - GitHub-flavored markdown — headings, lists, tables, task lists, syntax-highlighted code fences, links, blockquotes.
-- Images, written as markdown: \`![alt](path)\`. The path must be a file on this machine, either absolute or relative to your working directory. When you produce or find an image the user should see — a screenshot you captured, a chart or diagram you rendered to a file — embed it this way instead of only naming its path.
+- Images, written as markdown: \`![alt](path)\`. The path must be a file on this machine, either absolute or relative to your working directory. When you have an image the user should see — a screenshot you captured, a diagram you rendered to a file — embed it this way instead of only naming its path. This is for a picture you already have: where a tool is offered for drawing the thing itself, that tool's output is a live card in this transcript, so prefer it over rendering your own image of the same thing.
 
 Does not render:
 - Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.

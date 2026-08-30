@@ -7,7 +7,11 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type { CliKind, PullRequestInfo } from '../../shared/contracts';
+import type {
+  CliKind,
+  PullRequestInfo,
+  PullRequestRefResult,
+} from '../../shared/contracts';
 import type {
   AgentMcpListingDto as AgentMcpListing,
   HandoffTargetDto,
@@ -31,7 +35,7 @@ import {
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
 import { splitPullRequests } from './pull-request';
-import { PullRequestRow } from './pull-request-row';
+import { PullRequestRow, ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import type { ShellRun } from './shell-activity';
 import { ShellIcon, ShellRows } from './shell-list';
@@ -356,6 +360,37 @@ function PullRequestList({
 }
 
 /**
+ * The pull requests THIS THREAD opened, whatever repository each landed in.
+ *
+ * Flat and newest-first rather than split open/settled the way its neighbour
+ * is: this list is a record of what the conversation did, so a merged pull
+ * request is not a finished thing to be folded away — it is half the answer to
+ * "what came out of this thread". The repository is part of each name exactly
+ * when there is more than one.
+ */
+function ThreadPullRequestsSection({
+  results,
+}: {
+  results: readonly PullRequestRefResult[];
+}): React.JSX.Element {
+  const repos = new Set(
+    results.map((row) => `${row.ref.owner}/${row.ref.repo}`),
+  );
+  const showRepo = repos.size > 1;
+  return (
+    <PanelSection label="Opened by this thread">
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {results.map((result) => (
+          <li key={result.ref.url}>
+            <ThreadPullRequestRow result={result} showRepo={showRepo} />
+          </li>
+        ))}
+      </ul>
+    </PanelSection>
+  );
+}
+
+/**
  * The pull requests on the branch this run's folder has checked out — open ones
  * listed, finished ones behind a fold that is shut by default. THIS thread's
  * work, never the repo's: the caller scopes the list (`chats/pull-request.ts`).
@@ -415,6 +450,7 @@ export function AgentsPanel({
   agents,
   artifacts = [],
   pullRequests = [],
+  threadPullRequests = [],
   tasksByAgent,
   shellsByAgent,
   onOpenShell,
@@ -456,6 +492,17 @@ export function AgentsPanel({
    * the same rule {@link artifacts} follows.
    */
   pullRequests?: readonly PullRequestInfo[];
+  /**
+   * The pull requests THIS THREAD opened, newest first — captured from the
+   * agent's own output rather than derived from a checkout.
+   *
+   * A separate list from {@link pullRequests}, and the separation is the fix:
+   * one is what this conversation did, the other is what happens to be open on
+   * the branch its folder is sitting on, and presenting the second as the first
+   * is how a thread came to show a stranger's merged pull request while its own
+   * thirty-one were invisible.
+   */
+  threadPullRequests?: readonly PullRequestRefResult[];
   /**
    * The chat whose expanded context readout this panel may offer, or null.
    *
@@ -1196,6 +1243,9 @@ export function AgentsPanel({
               ))}
             </ul>
           </PanelSection>
+        ) : null}
+        {threadPullRequests.length > 0 ? (
+          <ThreadPullRequestsSection results={threadPullRequests} />
         ) : null}
         {pullRequests.length > 0 ? (
           <PullRequestsSection pullRequests={pullRequests} />

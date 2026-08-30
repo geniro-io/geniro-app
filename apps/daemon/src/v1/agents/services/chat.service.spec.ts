@@ -79,6 +79,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import type { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
@@ -713,6 +714,12 @@ function setup(
     runDao as unknown as RunDao,
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
+    // Inert: the capture pass reads its own transcript and writes its own
+    // column, and no case in this spec is about a pull request. It stays a
+    // double rather than the real service so the chat-list cases here are not
+    // also asserting on the scan — `pull-request-capture.service.spec.ts` owns
+    // that, over its own rows.
+    { sync: async () => undefined } as unknown as PullRequestCaptureService,
     bus,
     contexts,
     registry,

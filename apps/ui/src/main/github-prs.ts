@@ -1,8 +1,11 @@
 import { execFile } from 'node:child_process';
+import { homedir } from 'node:os';
 import { promisify } from 'node:util';
 
 import type {
   PullRequestInfo,
+  PullRequestRef,
+  PullRequestRefResult,
   PullRequestsResult,
   PullRequestState,
 } from '../shared/contracts';
@@ -239,4 +242,131 @@ export async function readPullRequests(
     return NO_PULL_REQUESTS;
   }
   return { branch, originOwner, pullRequests: [...onBranch].sort(byNewest) };
+}
+
+/**
+ * How many distinct REPOSITORIES one resolve may ask about.
+ *
+ * A thread that spans repositories is the case this whole path exists for — the
+ * one measured here touched six — and each is a round trip to GitHub, so the
+ * bound is on repositories rather than on pull requests: thirty-one pull
+ * requests across six repositories cost six queries.
+ */
+const REF_REPO_LIMIT = 24;
+
+/**
+ * How many pull requests may be fetched ONE BY ONE when a repository's listing
+ * did not contain them.
+ *
+ * The per-repository listing is the fast path and covers everything opened
+ * recently; a pull request older than that page needs its own query, and a
+ * thread that somehow references a hundred such would otherwise spend a minute
+ * of round trips before the panel could draw anything.
+ */
+const REF_VIEW_LIMIT = 12;
+
+/** One pull request read by URL, for a ref the repository listing did not carry. */
+async function viewPullRequest(
+  binary: string,
+  dir: string,
+  url: string,
+): Promise<PullRequestInfo | null> {
+  const stdout = await gh(binary, dir, [
+    'pr',
+    'view',
+    url,
+    '--json',
+    PULL_REQUEST_FIELDS,
+  ]);
+  if (stdout === null) {
+    return null;
+  }
+  try {
+    return readPullRequestRow(JSON.parse(stdout));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Live state for pull requests a THREAD opened, addressed by URL rather than by
+ * branch.
+ *
+ * This is the other half of `apps/daemon/.../pull-request-capture.ts`: the
+ * daemon knows WHICH pull requests belong to a thread (it read them out of the
+ * agent's own output), and only GitHub knows what they currently are. Keeping
+ * the two apart is deliberate — a title and a state stored at capture time
+ * would be a stale second answer beside this one.
+ *
+ * Addressing by URL is what makes a MULTI-REPOSITORY thread work at all: `gh`
+ * resolves `--repo owner/name` and a pull request URL from any working
+ * directory, so nothing here has to know where the agent was standing when it
+ * ran `gh pr create` — which is unknowable in the general case, since the agent
+ * `cd`s inside its own shell commands.
+ *
+ * Runs from the user's HOME rather than any checkout, for the same reason: no
+ * folder here is the right one, and `--repo` makes the question explicit.
+ *
+ * Never throws, on the rule the whole file follows: an absent binary, a
+ * logged-out CLI and a repository this account cannot see are all "no answer"
+ * about that pull request. The REF still comes back — the thread did open it,
+ * and a row that links to it while saying nothing about its state is better
+ * than a row that vanishes.
+ */
+export async function readPullRequestsByRef(
+  refs: readonly PullRequestRef[],
+): Promise<PullRequestRefResult[]> {
+  const unresolved = refs.map((ref) => ({ ref, pullRequest: null }));
+  const binary = resolveBinary('gh');
+  if (binary === null || refs.length === 0) {
+    return unresolved;
+  }
+  const dir = homedir();
+  const byRepo = new Map<string, PullRequestRef[]>();
+  for (const ref of refs) {
+    const key = `${ref.owner}/${ref.repo}`;
+    const group = byRepo.get(key);
+    if (group === undefined) {
+      if (byRepo.size >= REF_REPO_LIMIT) {
+        continue;
+      }
+      byRepo.set(key, [ref]);
+      continue;
+    }
+    group.push(ref);
+  }
+
+  const found = new Map<string, PullRequestInfo>();
+  // SEQUENTIAL, like `readPullRequests` above and for the same reason: each
+  // iteration is a process talking to GitHub, and a thread spanning six
+  // repositories would otherwise open six at once on the first paint.
+  for (const [repo, group] of byRepo) {
+    const rows = await listPullRequests(binary, dir, [
+      '--repo',
+      repo,
+      '--state',
+      'all',
+    ]);
+    for (const row of rows ?? []) {
+      found.set(`${repo}#${row.number}`, row);
+    }
+    // A pull request older than that page is not in it. Ask about those alone.
+    let views = 0;
+    for (const ref of group) {
+      const key = `${repo}#${ref.number}`;
+      if (found.has(key) || views >= REF_VIEW_LIMIT) {
+        continue;
+      }
+      views += 1;
+      const row = await viewPullRequest(binary, dir, ref.url);
+      if (row !== null) {
+        found.set(key, row);
+      }
+    }
+  }
+
+  return refs.map((ref) => ({
+    ref,
+    pullRequest: found.get(`${ref.owner}/${ref.repo}#${ref.number}`) ?? null,
+  }));
 }

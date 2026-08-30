@@ -7,7 +7,10 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-import type { PullRequestInfo } from '../../shared/contracts';
+import type {
+  PullRequestInfo,
+  PullRequestRefResult,
+} from '../../shared/contracts';
 import { PanelLinkRow } from '../components/panel-link-row';
 import { cn } from '../components/ui/utils';
 
@@ -140,5 +143,114 @@ export function CurrentPullRequestLine({
     <span data-slot="current-pull-request" title={label} className={shared}>
       {body}
     </span>
+  );
+}
+
+/**
+ * How a pull request the THREAD opened is named when the thread spans several
+ * repositories.
+ *
+ * `#87` is unambiguous inside one repository and meaningless across six — the
+ * measured case here opened `#3` in two different ones. So the repository is
+ * part of the name exactly when there is more than one on screen, and never
+ * otherwise: prefixing every row in a single-repository thread is noise that
+ * pushes the title out.
+ */
+export function pullRequestLabel(
+  ref: { repo: string; number: number },
+  showRepo: boolean,
+): string {
+  return showRepo ? `${ref.repo}#${ref.number}` : `#${ref.number}`;
+}
+
+/**
+ * One pull request THIS THREAD opened, in the right-hand panel.
+ *
+ * Draws from whatever is known: a resolved row gets the title and the state its
+ * sibling {@link PullRequestRow} draws, and an unresolved one still gets a row.
+ * That fallback is the point rather than a nicety — the thread demonstrably
+ * opened this pull request, so "GitHub could not be asked" must not make it
+ * disappear, which is exactly what a list built only from `gh` answers would do
+ * on a logged-out machine.
+ */
+export function ThreadPullRequestRow({
+  result,
+  showRepo,
+}: {
+  result: PullRequestRefResult;
+  showRepo: boolean;
+}): React.JSX.Element {
+  const { ref, pullRequest } = result;
+  const name = pullRequestLabel(ref, showRepo);
+  if (pullRequest === null) {
+    return (
+      <PanelLinkRow
+        href={ref.url}
+        title={name}
+        tooltip={`${ref.owner}/${ref.repo}#${ref.number}`}
+        icon={
+          <GitPullRequest
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+        }
+      />
+    );
+  }
+  return (
+    <PanelLinkRow
+      href={pullRequest.url}
+      title={pullRequest.title}
+      tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title}`}
+      icon={<PullRequestStateIcon pullRequest={pullRequest} />}
+      meta={`${name} · ${lookOf(pullRequest).word}`}
+    />
+  );
+}
+
+/**
+ * The same pull request as a CHIP for the shelf above the composer.
+ *
+ * A shelf chip is deliberately not a panel row: it sits in a wrapping row
+ * beside whatever else the shelf carries, so it takes a bounded width and gives
+ * the rest to its neighbours — the title truncates, the number never does,
+ * since the number is what identifies it.
+ */
+export function ThreadPullRequestChip({
+  result,
+  showRepo,
+}: {
+  result: PullRequestRefResult;
+  showRepo: boolean;
+}): React.JSX.Element {
+  const { ref, pullRequest } = result;
+  const name = pullRequestLabel(ref, showRepo);
+  const label =
+    pullRequest === null
+      ? `${ref.owner}/${ref.repo}#${ref.number}`
+      : `${name} ${pullRequest.title} · ${lookOf(pullRequest).word}`;
+  return (
+    <a
+      data-slot="pull-request-chip"
+      href={ref.url}
+      target="_blank"
+      rel="noreferrer"
+      title={label}
+      className="flex min-w-0 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1 text-xs shadow-panel-sm hover:bg-sidebar-accent">
+      {pullRequest === null ? (
+        <GitPullRequest
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+      ) : (
+        <PullRequestStateIcon pullRequest={pullRequest} />
+      )}
+      <span className="shrink-0 font-medium">{name}</span>
+      {pullRequest === null ? null : (
+        <span className="min-w-0 truncate text-muted-foreground">
+          {pullRequest.title}
+        </span>
+      )}
+    </a>
   );
 }

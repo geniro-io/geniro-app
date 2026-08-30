@@ -735,6 +735,37 @@ export interface PullRequestInfo {
  * {@link GitInfo} `isRepo: false` hides the branch chip. An error banner about a
  * CLI the user may have no intention of installing would be worse than silence.
  */
+/**
+ * One pull request to ask GitHub about, addressed the way a THREAD knows it.
+ *
+ * The IPC argument shape, not a daemon type. It overlaps structurally with the
+ * daemon's `RunPullRequest` because both describe the same four facts, and the
+ * renderer MAPS one to the other (`refOf`) rather than passing the wire object
+ * through: this side has no `seq`, which is a transcript position and means
+ * nothing here, and a cast would quietly couple an Electron channel to a
+ * generated type it must be free to diverge from.
+ */
+export interface PullRequestRef {
+  owner: string;
+  repo: string;
+  number: number;
+  url: string;
+}
+
+/**
+ * What GitHub could say about one {@link PullRequestRef}.
+ *
+ * The ref always comes back and `pullRequest` may be null: the thread demonstrably
+ * opened it — that is why it is in the list — so an unanswerable lookup (no
+ * `gh`, a logged-out CLI, a repository this account cannot see) must still
+ * leave a row that links to it, rather than making the pull request disappear
+ * because its STATE could not be read.
+ */
+export interface PullRequestRefResult {
+  ref: PullRequestRef;
+  pullRequest: PullRequestInfo | null;
+}
+
 export interface PullRequestsResult {
   /** The folder's checked-out branch — the key "current PR" is matched on. */
   branch: string | null;
@@ -928,6 +959,15 @@ export interface GeniroApi {
    */
   getPullRequests(dir: string): Promise<PullRequestsResult>;
   /**
+   * Live state for the pull requests a THREAD opened, addressed by URL.
+   *
+   * A batch rather than one call per thread: the sidebar draws many rows and
+   * threads routinely share repositories, and the resolve is grouped by
+   * repository — so one call for every thread on screen costs one `gh` query
+   * per distinct repository instead of one per thread.
+   */
+  getPullRequestsByRef(refs: PullRequestRef[]): Promise<PullRequestRefResult[]>;
+  /**
    * Show one of the daemon's own files in Finder — the debug log.
    *
    * Deliberately narrow: it REVEALS (selects in a file manager) rather than
@@ -1048,6 +1088,7 @@ export const IPC = {
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
   getPullRequests: 'geniro:getPullRequests',
+  getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',

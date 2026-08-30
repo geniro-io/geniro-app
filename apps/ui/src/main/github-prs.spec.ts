@@ -5,7 +5,11 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { parsePullRequests, readPullRequests } from './github-prs';
+import {
+  parsePullRequests,
+  readPullRequests,
+  readPullRequestsByRef,
+} from './github-prs';
 import { CLAUDE_ONLY_KEYS, CURSOR_ONLY_KEYS } from './probe-env';
 
 /**
@@ -337,5 +341,84 @@ describe('parsePullRequests', () => {
   it('answers null for output that is not a JSON array', () => {
     expect(parsePullRequests('not json at all')).toBeNull();
     expect(parsePullRequests('{"pullRequests":[]}')).toBeNull();
+  });
+});
+
+describe('readPullRequestsByRef', () => {
+  const ref = (owner: string, repo: string, number: number) => ({
+    owner,
+    repo,
+    number,
+    url: `https://github.com/${owner}/${repo}/pull/${number}`,
+  });
+
+  it('asks ONE query per repository, not one per pull request', async () => {
+    // The shape this exists for: a thread that spans repositories. Three pull
+    // requests in two of them must cost two round trips, not three — resolving
+    // one at a time is what made the obvious implementation unusable (31 pull
+    // requests measured on one real thread).
+    writeFileSync(
+      headJson,
+      JSON.stringify([
+        ghRow(1, 'OPEN', '2026-01-01T00:00:00Z'),
+        ghRow(2, 'MERGED', '2026-01-02T00:00:00Z'),
+        ghRow(3, 'OPEN', '2026-01-03T00:00:00Z'),
+      ]),
+    );
+    installGhShim(recordingShim());
+
+    await readPullRequestsByRef([
+      ref('acme', 'platform', 1),
+      ref('acme', 'platform', 2),
+      ref('acme', 'mobile-app', 3),
+    ]);
+
+    const calls = ghCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('--repo acme/platform');
+    expect(calls[1]).toContain('--repo acme/mobile-app');
+    // Never `--head`: this list is addressed by URL precisely because the
+    // branch is the key that loses them.
+    expect(calls.join(' ')).not.toContain('--head');
+  });
+
+  it('asks about a pull request the listing did not carry, one by one', async () => {
+    // A pull request older than the repository's first page still belongs to
+    // the thread, and `gh pr view <url>` is the only way to reach it.
+    writeFileSync(
+      headJson,
+      JSON.stringify([ghRow(2, 'OPEN', '2026-01-02T00:00:00Z')]),
+    );
+    const viewJson = join(binDir, 'view.json');
+    writeFileSync(
+      viewJson,
+      JSON.stringify(ghRow(1, 'MERGED', '2026-01-01T00:00:00Z')),
+    );
+    installGhShim(
+      `printf '%s\\n' "$*" >> "${argsLog}"\n` +
+        `if [ "$2" = "view" ]; then cat "${viewJson}"; else cat "${headJson}"; fi`,
+    );
+
+    const results = await readPullRequestsByRef([
+      ref('acme', 'platform', 1),
+      ref('acme', 'platform', 2),
+    ]);
+
+    expect(ghCalls().some((call) => call.includes('pr view'))).toBe(true);
+    expect(results.map((row) => row.pullRequest?.number ?? null)).toEqual([
+      1, 2,
+    ]);
+  });
+
+  it('still returns the ref when gh cannot answer at all', async () => {
+    // The thread demonstrably opened it — that is why it is in the list — so a
+    // logged-out CLI must cost the STATE and not the row.
+    installGhShim('exit 1');
+
+    const results = await readPullRequestsByRef([ref('acme', 'platform', 7)]);
+
+    expect(results).toEqual([
+      { ref: ref('acme', 'platform', 7), pullRequest: null },
+    ]);
   });
 });

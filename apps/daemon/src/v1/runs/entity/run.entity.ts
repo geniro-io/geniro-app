@@ -240,4 +240,37 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   pendingContext: string | null = null;
+
+  /**
+   * The pull requests this run opened, as a JSON array of
+   * `{owner, repo, number, url, seq}` — see `agents/utils/pull-request-capture.ts`.
+   *
+   * On the RUN because it is the only place the answer survives: the pull
+   * request is opened by the agent's own `gh` in a checkout that then moves on,
+   * and often in a sibling repository the run's `cwd` never names. The
+   * transcript holds the evidence, but re-deriving it on every read means
+   * scanning the whole conversation (14k items on a real thread here), so it is
+   * scanned once and kept.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively, no migration —
+   * the same rule {@link pendingContext} follows.
+   */
+  @Property({ type: 'text', nullable: true })
+  pullRequests: string | null = null;
+
+  /**
+   * How far {@link pullRequests} has been scanned — the highest item `seq` the
+   * capture pass has looked at, or null when it never ran.
+   *
+   * This is what makes the scan INCREMENTAL and the backfill free: a run whose
+   * marker is null is scanned whole (recovering every pull request opened
+   * before this feature existed), and after that each pass only reads items
+   * newer than the marker, which the `(run_id, seq)` index serves directly.
+   *
+   * NULL rather than -1 as the "never scanned" value: a run genuinely scanned
+   * when it had no items records -1, and the two mean different things to a
+   * later pass that has to decide whether history still needs recovering.
+   */
+  @Property({ type: 'integer', nullable: true })
+  pullRequestsScannedSeq: number | null = null;
 }

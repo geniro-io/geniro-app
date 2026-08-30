@@ -44,6 +44,7 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   lastMessage: null,
+  pullRequests: [],
 };
 const run2: ChatRun = { ...run1, id: 'r2', title: 'Other chat' };
 

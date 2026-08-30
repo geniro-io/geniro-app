@@ -88,6 +88,7 @@ import {
 import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
+import { ComposerShelf, ThreadPullRequestChips } from './composer-shelf';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
@@ -206,6 +207,10 @@ import { useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
+import {
+  threadPullRequestsOf,
+  useThreadPullRequests,
+} from './use-thread-pull-requests';
 import { useUnseenRuns } from './use-unseen-runs';
 
 /**
@@ -3259,6 +3264,38 @@ export function Chats({
       ? null
       : (currentPullRequestByDir.get(activeRun.cwd) ?? null);
   /**
+   * What each thread OPENED, as GitHub currently has it.
+   *
+   * The other source, and the primary one: these are addressed by URL off the
+   * run row the daemon captured them onto, so they survive a branch switch and
+   * span repositories — neither of which the branch query above can do.
+   */
+  const { byKey: resolvedThreadPullRequests } = useThreadPullRequests(runs);
+  const openedByActiveThread = useMemo(
+    () => threadPullRequestsOf(activeRun ?? null, resolvedThreadPullRequests),
+    [activeRun, resolvedThreadPullRequests],
+  );
+  /**
+   * The ONE pull request each sidebar row names.
+   *
+   * The thread's own newest outranks whatever is open on its folder's branch:
+   * a row is about the conversation, and the branch answer is routinely a
+   * stranger's work that merely shares a checkout. Only a RESOLVED one is
+   * offered — the row draws a title and a state, which an unresolved ref does
+   * not have — so a machine with no `gh` falls back exactly as before.
+   */
+  const rowPullRequestByRun = useMemo(() => {
+    const byRun = new Map<string, PullRequestInfo>();
+    for (const run of runs) {
+      const opened = threadPullRequestsOf(run, resolvedThreadPullRequests);
+      const resolved = opened.find((row) => row.pullRequest !== null);
+      if (resolved?.pullRequest != null) {
+        byRun.set(run.id, resolved.pullRequest);
+      }
+    }
+    return byRun;
+  }, [runs, resolvedThreadPullRequests]);
+  /**
    * A branch move changes which pull request is that folder's. Nothing else
    * re-reads it — the hook's own refresh is on window focus, and an in-app
    * switch never loses focus.
@@ -5308,10 +5345,11 @@ export function Chats({
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
                               pullRequest={
-                                run.cwd === null
+                                rowPullRequestByRun.get(run.id) ??
+                                (run.cwd === null
                                   ? null
                                   : (currentPullRequestByDir.get(run.cwd) ??
-                                    null)
+                                    null))
                               }
                               dragging={
                                 drag?.kind === 'run' && drag.id === run.id
@@ -6067,18 +6105,30 @@ export function Chats({
                         onSteer={(id) => void steerQueued(id)}
                       />
 
-                      {/* Its own band beside the queued strip, NOT a sixth chip
+                      {/* Its own shelf beside the queued strip, NOT more chips
                           in the row below: that row deliberately does not wrap,
                           and a pull-request title is user data of any length —
                           it would take width from the folder and branch chips
-                          every time. */}
-                      {activePullRequest ? (
-                        <CurrentPullRequestLine
-                          pullRequest={activePullRequest}
-                          interactive
-                          className="px-1"
-                        />
-                      ) : null}
+                          every time.
+
+                          What this thread OPENED comes first and is the whole
+                          shelf when there is any: those are addressed by URL,
+                          so they are still this thread's after a branch switch
+                          and across repositories. The branch's own pull request
+                          is the fallback for a thread that opened none itself —
+                          the case where the user opened one by hand. */}
+                      <ComposerShelf>
+                        {openedByActiveThread.length > 0 ? (
+                          <ThreadPullRequestChips
+                            results={openedByActiveThread}
+                          />
+                        ) : activePullRequest ? (
+                          <CurrentPullRequestLine
+                            pullRequest={activePullRequest}
+                            interactive
+                          />
+                        ) : null}
+                      </ComposerShelf>
 
                       {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
@@ -6466,6 +6516,7 @@ export function Chats({
                     agents={agents}
                     artifacts={artifacts}
                     pullRequests={activePullRequests}
+                    threadPullRequests={openedByActiveThread}
                     tasksByAgent={tasksByAgent}
                     shellsByAgent={shellsByAgent}
                     onOpenShell={setOpenShell}

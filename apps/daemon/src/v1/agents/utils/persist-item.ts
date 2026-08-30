@@ -11,6 +11,7 @@ import type {
 import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import { readModelParameters } from './model-parameters';
+import { readRunPullRequests } from './pull-request-capture';
 
 /**
  * The one persist-then-emit implementation both execution paths (single-agent
@@ -130,5 +131,9 @@ export function runToWire(
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     lastMessage,
+    // Read off the row rather than passed in like the four live readings above:
+    // this one IS a column, written by the capture pass, so a caller that
+    // cannot know about approvals or holds still projects it correctly.
+    pullRequests: readRunPullRequests(run.pullRequests),
   };
 }

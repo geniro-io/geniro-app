@@ -214,6 +214,7 @@ const run1: ChatRun = {
   createdAt: 'now',
   updatedAt: 'now',
   lastMessage: null,
+  pullRequests: [],
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -3106,6 +3107,7 @@ describe('Chats workflow runs', () => {
     createdAt: 'later',
     updatedAt: 'later',
     lastMessage: null,
+    pullRequests: [],
   };
 
   function wfItem(
@@ -3662,6 +3664,7 @@ describe('Chats — handing a conversation to the user', () => {
       createdAt: 'later',
       updatedAt: 'later',
       lastMessage: null,
+      pullRequests: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     workflowApi.getWorkflow.mockResolvedValue({

@@ -27,15 +27,23 @@ paths:
      neither screenshotted nor asserted on. Pass `groups`, never `<option>`
      children; a test opens `[data-menu-trigger]` and reads `[role="option"]`.
    - **`segmented-control` is the ONE run of mutually exclusive options that
-     are always visible** — the Stats page's period and metric switches, the
-     chat sidebar's Active/Archived filter. Not `select`, which is the app's
-     one DROPDOWN and would hide two-to-four choices behind a click each time;
-     not `chip`, which states ONE value where this states a set and which of
-     them is current. It was local to `Stats.tsx` under a comment saying
-     "nothing else uses one yet", and the second use rebuilt it with a third
-     active treatment before the promotion — which is precisely the shape the
-     Reuse rules below exist to catch, so reach for the primitive rather than
-     two buttons and an `aria-pressed`.
+     are always visible** — the Stats page's period and metric switches. Not
+     `select`, which is the app's one DROPDOWN and would hide two-to-four
+     choices behind a click each time; not `chip`, which states ONE value where
+     this states a set and which of them is current. It was local to
+     `Stats.tsx` under a comment saying "nothing else uses one yet", and its
+     second use rebuilt it with a third active treatment before the promotion —
+     which is precisely the shape the Reuse rules below exist to catch, so
+     reach for the primitive rather than two buttons and an `aria-pressed`.
+     **Always visible is the whole condition, and it is about the SPACE the
+     options are worth.** That second use was the chat sidebar's archive
+     filter, and it was reported straight back out ("у нас не должно быть этого
+     элемента интерфейса… должна быть отдельная маленькая иконка"): a run of
+     labelled options is a band of chrome, which a page's own top-level switch
+     earns and a list filter in a 260px column does not. That one is a `Menu`
+     behind an icon now (`chats/chat-scope-filter.tsx`). So put a set here when
+     the choice IS the screen's subject; put it behind a trigger when it only
+     narrows what is already on screen.
    - **Every image the user can look at goes through `image-viewer`'s
      `ZoomableImage`** — the transcript's attachments, the composer's staged
      strip, an agent's markdown image. Three surfaces draw the same picture at

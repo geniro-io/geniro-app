@@ -6,6 +6,7 @@ import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
   ChatExportWireSchema,
+  ChatListScopeSchema,
   ChatMetricsWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
@@ -229,15 +230,17 @@ export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
 export const listChatsQuerySchema = z.object({
   /**
-   * Which side of the archive to list — absent or false is the desk, true is
-   * the shelf. Never both: an archived thread the user filed away must not
-   * reappear in the list they filed it out of.
+   * How much of the archive to list. Absent means `active` — the desk, with
+   * everything shelved held back, which is the only reading under which
+   * archiving a thread does anything to the list it was filed out of.
    *
-   * `z.stringbool()` for the reason `mcp.dto.ts`'s `refresh` uses it: under
-   * `z.coerce.boolean()` the string `"false"` a query string actually carries
-   * is truthy, so an explicit `archived=false` would hand back the archive.
+   * An ENUM rather than the boolean this started as: a boolean can only ever
+   * name two of the three answers, and the one it cannot name (`all`) is the
+   * one a user reaches for to find a shelved thread among the live ones. It is
+   * also what stops a query string from deciding by truthiness — `?archived=false`
+   * under `z.coerce.boolean()` reads as TRUE and hands back the shelf.
    */
-  archived: z.stringbool().optional(),
+  scope: ChatListScopeSchema.optional(),
 });
 export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 

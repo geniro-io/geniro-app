@@ -52,7 +52,7 @@ describe('RunDao (in-memory sqlite)', () => {
       const newer = await dao.create({ createdAt: new Date(2_000) });
       await dao.create({ workflowId: 'wf-1', createdAt: new Date(3_000) });
 
-      const chats = await dao.listChats(false);
+      const chats = await dao.listChats('active');
 
       expect(chats.map((run) => run.id)).toEqual([newer.id, older.id]);
     });
@@ -64,7 +64,7 @@ describe('RunDao (in-memory sqlite)', () => {
         archivedAt: new Date(9_000),
       });
 
-      const chats = await dao.listChats(false);
+      const chats = await dao.listChats('active');
 
       expect(chats.map((run) => run.id)).toEqual([active.id]);
     });
@@ -83,9 +83,27 @@ describe('RunDao (in-memory sqlite)', () => {
         archivedAt: new Date(9_000),
       });
 
-      const chats = await dao.listChats(true);
+      const chats = await dao.listChats('archived');
 
       expect(chats.map((run) => run.id)).toEqual([archived.id]);
+    });
+
+    it('lists both sides under `all`, still newest first', async () => {
+      // The one scope that states NO condition on `archivedAt`. Narrow it back
+      // to either side and one of these ids goes missing; drop the ORDER BY and
+      // the pair comes back in insertion order, which is the reverse.
+      const archived = await dao.create({
+        createdAt: new Date(1_000),
+        archivedAt: new Date(9_000),
+      });
+      const active = await dao.create({ createdAt: new Date(2_000) });
+      // A workflow run is out of scope on EVERY side, `all` included — the
+      // scope widens the archive, never the run kind.
+      await dao.create({ workflowId: 'wf-1', createdAt: new Date(3_000) });
+
+      const chats = await dao.listChats('all');
+
+      expect(chats.map((run) => run.id)).toEqual([active.id, archived.id]);
     });
   });
 

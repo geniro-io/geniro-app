@@ -6804,16 +6804,41 @@ describe('Chats sidebar list', () => {
     expect(row!.querySelector('input')).toBeNull();
   });
 
-  /** The Active / Archived segmented control in the sidebar header. */
-  function filterButton(
+  /**
+   * What the filter icon says it is currently showing — the trigger's own
+   * hover title, which is where a collapsed control states its state.
+   */
+  function scopeTitle(container: HTMLElement): string {
+    return container
+      .querySelector('aside button[aria-label="Filter chats"]')!
+      .getAttribute('title')!;
+  }
+
+  /**
+   * Pick a scope from the sidebar header's filter icon.
+   *
+   * Two `act`s, not one: the rows do not exist until the trigger's press has
+   * been flushed, and a single `act` batches both so the query would run
+   * against a panel that is not there yet.
+   */
+  async function pickScope(
     container: HTMLElement,
-    side: 'Active' | 'Archived',
-  ): HTMLButtonElement {
-    return [
-      ...container.querySelectorAll<HTMLButtonElement>(
-        'aside [role="group"] button',
+    label: 'Active chats' | 'Show all' | 'Archived only',
+  ): Promise<void> {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'aside button[aria-label="Filter chats"]',
+    )!;
+    await act(async () => {
+      trigger.click();
+    });
+    const row = [
+      ...trigger.parentElement!.querySelectorAll<HTMLElement>(
+        '[role="option"]',
       ),
-    ].find((b) => b.textContent?.includes(side))!;
+    ].find((el) => el.textContent?.includes(label))!;
+    await act(async () => {
+      row.click();
+    });
   }
 
   /**
@@ -6824,15 +6849,13 @@ describe('Chats sidebar list', () => {
    */
   async function mountArchived(client: DaemonClient): Promise<HTMLElement> {
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true' ? [{ ...run1, archivedAt: 'then' }] : [],
+          params?.scope === 'archived' ? [{ ...run1, archivedAt: 'then' }] : [],
         ),
     );
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
     return container;
   }
 
@@ -6849,9 +6872,9 @@ describe('Chats sidebar list', () => {
   it('switches the sidebar between the desk and the archive, and the two listings are disjoint', async () => {
     // The reported ask: "some filter to show archived threads as well".
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [
                 {
                   ...run1,
@@ -6869,9 +6892,7 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).toContain('My chat');
     expect(container.textContent).not.toContain('Shelved chat');
 
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
 
     // Asserting BOTH directions: an archive that merely appended its rows to
     // the desk's would satisfy the first expectation on its own.
@@ -6879,11 +6900,9 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).not.toContain('My chat');
     // The query the daemon actually parses — `archived=true` as a string,
     // since `z.stringbool()` reads the query value rather than a JSON boolean.
-    expect(api.listChats).toHaveBeenCalledWith({ archived: 'true' });
+    expect(api.listChats).toHaveBeenCalledWith({ scope: 'archived' });
 
-    await act(async () => {
-      filterButton(container, 'Active').click();
-    });
+    await pickScope(container, 'Active chats');
     expect(container.textContent).toContain('My chat');
     expect(container.textContent).not.toContain('Shelved chat');
   });
@@ -6895,28 +6914,127 @@ describe('Chats sidebar list', () => {
       { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
     ]);
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
-        Promise.resolve(params?.archived === 'true' ? [] : [run1]),
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(params?.scope === 'archived' ? [] : [run1]),
     );
     const { client } = makeClient();
     const container = await mount(client);
     expect(container.textContent).toContain('Call Demo');
 
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
 
     expect(container.textContent).not.toContain('Call Demo');
     expect(container.textContent).toContain('Nothing archived yet');
+  });
+
+  it('`Show all` lists both sides at once, each row with its OWN actions', async () => {
+    // The scope the boolean filter could not express. Both rows are listed
+    // together, so the row actions cannot come from the view: a view-wide flag
+    // here offers Unarchive on the live thread and Archive on the shelved one.
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [{ ...run1, id: 'r-arch', title: 'Shelved', archivedAt: 'then' }]
+            : params?.scope === 'all'
+              ? [
+                  run1,
+                  {
+                    ...run1,
+                    id: 'r-arch',
+                    title: 'Shelved',
+                    archivedAt: 'then',
+                  },
+                ]
+              : [run1],
+        ),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await pickScope(container, 'Show all');
+
+    expect(api.listChats).toHaveBeenCalledWith({ scope: 'all' });
+    expect(container.textContent).toContain('My chat');
+    expect(container.textContent).toContain('Shelved');
+    // The live row offers the reversible action and NOT the one-way one; the
+    // shelved row offers the way back and the purge.
+    expect(rowAction(container, 'Archive My chat')).not.toBeNull();
+    expect(rowAction(container, 'Delete My chat')).toBeNull();
+    expect(rowAction(container, 'Unarchive Shelved')).not.toBeNull();
+    expect(rowAction(container, 'Delete Shelved')).not.toBeNull();
+    expect(rowAction(container, 'Archive Shelved')).toBeNull();
+    // And the shelved row SAYS so at rest. Row actions appear on hover, so
+    // without the glyph the two rows are identical until one is pointed at —
+    // which is the one thing `Show all` cannot afford.
+    const rows = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ];
+    const shelved = rows.find((el) => el.textContent?.includes('Shelved'))!;
+    const live = rows.find((el) => el.textContent?.includes('My chat'))!;
+    expect(shelved.querySelector('[aria-label="archived"]')).not.toBeNull();
+    expect(live.querySelector('[aria-label="archived"]')).toBeNull();
+  });
+
+  it('archiving under `Show all` KEEPS the row, it does not drop it', async () => {
+    // `Show all` hides nothing, so the row that was just shelved is still one
+    // this listing holds. Route this through the drop path and the thread
+    // disappears from a list whose whole promise is that it does not.
+    // Settled, so archiving is a single press — the running-chat confirm is a
+    // different path with its own test.
+    const settled = { ...run1, status: 'completed' as const };
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(params?.scope === 'archived' ? [] : [settled]),
+    );
+    api.archiveChat.mockImplementation(
+      ({ runId }: { runId: string }): Promise<ChatRun> =>
+        Promise.resolve({ ...settled, id: runId, archivedAt: 'then' }),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await pickScope(container, 'Show all');
+
+    await act(async () => {
+      rowAction(container, 'Archive My chat')!.click();
+    });
+
+    expect(api.archiveChat).toHaveBeenCalledWith({ runId: run1.id });
+    expect(container.textContent).toContain('My chat');
+    // And the row is now the SHELVED one — re-filed rather than left stale, so
+    // it offers the way back instead of the archive it has already taken.
+    expect(rowAction(container, 'Unarchive My chat')).not.toBeNull();
+    expect(rowAction(container, 'Archive My chat')).toBeNull();
+  });
+
+  it('keeps the open thread when the new scope still lists it', async () => {
+    // Closing on every switch was right while the filter had two disjoint
+    // sides. `Show all` holds the thread being read, so closing on the way in
+    // would shut a conversation to show a list that still contains it.
+    api.listChats.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(params?.scope === 'archived' ? [] : [run1]),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.textContent).not.toContain('What are we building?');
+
+    await pickScope(container, 'Show all');
+
+    // Still the thread, not the landing composer — and the room was never
+    // left, which is what a close actually does.
+    expect(container.textContent).not.toContain('What are we building?');
+    expect(client.leaveRun).not.toHaveBeenCalled();
   });
 
   it('offers Archive on the desk and keeps Delete for the archive alone', async () => {
     // "I wanna archive threads instead of delete, and then i can delete it
     // from archive" — the one-way door is reached only from the shelf.
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [{ ...run1, archivedAt: 'then' }]
             : [run1],
         ),
@@ -6928,9 +7046,7 @@ describe('Chats sidebar list', () => {
     expect(rowAction(container, 'Delete My chat')).toBeNull();
     expect(rowAction(container, 'Unarchive My chat')).toBeNull();
 
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
 
     expect(rowAction(container, 'Unarchive My chat')).not.toBeNull();
     expect(rowAction(container, 'Delete My chat')).not.toBeNull();
@@ -7022,18 +7138,16 @@ describe('Chats sidebar list', () => {
 
   it('unarchiving the OPEN chat hands the window back too', async () => {
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [{ ...run1, archivedAt: 'then' }]
             : [run1],
         ),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
     await clickRun(container, 'My chat');
     expect(client.leaveRun).not.toHaveBeenCalledWith('r1');
 
@@ -7052,18 +7166,16 @@ describe('Chats sidebar list', () => {
     // took the text only to have it bounced is what this avoids, so the state
     // is read off the ROW (`archivedAt`) rather than off which list is open.
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [{ ...run1, status: 'completed', archivedAt: 'then' }]
             : [],
         ),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
     await clickRun(container, 'My chat');
 
     const textarea = container.querySelector('textarea')!;
@@ -7098,24 +7210,20 @@ describe('Chats sidebar list', () => {
     // the header loses the title and Stop, and the archived-composer gate
     // reads `undefined` and re-enables a composer the daemon then refuses.
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [{ ...run1, status: 'completed', archivedAt: 'then' }]
             : [],
         ),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
     await clickRun(container, 'My chat');
     expect(container.querySelector('textarea')?.disabled).toBe(true);
 
-    await act(async () => {
-      filterButton(container, 'Active').click();
-    });
+    await pickScope(container, 'Active chats');
 
     // Back on the landing composer, which is usable because it belongs to no
     // thread — NOT an archived thread's composer that has quietly re-enabled.
@@ -7163,8 +7271,8 @@ describe('Chats sidebar list', () => {
     // and a permanent delete that do not apply to them.
     let releaseActive: (runs: ChatRun[]) => void = () => {};
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
-        params?.archived === 'true'
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        params?.scope === 'archived'
           ? Promise.resolve([
               { ...run1, id: 'r-arch', title: 'Shelved chat', archivedAt: 'x' },
             ])
@@ -7177,9 +7285,7 @@ describe('Chats sidebar list', () => {
 
     // The active fetch is still open — the filter is live regardless, which is
     // exactly what makes this reachable.
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
     expect(container.textContent).toContain('Shelved chat');
 
     // Now the slower active fetch resolves, addressed to a view nobody is on.
@@ -7196,9 +7302,9 @@ describe('Chats sidebar list', () => {
     // run — which is never archived — would otherwise be prepended into a list
     // whose row actions (Unarchive, Delete permanently) do not apply to it.
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [
                 {
                   ...run1,
@@ -7214,12 +7320,8 @@ describe('Chats sidebar list', () => {
     api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
     const { client } = makeClient();
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
-    expect(
-      filterButton(container, 'Archived').getAttribute('aria-pressed'),
-    ).toBe('true');
+    await pickScope(container, 'Archived only');
+    expect(scopeTitle(container)).toContain('Archived only');
 
     // Type into the landing composer and send — the path that creates a run.
     const textarea = container.querySelector('textarea')!;
@@ -7240,26 +7342,22 @@ describe('Chats sidebar list', () => {
     expect(api.createChat).toHaveBeenCalled();
     // The view moved to the side the new run belongs on. This is the assertion
     // that fails if `addRun` drops its guard and prepends into the archive.
-    expect(filterButton(container, 'Active').getAttribute('aria-pressed')).toBe(
-      'true',
-    );
+    expect(scopeTitle(container)).toContain('Active chats');
     expect(container.textContent).not.toContain('Shelved chat');
   });
 
   it('unarchives from the archive and drops the row', async () => {
     api.listChats.mockImplementation(
-      (params?: { archived?: string }): Promise<ChatRun[]> =>
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(
-          params?.archived === 'true'
+          params?.scope === 'archived'
             ? [{ ...run1, archivedAt: 'then' }]
             : [run1],
         ),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    await act(async () => {
-      filterButton(container, 'Archived').click();
-    });
+    await pickScope(container, 'Archived only');
 
     await act(async () => {
       rowAction(container, 'Unarchive My chat')!.dispatchEvent(

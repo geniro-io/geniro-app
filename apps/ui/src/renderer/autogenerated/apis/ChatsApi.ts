@@ -54,7 +54,7 @@ export interface ChatsApiExportChatRequest {
 }
 
 export interface ChatsApiListChatsRequest {
-    archived?: string;
+    scope?: ListChatsScopeEnum;
 }
 
 export interface ChatsApiListRunItemsRequest {
@@ -386,8 +386,8 @@ export class ChatsApi extends runtime.BaseAPI {
     async listChatsRaw(requestParameters: ChatsApiListChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
         const queryParameters: any = {};
 
-        if (requestParameters['archived'] != null) {
-            queryParameters['archived'] = requestParameters['archived'];
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
         }
 
         const headerParameters: runtime.HTTPHeaders = {};
@@ -999,3 +999,13 @@ export class ChatsApi extends runtime.BaseAPI {
     }
 
 }
+
+/**
+ * @export
+ */
+export const ListChatsScopeEnum = {
+    Active: 'active',
+    All: 'all',
+    Archived: 'archived'
+} as const;
+export type ListChatsScopeEnum = typeof ListChatsScopeEnum[keyof typeof ListChatsScopeEnum];

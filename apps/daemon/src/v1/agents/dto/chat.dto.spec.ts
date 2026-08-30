@@ -3,30 +3,27 @@ import { describe, expect, it } from 'vitest';
 import { listChatsQuerySchema } from './chat.dto';
 
 describe('listChatsQuerySchema', () => {
-  /**
-   * The trap `z.stringbool()` is here to avoid, driven rather than described.
-   *
-   * A query string carries the WORD `false`, and under `z.coerce.boolean()` a
-   * non-empty string is truthy — so an explicit `?archived=false` would hand
-   * back the archive. Swapping the schema for the obvious "simplification"
-   * has to fail something, and this is the something.
-   */
-  it('reads the STRING "false" as false, not as a truthy string', () => {
-    expect(listChatsQuerySchema.parse({ archived: 'false' }).archived).toBe(
-      false,
+  it('reads each of the three scopes a query string can carry', () => {
+    expect(listChatsQuerySchema.parse({ scope: 'active' }).scope).toBe(
+      'active',
     );
-    expect(listChatsQuerySchema.parse({ archived: 'true' }).archived).toBe(
-      true,
+    expect(listChatsQuerySchema.parse({ scope: 'all' }).scope).toBe('all');
+    expect(listChatsQuerySchema.parse({ scope: 'archived' }).scope).toBe(
+      'archived',
     );
   });
 
-  it('leaves the side unstated when the param is absent', () => {
-    // The caller resolves absent to the ACTIVE side; the schema must not
-    // decide that for it by defaulting.
-    expect(listChatsQuerySchema.parse({}).archived).toBeUndefined();
+  it('leaves the scope unstated when the param is absent', () => {
+    // The caller resolves absent to ACTIVE; the schema must not decide that
+    // for it by defaulting, or the two would be free to disagree.
+    expect(listChatsQuerySchema.parse({}).scope).toBeUndefined();
   });
 
-  it('refuses a value that names neither side', () => {
-    expect(() => listChatsQuerySchema.parse({ archived: 'maybe' })).toThrow();
+  it('refuses a value that names no scope', () => {
+    expect(() => listChatsQuerySchema.parse({ scope: 'maybe' })).toThrow();
+    // The boolean this replaced: a query string carries the WORD, and a schema
+    // that coerced it would read `false` as truthy and hand back the archive.
+    // Under the enum it is simply not a scope.
+    expect(() => listChatsQuerySchema.parse({ scope: 'false' })).toThrow();
   });
 });

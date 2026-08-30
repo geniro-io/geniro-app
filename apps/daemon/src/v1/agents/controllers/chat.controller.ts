@@ -81,7 +81,7 @@ export class ChatController {
   @ApiOperation({ operationId: 'listChats' })
   @ZodResponse({ status: 200, type: [RunDto] })
   listChats(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
-    return this.chatService.listChats(query.archived ?? false);
+    return this.chatService.listChats(query.scope ?? 'active');
   }
 
   /**

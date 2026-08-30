@@ -27,6 +27,7 @@ import {
   type AttachmentDataWire,
   CHAT_DEFAULT_APPROVAL,
   type ChatApprovalMode,
+  type ChatListScope,
   type ClaudeModesCapability,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -1211,9 +1212,9 @@ export class ChatService implements OnModuleInit {
     return { cleared };
   }
 
-  async listChats(archived = false): Promise<RunWire[]> {
+  async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listChats(archived, em);
+    const runs = await this.runDao.listChats(scope, em);
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);

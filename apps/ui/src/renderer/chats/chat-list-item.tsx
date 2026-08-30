@@ -265,6 +265,22 @@ export const ChatListItem = memo(function ChatListItem({
             className="size-3.5 shrink-0 text-muted-foreground"
           />
         ) : null}
+        {/* What makes `Show all` legible: with both kinds of row in one list,
+            a shelved thread is otherwise identical to a live one until it is
+            hovered, and its row actions are the only difference. Under the
+            other two scopes every row is the same kind and the glyph simply
+            says which list this is. */}
+        {archived ? (
+          // The accessible name is on a WRAPPER, like the unseen dot's: lucide
+          // narrows its own props and refuses `role`, so a bare icon here would
+          // be decorative markup carrying a label nothing announces.
+          <span role="img" aria-label="archived" title="Archived">
+            <Archive
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+          </span>
+        ) : null}
         {editing ? (
           <Input
             ref={inputRef}

@@ -76,7 +76,6 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
-import { ArchiveFilter } from './archive-filter';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
@@ -84,6 +83,7 @@ import { chatExportFileName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { ChatMetricsLoaderContext } from './chat-metrics';
+import { ChatScopeFilter } from './chat-scope-filter';
 import { CliLoginContext } from './cli-login-context';
 import {
   compactionOnlyTurnEnds,
@@ -206,7 +206,7 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
-import { useChatRun } from './use-chat-run';
+import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
@@ -731,9 +731,10 @@ export function Chats({
     addItem,
     rememberRunContext,
     refreshRuns,
-    archivedView,
-    showArchived,
+    chatScope,
+    showScope,
     addRun,
+    placeRun,
     dropRun,
     activateRun,
     handleActivateRun,
@@ -2389,13 +2390,14 @@ export function Chats({
    */
   const archiveRun = useCallback(
     async (runId: string): Promise<void> => {
-      await chatApi.archiveChat({ runId });
-      // It has just left the listing this window is showing, so leaving its
-      // transcript up would put a thread on screen with no row anywhere beside
-      // it. The conversation is intact — it is on the other side.
-      dropRun(runId, newChat);
+      const archived = await chatApi.archiveChat({ runId });
+      // Re-filed rather than dropped: under `Show all` the row stays and only
+      // its actions change. It is only under `Active chats` that it has left
+      // the listing, and there leaving its transcript up would put a thread on
+      // screen with no row anywhere beside it.
+      placeRun(archived, newChat);
     },
-    [chatApi, dropRun, newChat],
+    [chatApi, placeRun, newChat],
   );
 
   const handleArchiveRun = useCallback(
@@ -2435,61 +2437,74 @@ export function Chats({
   /**
    * Put an archived chat back, from its SIDEBAR ROW.
    *
-   * The same drop as archive and delete, and it needs the open-run branch just
-   * as much: an archived row is activatable, so the thread being put back can
-   * be the one on screen.
+   * The same re-file as archive, and it needs the open-run branch just as much:
+   * an archived row is activatable, so the thread being put back can be the
+   * one on screen.
    */
   const handleUnarchiveRun = useCallback(
     (runId: string): void => {
       void chatApi
         .unarchiveChat({ runId })
-        .then(() => dropRun(runId, newChat))
+        .then((run) => placeRun(run, newChat))
         .catch((err: unknown) => setError(String(err)));
     },
-    [chatApi, dropRun, newChat, setError],
+    [chatApi, placeRun, newChat, setError],
   );
 
   /**
    * Put the OPEN chat back, from the control above its own composer.
    *
-   * Deliberately not {@link handleUnarchiveRun}: that one DROPS the row, and
-   * this control is only ever on screen when the run is the open one — so
-   * sharing it would always take the close-the-thread branch and land the user
-   * on the landing composer, which is the opposite of what the button says. It
-   * exists to make THIS conversation usable again, so the thread stays open and
-   * follows to the side it now belongs on.
+   * Deliberately not {@link handleUnarchiveRun}: this control is only ever on
+   * screen when the run is the open one, and it exists to make THIS
+   * conversation usable again — so on the one scope that would drop the row
+   * (`Archived only`) it moves the sidebar to the desk and keeps the thread
+   * open, rather than taking the hand-back branch and landing the user on the
+   * landing composer, which is the opposite of what the button says.
    */
   const handleUnarchiveOpenRun = useCallback(
     (runId: string): void => {
       void chatApi
         .unarchiveChat({ runId })
-        .then(() => {
-          showArchived(false);
-          return activateRun(runId);
+        .then(async (run) => {
+          if (chatScope === 'archived') {
+            showScope('active');
+            await activateRun(runId);
+            return;
+          }
+          // `all` keeps it listed; the re-file is what re-enables the composer.
+          placeRun(run, newChat);
         })
         .catch((err: unknown) => setError(String(err)));
     },
-    [chatApi, showArchived, activateRun, setError],
+    [chatApi, chatScope, showScope, activateRun, placeRun, newChat, setError],
   );
 
   /**
-   * Switch the sidebar between the desk and the archive, closing whatever
-   * thread is open.
+   * Switch what the sidebar lists, keeping the open thread only where the new
+   * scope still holds it.
    *
-   * The two listings are DISJOINT, so the thread on screen belongs to the side
-   * being left. Left open, it would go on rendering while its row is absent
-   * from `runs` — and everything the transcript reads off that row goes with
-   * it: the header (title, status, Stop) disappears, and the archived-composer
-   * gate reads `undefined` and re-ENABLES a composer whose next send the daemon
-   * refuses. Closing is the honest answer, and it is what the sidebar already
-   * does whenever a thread leaves the list.
+   * Closing unconditionally was right while the filter had two disjoint sides —
+   * the thread on screen always belonged to the one being left. `Show all`
+   * breaks that: it holds every thread, so closing on the way in would shut a
+   * conversation the user is reading to show them a list that still contains
+   * it. A thread the new scope does NOT hold is still closed, because it would
+   * otherwise render on with its row absent from `runs` — and everything the
+   * transcript reads off that row goes with it: the header (title, status,
+   * Stop) disappears, and the archived-composer gate reads `undefined` and
+   * re-ENABLES a composer whose next send the daemon refuses.
    */
-  const handleShowArchived = useCallback(
-    (next: boolean): void => {
-      deactivateRun();
-      showArchived(next);
+  const handleShowScope = useCallback(
+    (next: ChatListScope): void => {
+      const open = runsRef.current.find((run) => run.id === activeRunId);
+      const kept =
+        open !== undefined &&
+        (next === 'all' || (open.archivedAt != null) === (next === 'archived'));
+      if (!kept) {
+        deactivateRun();
+      }
+      showScope(next);
     },
-    [deactivateRun, showArchived],
+    [activeRunId, runsRef, deactivateRun, showScope],
   );
 
   const confirmDelete = useCallback(async (): Promise<void> => {
@@ -3339,8 +3354,9 @@ export function Chats({
   /**
    * The open thread is shelved, so its composer is inert.
    *
-   * Read off the ROW rather than off `archivedView`: the view says which list
-   * is on screen, and the question here is about this one conversation — the
+   * Read off the ROW rather than off `chatScope`: the scope says what the list
+   * covers, and the question here is about this one conversation — under
+   * `Show all` the two are listed side by side. The
    * daemon refuses the send either way (`RUN_ARCHIVED`), and a composer that
    * accepted text only to have it bounced is the shape this exists to avoid.
    */
@@ -5253,6 +5269,13 @@ export function Chats({
                       Chats
                     </span>
                     <span className="flex items-center gap-0.5">
+                      {/* First in the row because it acts on the LIST the row
+                          sits above, where the three beside it each add
+                          something to that list. */}
+                      <ChatScopeFilter
+                        scope={chatScope}
+                        onChange={handleShowScope}
+                      />
                       <Button
                         type="button"
                         variant="ghost"
@@ -5300,14 +5323,6 @@ export function Chats({
                       </Button>
                     </span>
                   </div>
-                  {/* Its own row under the heading rather than beside it: the
-                      header band is already three icon buttons wide at h-11,
-                      and a two-word segmented control squeezed in there would
-                      push the + off the edge on a narrow sidebar. */}
-                  <ArchiveFilter
-                    archived={archivedView}
-                    onChange={handleShowArchived}
-                  />
                   <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
                     {!runsLoaded && runs.length === 0 ? (
                       <li className="px-2 py-1.5 text-sm text-muted-foreground">
@@ -5374,7 +5389,12 @@ export function Chats({
                               onActivate={handleActivateRun}
                               onRename={handleRenameRun}
                               onDelete={handleDeleteRun}
-                              archived={archivedView}
+                              // Read off the ROW, never off the scope: under
+                              // `Show all` both kinds of row are listed
+                              // together, so a view-wide flag would offer
+                              // Unarchive on a live thread and Archive on a
+                              // shelved one, in the same list.
+                              archived={run.archivedAt != null}
                               // Chats only. A workflow row has no archive, so
                               // withholding the handler is what leaves it on
                               // the Delete it has always had — the asymmetry
@@ -5520,7 +5540,7 @@ export function Chats({
                         })}
                         {runs.length === 0 ? (
                           <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                            {archivedView
+                            {chatScope === 'archived'
                               ? 'Nothing archived yet'
                               : 'No chats yet'}
                           </li>

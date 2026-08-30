@@ -41,6 +41,7 @@ import { ClaudeAdapter } from '../adapters/claude/claude.adapter';
 import type { ClaudeProbeService } from '../adapters/claude/claude-probe.service';
 import { CursorAcpAdapter } from '../adapters/cursor-acp/cursor-acp.adapter';
 import type {
+  ChatListScope,
   ClaudeModesCapability,
   RunDeltaEvent,
   RunItemEvent,
@@ -151,11 +152,13 @@ class FakeRunDao {
       run.updatedAt = at;
     }
   }
-  /** Mirrors the real query — chat runs only, one side of the archive. */
-  async listChats(archived: boolean): Promise<Run[]> {
+  /** Mirrors the real query — chat runs only, filtered by archive scope. */
+  async listChats(scope: ChatListScope): Promise<Run[]> {
     return [...this.runs.values()].filter(
       (run) =>
-        run.workflowId === null && (run.archivedAt !== null) === archived,
+        run.workflowId === null &&
+        (scope === 'all' ||
+          (run.archivedAt !== null) === (scope === 'archived')),
     );
   }
   async setPendingContext(id: string, context: string | null): Promise<void> {
@@ -1900,21 +1903,52 @@ describe('ChatService', () => {
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
 
       expect((await service.listChats()).map((r) => r.id)).toEqual([run.id]);
-      expect((await service.listChats(true)).map((r) => r.id)).toEqual([]);
+      expect((await service.listChats('archived')).map((r) => r.id)).toEqual(
+        [],
+      );
 
       const archived = await service.archive(run.id);
       expect(archived.archivedAt).not.toBeNull();
 
-      // The two sides are exclusive: a shelved thread must not still be
-      // sitting in the list the user filed it out of.
+      // `active` and `archived` are exclusive: a shelved thread must not still
+      // be sitting in the list the user filed it out of.
       expect((await service.listChats()).map((r) => r.id)).toEqual([]);
-      expect((await service.listChats(true)).map((r) => r.id)).toEqual([
+      expect((await service.listChats('archived')).map((r) => r.id)).toEqual([
         run.id,
       ]);
 
       expect((await service.unarchive(run.id)).archivedAt).toBeNull();
       expect((await service.listChats()).map((r) => r.id)).toEqual([run.id]);
-      expect((await service.listChats(true)).map((r) => r.id)).toEqual([]);
+      expect((await service.listChats('archived')).map((r) => r.id)).toEqual(
+        [],
+      );
+    });
+
+    it('`all` is the one scope that hides neither side', async () => {
+      const { service } = setup();
+      const shelved = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
+      const live = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.archive(shelved.id);
+
+      // Each of the other two scopes returns exactly one of these; only `all`
+      // returns both, so narrowing the DAO's `all` arm back to either side
+      // fails here and nowhere else.
+      expect((await service.listChats('all')).map((r) => r.id).sort()).toEqual(
+        [live.id, shelved.id].sort(),
+      );
+    });
+
+    it('defaults to the ACTIVE side when no scope is named', async () => {
+      // The default is what makes archiving mean anything: were it `all`, a
+      // shelved thread would stay in the list it was filed out of.
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.archive(run.id);
+
+      expect(await service.listChats()).toEqual([]);
     });
 
     it('destroys nothing — the transcript survives being archived', async () => {

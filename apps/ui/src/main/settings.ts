@@ -11,7 +11,9 @@ import { app } from 'electron';
 
 import {
   DEFAULT_SETTINGS,
+  MAX_CONFIG_PROFILES,
   MAX_FAST_ACTIONS,
+  MAX_RUN_CONFIGS,
   type Settings,
 } from '../shared/contracts';
 import { settingsPatchSchema } from './ipc-schemas';
@@ -58,10 +60,32 @@ export function readSettings(): Settings {
         }
         continue;
       }
+      if (key === 'runConfigs') {
+        const configs = salvageList('runConfigs', record[key], MAX_RUN_CONFIGS);
+        if (configs !== undefined) {
+          salvaged[key] = configs;
+        }
+        continue;
+      }
       if (key === 'fastActions') {
-        const actions = salvageFastActions(record[key]);
+        const actions = salvageList(
+          'fastActions',
+          record[key],
+          MAX_FAST_ACTIONS,
+        );
         if (actions !== undefined) {
           salvaged[key] = actions;
+        }
+        continue;
+      }
+      if (key === 'configProfiles') {
+        const profiles = salvageList(
+          'configProfiles',
+          record[key],
+          MAX_CONFIG_PROFILES,
+        );
+        if (profiles !== undefined) {
+          salvaged[key] = profiles;
         }
         continue;
       }
@@ -102,20 +126,28 @@ function salvageCliPaths(value: unknown): Settings['cliPaths'] | undefined {
 }
 
 /**
- * Same per-entry salvage as {@link salvageCliPaths}, for the fast actions —
- * zod rejects an ARRAY wholesale on one bad element, and the blast radius here
- * is the user's whole set of them, each hand-written and unrecoverable. Order
- * is preserved: it is the order the user arranged, not an MRU this file is free
- * to re-sort.
+ * Same per-entry salvage as {@link salvageCliPaths}, for the three HAND-MANAGED
+ * lists — the saved run configurations, the fast actions, and the named agent
+ * configurations. Zod rejects an ARRAY wholesale on one bad element, and the
+ * blast radius here is the user's whole set of them, each hand-written and
+ * unrecoverable. Order is preserved: it is the order the user arranged, not an
+ * MRU this file is free to re-sort.
+ *
+ * ONE function over all three rather than a copy each. They are different
+ * features and must never be folded together in the UI — but this rule is about
+ * the FILE, not the feature: entry-by-entry, unique ids, re-apply the cap. A
+ * second copy is how one list would quietly acquire a fix the other lacks.
  */
-function salvageFastActions(
+function salvageList<K extends 'runConfigs' | 'fastActions' | 'configProfiles'>(
+  key: K,
   value: unknown,
-): Settings['fastActions'] | undefined {
+  cap: number,
+): Settings[K] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const entry = settingsPatchSchema.shape.fastActions.unwrap().element;
-  const salvaged: Settings['fastActions'] = [];
+  const entry = settingsPatchSchema.shape[key].unwrap().element;
+  const salvaged: Settings[K][number][] = [];
   const seen = new Set<string>();
   for (const candidate of value) {
     const parsed = entry.safeParse(candidate);
@@ -124,18 +156,18 @@ function salvageFastActions(
     }
     // Ids must be UNIQUE, and this is the only place that can guarantee it: the
     // schema cannot express it, and every consumer keys on the id across the
-    // whole list, so a duplicate in a hand-edited file makes renaming one
-    // action silently rewrite another, and deleting one remove two.
+    // whole list, so a duplicate in a hand-edited file makes renaming one entry
+    // silently rewrite another, and deleting one remove two.
     if (seen.has(parsed.data.id)) {
       continue;
     }
     seen.add(parsed.data.id);
-    salvaged.push(parsed.data);
+    salvaged.push(parsed.data as Settings[K][number]);
   }
   // Salvaging entry-by-entry skips the array-level cap, so it is re-applied
   // here: an over-long hand-edited file would otherwise load in full and then
   // make every subsequent write fail its own schema.
-  return salvaged.slice(0, MAX_FAST_ACTIONS);
+  return salvaged.slice(0, cap) as Settings[K];
 }
 
 export function writeSettings(next: Settings): Settings {

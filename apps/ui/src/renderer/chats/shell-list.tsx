@@ -1,6 +1,5 @@
 import { SquareTerminal } from 'lucide-react';
 
-import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { formatElapsed, useSecondsTick } from './live-row';
 import type { ShellRun } from './shell-activity';
@@ -41,9 +40,18 @@ export function ShellIcon({
 }
 
 /**
- * One running command: what it is, and how long it has been going.
+ * One running command, on ONE LINE: what it is, whether it outlives the turn,
+ * and how long it has been going.
  *
- * It owns its own clock — see {@link useSecondsTick}. Handed an elapsed number
+ * The row carries the TERMINAL GLYPH rather than a spinner, and that is what
+ * pays for the heading this list no longer has (see {@link ShellRows}): a
+ * reader scanning the panel's three bands has to be able to tell commands from
+ * tasks without a caption over them, and a monospace string alone does not say
+ * it. The spinner it replaced said only "running", which is true of every row
+ * here by construction and was therefore the same mark repeated N times — while
+ * the clock beside it is already moving, so nothing about liveness is lost.
+ *
+ * It owns that clock — see {@link useSecondsTick}. Handed an elapsed number
  * from above, every tick would re-render the whole panel, and the panel holds
  * every agent of the run.
  */
@@ -71,7 +79,26 @@ function ShellRow({
       data-slot="shell-row"
       data-shell-background={shell.background}
       className="flex items-center gap-1.5 text-xs">
-      <Spinner className="size-3 shrink-0 text-primary" />
+      {/* Nudged UP by a pixel, and this is an optical correction rather than a
+          fudge — REPORTED as "it should be on the same line, now icon a bit
+          more down". `items-center` centres BOXES, and a line box is not
+          symmetric about its ink: it reserves descender space below the
+          baseline that a command like `sleep 400` mostly does not use, so the
+          text's visible band sits ABOVE the box centre while a square glyph
+          lands exactly on it. Measured off the rendered pixels: the glyph's ink
+          centred 3.5 device px below the digits'.
+
+          A pixel rather than the full 3.5, because the two ends of the string
+          disagree — `sleep` HAS a descender, so the whole command's ink centres
+          only 1 device px above the glyph. Closing the gap to the cap band
+          alone would leave the glyph visibly high against the letters. Between
+          the two is where it reads as one line.
+
+          Not a line-height change, which was the first thing tried and cannot
+          work: shrinking a centred line box moves its top down by exactly half
+          of what it takes off the leading, so the ink does not move at all.
+          Verified twice, here and on the shelf chip. */}
+      <ShellIcon className="-translate-y-px text-muted-foreground" />
       {onOpen === undefined ? (
         <span
           className="min-w-0 flex-1 truncate font-mono text-[11px]"
@@ -100,16 +127,32 @@ function ShellRow({
           {shell.command}
         </button>
       )}
-      {/* Said in a word, not drawn as a second glyph: a detached command is the
-          one row that will still be running after the agent has answered, and
-          "why is this one still here" needs an answer on the row itself. */}
+      {/* Said in a WORD, not an abbreviation and not a second glyph: a detached
+          command is the one row that will still be running after the agent has
+          answered, and "why is this one still here" needs an answer on the row
+          itself. It read `BG` until it was REPORTED as unreadable ("not
+          understandable what is BG") — two letters of shell jargon, set in the
+          same muted grey as the clock beside them, so the one row carrying an
+          explanation was the one nobody could decode. It is drawn as a TAG
+          rather than as more muted text for the same reason: a bare word
+          between a command and a duration reads as part of one of them. The
+          sentence a tag has no room for lives on `title`. */}
       {shell.background ? (
-        <span className="shrink-0 text-[10px] text-muted-foreground uppercase">
-          bg
+        <span
+          className="shrink-0 rounded border border-border px-1 py-px text-[10px] text-muted-foreground"
+          title="Detached — this command keeps running after the agent's turn ends">
+          background
         </span>
       ) : null}
+      {/* A COLUMN, not a trailing word: the clock is the last thing on the row
+          and its width swings with the duration (`7s` against `2m 29s`), so
+          left to size itself it pushes everything before it sideways — two
+          rows of one list then carry their `background` tags at two different
+          x positions, which reads as a broken layout rather than as two
+          durations. `min-w` and not a fixed width, since nothing here bounds
+          how long a detached command runs. */}
       {elapsed === null ? null : (
-        <span className="shrink-0 tabular-nums text-muted-foreground">
+        <span className="min-w-[3.25rem] shrink-0 text-right tabular-nums text-muted-foreground">
           {elapsed}
         </span>
       )}
@@ -119,6 +162,14 @@ function ShellRow({
 
 /**
  * Every shell an agent is running, bounded and scrolling itself.
+ *
+ * There is NO heading over these rows, and that is the fix for the reported
+ * "not in one line". The panel's band used to caption them `1 shell running`,
+ * so the commonest case — one command — spent two lines saying one thing, the
+ * second of them a count of the single row beneath it. Nothing was lost by
+ * cutting it: with the finished commands deliberately absent there was never a
+ * `done/total` to state, and every row now says on its own line what the
+ * caption used to say about all of them together.
  *
  * The empty case is a SENTENCE rather than an empty box, on the same rule the
  * header's sub-agent list follows: the counter beside it is drawn at zero, and

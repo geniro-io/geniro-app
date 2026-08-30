@@ -106,9 +106,54 @@ describe('ChatListItem', () => {
       />,
     );
 
-    const line = container.querySelector('[data-slot="current-pull-request"]');
-    expect(line?.textContent).toContain('#70');
-    expect(line?.textContent).toContain('builder polish');
+    // A LABEL now, not a line: the glyph and the number, and nothing else.
+    // REPORTED as "make chip with current pr in threads list smaller - just
+    // icon and pr number" — the title was the row's whole width spent
+    // restating text the row already carries on two other lines.
+    const badge = container.querySelector('[data-slot="current-pull-request"]');
+    expect(badge?.textContent).toContain('#70');
+    expect(badge?.textContent).not.toContain('builder polish');
+    // It is not LOST, only moved: the state word is undrawn too, so the
+    // tooltip is the one place either can be read back.
+    expect(badge?.getAttribute('title')).toContain('builder polish');
+  });
+
+  it('labels every row with the agent driving it', async () => {
+    // The second label asked for beside the pull request. `cursor-agent` is
+    // the BINARY's name; the label says `cursor`, which is the user's own
+    // word and the one that fits a 260px rail.
+    const claude = await mount(
+      <ChatListItem {...props({ agentKind: 'claude' })} />,
+    );
+    expect(claude.querySelector('[data-slot="agent-kind"]')?.textContent).toBe(
+      'claude',
+    );
+
+    const cursor = await mount(
+      <ChatListItem {...props({ agentKind: 'cursor-agent' })} />,
+    );
+    expect(cursor.querySelector('[data-slot="agent-kind"]')?.textContent).toBe(
+      'cursor',
+    );
+  });
+
+  it('labels a workflow run `graph`, whatever agent kind it carries', async () => {
+    // A workflow has no single CLI — its agents are per node — so the honest
+    // word is what the run IS. Given a kind as well, to pin that the workflow
+    // reading WINS rather than merely filling a gap.
+    const container = await mount(
+      <ChatListItem {...props({ isWorkflow: true, agentKind: 'claude' })} />,
+    );
+    expect(
+      container.querySelector('[data-slot="agent-kind"]')?.textContent,
+    ).toBe('graph');
+  });
+
+  it('says `agent` for a run that recorded no kind, never a guess', async () => {
+    const container = await mount(<ChatListItem {...props({})} />);
+    expect(
+      container.querySelector('[data-slot="agent-kind"]')?.textContent,
+    ).toBe('agent');
   });
 
   it('draws the pull request as TEXT, never as a nested link', async () => {

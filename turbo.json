@@ -57,7 +57,17 @@
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      // `GENIRO_UI_USER_DATA` is how a dev shell runs BESIDE an installed one
+      // (see `apps/ui/src/main/index.ts`, which names its own directory for
+      // settings, database, pidfile, lock, attachments and logs). Turbo 2
+      // hands a task a FILTERED environment, so without this the variable is
+      // stripped between the shell and Electron and the override silently does
+      // nothing: the dev app then resolves the installed app's userData —
+      // `productName` is `Geniro` in development too — fails
+      // `requestSingleInstanceLock`, and quits with no output at all, which
+      // reads as `pnpm dev` being broken.
+      "passThroughEnv": ["GENIRO_UI_USER_DATA"]
     }
   }
 }

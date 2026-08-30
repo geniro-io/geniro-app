@@ -42,7 +42,7 @@ import { splitPullRequests } from './pull-request';
 import { PullRequestRow, ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import type { ShellRun } from './shell-activity';
-import { ShellIcon, ShellRows } from './shell-list';
+import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
 import type { WorkflowEntry } from './transcript-groups';
@@ -1269,23 +1269,15 @@ export function AgentsPanel({
                     <div
                       data-slot="agent-shell-list"
                       className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
-                      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <ShellIcon />
-                        {/* The count is the heading, not a figure beside one:
-                            with the finished commands deliberately absent (see
-                            `runningShellsByAgent`) there is no `done/total` to
-                            state, and "Shells" over three rows says nothing the
-                            rows do not. */}
-                        <span>
-                          {shells.length} shell
-                          {shells.length === 1 ? '' : 's'} running
-                        </span>
-                      </p>
-                      <ShellRows
-                        shells={shells}
-                        className="pl-0.5"
-                        onOpen={onOpenShell}
-                      />
+                      {/* NO caption over these rows, unlike the task band
+                          below. It read `1 shell running`, which on the
+                          commonest case — one command — was a whole line
+                          counting the single line under it, and was REPORTED
+                          as such ("not in one line"). A task row is prose and
+                          needs the word `Tasks` over it to be placed; a shell
+                          row leads with the terminal glyph and places
+                          itself. */}
+                      <ShellRows shells={shells} onOpen={onOpenShell} />
                     </div>
                   ) : null}
                   {tasks.length > 0 ? (

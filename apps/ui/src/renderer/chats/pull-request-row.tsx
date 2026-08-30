@@ -1,5 +1,4 @@
 import {
-  ExternalLink,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -12,7 +11,9 @@ import type {
   PullRequestRefResult,
 } from '../../shared/contracts';
 import { PanelLinkRow } from '../components/panel-link-row';
+import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
+import { SHELF_SEGMENT_CLASS } from './shelf-chip';
 
 /**
  * How one state is drawn — the single mapping, so the panel's list, the sidebar
@@ -102,52 +103,41 @@ export function PullRequestRow({
 }
 
 /**
- * THIS thread's pull request, on one line — the sidebar row and the band above
- * the composer.
+ * THIS thread's pull request as a LABEL — a state glyph and the number, and
+ * nothing else.
  *
- * `interactive` is what separates the two, and it is not a style choice: the
- * sidebar row is itself an activatable element, and an anchor nested inside one
- * is invalid markup that also steals the row's own click.
+ * It was a full line on the sidebar row: the glyph, the number and the TITLE,
+ * spending the row's whole width on text the row already spends two lines on
+ * (the chat's own name, and the last message). REPORTED as "make chip with
+ * current pr in threads list smaller - just icon and pr number. And make it as
+ * label", and the title is the part that had to go — the number is what
+ * identifies a pull request, and the state is what a glance is asking about.
+ *
+ * A `Badge` rather than a bordered chip, because the sidebar row is not a place
+ * for controls: it is one activatable element, and everything drawn inside it is
+ * a description of the thread. A chip's affordance would promise a press this
+ * cannot honour — an anchor nested inside an activatable row is invalid markup
+ * that also steals the row's own click, which is why nothing here is a link. The
+ * whole sentence stays on `title`, so the title is one hover away rather than
+ * gone.
  */
-export function CurrentPullRequestLine({
+export function PullRequestBadge({
   pullRequest,
-  interactive = false,
   className,
 }: {
   pullRequest: PullRequestInfo;
-  interactive?: boolean;
   className?: string;
 }): React.JSX.Element {
   const look = lookOf(pullRequest);
-  const body = (
-    <>
-      <PullRequestStateIcon pullRequest={pullRequest} />
-      <span className="shrink-0 font-medium">#{pullRequest.number}</span>
-      <span className="min-w-0 truncate">{pullRequest.title}</span>
-      {interactive ? (
-        <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-      ) : null}
-    </>
-  );
-  const shared = cn(
-    'flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground',
-    className,
-  );
-  const label = `#${pullRequest.number} ${pullRequest.title} · ${look.word}`;
-  return interactive ? (
-    <a
+  return (
+    <Badge
       data-slot="current-pull-request"
-      href={pullRequest.url}
-      target="_blank"
-      rel="noreferrer"
-      title={label}
-      className={cn(shared, 'hover:text-foreground')}>
-      {body}
-    </a>
-  ) : (
-    <span data-slot="current-pull-request" title={label} className={shared}>
-      {body}
-    </span>
+      variant="muted"
+      title={`#${pullRequest.number} ${pullRequest.title} · ${look.word}`}
+      className={cn('gap-1 px-1.5 py-0 font-normal', className)}>
+      <PullRequestStateIcon pullRequest={pullRequest} />
+      <span className="tabular-nums">#{pullRequest.number}</span>
+    </Badge>
   );
 }
 
@@ -161,7 +151,7 @@ export function CurrentPullRequestLine({
  * otherwise: prefixing every row in a single-repository thread is noise that
  * pushes the title out.
  */
-export function pullRequestLabel(
+function pullRequestLabel(
   ref: { repo: string; number: number },
   showRepo: boolean,
 ): string {
@@ -224,9 +214,16 @@ export function ThreadPullRequestRow({
 export function ThreadPullRequestChip({
   result,
   showRepo,
+  widthClassName = 'max-w-56',
 }: {
   result: PullRequestRefResult;
   showRepo: boolean;
+  /**
+   * How wide this chip may get — the SHELF's decision, since it depends on how
+   * many are drawn beside it (`PULL_REQUEST_CHIP_WIDTH`). Defaulted to the lone
+   * chip's width so a caller that draws exactly one need not say so.
+   */
+  widthClassName?: string;
 }): React.JSX.Element {
   const { ref, pullRequest } = result;
   const name = pullRequestLabel(ref, showRepo);
@@ -241,7 +238,7 @@ export function ThreadPullRequestChip({
       target="_blank"
       rel="noreferrer"
       title={label}
-      className="flex min-w-0 max-w-56 items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1 text-xs shadow-panel-sm hover:bg-sidebar-accent">
+      className={cn(SHELF_SEGMENT_CLASS, widthClassName)}>
       {pullRequest === null ? (
         <GitPullRequest
           aria-hidden="true"

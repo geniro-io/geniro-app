@@ -68,17 +68,21 @@ const pressKey = (el: Element, key: string): void => {
  * the component only calls `setData`/`dropEffect` on it — and the alternative
  * would be asserting nothing about the gesture at all.
  */
-const dragOver = (from: Element, to: Element): void => {
+const dragOver = (from: Element, to: Element): Event => {
   const dataTransfer = { setData: () => {}, effectAllowed: '', dropEffect: '' };
-  const fire = (el: Element, type: string): void => {
+  const fire = (el: Element, type: string): Event => {
     const event = new Event(type, { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'dataTransfer', { value: dataTransfer });
     act(() => {
       el.dispatchEvent(event);
     });
+    return event;
   };
   fire(from, 'dragstart');
-  fire(to, 'dragover');
+  // The `dragover` is handed back so a test can read `defaultPrevented` off it,
+  // which is the ONE observable that decides whether the browser plays its
+  // snap-back animation when the button comes up.
+  return fire(to, 'dragover');
 };
 
 const editor = (position: number): HTMLTextAreaElement | null =>
@@ -293,6 +297,64 @@ describe('QueuedStrip', () => {
     const rows = [...container!.querySelectorAll('[role="group"] > div')];
     dragOver(rows[0]!, rows[0]!);
     expect(onReorder).not.toHaveBeenCalled();
+  });
+
+  it('still ACCEPTS the drop over the row being dragged', () => {
+    // REPORTED as "wrong animation when i moving message in message queue —
+    // it's like jumping back to its position before moving". A drag whose last
+    // `dragover` was not prevented is an unsuccessful drop, and the browser
+    // answers one by flying the drag image back to where it was picked up.
+    //
+    // This row is where the gesture almost always ENDS: the list rearranges
+    // live under the pointer, so the carried row follows the cursor and is the
+    // element under it when the button comes up. Refusing the drop here — which
+    // the same-row early return above used to do — made the snap-back fire on
+    // essentially every reorder, with the queue itself already correct.
+    //
+    // `defaultPrevented` is the real observable and the only one: jsdom runs no
+    // drag machinery, so the animation cannot be seen here, but it is precisely
+    // this flag the browser branches on.
+    render(
+      <QueuedStrip
+        messages={[message('id-a', 'first'), message('id-b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={noop}
+      />,
+    );
+    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    expect(dragOver(rows[0]!, rows[0]!).defaultPrevented).toBe(true);
+    // And over a DIFFERENT row too, which is the half that always worked.
+    expect(dragOver(rows[0]!, rows[1]!).defaultPrevented).toBe(true);
+  });
+
+  it('refuses a drag that did not start in the strip', () => {
+    // The sidebar's chat rows are draggable too. Accepting one here would take
+    // the drop and land it nowhere — so the strip is a drop target only for the
+    // gesture it started itself.
+    render(
+      <QueuedStrip
+        messages={[message('id-a', 'first'), message('id-b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={noop}
+      />,
+    );
+    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    const event = new Event('dragover', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { setData: () => {}, effectAllowed: '', dropEffect: '' },
+    });
+    act(() => {
+      rows[0]!.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it('moves a row with ↑ / ↓ on its grip, and stops at the ends', () => {

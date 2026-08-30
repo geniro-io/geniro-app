@@ -1725,11 +1725,15 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       }
       continue;
     }
-    if (item.kind === 'shell_info' || item.kind === 'workflow_info') {
-      // Bookkeeping, not narrative: one says a detached command has finished
-      // (`shell-activity.ts` is its only reader), the other describes a running
-      // workflow and is folded into that workflow's own card by
-      // `buildWorkflowCards`. Neither renders anything here. Skipped OUTRIGHT
+    if (
+      item.kind === 'shell_open' ||
+      item.kind === 'shell_info' ||
+      item.kind === 'workflow_info'
+    ) {
+      // Bookkeeping, not narrative: the first two are the open and the close of
+      // a detached command (`shell-activity.ts` is their only reader), the third
+      // describes a running workflow and is folded into that workflow's own card
+      // by `buildWorkflowCards`. None renders anything here. Skipped OUTRIGHT
       // rather than left to the fall-through below, which treats any other kind
       // as the node having "said something" and closes its open tool group — so
       // a burst of them would chop one turn's tools into a run of one-call rows

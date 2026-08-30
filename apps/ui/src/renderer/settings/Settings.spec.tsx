@@ -16,7 +16,7 @@ import {
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
 } from '../../shared/contracts';
 import { THEMES } from '../../shared/themes';
-import { Settings } from './Settings';
+import { Settings, type SettingsSection } from './Settings';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -121,7 +121,7 @@ function det(
 let container: HTMLDivElement;
 let root: Root | null;
 
-async function mount(section?: 'general' | 'fast-actions'): Promise<void> {
+async function mount(section?: SettingsSection): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
   const mountedRoot = createRoot(container);
@@ -1020,7 +1020,25 @@ describe('Settings — sections', () => {
     // that reordered itself around a new feature would move every control the
     // user already knows where to find.
     await mount();
-    expect(navButtons()).toEqual(['General', 'Fast actions']);
+    expect(navButtons()).toEqual([
+      'General',
+      'Run configurations',
+      'Fast actions',
+    ]);
+  });
+
+  it('keeps run configurations and fast actions as two separate panes', async () => {
+    // They are different features — one says where and with what a chat runs,
+    // the other says what it says — and collapsing them into a single surface
+    // is what destroyed the saved configurations once. This is the cheap guard
+    // against a later tidy-up folding them back together.
+    await mount('run-configurations');
+    expect(container.textContent).toContain('No configurations yet');
+    expect(container.textContent).not.toContain('No fast actions yet');
+
+    await mount('fast-actions');
+    expect(container.textContent).toContain('No fast actions yet');
+    expect(container.textContent).not.toContain('No configurations yet');
   });
 
   it('shows ONE pane at a time', async () => {

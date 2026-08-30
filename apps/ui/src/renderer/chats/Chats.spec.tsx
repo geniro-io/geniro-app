@@ -14,6 +14,7 @@ import type {
   RunStatusEvent,
   VerdictAck,
 } from '../daemon-client';
+import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
 import type { LiveTextEvent } from './live-text';
@@ -305,13 +306,18 @@ const LIVE_DELTA_REST = {
 
 const roots: Root[] = [];
 
-async function mount(client: DaemonClient): Promise<HTMLElement> {
+async function mount(
+  client: DaemonClient,
+  onOpenSettings?: (section: SettingsSection) => void,
+): Promise<HTMLElement> {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
   roots.push(root);
   await act(async () => {
-    root.render(<Chats client={client} handle={handle} />);
+    root.render(
+      <Chats client={client} handle={handle} onOpenSettings={onOpenSettings} />,
+    );
   });
   return container;
 }
@@ -1550,8 +1556,14 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
     // The same row, re-queried — asserting on its text rather than on a
     // find() succeeding, so a regression reads as the label that is actually
     // there instead of "expected undefined to be defined".
-    expect(untitled().textContent).toContain('Fix Conflicts Worktree');
-    expect(untitled().textContent).not.toContain('claude');
+    // Scoped to the LABEL rather than the row, and that is stricter rather
+    // than looser: every row now carries an agent badge that says `claude` on
+    // purpose, so a whole-row assertion would have to be weakened to survive
+    // it. The label is the one element this is about.
+    const label = (): HTMLElement =>
+      untitled().querySelector<HTMLElement>('[data-slot="chat-row-label"]')!;
+    expect(label().textContent).toContain('Fix Conflicts Worktree');
+    expect(label().textContent).not.toContain('claude');
     // And the sibling row is left alone.
     expect(
       rows().find((el) => el.textContent?.includes('My chat')),
@@ -6579,8 +6591,24 @@ describe('Chats run composer chips', () => {
     // change things. Three such facts used to be three chips there; the
     // reported "we have soo much information here" folded them into ONE, whose
     // face is the folder and whose label carries all three.
-    const header = container.querySelector('h2')!.parentElement!;
+    const header = container.querySelector<HTMLElement>(
+      '[data-slot="chat-header"]',
+    )!;
     expect(header.textContent).toContain('proj');
+    // On the RIGHT of the row, not beside the title — asked for as "lets move
+    // current working directory to the right in this header". Pinned by which
+    // GROUP holds it, because the assertion above is satisfied from either
+    // side: the left group is the one that gives up width to a truncating
+    // title, so a fixed-size chip standing in it costs the title ~150px.
+    const aside = container.querySelector<HTMLElement>(
+      '[data-slot="chat-header-aside"]',
+    )!;
+    expect(aside.querySelector('[data-slot="thread-identity"]')).not.toBeNull();
+    expect(
+      container
+        .querySelector('h2')!
+        .parentElement!.querySelector('[data-slot="thread-identity"]'),
+    ).toBeNull();
     const identity = container.querySelector<HTMLButtonElement>(
       '[data-slot="thread-identity"] button',
     )!;
@@ -9071,6 +9099,28 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
   const transcript = (container: HTMLElement): HTMLElement =>
     container.querySelector<HTMLElement>('[data-slot="transcript"]')!;
 
+  it('turns Chromium scroll ANCHORING off on the transcript', async () => {
+    // The tail-follow's one unambiguous "the user is reading further up" is
+    // `scrollTop` moving up. Scroll anchoring moves it BY ITSELF whenever
+    // content above the viewport changes height — a superseded task list
+    // collapsing eight rows to one — so the follow read a browser adjustment
+    // as intent and switched itself off with nobody touching anything.
+    // REPORTED as the tail working for a while and then quietly stopping.
+    //
+    // The CLASS, because jsdom implements neither layout nor anchoring: the
+    // behaviour is unobservable here, while the declaration that disables it
+    // is the DOM fact that regressed. Measured in the real browser instead —
+    // see the note at this element in `Chats.tsx`.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(classesOf(transcript(container))).toContain(
+      '[overflow-anchor:none]',
+    );
+  });
+
   it('lifts the open card out of the transcript and leaves a marker in its slot', async () => {
     // Two live copies of one card would put two sets of buttons over a
     // one-shot verdict channel; no copy at all would drop a row out of the
@@ -9403,9 +9453,9 @@ describe('Chats — running shells', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(
-      container.querySelector('[data-slot="running-shells"]')?.textContent,
-    ).toContain('0');
+    // The chip is GONE, not showing zero: it lives on the composer shelf now,
+    // which is a row of what exists rather than a fixed set of readouts.
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="agent-shell-list"]'),
     ).toBeNull();
@@ -9449,9 +9499,9 @@ describe('Chats — running shells', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(
-      container.querySelector('[data-slot="running-shells"]')?.textContent,
-    ).toContain('0');
+    // The chip is GONE, not showing zero: it lives on the composer shelf now,
+    // which is a row of what exists rather than a fixed set of readouts.
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="agent-shell-list"]'),
     ).toBeNull();
@@ -9560,9 +9610,9 @@ describe('Chats — running shells', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(
-      container.querySelector('[data-slot="running-shells"]')?.textContent,
-    ).toContain('0');
+    // The chip is GONE, not showing zero: it lives on the composer shelf now,
+    // which is a row of what exists rather than a fixed set of readouts.
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="agent-shell-list"]'),
     ).toBeNull();
@@ -9583,9 +9633,9 @@ describe('Chats — running shells', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
-    expect(
-      container.querySelector('[data-slot="running-shells"]')?.textContent,
-    ).toContain('0');
+    // The chip is GONE, not showing zero: it lives on the composer shelf now,
+    // which is a row of what exists rather than a fixed set of readouts.
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
     expect(
       container.querySelector('[data-slot="agent-shell-list"]'),
     ).toBeNull();
@@ -11113,9 +11163,6 @@ describe('Chats — a fast action writes into the composer', () => {
     });
   }
 
-  const bar = (container: HTMLElement): HTMLElement | null =>
-    container.querySelector('[data-slot="fast-action-bar"]');
-
   const actionButtons = (container: HTMLElement): HTMLButtonElement[] => [
     ...container.querySelectorAll<HTMLButtonElement>(
       '[data-slot="fast-action"]',
@@ -11143,11 +11190,23 @@ describe('Chats — a fast action writes into the composer', () => {
     });
   }
 
-  it('draws one button per action, and nothing at all for a user with none', async () => {
+  it('offers the way to write the first one to a user with none', async () => {
+    // The screen a fast action is FOR is where somebody who has none has to be
+    // told they exist — Settings' nav entry cannot do that on its own.
     withActions([]);
-    const { client } = makeClient();
-    expect(bar(await mount(client))).toBeNull();
+    const openSettings = vi.fn();
+    const container = await mount(makeClient().client, openSettings);
+    const add = container.querySelector<HTMLButtonElement>(
+      '[data-slot="fast-action-add"]',
+    );
+    expect(add).not.toBeNull();
+    await act(async () => {
+      add?.click();
+    });
+    expect(openSettings).toHaveBeenCalledWith('fast-actions');
+  });
 
+  it('draws one button per action', async () => {
     withActions([action, { ...action, id: 'fa-2', name: 'Standup' }]);
     const container = await mount(makeClient().client);
     expect(actionButtons(container).map((b) => b.textContent)).toEqual([
@@ -11341,5 +11400,85 @@ describe('Chats — the pull request above the composer', () => {
     expect(
       container.querySelector('[data-slot="current-pull-request"]'),
     ).toBeNull();
+  });
+});
+
+describe('Chats — the thread list is resizable', () => {
+  // The width is PERSISTED, so a test that asserts the default has to start
+  // from an install that has never dragged it — otherwise these three pass or
+  // fail on the order they happen to run in.
+  beforeEach(() => {
+    localStorage.removeItem('chats.listWidth');
+  });
+
+  /** The grid that lays the three columns out. */
+  const columns = (container: HTMLElement): string =>
+    container.querySelector<HTMLElement>('.grid')!.style.gridTemplateColumns;
+
+  it('carries the same drag handle the agents panel has', async () => {
+    // Asked for in those words: "Left sidebar with threads list should be
+    // resizible, same as right sidebar with agents". SAME means the same hook
+    // and the same handle — the clamping, the persisted-value migration, the
+    // persist-at-drag-end and the ARIA splitter wiring are worth getting right
+    // once, and a second implementation would have had to get all of them
+    // right again.
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const handle = container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize chat list"]',
+    );
+    expect(handle).not.toBeNull();
+    // A vertical divider, because it slides horizontally — the pairing is the
+    // ARIA window-splitter pattern's, not a guess.
+    expect(handle!.getAttribute('aria-orientation')).toBe('vertical');
+    expect(handle!.getAttribute('aria-valuenow')).toBe('260');
+  });
+
+  it('drives the GRID column, so the transcript gives up exactly what the list takes', async () => {
+    // The observable that matters: the width is not a class on the aside, it is
+    // the first grid track. A handle that moved the aside alone would leave a
+    // gap or an overlap beside it.
+    const { client } = makeClient();
+    const container = await mount(client);
+    expect(columns(container)).toContain('260px');
+
+    const handle = container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize chat list"]',
+    )!;
+    await act(async () => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+      );
+    });
+
+    // One keyboard step wider — the hook's own 16px.
+    expect(columns(container)).toContain('276px');
+    expect(localStorage.getItem('chats.listWidth')).toBe('276');
+  });
+
+  it('refuses to go past its bounds, in both directions', async () => {
+    // The floor is what keeps the list header's four controls from crowding the
+    // word `Chats` off its row; the ceiling keeps a dragged list from eating
+    // the transcript. Home/End are the splitter pattern's way to reach both.
+    const { client } = makeClient();
+    const container = await mount(client);
+    const handle = container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize chat list"]',
+    )!;
+
+    await act(async () => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Home', bubbles: true }),
+      );
+    });
+    expect(columns(container)).toContain('220px');
+
+    await act(async () => {
+      handle.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'End', bubbles: true }),
+      );
+    });
+    expect(columns(container)).toContain('520px');
   });
 });

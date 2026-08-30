@@ -103,3 +103,66 @@ function leafOf(path: string): string {
   const parts = path.split('/').filter((part) => part !== '');
   return parts[parts.length - 1] ?? path;
 }
+
+/**
+ * Sentinel for {@link BranchValueSelect}'s "no opinion" row. A git refname is
+ * never empty, so no real branch can collide with it.
+ */
+const ANY_BRANCH = '';
+
+/**
+ * The branch chip a saved run configuration is EDITED with — it records a name
+ * and switches nothing.
+ *
+ * The distinction from {@link BranchSelect} above is the whole reason it is a
+ * second component rather than a prop: that one acts on the checkout the moment
+ * a row is picked, which is exactly wrong while describing a setup for later —
+ * editing a configuration would check the branch out under whatever the user
+ * was doing. It also has a value this one does not: "whatever is checked out",
+ * a real answer that no live chip can express.
+ */
+export function BranchValueSelect({
+  info,
+  value,
+  onChange,
+}: {
+  /** Git state of the folder the configuration points at, for the row list. */
+  info: GitInfo;
+  /** The recorded branch, or null to take whatever is checked out. */
+  value: string | null;
+  onChange: (branch: string | null) => void;
+}): React.JSX.Element | null {
+  if (!info.isRepo) {
+    return null;
+  }
+  // A branch the folder no longer has is still the user's stored answer, so it
+  // is added back as its own row rather than silently reading as unset — the
+  // same rule the model and effort chips follow for an off-list value.
+  const known = info.branches.includes(value ?? '');
+  return (
+    <Select
+      variant="ghost"
+      // The SENTINEL, not `null`: `Select` matches a row by `item.value ===
+      // value`, so a null matches no row and a real choice would read as
+      // "nothing chosen" — no checkmark, and the trigger on its placeholder.
+      value={value ?? ANY_BRANCH}
+      placeholder="branch in use"
+      searchPlaceholder="Search branches…"
+      aria-label="Branch this configuration checks out"
+      title="Branch to switch to when this configuration is used"
+      className="max-w-40"
+      flexible
+      leadingIcon={<GitBranch />}
+      groups={[
+        {
+          items: [
+            { value: ANY_BRANCH, label: 'Whatever is checked out' },
+            ...info.branches.map((b) => ({ value: b, label: b })),
+            ...(value !== null && !known ? [{ value, label: value }] : []),
+          ],
+        },
+      ]}
+      onValueChange={(next) => onChange(next === ANY_BRANCH ? null : next)}
+    />
+  );
+}

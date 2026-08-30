@@ -5,7 +5,9 @@
     "node_modules",
     "dist",
     "**/*.spec.ts",
-    "**/__tests__/**"
+    "**/__tests__/**",
+    "src/db/seed.ts",
+    "src/db/seeders/**"
   ],
   "compilerOptions": {
     "module": "ESNext",

@@ -107,14 +107,82 @@ describe('ThreadPullRequestChips', () => {
           } satisfies PullRequestInfo),
   });
 
-  it('shows ONE chip however many the thread opened', () => {
+  it('shows ONE chip when nothing the thread opened is still open', () => {
     // The shelf is one line above the composer: thirty-one chips pushed the
-    // textarea most of the way up the pane, which is what this replaced.
+    // textarea most of the way up the pane, which is what this replaced. With
+    // no open pull request there is one thing worth naming — the newest — and
+    // the rest are history the panel lists.
     render([1, 2, 3, 4, 5].map((n) => result('platform', n)));
 
     expect(
       container.querySelectorAll('[data-slot="pull-request-chip"]'),
     ).toHaveLength(1);
+  });
+
+  it('names EVERY pull request the thread has open, not just the newest', () => {
+    // Asked for as "in case if we have few opened PRS - all of them". A thread
+    // with three reviews out could reach only the newest from here before this;
+    // the other two were behind the panel.
+    render([
+      result('platform', 90, 'open'),
+      result('platform', 87, 'merged'),
+      result('platform', 80, 'open'),
+    ]);
+
+    const chips = [
+      ...container.querySelectorAll('[data-slot="pull-request-chip"]'),
+    ];
+    expect(chips.map((c) => c.textContent)).toEqual([
+      expect.stringContaining('#90'),
+      expect.stringContaining('#80'),
+    ]);
+    // The merged one is NOT among them — an open pull request is the only kind
+    // that is still work.
+    expect(container.textContent).not.toContain('#87');
+  });
+
+  it('stops at THREE and hands the rest to the panel', () => {
+    // The cap is about the LINE, not about pull requests: the shelf never
+    // wraps, so a fourth chip takes its width from the three beside it and from
+    // the terminals chip, which does not shrink.
+    render([95, 94, 93, 92, 91].map((n) => result('platform', n, 'open')));
+
+    const chips = [
+      ...container.querySelectorAll('[data-slot="pull-request-chip"]'),
+    ];
+    expect(chips).toHaveLength(3);
+    expect(chips.map((c) => c.textContent)).toEqual([
+      expect.stringContaining('#95'),
+      expect.stringContaining('#94'),
+      expect.stringContaining('#93'),
+    ]);
+    // Counting what the THREAD opened, which is what the panel behind it lists.
+    expect(container.querySelector('button')?.textContent).toBe('All 5');
+  });
+
+  it('gives each chip LESS width as more are drawn beside it', () => {
+    // "we always should fit all available chips to one line". A crowded row is
+    // handled by flex on its own (every chip is `min-w-0` and shrinks while the
+    // terminals chip does not); what flex cannot do is the ROOMY row, where
+    // three chips would each take a lone chip's full width and press the rest
+    // of the shelf against the edge. jsdom computes no layout, so the cap
+    // itself is the observable — and it is the thing that would regress.
+    const widthOf = (): string | undefined =>
+      [...container.querySelectorAll('[data-slot="pull-request-chip"]')]
+        .map((c) => [...c.classList].find((n) => n.startsWith('max-w-')))
+        .at(0);
+
+    render([result('platform', 90, 'open')]);
+    const lone = widthOf();
+    act(() => root.unmount());
+    container.remove();
+
+    render([90, 89, 88].map((n) => result('platform', n, 'open')));
+    const crowded = widthOf();
+
+    expect(lone).toBeDefined();
+    expect(crowded).toBeDefined();
+    expect(crowded).not.toBe(lone);
   });
 
   it('names the one still OPEN, not merely the newest', () => {

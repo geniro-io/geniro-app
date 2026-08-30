@@ -62,9 +62,9 @@ import {
 } from '../utils/approval-answer';
 import { withCarriedContext } from '../utils/carried-context';
 import {
-  closesWork,
   mapEventToItem,
   offTurnActivity,
+  restatesRunAsWorking,
   terminalStatus,
 } from '../utils/event-to-item';
 import { isHostChartCall } from '../utils/host-chart';
@@ -1721,7 +1721,7 @@ export class ChatService implements OnModuleInit {
       this.recordDelegateBracket(runId, event);
       if (event.parentToolUseId !== undefined) {
         await this.leaseOnDelegateRow(runId, event.parentToolUseId);
-      } else if (!closesWork(event)) {
+      } else if (restatesRunAsWorking(event)) {
         await this.restatusAfterOffTurnEvent(em, runId, event);
       }
     } catch (err: unknown) {
@@ -1959,9 +1959,9 @@ export class ChatService implements OnModuleInit {
    *   delegate's trailing rows through it is what latched a `still working`
    *   spinner on at the exact moment the work ended, with nothing able to take
    *   it down. The lease is that missing off-switch.
-   * - A delegate CLOSING (`closesWork`) still restates nothing, and now
-   *   need not be special-cased: a close carries no `parentToolUseId`, so it
-   *   never reaches here at all.
+   * - A delegate CLOSING still restates nothing — `restatesRunAsWorking`
+   *   answers no — and now need not be special-cased: a close carries no
+   *   `parentToolUseId`, so it never reaches here at all.
    *
    * Renewal is free — a live delegate emits rows continuously, and re-arming a
    * timer must not cost a write — so only the FIRST row of a quiet stretch

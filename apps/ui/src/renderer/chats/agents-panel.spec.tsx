@@ -1965,14 +1965,22 @@ describe('running shells', () => {
       '[data-slot="agent-shell-list"]',
     )!;
     expect(section).not.toBeNull();
-    expect(section.textContent).toContain('2 shells running');
     expect(section.textContent).toContain('pnpm build');
     // A detached command is the one row that can outlive the agent's answer, so
-    // it says which it is.
-    expect(
-      section.querySelector('[data-shell-background="true"]')?.textContent,
-    ).toContain('pnpm dev');
+    // it says which it is — in a WORD. `BG` was reported as undecodable, and
+    // the abbreviation is what this pins: `background` CONTAINS neither `bg`
+    // as a standalone token nor the old uppercase form, so re-shortening it
+    // fails here.
+    const detached = section.querySelector('[data-shell-background="true"]')!;
+    expect(detached.textContent).toContain('pnpm dev');
+    expect(detached.textContent).toContain('background');
+    expect(detached.textContent).not.toContain('BG');
     expect(section.textContent).toContain('12s');
+
+    // And there is NO caption over the rows: it counted them, which on one
+    // command was a whole line restating the line beneath it.
+    expect(section.textContent).not.toContain('shells running');
+    expect(section.querySelectorAll('[data-slot="shell-row"]')).toHaveLength(2);
 
     // And it is THIS agent's: the worker was given none.
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;

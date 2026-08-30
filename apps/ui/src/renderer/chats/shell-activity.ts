@@ -255,6 +255,67 @@ function settleFromShellInfo(
   }
 }
 
+/**
+ * Mark the shell a `shell_open` row names as DETACHED — the daemon saying which
+ * tool calls this CLI actually put in the background.
+ *
+ * The AUTHORITY on that question, ranked above {@link readLaunchHandle}, and the
+ * fix for two surfaces answering it differently. The daemon reads it off the
+ * CLI's own structured frames; this reader could only recover it by matching the
+ * CLI's English, which is deliberately strict (a loose match promotes a
+ * foreground command whose OUTPUT quotes the announcement into a shell nothing
+ * can ever close) and therefore misses. Every miss put the run row's own
+ * `shellsOpen` — which counts exactly these events — over a transcript naming
+ * fewer commands than the count, and the two are read by different surfaces:
+ * REPORTED as a sidebar row saying `working · waiting on background work` beside
+ * a header counting zero shells.
+ *
+ * It marks and never CREATES: a row naming a call this transcript has not seen
+ * is a launch below the loaded window, and inventing a shell for it would put a
+ * command on screen with no name to draw. It also never closes one — the open
+ * and the close are two rows, and this is the open.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes the two
+ * keys read here (`id` = the launching tool call, `workId` = the CLI's own id).
+ * An item payload is `z.unknown()` on the wire BY DESIGN — every kind carries a
+ * different shape — so no generated type spans the two sides, and a key renamed
+ * there must be renamed here.
+ */
+function detachFromShellOpen(
+  callId: string | null,
+  workId: string | null,
+  index: {
+    byCall: Map<string, ShellRun>;
+    byHandle: Map<string, ShellRun>;
+  },
+): void {
+  if (callId === null) {
+    return;
+  }
+  const target = index.byCall.get(callId);
+  if (target === undefined) {
+    return;
+  }
+  target.background = true;
+  // Nothing orders this row against the launch's own REPLY, so the case where
+  // the reply landed first has to be undone here: with no announcement in its
+  // prose that arm reads the reply as the command's output and marks the shell
+  // finished. `completed` is the only status reachable by then — a probe or a
+  // kill is addressed to a handle, which does not exist until one of the two
+  // channels has named it — so this cannot coarsen a finer ending.
+  if (target.status === 'completed') {
+    target.status = 'running';
+  }
+  // The CLI's own id for the unit, so a later `shell_info` naming only the work
+  // id still finds this row — the settle carries the call on one of its two
+  // channels and not the other. The prose handle wins where it landed first: it
+  // is the id a `BashOutput` PROBE is addressed to, and this one is not.
+  if (workId !== null && target.handle === null) {
+    target.handle = workId;
+    index.byHandle.set(workId, target);
+  }
+}
+
 /** What a probe/kill call is FOR, so its reply can be read the right way. */
 interface ShellProbe {
   handle: string;
@@ -278,9 +339,32 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
   const probes = new Map<string, ShellProbe>();
   /** Background handle → the shell carrying it, for those probes to find. */
   const byHandle = new Map<string, ShellRun>();
+  /**
+   * The launching calls the DAEMON said were detached — see
+   * {@link detachFromShellOpen}.
+   *
+   * Kept as well as applied, because nothing orders a `shell_open` against the
+   * launch's own reply: arriving first, it must survive that reply's "no
+   * announcement in the prose means the command has exited" arm, which is
+   * otherwise the correct reading and would close the shell a moment after the
+   * daemon opened it.
+   */
+  const detached = new Set<string>();
   for (const item of items) {
     const payload: unknown = item.payload;
     const callId = payloadString(payload, 'id');
+    if (item.kind === 'shell_open') {
+      // Before the id guard, on `shell_info`'s reasoning: the row is read for
+      // both of its keys, and only one of them is the launching call.
+      if (callId !== null) {
+        detached.add(callId);
+      }
+      detachFromShellOpen(callId, payloadString(payload, 'workId'), {
+        byCall,
+        byHandle,
+      });
+      continue;
+    }
     if (item.kind === 'shell_info') {
       // BEFORE the id guard below, because this row's `id` is legitimately null
       // — a settle channel that names no launching call still names the unit,
@@ -383,8 +467,23 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
     // all, so an input-only reading leaves it listed for ever with no handle
     // any probe could match. Measured on the reporter's own `geniro.db` — two
     // such rows, from today.
+    //
+    // What OUTRANKS the reply is the daemon's own `shell_open`: this reading is
+    // a match on the CLI's English, that one is a reading of the CLI's frames,
+    // and the two disagreeing is what put a header counting zero shells beside
+    // a sidebar row saying background work was still out. The prose stays the
+    // only source of the PROBE HANDLE, which is why it is still read here.
     const handle = readLaunchHandle(replyText);
     if (handle === null) {
+      if (detached.has(callId)) {
+        // The daemon says this command was detached, so the reply is the
+        // launch's acknowledgement rather than its output — it settles nothing.
+        // What is lost by the prose not matching is only the probe handle: a
+        // later `BashOutput` cannot be tied to this row, while the `shell_info`
+        // that ends it still can, by the work id the open carried.
+        shell.background = true;
+        continue;
+      }
       // No announcement means the reply IS the command's output, whichever
       // way the call was written: the shell has exited.
       shell.background = false;

@@ -16,9 +16,10 @@ import { Button } from '../components/ui/button';
  * the model would be a second, invisible source of the run's configuration, and
  * pressing one would move chips the user had just set by hand.
  *
- * The set is EMPTY for most users and draws nothing at all then, on the rule
- * the composer shelf follows: a surface that costs space for a feature nobody
- * has configured is a surface in the way.
+ * With NO actions the bar is one muted invitation to write the first one, not
+ * nothing at all: the new-chat screen is where a fast action is wanted, and a
+ * feature that is invisible until it is already configured can only be found by
+ * somebody who went looking through Settings for it.
  */
 export function FastActionBar({
   actions,
@@ -31,7 +32,30 @@ export function FastActionBar({
   onManage?: () => void;
 }): React.JSX.Element | null {
   if (actions.length === 0) {
-    return null;
+    // Without a way to Settings there is nothing to invite the user TO — the
+    // harness case, and the one place drawing nothing is still right.
+    if (!onManage) {
+      return null;
+    }
+    return (
+      <div
+        data-slot="fast-action-bar"
+        aria-label="Fast actions"
+        role="group"
+        className="flex items-center justify-center">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          data-slot="fast-action-add"
+          title="Fast actions are your own prompts — one press writes one into the message box"
+          className="h-7 gap-1.5 rounded-lg px-2.5 text-xs text-muted-foreground"
+          onClick={onManage}>
+          <Zap aria-hidden="true" className="size-3.5 shrink-0" />
+          Add fast actions
+        </Button>
+      </div>
+    );
   }
   return (
     <div
@@ -63,10 +87,9 @@ export function FastActionBar({
       ))}
       {/* The way back to where these are written, from where they are used. It
           rides the bar rather than sitting beside the `+`, because the bar is
-          the only place the actions are visible — and it is drawn only when
-          there ARE some, since a manage button over an empty set is the surface
-          this bar refuses to be. Settings' own nav entry is how the first one
-          gets made. */}
+          the only place the actions are visible. A glyph is enough HERE, where
+          the buttons beside it already say what the bar is; over an empty set
+          the same trip is spelled out in words instead. */}
       {onManage ? (
         <Button
           type="button"

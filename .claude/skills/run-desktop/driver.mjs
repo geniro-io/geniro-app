@@ -177,6 +177,25 @@ function stubScript(handle) {
   const recentConfigDirs = process.env.GENIRO_RUN_CONFIG_DIR
     ? `[${configDir}]`
     : '[]';
+  // The thread's pull requests, keyed by URL, read from a JSON file at
+  // `GENIRO_RUN_PRS` — see `getPullRequestsByRef` below.
+  const seededPullRequests = JSON.stringify(
+    process.env.GENIRO_RUN_PRS
+      ? JSON.parse(fs.readFileSync(process.env.GENIRO_RUN_PRS, 'utf8'))
+      : {},
+  );
+  // Extra settings keys the stub should answer with, read from a JSON file at
+  // `GENIRO_RUN_SETTINGS`. The stub's own object is a minimal fixture, so any
+  // feature whose data lives in settings.json (saved run configurations, fast
+  // actions) is otherwise unreachable here — and driving one through the `js`
+  // command means pasting the whole list into a REPL line, which jams tmux at
+  // a few hundred characters. It seeds the SAME `window.__geniroSettings` the
+  // stub already merges, so a write from the app still wins over it.
+  const seededSettings = JSON.stringify(
+    process.env.GENIRO_RUN_SETTINGS
+      ? JSON.parse(fs.readFileSync(process.env.GENIRO_RUN_SETTINGS, 'utf8'))
+      : {},
+  );
   // The update surface is unreachable here otherwise: main is what decides
   // there is a release, and this harness has no main. `GENIRO_FAKE_UPDATE`
   // makes the stub report one so the nav rail's update control can actually be
@@ -195,7 +214,9 @@ function stubScript(handle) {
     // nothing, and saying otherwise would hide the control under test.
     canInstall: Boolean(fakeVersion),
   });
-  return `window.geniro = {
+  return `window.__geniroSettings = { ...${seededSettings}, ...(window.__geniroSettings ?? {}) };
+  window.__geniroPullRequests = ${seededPullRequests};
+  window.geniro = {
     getStatus: async () => ({ onboardingComplete: true, daemon: { connected: true, handle: ${h} } }),
     getDaemonHandle: async () => (${h}),
     onDaemonRestarted: () => () => {},
@@ -255,6 +276,19 @@ function stubScript(handle) {
     pullBranch: async () => (${gitStub}
       ? { ok: true, branch: 'main', error: null, stashLeft: null }
       : { ok: false, branch: null, error: 'not a repo in the run-desktop stub', stashLeft: null }),
+    // The pull requests a THREAD opened. Answered from the seed file rather
+    // than from the gh CLI: there is no main process here to spawn it, and the
+    // renderer's half — which chip is current, how the shelf lays out, what
+    // the panel groups — is what this harness exists to drive. Seed it from
+    // real 'gh pr view --json' output so the rows are a real repository's.
+    getPullRequestsByRef: async (refs) => refs.map((ref) => ({
+      ref,
+      pullRequest: (window.__geniroPullRequests ?? {})[ref.url] ?? null,
+    })),
+    // The BRANCH query beside it (the second source). Empty by default: a
+    // throwaway cwd is not a checkout, and failing closed is what the real one
+    // does with no gh on the machine.
+    getPullRequests: async () => ({ branch: null, originOwner: null, pullRequests: [] }),
     // System notifications. There is no main process here, so a real macOS
     // banner is impossible — the calls are RECORDED instead, which is what
     // makes the half this harness CAN answer ("which thread earns one, and
@@ -263,6 +297,11 @@ function stubScript(handle) {
     // The banner itself has to be seen in the real Electron app.
     notify: async (n) => { (window.__geniroNotifications ??= []).push(n); },
     onNotificationActivated: () => () => {},
+    // The menu bar's Clear Agent Cache row. Subscribed unconditionally by the
+    // shell, so — like \`onUpdateState\` above — a missing member is not a
+    // degraded feature here but the whole app on its error boundary.
+    onClearAgentCaches: () => () => {},
+    toggleDevTools: async () => {},
   };`;
 }
 

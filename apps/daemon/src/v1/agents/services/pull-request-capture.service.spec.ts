@@ -6,9 +6,13 @@ import type { Run } from '../../runs/entity/run.entity';
 import type { ItemDao } from '../dao/item.dao';
 import type { RunDao } from '../dao/run.dao';
 import { readRunPullRequests } from '../utils/pull-request-capture';
+import type { AgentEventBus } from './agent-events.bus';
 import { PullRequestCaptureService } from './pull-request-capture.service';
 
-const em = {} as EntityManager;
+// `fork` because the SETTLE path takes its own context — the listing runs
+// inside the request's, this one has no request to borrow. The daos are
+// doubles and ignore it either way.
+const em = { fork: () => em } as unknown as EntityManager;
 
 interface Row {
   seq: number;
@@ -88,6 +92,39 @@ function chatRun(overrides: Partial<Run> = {}): Run {
 
 const CREATED = 'https://github.com/acme/platform/pull/87';
 
+/**
+ * The two collaborators the SETTLE path needs, inert for the tests that only
+ * drive `sync`.
+ *
+ * A factory rather than a shared object: `published` is asserted on, and one
+ * array across tests would carry a previous test's announcements into the next.
+ */
+function settleDeps(): {
+  em: EntityManager;
+  bus: AgentEventBus;
+  published: unknown[];
+  listeners: ((event: {
+    runId: string;
+    item: { nodeId: string | null; kind: string };
+  }) => void)[];
+} {
+  const published: unknown[] = [];
+  const listeners: ((event: {
+    runId: string;
+    item: { nodeId: string | null; kind: string };
+  }) => void)[] = [];
+  const bus = {
+    all: () => ({
+      subscribe: (fn: (event: never) => void) => {
+        listeners.push(fn as never);
+        return { unsubscribe: () => undefined };
+      },
+    }),
+    publishRunStatus: (status: unknown) => published.push(status),
+  } as unknown as AgentEventBus;
+  return { em: em, bus, published, listeners };
+}
+
 describe('PullRequestCaptureService', () => {
   it('captures the pull request a gh pr create call opened', async () => {
     const { itemDao } = daos([
@@ -97,7 +134,12 @@ describe('PullRequestCaptureService', () => {
     const { dao, writes } = runDao();
     const run = chatRun();
 
-    await new PullRequestCaptureService(itemDao, dao).sync([run], em);
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([run], em);
 
     expect(readRunPullRequests(writes[0]?.pullRequests ?? null)).toEqual([
       {
@@ -122,7 +164,12 @@ describe('PullRequestCaptureService', () => {
     ]);
     const { dao, writes } = runDao();
 
-    await new PullRequestCaptureService(itemDao, dao).sync([chatRun()], em);
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([chatRun()], em);
 
     expect(writes[0]?.pullRequests).toBeNull();
   });
@@ -138,7 +185,12 @@ describe('PullRequestCaptureService', () => {
     ]);
     const { dao, writes } = runDao();
 
-    await new PullRequestCaptureService(itemDao, dao).sync([chatRun()], em);
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([chatRun()], em);
 
     expect(
       readRunPullRequests(writes[0]?.pullRequests ?? null).map(
@@ -157,7 +209,12 @@ describe('PullRequestCaptureService', () => {
     ]);
     const { dao, writes } = runDao();
 
-    await new PullRequestCaptureService(itemDao, dao).sync([chatRun()], em);
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([chatRun()], em);
 
     expect(writes[0]?.pullRequestsScannedSeq).toBe(2);
     expect(writes[0]?.pullRequests).toBeNull();
@@ -170,10 +227,12 @@ describe('PullRequestCaptureService', () => {
     ]);
     const { dao, writes } = runDao();
 
-    await new PullRequestCaptureService(itemDao, dao).sync(
-      [chatRun({ pullRequestsScannedSeq: 2 })],
-      em,
-    );
+    await new PullRequestCaptureService(
+      itemDao,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    ).sync([chatRun({ pullRequestsScannedSeq: 2 })], em);
 
     expect(counts.max).toBe(1);
     expect(counts.candidates).toBe(0);
@@ -189,11 +248,142 @@ describe('PullRequestCaptureService', () => {
       },
     } as unknown as ItemDao;
     const { dao, writes } = runDao();
-    const service = new PullRequestCaptureService(failing, dao);
+    const service = new PullRequestCaptureService(
+      failing,
+      dao,
+      settleDeps().em,
+      settleDeps().bus,
+    );
 
     await expect(
       service.sync([chatRun(), chatRun({ id: 'run-2' })], em),
     ).resolves.toBeUndefined();
     expect(writes).toEqual([]);
+  });
+});
+
+/**
+ * Let the subscriber's fire-and-forget work finish.
+ *
+ * `onModuleInit` deliberately does not await — an RxJS subscriber cannot — so
+ * there is no promise for a test to hold, and the chain behind it is five
+ * awaits deep (the row, `max(seq)`, the candidates, each pair, the write).
+ * A macrotask turn clears all of them; counting microtasks would be a number
+ * that quietly stops being right the moment a query is added.
+ */
+const settled = (): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('PullRequestCaptureService — capturing when a TURN ends', () => {
+  /** A run dao that also answers `getById`, which the settle path needs. */
+  function settleRunDao(run: Run): { dao: RunDao; writes: Partial<Run>[] } {
+    const writes: Partial<Run>[] = [];
+    const dao = {
+      getById: async () => run,
+      updateById: async (_id: string, data: Partial<Run>) => {
+        writes.push(data);
+        Object.assign(run, data);
+        return 1;
+      },
+    } as unknown as RunDao;
+    return { dao, writes };
+  }
+
+  it('captures on a turn ending, and ANNOUNCES what it found', async () => {
+    // THE REPORTED DEFECT. The capture ran on the chat LISTING alone, which is
+    // one fetch per window — so a thread that opened a pull request during the
+    // session it was opened in never showed a chip for it, however long the
+    // window stayed open. Reconstructed from the reporter's own database: the
+    // window listed the chats at seq 441, `gh pr create` landed at seq 1827,
+    // and the marker was still 441 hours later.
+    const { itemDao } = daos([
+      call(1, 'toolu_1', 'gh pr create --base main'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const run = chatRun();
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+    );
+    service.onModuleInit();
+
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: null, kind: 'turn_complete' },
+    });
+    await settled();
+
+    expect(readRunPullRequests(run.pullRequests)).toHaveLength(1);
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        // NEVER a status: this says what the run HAS, and an event that did not
+        // read the run must not assert whether it is still going.
+        status: null,
+        pullRequests: [
+          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+        ],
+      },
+    ]);
+  });
+
+  it('says NOTHING when a turn ended without changing the answer', async () => {
+    // The common case by far — a chat with no pull requests in it — and it must
+    // not broadcast an empty array to every window on every turn.
+    const { itemDao } = daos([call(1, 'toolu_1', 'pnpm build')]);
+    const run = chatRun();
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+    );
+    service.onModuleInit();
+
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: null, kind: 'turn_complete' },
+    });
+    await settled();
+
+    expect(deps.published).toEqual([]);
+  });
+
+  it('ignores a workflow NODE and a mid-turn row', async () => {
+    // A node's transcript is not a chat's, and scanning on every tool call
+    // would turn one indexed read per turn into one per row.
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --base main'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const run = chatRun();
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+    );
+    service.onModuleInit();
+
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: 'node-a', kind: 'turn_complete' },
+    });
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: null, kind: 'tool_call' },
+    });
+    await settled();
+
+    expect(deps.published).toEqual([]);
+    expect(counts.max).toBe(0);
   });
 });

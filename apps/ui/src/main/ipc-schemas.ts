@@ -6,10 +6,15 @@ import {
   CLI_KINDS,
   type CliKind,
   hasControlCharacters,
+  MAX_CONFIG_PROFILE_NAME,
+  MAX_CONFIG_PROFILES,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   MAX_FAST_ACTION_NAME,
   MAX_FAST_ACTION_TEXT,
   MAX_FAST_ACTIONS,
+  MAX_RUN_CONFIG_NAME,
+  MAX_RUN_CONFIGS,
+  PROFILE_COLORS,
 } from '../shared/contracts';
 import { THEME_PREFERENCES } from '../shared/themes';
 
@@ -70,6 +75,41 @@ const chatTarget = z.union([
 ]);
 
 /**
+ * One saved new-chat setup (`RunConfig` in shared/contracts.ts).
+ *
+ * Every field is bounded rather than merely typed: these are persisted, and two
+ * reach privileged sinks — `cwd` is handed to the daemon and to `git`, and
+ * `branch` becomes an argv entry of `git switch`, so it reuses that channel's
+ * own refname schema rather than a looser copy. The daemon-vocabulary fields
+ * stay OPAQUE, like their single-value counterparts above.
+ */
+const runConfigSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(MAX_RUN_CONFIG_NAME),
+  cwd: absolutePath,
+  branch: branchNameSchema.nullable(),
+  target: chatTarget,
+  model: z.string().min(1).max(64).nullable(),
+  effort: z.string().min(1).max(64).nullable(),
+  // `.default(null)` and not a bare `.nullable()`, unlike its neighbours: this
+  // field arrived after users already had saved configurations on disk, and
+  // `runConfigSchema` is strict — required, every entry written before it
+  // would fail to parse and `salvageRunConfigs` would drop the lot. A
+  // configuration is hand-made and unrecoverable, which is the whole reason
+  // that salvage is entry-by-entry. The default reads an older file as "no
+  // size chosen", which is what those entries mean.
+  contextWindow: z.string().min(1).max(64).nullable().default(null),
+  // Defaulted, not optional: a configuration saved before this field existed
+  // must salvage rather than fail the entry, which `salvageRunConfigs` grades
+  // one row at a time.
+  modelParameters: z
+    .record(z.string().min(1).max(64), z.string().min(1).max(200))
+    .default({}),
+  approval: z.string().min(1).max(32).nullable(),
+  configDir: absolutePath.nullable(),
+});
+
+/**
  * One fast action (`FastAction` in shared/contracts.ts).
  *
  * Bounded rather than merely typed, because these are persisted and the
@@ -85,6 +125,23 @@ const fastActionSchema = z.strictObject({
 });
 
 /**
+ * One named agent configuration (`ConfigProfile` in shared/contracts.ts).
+ *
+ * `strictObject` and bounded, on the same terms as the fast action above: these
+ * are persisted, the read path grades one entry at a time, and a field with no
+ * ceiling is a renderer bug away from a settings.json nothing can open. The
+ * COLOUR is enumerated rather than a bounded string — unlike the daemon
+ * vocabularies elsewhere in this file, this palette is the app's own, so an
+ * unknown value is a bug here rather than a version skew to tolerate.
+ */
+const configProfileSchema = z.strictObject({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(MAX_CONFIG_PROFILE_NAME),
+  dir: absolutePath,
+  color: z.enum(PROFILE_COLORS),
+});
+
+/**
  * A `Partial<Settings>` patch. `strictObject` rejects unknown keys, so the
  * renderer can't write arbitrary fields into settings.json.
  */
@@ -96,10 +153,20 @@ export const settingsPatchSchema = z.strictObject({
   // directory", which is a real choice and must be writable back.
   configDir: absolutePath.nullable().optional(),
   recentConfigDirs: z.array(absolutePath).max(10).optional(),
+  // The user's saved new-chat setups. Hand-managed rather than auto-evicted, so
+  // the cap is a guard against a renderer bug growing settings.json without
+  // limit, set well above any plausible number of real configurations.
+  runConfigs: z.array(runConfigSchema).max(MAX_RUN_CONFIGS).optional(),
   // The user's fast actions. Hand-managed rather than auto-evicted, so the cap
   // is a guard against a renderer bug growing settings.json without limit, set
   // well above any plausible number of real ones.
   fastActions: z.array(fastActionSchema).max(MAX_FAST_ACTIONS).optional(),
+  // The user's named agent configurations. Hand-managed like the two above, so
+  // the cap is the same kind of guard rather than a limit anyone will meet.
+  configProfiles: z
+    .array(configProfileSchema)
+    .max(MAX_CONFIG_PROFILES)
+    .optional(),
   lastChatTarget: chatTarget.nullable().optional(),
   // The daemon's ChatApprovalMode, kept OPAQUE here: its vocabulary belongs to
   // the daemon, and the main process holds no daemon shapes. Bounded so a

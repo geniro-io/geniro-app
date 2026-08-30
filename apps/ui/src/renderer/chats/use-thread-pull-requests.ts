@@ -219,3 +219,47 @@ export function currentThreadPullRequest(
     null
   );
 }
+
+/**
+ * How many pull requests the shelf may name at once.
+ *
+ * THREE, and the number is about the LINE rather than about pull requests: the
+ * shelf never wraps, so every chip drawn takes width from the ones beside it
+ * and from the running-terminals chip, which does not shrink. Three chips still
+ * leave each of them enough room to show a number and the front of a title;
+ * four is where a title stops being readable at all and the row becomes a
+ * column of bare numbers.
+ */
+export const MAX_SHELF_PULL_REQUESTS = 3;
+
+/**
+ * Which of them the shelf NAMES — every one the thread has open, capped, and
+ * the newest single one when it has none.
+ *
+ * ASKED FOR as "we should show last PR. But in case if we have few opened PRS -
+ * all of them, but maximum 3". The shelf named exactly one before this, which
+ * is right for a thread whose work is one branch and wrong for the case it was
+ * reported against: a thread with several reviews open at once could reach only
+ * the newest of them from here, and the others were behind the panel.
+ *
+ * OPEN is what earns a chip, because an open pull request is the only kind that
+ * is still work — a merged one is history and has its row in the panel. So the
+ * cases collapse rather than branching: zero or one open gives back exactly
+ * what {@link currentThreadPullRequest} gave, several give all of them, and a
+ * thread whose pull requests have all settled still names its newest, since
+ * "this thread produced this" is worth a chip even when nothing is left to do.
+ *
+ * Newest first throughout — `results` already arrives that way — so the chip
+ * nearest the composer is the one the thread is most likely on.
+ */
+export function shelfThreadPullRequests(
+  results: readonly PullRequestRefResult[],
+  limit: number = MAX_SHELF_PULL_REQUESTS,
+): PullRequestRefResult[] {
+  const open = results.filter((row) => row.pullRequest?.state === 'open');
+  if (open.length > 0) {
+    return open.slice(0, limit);
+  }
+  const current = currentThreadPullRequest(results);
+  return current === null ? [] : [current];
+}

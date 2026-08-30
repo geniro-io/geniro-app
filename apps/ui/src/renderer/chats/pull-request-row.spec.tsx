@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PullRequestInfo, PullRequestState } from '../../shared/contracts';
-import { CurrentPullRequestLine, PullRequestRow } from './pull-request-row';
+import { PullRequestBadge, PullRequestRow } from './pull-request-row';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -104,24 +104,38 @@ describe('PullRequestRow', () => {
   });
 });
 
-describe('CurrentPullRequestLine', () => {
-  it('renders a link when it is interactive', async () => {
-    await mount(
-      <CurrentPullRequestLine pullRequest={pr()} interactive={true} />,
-    );
+describe('PullRequestBadge', () => {
+  it('says the number and NOT the title', async () => {
+    // REPORTED as "make chip with current pr in threads list smaller - just
+    // icon and pr number". The title was the row's whole width spent restating
+    // text the row already carries on two other lines, and the number is what
+    // identifies a pull request.
+    await mount(<PullRequestBadge pullRequest={pr()} />);
 
-    expect(container.querySelector('a')?.getAttribute('href')).toBe(
-      'https://github.com/o/r/pull/70',
-    );
+    expect(container.textContent).toContain('#70');
+    expect(container.textContent).not.toContain(pr().title);
   });
 
-  it('renders NO anchor when it is not interactive', async () => {
-    // The sidebar row is itself an activatable element: an anchor nested in one
-    // is invalid markup and steals the row's own click, so this is a
-    // correctness pin rather than a styling preference.
-    await mount(<CurrentPullRequestLine pullRequest={pr()} />);
+  it('keeps the whole sentence one hover away', async () => {
+    // Dropping the title from the badge must not drop it from the row: the
+    // state word is not drawn either, so `title` is the only place a reader
+    // can get either back.
+    await mount(<PullRequestBadge pullRequest={pr()} />);
+
+    const badge = container.querySelector(
+      '[data-slot="current-pull-request"]',
+    )!;
+    expect(badge.getAttribute('title')).toContain(pr().title);
+    expect(badge.getAttribute('title')).toContain('open');
+  });
+
+  it('renders NO anchor — the sidebar row owns the click', async () => {
+    // The row is itself an activatable element: an anchor nested in one is
+    // invalid markup and steals the row's own click, so this is a correctness
+    // pin rather than a styling preference. It is why this is a label and not
+    // a chip, whose affordance would promise a press nothing here can honour.
+    await mount(<PullRequestBadge pullRequest={pr()} />);
 
     expect(container.querySelector('a')).toBeNull();
-    expect(container.textContent).toContain('#70');
   });
 });

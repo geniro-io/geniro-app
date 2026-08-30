@@ -597,6 +597,92 @@ describe('Menu — the second level', () => {
   });
 });
 
+describe('Menu — a row that carries a colour', () => {
+  const row = (el: HTMLElement, label: string): HTMLElement =>
+    [...el.querySelectorAll<HTMLElement>('[role="option"]')].find((node) =>
+      node.textContent?.includes(label),
+    )!;
+
+  it('draws the colour as a LEFT BORDER, from the palette', () => {
+    // Asked for in those words — "там должен быть просто левый бордер вот этого
+    // же цвета". A border rather than a second glyph: the row already leads
+    // with an icon saying what KIND of thing it is, and an edge stripe is read
+    // by position while costing the label no width. It is also how the sidebar
+    // already draws a group's colour, so a named agent configuration and a chat
+    // group wear theirs the same way.
+    //
+    // Asserted on the class, because jsdom loads no stylesheet — and on the
+    // PALETTE's class specifically, since a raw colour here is an eslint error.
+    const el = render(
+      <Menu
+        open
+        groups={[
+          {
+            items: [
+              { value: 'a', label: 'work', accent: 'teal' as const },
+              { value: 'b', label: 'plain' },
+            ],
+          },
+        ]}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(row(el, 'work').className).toContain('border-l-group-teal');
+    expect(row(el, 'work').className).toContain('border-l-2');
+  });
+
+  it('leaves an uncoloured row exactly as it was', () => {
+    // Most rows in most menus have no colour. A transparent placeholder border
+    // would shift every label by its width for the sake of the few that do.
+    const el = render(
+      <Menu
+        open
+        groups={[
+          {
+            items: [
+              { value: 'a', label: 'work', accent: 'teal' as const },
+              { value: 'b', label: 'plain' },
+            ],
+          },
+        ]}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(row(el, 'plain').className).not.toContain('border-l-2');
+    expect(row(el, 'plain').className).not.toMatch(/border-l-group-/);
+  });
+
+  it('pulls the left padding back by the border, so labels stay on one line', () => {
+    // Otherwise a coloured row's label sits 2px right of its uncoloured
+    // neighbours', which on a list where only some directories are named reads
+    // as two indents rather than as one list.
+    const el = render(
+      <Menu
+        open
+        groups={[
+          {
+            items: [
+              { value: 'a', label: 'work', accent: 'blue' as const },
+              { value: 'b', label: 'plain' },
+            ],
+          },
+        ]}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    // `px-2.5` is 10px; the coloured row takes 8px plus a 2px border.
+    expect(row(el, 'work').className).toContain('pl-2');
+    expect(row(el, 'work').className).not.toMatch(/(^| )pl-2\.5( |$)/);
+    expect(row(el, 'plain').className).toContain('px-2.5');
+  });
+});
+
 describe('Menu — fitting the window', () => {
   /**
    * Open with the panel reporting a given rect.
@@ -800,6 +886,171 @@ describe('Menu — escaping a clipping container', () => {
       expect(panel(el).style.left).toBe(
         `${700 - (1100 - window.innerWidth) - 8}px`,
       );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not cap a floating panel from the commit BEFORE it is placed', () => {
+    // The root cause of the reported "popover is cut", and it is upstream of
+    // the placement itself. A floating panel is positioned in TWO commits — one
+    // effect reads the trigger and sets the offset, and only the render after
+    // that moves the panel — so in the first commit it is still sitting where
+    // the ancestor classes put it. The horizontal correction survives that (it
+    // re-runs and settles); the HEIGHT clamp does not, because nothing lowers
+    // `maxHeight` again until the menu closes. A cap taken at the wrong
+    // position was therefore frozen for the life of the open.
+    //
+    // Measured in the running app on the composer's Profile submenu: an
+    // eight-row panel came out `maxHeight: 120px` — the FLOOR — while sitting
+    // at `top: 715` in a 900px window, with over 170px of room and no need for
+    // a cap at all.
+    //
+    // The stub reports an OVERFLOWING rect until the panel has been placed,
+    // which is what the real first commit does; a static rect would overflow in
+    // both commits and could not tell the two apart.
+    const { ref } = triggerAt({ top: 100, bottom: 140, left: 120, right: 260 });
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
+          return { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
+        }
+        const placed = (this as HTMLElement).style.top !== '';
+        const top = placed
+          ? Number.parseFloat((this as HTMLElement).style.top)
+          : 700;
+        return {
+          top,
+          bottom: top + 200,
+          height: 200,
+          left: 0,
+          right: 200,
+          width: 200,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = render(
+        <Menu
+          open
+          anchor="viewport"
+          triggerRef={ref}
+          side="bottom"
+          groups={BRANCHES}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      // Placed under a trigger ending at 140, a 200px panel ends at 346 —
+      // comfortably inside a 768px window. The unplaced first commit's 700+200
+      // must not have left a cap behind.
+      expect(panel(el).style.maxHeight).toBe('');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('MOVES a submenu up when it would run off the bottom, rather than shortening it', () => {
+    // REPORTED as "popover is cut", against the composer's Profile submenu:
+    // `side='right'` pins the panel's top to the row that opened it and grows
+    // DOWN, and that parent menu opens upward from a control at the foot of the
+    // window — so a row low on screen put the submenu's tail off the bottom.
+    //
+    // The height clamp is not the answer here. It is FLOORED at
+    // `MIN_MENU_HEIGHT` on purpose, so once the room under the row falls below
+    // that floor the panel overhangs anyway, and the rows past the edge are
+    // unreachable: what scrolls is the list inside a panel whose own box is off
+    // the screen. Moving it is what every other placement already does in some
+    // form, and a shifted submenu still sits beside its row — which is all this
+    // placement ever promised.
+    //
+    // The stub tracks the panel's OWN top rather than returning a fixed rect,
+    // for the reason the horizontal test above states: a static rect overflows
+    // in both commits and would pass with the defect in place.
+    const { ref } = triggerAt({ top: 900, bottom: 940, left: 120, right: 260 });
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
+          return { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
+        }
+        const top = Number.parseFloat((this as HTMLElement).style.top || '0');
+        return {
+          top,
+          bottom: top + 300,
+          height: 300,
+          left: 0,
+          right: 200,
+          width: 200,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = render(
+        <Menu
+          open
+          anchor="viewport"
+          triggerRef={ref}
+          side="right"
+          groups={BRANCHES}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      // Placed at the row's top less the 5px nudge (895), a 300px panel ends at
+      // 1195 — 435px past a 768px window's safe edge. It comes back by exactly
+      // that, and STAYS the full height rather than being cut to the floor.
+      const expected = 895 - (1195 - (window.innerHeight - 8));
+      expect(panel(el).style.top).toBe(`${expected}px`);
+      expect(panel(el).style.maxHeight).toBe('');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('still SHORTENS a submenu taller than the window, once it can move no further', () => {
+    // Moving is the first answer, not the only one. A panel that overhangs even
+    // with its top against the margin has nowhere left to go, and the clamp
+    // below is what catches it — which is the genuinely taller-than-the-window
+    // case, and only that.
+    const { ref } = triggerAt({ top: 20, bottom: 60, left: 120, right: 260 });
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
+          return { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
+        }
+        const top = Number.parseFloat((this as HTMLElement).style.top || '0');
+        const height = window.innerHeight + 200;
+        return {
+          top,
+          bottom: top + height,
+          height,
+          left: 0,
+          right: 200,
+          width: 200,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = render(
+        <Menu
+          open
+          anchor="viewport"
+          triggerRef={ref}
+          side="right"
+          groups={BRANCHES}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      // Against the top margin, and shortened from there.
+      expect(panel(el).style.top).toBe('8px');
+      expect(panel(el).style.maxHeight).not.toBe('');
     } finally {
       spy.mockRestore();
     }

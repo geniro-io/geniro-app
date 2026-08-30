@@ -228,6 +228,14 @@ export interface ChatRunState {
     window: number | null,
   ) => void;
   refreshRuns: () => void;
+  /** True while the sidebar is showing the archive rather than the desk. */
+  archivedView: boolean;
+  /** Switch sides and refetch — the two listings are disjoint. */
+  showArchived: (next: boolean) => void;
+  /** Prepend a freshly created run, returning to the desk if the archive is up. */
+  addRun: (run: ChatRun) => void;
+  /** Drop a run's row; `closeOpen` runs instead when that run is the open one. */
+  dropRun: (runId: string, closeOpen: () => void) => void;
   activateRun: (runId: string) => Promise<void>;
   /** Stable id-keyed activation for the memoized ChatListItem rows. */
   handleActivateRun: (runId: string) => void;
@@ -255,6 +263,28 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   } = scope;
 
   const [runs, setRuns] = useState<ChatRun[]>([]);
+  /**
+   * Which side of the archive the sidebar is showing.
+   *
+   * Mirrored into a ref because `refreshRuns` is called from places that
+   * cannot pass it — the mount effect, the reconnect handler, `newChat` — and
+   * reading it off state there would rebuild `refreshRuns` on every switch,
+   * re-arming the socket effect that depends on its identity.
+   */
+  const [archivedView, setArchivedView] = useState(false);
+  const archivedViewRef = useRef(false);
+  /**
+   * Which `refreshRuns` call the list on screen belongs to.
+   *
+   * Last to RESOLVE is not last to be asked for — the same rule
+   * `use-pull-requests` states for its per-folder reads. It bites harder here
+   * because the two listings are DISJOINT: the active fetch runs the
+   * pull-request capture pass over every run, so it can still be in flight
+   * when the user reaches the archive, and landing it there would fill the
+   * archive with rows offering Unarchive and a permanent delete that do not
+   * apply to them.
+   */
+  const refreshGenerationRef = useRef(0);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [items, setItems] = useState<ChatItem[]>([]);
   /**
@@ -767,8 +797,24 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   }, []);
 
   const refreshRuns = useCallback((): void => {
-    void Promise.all([chatApi.listChats(), workflowApi.listWorkflowRuns()])
+    const archived = archivedViewRef.current;
+    const generation = ++refreshGenerationRef.current;
+    void Promise.all([
+      // `'true'` rather than `true`: the daemon parses this one with
+      // `z.stringbool()`, and the generated client types it as the string the
+      // query actually carries — same call shape as the MCP listing's
+      // `refresh`.
+      chatApi.listChats(archived ? { archived: 'true' } : {}),
+      // The archive holds CHATS and nothing else — workflow runs have no
+      // archive, so listing them beside archived threads would put rows in a
+      // view whose own controls (unarchive, delete permanently) cannot act on
+      // them.
+      archived ? Promise.resolve([]) : workflowApi.listWorkflowRuns(),
+    ])
       .then(([chats, workflowRuns]) => {
+        if (generation !== refreshGenerationRef.current) {
+          return;
+        }
         const all = [...chats, ...workflowRuns].sort((a, b) =>
           b.createdAt.localeCompare(a.createdAt),
         );
@@ -793,11 +839,79 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           new Set(all.filter((r) => r.shellsOpen > 0).map((r) => r.id)),
         );
       })
-      .catch((err: unknown) => setError(String(err)))
+      .catch((err: unknown) => {
+        // Superseded on both arms, not only the happy one: a failed fetch of
+        // the side the user has already left must not put its error on screen
+        // over a listing that loaded fine.
+        if (generation === refreshGenerationRef.current) {
+          setError(String(err));
+        }
+      })
       // Either way the first fetch settled — "No chats yet" is reserved for a
       // resolved-but-empty list, never shown while the fetch is in flight.
-      .finally(() => setRunsLoaded(true));
+      .finally(() => {
+        if (generation === refreshGenerationRef.current) {
+          setRunsLoaded(true);
+        }
+      });
   }, [chatApi, workflowApi]);
+
+  /**
+   * Switch the sidebar between the desk and the shelf, and refetch.
+   *
+   * The ref is written BEFORE the refetch, not by the effect that mirrors the
+   * state: `refreshRuns` reads it synchronously, so a switch that only called
+   * `setArchivedView` would refetch the side the user just left.
+   */
+  const showArchived = useCallback(
+    (next: boolean): void => {
+      archivedViewRef.current = next;
+      setArchivedView(next);
+      // The two lists are disjoint, so whatever is on screen belongs to the
+      // other side — blank it rather than leaving the old rows under the new
+      // heading until the fetch lands.
+      setRuns([]);
+      setRunsLoaded(false);
+      refreshRuns();
+    },
+    [refreshRuns],
+  );
+
+  /**
+   * Put a freshly created run at the top of the list.
+   *
+   * A new run is never archived, so while the archive is showing it belongs on
+   * the OTHER side — prepending it here would put a row in the archive
+   * offering Unarchive and a permanent delete that do not apply to it. The
+   * switch refetches and the new run arrives in that listing, so the
+   * optimistic prepend is only needed on the side it already belongs to.
+   */
+  const addRun = useCallback(
+    (run: ChatRun): void => {
+      if (archivedViewRef.current) {
+        showArchived(false);
+        return;
+      }
+      setRuns((prev) => [run, ...prev]);
+    },
+    [showArchived],
+  );
+
+  /**
+   * Take a run's row off whichever list is showing, handing the window back to
+   * the composer when that run is the one open.
+   *
+   * The ONE copy of a rule three call sites need — archive, unarchive and
+   * delete all remove a row, and all three can be aimed at the thread on
+   * screen.
+   */
+  const dropRun = useCallback((runId: string, closeOpen: () => void): void => {
+    if (activeRunIdRef.current === runId) {
+      closeOpen();
+      return;
+    }
+    setRuns((prev) => prev.filter((run) => run.id !== runId));
+  }, []);
 
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
@@ -1423,6 +1537,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     addItem,
     rememberRunContext,
     refreshRuns,
+    archivedView,
+    showArchived,
+    addRun,
+    dropRun,
     activateRun,
     handleActivateRun,
     deactivateRun,

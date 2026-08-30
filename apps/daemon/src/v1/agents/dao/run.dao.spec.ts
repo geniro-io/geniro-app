@@ -52,9 +52,40 @@ describe('RunDao (in-memory sqlite)', () => {
       const newer = await dao.create({ createdAt: new Date(2_000) });
       await dao.create({ workflowId: 'wf-1', createdAt: new Date(3_000) });
 
-      const chats = await dao.listChats();
+      const chats = await dao.listChats(false);
 
       expect(chats.map((run) => run.id)).toEqual([newer.id, older.id]);
+    });
+
+    it('leaves archived chats out of the active listing', async () => {
+      const active = await dao.create({ createdAt: new Date(1_000) });
+      await dao.create({
+        createdAt: new Date(2_000),
+        archivedAt: new Date(9_000),
+      });
+
+      const chats = await dao.listChats(false);
+
+      expect(chats.map((run) => run.id)).toEqual([active.id]);
+    });
+
+    it('lists ONLY archived chats when asked for the archive', async () => {
+      await dao.create({ createdAt: new Date(1_000) });
+      const archived = await dao.create({
+        createdAt: new Date(2_000),
+        archivedAt: new Date(9_000),
+      });
+      // An archived WORKFLOW run is still out of scope: this route is the
+      // chat listing, and workflow runs have no archive.
+      await dao.create({
+        workflowId: 'wf-1',
+        createdAt: new Date(3_000),
+        archivedAt: new Date(9_000),
+      });
+
+      const chats = await dao.listChats(true);
+
+      expect(chats.map((run) => run.id)).toEqual([archived.id]);
     });
   });
 

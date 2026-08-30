@@ -121,6 +121,7 @@ class FakeRunDao {
       // The column's own default, spelled out: a fixture that omits it hands
       // `runToWire` an `undefined` the real entity can never produce.
       modelParameters: null,
+      archivedAt: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -128,7 +129,14 @@ class FakeRunDao {
     this.runs.set(run.id, run);
     return run;
   }
+  /**
+   * Held open by a test that needs a write to be IN FLIGHT — the only way to
+   * observe a guard that fires between a claim and the row it writes.
+   */
+  beforeUpdate: ((data: Partial<Run>) => Promise<void> | undefined) | null =
+    null;
   async updateById(id: string, data: Partial<Run>): Promise<number> {
+    await this.beforeUpdate?.(data);
     const run = this.runs.get(id);
     if (!run) {
       return 0;
@@ -143,8 +151,12 @@ class FakeRunDao {
       run.updatedAt = at;
     }
   }
-  async listChats(): Promise<Run[]> {
-    return [...this.runs.values()];
+  /** Mirrors the real query — chat runs only, one side of the archive. */
+  async listChats(archived: boolean): Promise<Run[]> {
+    return [...this.runs.values()].filter(
+      (run) =>
+        run.workflowId === null && (run.archivedAt !== null) === archived,
+    );
   }
   async setPendingContext(id: string, context: string | null): Promise<void> {
     const run = this.runs.get(id);
@@ -1879,6 +1891,239 @@ describe('ChatService', () => {
         /RUN_BUSY|idle/,
       );
       await turn(claude, 'hi');
+    });
+  });
+
+  describe('archive', () => {
+    it('shelves a chat out of the listing and unarchive puts it back', async () => {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      expect((await service.listChats()).map((r) => r.id)).toEqual([run.id]);
+      expect((await service.listChats(true)).map((r) => r.id)).toEqual([]);
+
+      const archived = await service.archive(run.id);
+      expect(archived.archivedAt).not.toBeNull();
+
+      // The two sides are exclusive: a shelved thread must not still be
+      // sitting in the list the user filed it out of.
+      expect((await service.listChats()).map((r) => r.id)).toEqual([]);
+      expect((await service.listChats(true)).map((r) => r.id)).toEqual([
+        run.id,
+      ]);
+
+      expect((await service.unarchive(run.id)).archivedAt).toBeNull();
+      expect((await service.listChats()).map((r) => r.id)).toEqual([run.id]);
+      expect((await service.listChats(true)).map((r) => r.id)).toEqual([]);
+    });
+
+    it('destroys nothing — the transcript survives being archived', async () => {
+      // The whole difference from `delete`, which purges the same rows. If
+      // archiving ever routed through the teardown this fails on an empty
+      // history rather than on a subtler symptom.
+      const { service, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      claude.finish();
+      await drain();
+      const before = await service.getHistory(run.id);
+      expect(before.length).toBeGreaterThan(0);
+
+      await service.archive(run.id);
+
+      expect(await service.getHistory(run.id)).toHaveLength(before.length);
+    });
+
+    it('cancels a RUNNING chat’s turn before shelving it, and closes its process', async () => {
+      // The user's own pick over "archive it and leave it running": a thread
+      // filed away must not go on spending tokens out of sight.
+      //
+      // The in-flight HANDLE's cancel is the observable, the way `cancel()`'s
+      // own spec asserts it — the terminal STATUS is written later by the
+      // turn's finalizer, from the process actually dying, which no fake here
+      // plays out (`maps a turn_cancelled event to cancelled status` pins that
+      // half).
+      const { service, runDao, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      expect((await runDao.getById(run.id))?.status).toBe('running');
+      const started = claude.start.mock.results[0]?.value as {
+        cancel: ReturnType<typeof vi.fn>;
+      };
+
+      await service.archive(run.id);
+
+      expect(started.cancel).toHaveBeenCalledOnce();
+      expect(claude.sessions[0]?.closed).toBe(true);
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+
+      claude.finish();
+      await drain();
+    });
+
+    it('leaves a settled chat’s status alone, and still closes its process', async () => {
+      // The session close sits OUTSIDE the `running` branch on purpose — a
+      // shelved conversation has no next turn, and a kept CLI is ~1GB. Moving
+      // that line inside the branch has to fail something, so it is asserted
+      // here rather than only on the running path.
+      const { service, runDao, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      claude.finish();
+      await drain();
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+      expect(claude.sessions[0]?.closed).toBe(false);
+
+      await service.archive(run.id);
+
+      expect((await runDao.getById(run.id))?.status).toBe('completed');
+      expect(claude.sessions[0]?.closed).toBe(true);
+    });
+
+    it('leaves a chat that never sent a message PENDING, with no cancel row', async () => {
+      // The case the `running` gate actually protects, and the reason it is
+      // not `!isTerminalRunStatus`: `pending` is non-terminal, so routing this
+      // run through `cancel()` would write it `cancelled` AND persist a
+      // `turn_cancelled` item for a turn that never existed.
+      const { service, runDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      expect((await runDao.getById(run.id))?.status).toBe('pending');
+
+      await service.archive(run.id);
+
+      expect((await runDao.getById(run.id))?.status).toBe('pending');
+      expect(await service.getHistory(run.id)).toEqual([]);
+    });
+
+    it('cancels BEFORE it marks the row', async () => {
+      // The ordering the method's own doc block calls load-bearing: the cancel
+      // settles this run through the turn's finalizer, so marking first would
+      // settle a run the user had already shelved. Observed from inside the
+      // cancel rather than inferred from the end state, which is identical
+      // either way.
+      const { service, runDao, claude } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'go');
+      const started = claude.start.mock.results[0]?.value as {
+        cancel: ReturnType<typeof vi.fn>;
+      };
+      let archivedAtWhenCancelled: Date | null | undefined = new Date(0);
+      started.cancel.mockImplementation(() => {
+        archivedAtWhenCancelled = runDao.runs.get(run.id)?.archivedAt ?? null;
+        // Still model the child DYING, which the default fake cancel does: a
+        // cancel that leaves `done` pending plays a wedged process as the
+        // normal case, and would hang a future `await handle.done` here
+        // instead of failing.
+        claude.finish();
+      });
+
+      await service.archive(run.id);
+
+      expect(archivedAtWhenCancelled).toBeNull();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+
+      claude.finish();
+      await drain();
+    });
+
+    it('a turn crossing the claim→register window aborts instead of outliving the archive', async () => {
+      // The twin of the delete's own guard, and the reason `archiving` exists.
+      // Between `tryClaim` and `register` the turn is live with no handle for
+      // `cancel` to reach, so archive's "it stops the turn first" promise is
+      // only true if the turn notices the archive itself.
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      const release = claude.stallBeforeSpawn();
+      const sending = service.sendMessage(run.id, 'go');
+      await drain();
+      expect(claude.start).not.toHaveBeenCalled();
+
+      const archiving = service.archive(run.id);
+      await drain();
+      release();
+      await expect(sending).rejects.toThrow(
+        /archived while the turn was starting/,
+      );
+      await archiving;
+
+      // Never spawned, and the chat is shelved rather than destroyed.
+      expect(claude.start).not.toHaveBeenCalled();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+    });
+
+    it('aborts a crossing turn while the archive is STILL IN FLIGHT', async () => {
+      // The other half of the guard, and the one the `archiving` Set alone can
+      // answer: here the row has NOT been written yet, so `archivedAt` is still
+      // null and the re-read cannot reject anything. Delete the Set from the
+      // seam's condition and only this test goes red.
+      const { service, claude, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: process.cwd(),
+      });
+      const release = claude.stallBeforeSpawn();
+      const sending = service.sendMessage(run.id, 'go');
+      await drain();
+      expect(claude.start).not.toHaveBeenCalled();
+
+      // Hold `archive` open between claiming the run and writing the column.
+      let releaseArchive = (): void => {};
+      // ONLY the archive's own write — the aborting turn writes its terminal
+      // status through this same DAO, so holding every write deadlocks the
+      // very rejection this test is waiting for.
+      runDao.beforeUpdate = (data) =>
+        'archivedAt' in data
+          ? new Promise<void>((resolve) => {
+              releaseArchive = () => resolve();
+            })
+          : undefined;
+      const archiving = service.archive(run.id);
+      await drain();
+      // The row still says NOT archived — so nothing but the Set can refuse.
+      expect(runDao.runs.get(run.id)?.archivedAt ?? null).toBeNull();
+
+      release();
+      await expect(sending).rejects.toThrow(
+        /archived while the turn was starting/,
+      );
+      releaseArchive();
+      await archiving;
+      expect(claude.start).not.toHaveBeenCalled();
+    });
+
+    it('refuses a message to an archived chat', async () => {
+      // The user's pick: the archive is inert. Without this, archiving a
+      // running chat stops one turn and the very next message starts another
+      // on a row the desk never shows.
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.archive(run.id);
+
+      await expect(service.sendMessage(run.id, 'go')).rejects.toThrow(
+        /archived/,
+      );
+
+      // And unarchiving is genuinely the way back, not just a row move.
+      await service.unarchive(run.id);
+      await expect(service.sendMessage(run.id, 'go')).resolves.toBeDefined();
+    });
+
+    it('refuses a workflow run on both routes', async () => {
+      const { service, runDao } = setup();
+      const wf = await runDao.create({ workflowId: 'wf-1' });
+      // The kind guard's own message, not a bare throw — a TypeError would
+      // satisfy `rejects.toThrow()` and tell us nothing.
+      await expect(service.archive(wf.id)).rejects.toThrow(/chat/i);
+      await expect(service.unarchive(wf.id)).rejects.toThrow(/chat/i);
+    });
+
+    it('404s for a run that does not exist', async () => {
+      const { service } = setup();
+      await expect(service.archive('nope')).rejects.toThrow(/not found/);
+      await expect(service.unarchive('nope')).rejects.toThrow(/not found/);
     });
   });
 

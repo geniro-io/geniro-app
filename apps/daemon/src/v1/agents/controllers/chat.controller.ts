@@ -33,6 +33,7 @@ import {
   ForgottenInstructionsDto,
   HistoryQueryDto,
   ItemDto,
+  ListChatsQueryDto,
   LocalImageDto,
   LocalImageQueryDto,
   RenameRunDto,
@@ -79,8 +80,8 @@ export class ChatController {
   @Get()
   @ApiOperation({ operationId: 'listChats' })
   @ZodResponse({ status: 200, type: [RunDto] })
-  listChats(): Promise<RunWire[]> {
-    return this.chatService.listChats();
+  listChats(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
+    return this.chatService.listChats(query.archived ?? false);
   }
 
   /**
@@ -259,6 +260,28 @@ export class ChatController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.chatService.cancel(runId);
+  }
+
+  /**
+   * Shelve this chat, or put it back. Two routes rather than one taking a
+   * boolean: each is a thing the user pressed, and the pair reads the same way
+   * in the generated client as it does in the sidebar.
+   *
+   * They answer with the RUN, like `setGroup` above and for its reason — the
+   * sidebar replaces the row it already holds.
+   */
+  @Post(':runId/archive')
+  @ApiOperation({ operationId: 'archiveChat' })
+  @ZodResponse({ status: 200, type: RunDto })
+  archive(@Param('runId') runId: string): Promise<RunWire> {
+    return this.chatService.archive(runId);
+  }
+
+  @Post(':runId/unarchive')
+  @ApiOperation({ operationId: 'unarchiveChat' })
+  @ZodResponse({ status: 200, type: RunDto })
+  unarchive(@Param('runId') runId: string): Promise<RunWire> {
+    return this.chatService.unarchive(runId);
   }
 
   @Delete(':runId')

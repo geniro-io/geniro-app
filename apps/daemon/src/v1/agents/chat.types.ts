@@ -2346,6 +2346,10 @@ export const RunWireSchema = z.object({
     .describe(
       'Pull requests this run opened, oldest first, as captured from the agent output',
     ),
+  archivedAt: z
+    .string()
+    .nullable()
+    .describe('When this run was archived, or null while it is not'),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

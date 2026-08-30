@@ -44,6 +44,8 @@ function props(
     onActivate: vi.fn(),
     onRename: vi.fn(async () => {}),
     onDelete: vi.fn(),
+    onArchive: vi.fn(),
+    onUnarchive: vi.fn(),
     ...overrides,
   };
 }
@@ -374,7 +376,9 @@ describe('ChatListItem', () => {
   });
 
   it('delete asks the parent WITHOUT activating the row', async () => {
-    const p = props();
+    // Reached from the ARCHIVE — a chat row on the desk offers Archive
+    // instead, and the permanent delete lives one step behind it.
+    const p = props({ archived: true });
     const container = await mount(<ChatListItem {...p} />);
     await act(async () => {
       buttonLabelled(container, 'Delete Review team').dispatchEvent(
@@ -383,6 +387,44 @@ describe('ChatListItem', () => {
     });
     expect(p.onDelete).toHaveBeenCalledWith('run-1');
     expect(p.onActivate).not.toHaveBeenCalled();
+  });
+
+  it('offers Archive on the desk and Unarchive + Delete in the archive', async () => {
+    const desk = props();
+    const deskRow = await mount(<ChatListItem {...desk} />);
+    expect(buttonLabelled(deskRow, 'Archive Review team')).not.toBeNull();
+    // The one-way door is NOT beside the reversible step — that is the whole
+    // point of the split, so both halves are asserted.
+    expect(buttonLabelled(deskRow, 'Delete Review team')).toBeNull();
+    expect(buttonLabelled(deskRow, 'Unarchive Review team')).toBeNull();
+
+    const shelf = props({ archived: true });
+    const shelfRow = await mount(<ChatListItem {...shelf} />);
+    expect(buttonLabelled(shelfRow, 'Unarchive Review team')).not.toBeNull();
+    expect(buttonLabelled(shelfRow, 'Delete Review team')).not.toBeNull();
+    expect(buttonLabelled(shelfRow, 'Archive Review team')).toBeNull();
+  });
+
+  it('archive and unarchive ask the parent WITHOUT activating the row', async () => {
+    const desk = props();
+    const deskRow = await mount(<ChatListItem {...desk} />);
+    await act(async () => {
+      buttonLabelled(deskRow, 'Archive Review team').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(desk.onArchive).toHaveBeenCalledWith('run-1');
+    expect(desk.onActivate).not.toHaveBeenCalled();
+
+    const shelf = props({ archived: true });
+    const shelfRow = await mount(<ChatListItem {...shelf} />);
+    await act(async () => {
+      buttonLabelled(shelfRow, 'Unarchive Review team').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    expect(shelf.onUnarchive).toHaveBeenCalledWith('run-1');
+    expect(shelf.onActivate).not.toHaveBeenCalled();
   });
 
   it('clicking the row activates it via a REAL button that keeps li semantics', async () => {

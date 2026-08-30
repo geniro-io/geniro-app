@@ -1,4 +1,10 @@
-import { Pencil, Trash2, Workflow as WorkflowIcon } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  Pencil,
+  Trash2,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
 import { memo, useEffect, useRef, useState } from 'react';
 
 import type { PullRequestInfo } from '../../shared/contracts';
@@ -57,6 +63,9 @@ export const ChatListItem = memo(function ChatListItem({
   onActivate,
   onRename,
   onDelete,
+  onArchive,
+  onUnarchive,
+  archived = false,
   dragging = false,
   onDragStartRun,
   onDragEndRun,
@@ -122,6 +131,19 @@ export const ChatListItem = memo(function ChatListItem({
   /** Commit a new title. Rejects to report the failure back into the row. */
   onRename: (runId: string, title: string) => Promise<void>;
   onDelete: (runId: string) => void;
+  /**
+   * Shelve this chat. Absent on a workflow row, which has no archive — its
+   * runs belong to the graph executor's history and the sidebar's archive is
+   * a chat feature.
+   */
+  onArchive?: (runId: string) => void;
+  /** Put an archived chat back. Only ever passed in the archived view. */
+  onUnarchive?: (runId: string) => void;
+  /**
+   * This row is being drawn in the ARCHIVE, which decides which pair of
+   * actions it offers: Archive on the desk, Unarchive + Delete on the shelf.
+   */
+  archived?: boolean;
   /** This is the row being dragged — dimmed while it travels. */
   dragging?: boolean;
   /**
@@ -310,23 +332,59 @@ export const ChatListItem = memo(function ChatListItem({
                 <Pencil className="size-3 shrink-0" />
               </Button>
             )}
-            {/* BOTH kinds. A workflow ROW is one run's history, not the
-                workflow — deleting it leaves the library entry untouched. It
-                was gated with rename before, which is why the sidebar's
-                workflow rows could not be removed at all. */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
-              aria-label={`Delete ${label}`}
-              title="Delete"
-              onClick={(event) => {
-                event.stopPropagation();
-                onDelete(runId);
-              }}>
-              <Trash2 className="size-3 shrink-0" />
-            </Button>
+            {/* The desk's destructive-looking action is ARCHIVE, and it is
+                reversible: nothing is destroyed, the thread moves to the
+                shelf. Chats only — a workflow row has no archive, so it keeps
+                going straight to Delete below. */}
+            {!archived && onArchive ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`Archive ${label}`}
+                title="Archive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArchive(runId);
+                }}>
+                <Archive className="size-3 shrink-0" />
+              </Button>
+            ) : null}
+            {archived && onUnarchive ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`Unarchive ${label}`}
+                title="Unarchive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onUnarchive(runId);
+                }}>
+                <ArchiveRestore className="size-3 shrink-0" />
+              </Button>
+            ) : null}
+            {/* The one-way door, and it is now reached only from the archive
+                (or from a workflow row, which has no archive to reach it
+                from). A workflow ROW is one run's history, not the workflow —
+                deleting it leaves the library entry untouched. */}
+            {archived || isWorkflow ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                aria-label={`Delete ${label}`}
+                title="Delete permanently"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onDelete(runId);
+                }}>
+                <Trash2 className="size-3 shrink-0" />
+              </Button>
+            ) : null}
           </>
         )}
       </span>

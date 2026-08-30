@@ -10,10 +10,13 @@ export class RunDao extends BaseDao<Run> {
     super(em, Run);
   }
 
-  /** Single-agent chat runs (no workflow), newest first. */
-  async listChats(txEm?: EntityManager): Promise<Run[]> {
+  /**
+   * Single-agent chat runs (no workflow), newest first — one side of the
+   * archive or the other, never both.
+   */
+  async listChats(archived: boolean, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { workflowId: null },
+      { workflowId: null, archivedAt: archived ? { $ne: null } : null },
       // Read-only list paths: skip identity-map tracking so a long run history
       // doesn't accumulate managed entities in the forked EM (see item.dao).
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },

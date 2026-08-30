@@ -273,4 +273,22 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   pullRequestsScannedSeq: number | null = null;
+
+  /**
+   * When this run was ARCHIVED — shelved out of the chat list but destroyed in
+   * no way — or null while it is not.
+   *
+   * Its OWN column rather than {@link TimestampsEntity.deletedAt}, and that is
+   * the load-bearing part: `softDelete` is a `@Filter` declared `default: true`
+   * on the base entity, so a row carrying `deletedAt` disappears from every
+   * read at once — `getById`, cancel, history, metrics and the teardown alike.
+   * An archived run has to stay fully reachable (that is what makes archiving
+   * reversible), and one hidden by that filter could not even be unarchived,
+   * since the write would have nothing to find.
+   *
+   * `datetime` and nullable so the `safe: true` schema sync adds it
+   * additively, no migration.
+   */
+  @Property({ type: 'datetime', nullable: true })
+  archivedAt: Date | null = null;
 }

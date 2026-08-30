@@ -227,6 +227,20 @@ export const historyQuerySchema = z.object({
 });
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
 
+export const listChatsQuerySchema = z.object({
+  /**
+   * Which side of the archive to list — absent or false is the desk, true is
+   * the shelf. Never both: an archived thread the user filed away must not
+   * reappear in the list they filed it out of.
+   *
+   * `z.stringbool()` for the reason `mcp.dto.ts`'s `refresh` uses it: under
+   * `z.coerce.boolean()` the string `"false"` a query string actually carries
+   * is truthy, so an explicit `archived=false` would hand back the archive.
+   */
+  archived: z.stringbool().optional(),
+});
+export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
+
 // ── Responses ───────────────────────────────────────────────────────────────
 
 /** A run — a single-agent chat or a workflow execution. */

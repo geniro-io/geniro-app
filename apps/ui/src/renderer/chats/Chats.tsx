@@ -1,4 +1,5 @@
 import {
+  ArchiveRestore,
   ArrowUp,
   Clock,
   FolderPlus,
@@ -75,6 +76,7 @@ import {
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
+import { ArchiveFilter } from './archive-filter';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
@@ -729,6 +731,10 @@ export function Chats({
     addItem,
     rememberRunContext,
     refreshRuns,
+    archivedView,
+    showArchived,
+    addRun,
+    dropRun,
     activateRun,
     handleActivateRun,
     deactivateRun,
@@ -1382,6 +1388,11 @@ export function Chats({
       setDeleting(run);
     }
   }, []);
+
+  // The chat queued for archiving — ONLY ever a running one (see the dialog).
+  const [archiving, setArchiving] = useState<ChatRun | null>(null);
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   // The selected workflow's entry points for the composer's trigger select —
   // a run starts by firing a trigger, so the composer surfaces which one.
@@ -2323,7 +2334,7 @@ export function Chats({
             ...(profile === null ? {} : { configDir: profile }),
           },
         });
-        setRuns((prev) => [run, ...prev]);
+        addRun(run);
         setSessionPickerOpen(false);
         await activateRun(run.id);
       } catch (err) {
@@ -2332,7 +2343,7 @@ export function Chats({
         setResumingSessionId(null);
       }
     },
-    [sessionAgent, models, efforts, chatApi, activateRun],
+    [sessionAgent, models, efforts, chatApi, activateRun, addRun],
   );
 
   /**
@@ -2358,10 +2369,10 @@ export function Chats({
       return null;
     }
     const run = await createChatRun(cwd);
-    setRuns((prev) => [run, ...prev]);
+    addRun(run);
     await activateRun(run.id);
     return { runId: run.id, created: run };
-  }, [ensureFolder, createChatRun, activateRun]);
+  }, [ensureFolder, createChatRun, activateRun, addRun]);
 
   /** The sidebar's + : back to the new-run composer. Nothing is created —
    *  the run (chat or workflow) is only seeded when the composer sends. */
@@ -2369,6 +2380,117 @@ export function Chats({
     deactivateRun();
     refreshRuns();
   }, [deactivateRun, refreshRuns]);
+
+  /**
+   * Shelve one chat and take its row off whichever list is on screen.
+   *
+   * Below `newChat` for the reason `confirmDelete` is: it hands the window
+   * back to the composer when the thread being filed away is the open one.
+   */
+  const archiveRun = useCallback(
+    async (runId: string): Promise<void> => {
+      await chatApi.archiveChat({ runId });
+      // It has just left the listing this window is showing, so leaving its
+      // transcript up would put a thread on screen with no row anywhere beside
+      // it. The conversation is intact — it is on the other side.
+      dropRun(runId, newChat);
+    },
+    [chatApi, dropRun, newChat],
+  );
+
+  const handleArchiveRun = useCallback(
+    (runId: string): void => {
+      const run = runsRef.current.find((r) => r.id === runId);
+      if (!run) {
+        return;
+      }
+      // The same gate the daemon cancels on, read off the row this window
+      // already holds, so the two cannot disagree about which chats ask.
+      if (run.status === 'running') {
+        setArchiveError(null);
+        setArchiving(run);
+        return;
+      }
+      void archiveRun(runId).catch((err: unknown) => setError(String(err)));
+    },
+    [archiveRun, runsRef, setError],
+  );
+
+  const confirmArchive = useCallback(async (): Promise<void> => {
+    if (!archiving) {
+      return;
+    }
+    setArchiveBusy(true);
+    setArchiveError(null);
+    try {
+      await archiveRun(archiving.id);
+      setArchiving(null);
+    } catch (err) {
+      setArchiveError(String(err));
+    } finally {
+      setArchiveBusy(false);
+    }
+  }, [archiving, archiveRun]);
+
+  /**
+   * Put an archived chat back, from its SIDEBAR ROW.
+   *
+   * The same drop as archive and delete, and it needs the open-run branch just
+   * as much: an archived row is activatable, so the thread being put back can
+   * be the one on screen.
+   */
+  const handleUnarchiveRun = useCallback(
+    (runId: string): void => {
+      void chatApi
+        .unarchiveChat({ runId })
+        .then(() => dropRun(runId, newChat))
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [chatApi, dropRun, newChat, setError],
+  );
+
+  /**
+   * Put the OPEN chat back, from the control above its own composer.
+   *
+   * Deliberately not {@link handleUnarchiveRun}: that one DROPS the row, and
+   * this control is only ever on screen when the run is the open one — so
+   * sharing it would always take the close-the-thread branch and land the user
+   * on the landing composer, which is the opposite of what the button says. It
+   * exists to make THIS conversation usable again, so the thread stays open and
+   * follows to the side it now belongs on.
+   */
+  const handleUnarchiveOpenRun = useCallback(
+    (runId: string): void => {
+      void chatApi
+        .unarchiveChat({ runId })
+        .then(() => {
+          showArchived(false);
+          return activateRun(runId);
+        })
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [chatApi, showArchived, activateRun, setError],
+  );
+
+  /**
+   * Switch the sidebar between the desk and the archive, closing whatever
+   * thread is open.
+   *
+   * The two listings are DISJOINT, so the thread on screen belongs to the side
+   * being left. Left open, it would go on rendering while its row is absent
+   * from `runs` — and everything the transcript reads off that row goes with
+   * it: the header (title, status, Stop) disappears, and the archived-composer
+   * gate reads `undefined` and re-ENABLES a composer whose next send the daemon
+   * refuses. Closing is the honest answer, and it is what the sidebar already
+   * does whenever a thread leaves the list.
+   */
+  const handleShowArchived = useCallback(
+    (next: boolean): void => {
+      deactivateRun();
+      showArchived(next);
+    },
+    [deactivateRun, showArchived],
+  );
 
   const confirmDelete = useCallback(async (): Promise<void> => {
     if (!deleting) {
@@ -2388,20 +2510,16 @@ export function Chats({
       // the daemon's own per-run maps follow, announced there on the bus.
       forgetContextReading(deleting.id);
       setDeleting(null);
-      if (activeRunIdRef.current === deleting.id) {
-        // The open transcript belongs to a run that no longer exists: leave its
-        // room and fall back to the composer, rather than leaving a dead
-        // transcript on screen whose Send would 404.
-        newChat();
-      } else {
-        setRuns((prev) => prev.filter((run) => run.id !== deleting.id));
-      }
+      // The open transcript belongs to a run that no longer exists: leave its
+      // room and fall back to the composer, rather than leaving a dead
+      // transcript on screen whose Send would 404.
+      dropRun(deleting.id, newChat);
     } catch (err) {
       setDeleteError(String(err));
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleting, chatApi, workflowApi, newChat, forgetContextReading]);
+  }, [deleting, chatApi, workflowApi, dropRun, newChat, forgetContextReading]);
 
   /**
    * Start one turn: mark the run working, send, render the user message
@@ -2552,7 +2670,7 @@ export function Chats({
             ...(await currentRunSettings()),
           },
         });
-        setRuns((prev) => [run, ...prev]);
+        addRun(run);
         await activateRun(run.id);
         // A run can fail-fast within the activation window (missing CLI →
         // instant terminal item in the replayed history); re-arming Stop then
@@ -2615,6 +2733,7 @@ export function Chats({
     startTurn,
     attachments,
     refuseUnknownCommand,
+    addRun,
   ]);
 
   /** Send this run's next queued message after a settled turn (called via
@@ -3217,6 +3336,15 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+  /**
+   * The open thread is shelved, so its composer is inert.
+   *
+   * Read off the ROW rather than off `archivedView`: the view says which list
+   * is on screen, and the question here is about this one conversation — the
+   * daemon refuses the send either way (`RUN_ARCHIVED`), and a composer that
+   * accepted text only to have it bounced is the shape this exists to avoid.
+   */
+  const activeRunArchived = activeRun?.archivedAt != null;
 
   /**
    * Every distinct folder the chat list names, so pull requests are read once
@@ -5172,6 +5300,14 @@ export function Chats({
                       </Button>
                     </span>
                   </div>
+                  {/* Its own row under the heading rather than beside it: the
+                      header band is already three icon buttons wide at h-11,
+                      and a two-word segmented control squeezed in there would
+                      push the + off the edge on a narrow sidebar. */}
+                  <ArchiveFilter
+                    archived={archivedView}
+                    onChange={handleShowArchived}
+                  />
                   <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
                     {!runsLoaded && runs.length === 0 ? (
                       <li className="px-2 py-1.5 text-sm text-muted-foreground">
@@ -5238,6 +5374,17 @@ export function Chats({
                               onActivate={handleActivateRun}
                               onRename={handleRenameRun}
                               onDelete={handleDeleteRun}
+                              archived={archivedView}
+                              // Chats only. A workflow row has no archive, so
+                              // withholding the handler is what leaves it on
+                              // the Delete it has always had — the asymmetry
+                              // is deliberate, not an oversight.
+                              onArchive={
+                                run.workflowId == null
+                                  ? handleArchiveRun
+                                  : undefined
+                              }
+                              onUnarchive={handleUnarchiveRun}
                               onDragStartRun={handleRunDragStart}
                               onDragEndRun={handleDragEnd}
                             />
@@ -5373,7 +5520,9 @@ export function Chats({
                         })}
                         {runs.length === 0 ? (
                           <li className="px-2 py-1.5 text-sm text-muted-foreground">
-                            No chats yet
+                            {archivedView
+                              ? 'Nothing archived yet'
+                              : 'No chats yet'}
                           </li>
                         ) : null}
                       </>
@@ -6021,6 +6170,24 @@ export function Chats({
                           the chip's whole point is that it goes away. */}
                       <RunSettledContext.Provider value={activeRunSettledAt}>
                         <ComposerShelf>
+                          {/* FIRST in the row, and the one chip here that is
+                              not about what the thread produced: the composer
+                              under it is disabled, so this is the only control
+                              on screen that can make it usable again. */}
+                          {activeRunArchived ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
+                              onClick={() =>
+                                activeRunId &&
+                                handleUnarchiveOpenRun(activeRunId)
+                              }>
+                              <ArchiveRestore className="size-3 shrink-0" />
+                              Archived — unarchive to continue
+                            </Button>
+                          ) : null}
                           <ThreadPullRequestChips
                             results={openedByActiveThread}
                           />
@@ -6093,17 +6260,21 @@ export function Chats({
                             value={input}
                             rows={2}
                             aria-label="Message the agent"
-                            disabled={activeRun?.workflowId != null}
+                            disabled={
+                              activeRun?.workflowId != null || activeRunArchived
+                            }
                             className={cn(
                               COMPOSER_TEXTAREA_GROWTH,
                               'min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
                             )}
                             placeholder={
-                              activeRun?.workflowId
-                                ? 'Workflow runs take one task — press + to start another.'
-                                : streaming && !activeRunHeld
-                                  ? 'Agent is working — your message will queue…'
-                                  : 'Message the agent…'
+                              activeRunArchived
+                                ? 'This chat is archived — unarchive it to continue.'
+                                : activeRun?.workflowId
+                                  ? 'Workflow runs take one task — press + to start another.'
+                                  : streaming && !activeRunHeld
+                                    ? 'Agent is working — your message will queue…'
+                                    : 'Message the agent…'
                             }
                             onChange={(event) => setInput(event.target.value)}
                             onPaste={(event) => {
@@ -6574,6 +6745,31 @@ export function Chats({
                   load={loadShellOutput}
                 />
 
+                {/* Archiving asks NOTHING of a settled chat — it is one press
+                    and it is reversible. This fires only for a chat with a
+                    turn in flight, where the shelving cancels that turn on the
+                    way, and cancelled work does not come back with the
+                    thread. */}
+                <ConfirmDialog
+                  open={archiving !== null}
+                  busy={archiveBusy}
+                  error={archiveError}
+                  title="Archive a running chat"
+                  confirmLabel="Cancel turn & archive"
+                  busyLabel="Archiving…"
+                  onCancel={() => setArchiving(null)}
+                  onConfirm={() => void confirmArchive()}>
+                  <>
+                    <strong>
+                      {archiving ? runLabel(archiving, workflowNames) : ''}
+                    </strong>{' '}
+                    is still working. Archiving it stops the turn and closes its
+                    agent session first — whatever it is part-way through is
+                    lost. The conversation itself is kept, and you can unarchive
+                    it at any time.
+                  </>
+                </ConfirmDialog>
+
                 <ConfirmDialog
                   open={deleting !== null}
                   busy={deleteBusy}
@@ -6589,8 +6785,8 @@ export function Chats({
                       {deleting ? runLabel(deleting, workflowNames) : ''}
                     </strong>
                     ? Its transcript, attachments and any live terminal go with
-                    it. This cannot be undone. Its token and cost totals stay on
-                    the Stats page.
+                    it. This cannot be undone — unlike archiving, nothing is
+                    kept. Its token and cost totals stay on the Stats page.
                     {deleting?.workflowId
                       ? ' The workflow itself stays in your library.'
                       : ''}

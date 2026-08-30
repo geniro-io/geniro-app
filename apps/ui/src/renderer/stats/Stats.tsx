@@ -17,7 +17,7 @@ import { EmptyState } from '../components/empty-state';
 import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
-import { cn } from '../components/ui/utils';
+import { SegmentedControl } from '../components/ui/segmented-control';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
 import { BreakdownCard } from './breakdown-card';
@@ -362,53 +362,4 @@ function formatOrDash(
   format: (value: number) => string,
 ): string {
   return value === null ? NOT_MEASURED : format(value);
-}
-
-/**
- * A small run of mutually exclusive options.
- *
- * Not `select`: there are two to four choices, they are always worth showing,
- * and switching between them is the main thing a reader does on this page — a
- * dropdown would hide them behind a click each time. Kept local to this screen
- * rather than promoted to `components/`, since nothing else uses one yet.
- */
-function SegmentedControl<T extends string>({
-  ariaLabel,
-  options,
-  value,
-  onSelect,
-  className,
-}: {
-  ariaLabel: string;
-  options: readonly { id: T; label: string }[];
-  value: T;
-  onSelect: (id: T) => void;
-  className?: string;
-}): React.JSX.Element {
-  return (
-    <div
-      role="group"
-      aria-label={ariaLabel}
-      className={cn(
-        'flex items-center gap-1 rounded-md border border-border bg-muted p-1',
-        className,
-      )}>
-      {options.map((option) => (
-        <button
-          key={option.id}
-          type="button"
-          aria-pressed={option.id === value}
-          onClick={() => onSelect(option.id)}
-          className={cn(
-            'rounded-sm px-3 py-1 text-sm font-medium outline-none transition-colors',
-            'focus-visible:ring-2 focus-visible:ring-ring/50',
-            option.id === value
-              ? 'bg-card text-foreground shadow-panel-sm'
-              : 'text-muted-foreground hover:text-foreground',
-          )}>
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
 }

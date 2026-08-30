@@ -199,6 +199,18 @@ export class ChatService implements OnModuleInit {
   private readonly deleting = new Set<string>();
 
   /**
+   * Runs whose ARCHIVE is in flight — the twin of {@link deleting}, and it
+   * exists for the same window rather than for tidiness.
+   *
+   * Between `tryClaim` and `register` a turn is live and has no handle to
+   * cancel, and that stretch contains real awaits. `archive()` promises the
+   * user it stopped the turn first; without this, a turn crossing that window
+   * registers behind the archive and runs on — with full tool access, on a run
+   * the desk no longer shows.
+   */
+  private readonly archiving = new Set<string>();
+
+  /**
    * How a mid-turn approval change reaches the turn in flight, keyed by run.
    *
    * Set when a turn registers, dropped when it settles. Returns whether the
@@ -1199,9 +1211,9 @@ export class ChatService implements OnModuleInit {
     return { cleared };
   }
 
-  async listChats(): Promise<RunWire[]> {
+  async listChats(archived = false): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listChats(em);
+    const runs = await this.runDao.listChats(archived, em);
     // Incremental and error-swallowing by construction, so this is a `max(seq)`
     // read per run in the steady state and can never fail the listing.
     await this.pullRequests.sync(runs, em);
@@ -1254,6 +1266,70 @@ export class ChatService implements OnModuleInit {
     }
     await this.runDao.updateById(runId, { groupId }, em);
     run.groupId = groupId;
+    const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+    return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * Shelve a chat out of the sidebar without destroying any part of it.
+   *
+   * The reversible half of what used to be a single one-way Delete: everything
+   * the run owns — transcript, attachments, node state, call tokens — is left
+   * exactly where it is, and {@link unarchive} puts the thread back. The purge
+   * still exists and is still irreversible; it is reached from the archive.
+   *
+   * **Archiving a RUNNING chat cancels its turn first**, so a thread the user
+   * has filed away cannot go on spending tokens out of sight. Ordered that way
+   * deliberately: the cancel writes this run's terminal status through the
+   * turn's own finalizer, and doing it after the mark would settle a run the
+   * user had already shelved.
+   *
+   * The cancel is gated on `running` and NOT on `!isTerminalRunStatus`, which
+   * looks like the more general test and is wrong: `pending` covers both a
+   * chat whose turn is mid-claim AND one that never sent a message at all, and
+   * `cancel()` would write the second a `cancelled` status and a
+   * `turn_cancelled` row it never earned. The mid-claim case is answered by
+   * {@link archiving} instead, which is the only mechanism that can see it.
+   *
+   * The session is closed on EVERY archive, not only the running one. A kept
+   * process is ~1GB of the machine's memory held so the next turn opens fast,
+   * and a shelved conversation has no next turn until it comes back — at which
+   * point it re-opens like any other cold chat.
+   */
+  async archive(runId: string): Promise<RunWire> {
+    const em = this.em.fork();
+    // Kind-guarded like cancel and delete: workflow runs have no archive, so
+    // one reaching this route must 400 rather than be marked with a column
+    // nothing on their side of the sidebar reads.
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    // Claimed BEFORE the cancel, exactly as `delete` claims — see {@link archiving}.
+    this.archiving.add(runId);
+    try {
+      if (run.status === 'running') {
+        await this.cancel(runId);
+      }
+      this.sessions.close(runId);
+      const archivedAt = new Date();
+      await this.runDao.updateById(runId, { archivedAt }, em);
+      // Re-read rather than patch the entity in hand: the cancel above settles
+      // this run through the turn's own finalizer, on a DIFFERENT fork, so the
+      // row loaded before it still says `running` — and answering the archive
+      // with a status the run no longer has is a lie the caller cannot detect.
+      const fresh = (await this.runDao.getById(runId, em)) ?? run;
+      fresh.archivedAt = archivedAt;
+      const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
+      return this.toRunWire(fresh, previews.get(runId) ?? null);
+    } finally {
+      this.archiving.delete(runId);
+    }
+  }
+
+  /** Put an archived chat back on the desk. Nothing else about it changed. */
+  async unarchive(runId: string): Promise<RunWire> {
+    const em = this.em.fork();
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    await this.runDao.updateById(runId, { archivedAt: null }, em);
+    run.archivedAt = null;
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
   }
@@ -2210,6 +2286,16 @@ export class ChatService implements OnModuleInit {
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    // An ARCHIVED chat is inert: shelving one cancels the turn it had, and
+    // without this the very next message would start another on a row the desk
+    // never shows — the thing archiving a running chat exists to prevent,
+    // reached one step later. Unarchiving is the way back.
+    if (run.archivedAt !== null) {
+      throw new ConflictException(
+        'RUN_ARCHIVED',
+        'this chat is archived — unarchive it to send a message',
+      );
+    }
     if (!run.cwd || !run.agentKind) {
       throw new BadRequestException(
         'RUN_NOT_CONFIGURED',
@@ -2675,12 +2761,22 @@ export class ChatService implements OnModuleInit {
       // in-flight delete (it is set before any row is destroyed) and the null
       // read catches every completed one, with no await left between the check
       // and `register`.
-      const runStillExists =
-        (await this.runDao.getById(runId, this.em.fork())) !== null;
-      if (this.deleting.has(runId) || !runStillExists) {
+      const current = await this.runDao.getById(runId, this.em.fork());
+      if (this.deleting.has(runId) || current === null) {
         throw new ConflictException(
           'RUN_DELETING',
           'this chat was deleted while the turn was starting',
+        );
+      }
+      // The same window and the same two shapes, for the reversible act: the
+      // Set catches an archive still in flight, the re-read one that FINISHED
+      // while we were probing (the Set is cleared the moment `archive`
+      // returns). Its own branch because the outcome differs — the chat is
+      // still there, and the sentence has to say so.
+      if (this.archiving.has(runId) || current.archivedAt !== null) {
+        throw new ConflictException(
+          'RUN_ARCHIVED',
+          'this chat was archived while the turn was starting',
         );
       }
       /**

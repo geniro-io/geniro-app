@@ -26,6 +26,16 @@ paths:
      headers/icons/checkmarks/search, and is invisible to the DOM, so it can be
      neither screenshotted nor asserted on. Pass `groups`, never `<option>`
      children; a test opens `[data-menu-trigger]` and reads `[role="option"]`.
+   - **`segmented-control` is the ONE run of mutually exclusive options that
+     are always visible** — the Stats page's period and metric switches, the
+     chat sidebar's Active/Archived filter. Not `select`, which is the app's
+     one DROPDOWN and would hide two-to-four choices behind a click each time;
+     not `chip`, which states ONE value where this states a set and which of
+     them is current. It was local to `Stats.tsx` under a comment saying
+     "nothing else uses one yet", and the second use rebuilt it with a third
+     active treatment before the promotion — which is precisely the shape the
+     Reuse rules below exist to catch, so reach for the primitive rather than
+     two buttons and an `aria-pressed`.
    - **Every image the user can look at goes through `image-viewer`'s
      `ZoomableImage`** — the transcript's attachments, the composer's staged
      strip, an agent's markdown image. Three surfaces draw the same picture at

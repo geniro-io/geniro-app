@@ -7,6 +7,7 @@ import {
   type CliKind,
   hasControlCharacters,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
+  MAX_RUN_CONFIG_MESSAGE,
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
 } from '../shared/contracts';
@@ -100,6 +101,15 @@ const runConfigSchema = z.strictObject({
     .default({}),
   approval: z.string().min(1).max(32).nullable(),
   configDir: absolutePath.nullable(),
+  // Defaulted for `contextWindow`'s reason, which is the same one again: this
+  // field arrived after users had saved configurations on disk, and a strict
+  // required field would make `salvageRunConfigs` drop every one of them.
+  firstMessage: z
+    .string()
+    .min(1)
+    .max(MAX_RUN_CONFIG_MESSAGE)
+    .nullable()
+    .default(null),
 });
 
 /**

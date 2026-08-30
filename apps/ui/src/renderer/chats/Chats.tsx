@@ -60,6 +60,7 @@ import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
 import { followTail, jumpToBottom } from '../scroll-to-bottom';
+import type { SettingsSection } from '../settings/Settings';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
@@ -96,6 +97,7 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
+import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { JumpToLatest } from './jump-to-latest';
@@ -121,7 +123,6 @@ import {
   targetAgentKind,
   workflowSlugOf,
 } from './run-config';
-import { RunConfigPicker } from './run-config-picker';
 import {
   GROUP_RAIL_CLASS,
   previewSectionRuns,
@@ -390,9 +391,19 @@ export function Chats({
   handle,
   active = true,
   onTitleChange,
+  onOpenSettings,
 }: {
   client: DaemonClient;
   handle: DaemonHandle;
+  /**
+   * Take the app to a Settings pane. Absent in a harness, which is why every
+   * call site is optional-chained rather than asserted.
+   *
+   * Chats owns no route of its own — the nav rail is `App`'s — and fast actions
+   * are edited on ONE screen, so the composer's way to that screen has to be a
+   * callback rather than a dialog of its own.
+   */
+  onOpenSettings?: (section: SettingsSection) => void;
   /** False while another view is shown (the tab stays mounted, hidden). */
   active?: boolean;
   /**
@@ -521,11 +532,7 @@ export function Chats({
   // here rather than in the picker because the composer is what a pick SEEDS —
   // the dialog only chooses which one.
   const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
-  const [runConfigPickerOpen, setRunConfigPickerOpen] = useState(false);
   /** Which surface the picker opens on — the `+` menu offers both entry points. */
-  const [runConfigPickerMode, setRunConfigPickerMode] = useState<
-    'list' | 'new'
-  >('list');
   /**
    * Why a configuration's branch could not be checked out, if it could not —
    * surfaced rather than swallowed, and non-blocking: the switch is refused
@@ -1586,6 +1593,29 @@ export function Chats({
       setSessionQueryAsked('');
     }
   }, [sessionPickerOpen]);
+
+  /**
+   * Re-read the fast actions whenever this screen comes back into view.
+   *
+   * Chats stays MOUNTED across nav switches — that is what keeps its live room
+   * and active run alive — so its one-shot settings read never runs again.
+   * Fast actions are edited on another screen, so without this the buttons
+   * under the composer keep showing the set as it was when the app started:
+   * an action added in Settings would not appear until the next launch, and a
+   * deleted one would still be pressable.
+   *
+   * Only this key, and only on the way IN: the rest of that read is composer
+   * state the user may have moved since, and clobbering it on every nav switch
+   * would throw away the folder or model they just chose.
+   */
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    void window.geniro
+      .getSettings()
+      .then((s) => setRunConfigs(s.runConfigs ?? []));
+  }, [active]);
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {
@@ -3518,37 +3548,6 @@ export function Chats({
   // whose only surviving effect was an error strip about a control nobody sees.
   const git = useGitInfo(folder);
 
-  /** The composer's current setup, or null when it has no folder to save yet. */
-  const captureCurrentRunConfig = useCallback(
-    (name: string): RunConfigDraft | null =>
-      folder === null
-        ? null
-        : captureRunConfig({
-            name,
-            target,
-            cwd: folder,
-            // The branch the folder is actually on: a configuration saved from
-            // the composer means "the setup I am looking at", checkout included.
-            branch: git.info.isRepo ? git.info.branch : null,
-            configDir,
-            models,
-            efforts,
-            contextWindows,
-            modelParameters,
-            approval: approvalMode,
-          }),
-    [
-      folder,
-      target,
-      git.info,
-      configDir,
-      models,
-      efforts,
-      contextWindows,
-      approvalMode,
-    ],
-  );
-
   /**
    * Seed the composer from a saved configuration, then try to put the folder on
    * its branch.
@@ -3567,7 +3566,6 @@ export function Chats({
         );
         return;
       }
-      setRunConfigPickerOpen(false);
       setRunConfigBranchNotice(null);
       setError(null);
       // The strip reads `error ?? attachments.error ?? git.error ?? notice`, so
@@ -3662,6 +3660,109 @@ export function Chats({
       changeEffort,
       git,
       refreshPullRequestsFor,
+    ],
+  );
+  /**
+   * Press a fast action: seed the composer from it and, when it carries a
+   * message, start the chat and send that message.
+   *
+   * The run is built from the APPLIED configuration rather than from composer
+   * state, and that is not an optimisation — it is the only correct reading.
+   * `applyRunConfigToComposer` above sets React state, which this callback's
+   * closure cannot see: creating the chat from `agentKind`/`models`/`folder`
+   * would use whatever the composer held BEFORE the press, so an action naming
+   * cursor would start claude with the last chat's model. Every value the run
+   * needs is already on `applied`.
+   *
+   * The composer is still seeded, because the user must be able to SEE what
+   * they pressed — and because the branch switch, its refusal notice and the
+   * folder's git read all live on that path.
+   */
+  const runFastAction = useCallback(
+    async (config: RunConfig): Promise<void> => {
+      const applied = applyRunConfig(config);
+      if (applied === null) {
+        setError(
+          `“${config.name}” starts ${config.target}, which this version cannot run. Edit the action to pick another agent.`,
+        );
+        return;
+      }
+      await applyRunConfigToComposer(config);
+      const text = applied.firstMessage;
+      if (text === null || streaming) {
+        // No message is a complete action: the chips are filled in and the
+        // cursor is in an empty composer, which is what these setups have
+        // always done and is still what some of them are for.
+        return;
+      }
+      try {
+        if (applied.isWorkflow) {
+          const slug = workflowSlugOf(applied.target);
+          if (slug === null) {
+            return;
+          }
+          const run = await workflowApi.startWorkflowRun({
+            slug,
+            runWorkflowDto: {
+              cwd: applied.cwd,
+              prompt: text,
+              ...(await currentRunSettings()),
+            },
+          });
+          setRuns((prev) => [run, ...prev]);
+          await activateRun(run.id);
+          if (!sawTerminalRef.current) {
+            setStreaming(true);
+          }
+          return;
+        }
+        // Asked about the ACTION's agent, never the composer's: a mode or a
+        // profile directory this CLI does not honour is dropped rather than
+        // sent, exactly as the composer drops its own.
+        const modes = capabilities
+          ? (approvalModesByAgent.get(applied.agentKind) ?? [])
+          : null;
+        const configDir =
+          configDirReasonFor(applied.agentKind) === null
+            ? applied.configDir
+            : null;
+        const run = await chatApi.createChat({
+          createChatDto: {
+            agentKind: applied.agentKind,
+            cwd: applied.cwd,
+            ...(await currentRunSettings()),
+            ...(applied.model ? { model: applied.model } : {}),
+            ...(applied.effort ? { effort: applied.effort } : {}),
+            ...(Object.keys(applied.modelParameters).length > 0
+              ? { modelParameters: applied.modelParameters }
+              : {}),
+            ...(applied.contextWindow
+              ? { contextWindow: applied.contextWindow }
+              : {}),
+            ...(applied.approval !== null && modes?.includes(applied.approval)
+              ? { approval: applied.approval }
+              : {}),
+            ...(configDir === null ? {} : { configDir }),
+          },
+        });
+        setRuns((prev) => [run, ...prev]);
+        await activateRun(run.id);
+        await startTurn(run.id, text, [], run.status);
+      } catch (err) {
+        setError(daemonErrorDetail(err) ?? String(err));
+        setStreaming(false);
+      }
+    },
+    [
+      applyRunConfigToComposer,
+      streaming,
+      workflowApi,
+      chatApi,
+      activateRun,
+      startTurn,
+      capabilities,
+      approvalModesByAgent,
+      configDirReasonFor,
     ],
   );
 
@@ -5311,14 +5412,11 @@ export function Chats({
                         onApply={(config) =>
                           void applyRunConfigToComposer(config)
                         }
-                        onCreate={() => {
-                          setRunConfigPickerMode('new');
-                          setRunConfigPickerOpen(true);
-                        }}
-                        onManage={() => {
-                          setRunConfigPickerMode('list');
-                          setRunConfigPickerOpen(true);
-                        }}
+                        // Both rows lead to the same screen, which is the ONE
+                        // place fast actions are edited — see
+                        // `settings/fast-actions.tsx`.
+                        onCreate={() => onOpenSettings?.('fast-actions')}
+                        onManage={() => onOpenSettings?.('fast-actions')}
                       />
                     </span>
                   </div>
@@ -5764,7 +5862,16 @@ export function Chats({
                 are now rows in the composer's own menus — folders in the folder
                 chip, workflows in the target chip, each searchable — so the
                 chips only restated, below the card, choices the card already
-                offered, and were capped at three besides. */}
+                offered, and were capped at three besides.
+
+                              What stands here now is not that row rebuilt: a fast action is
+                              the user's OWN button, and pressing one is a whole chat rather
+                              than a value dropped into a chip. */}
+                          <FastActionBar
+                            actions={runConfigs}
+                            disabled={streaming}
+                            onRun={(action) => void runFastAction(action)}
+                          />
                           {workflowSlug && triggers.length > 1 ? (
                             <p className="text-center text-xs text-muted-foreground">
                               This graph has {triggers.length} triggers — v1
@@ -6768,27 +6875,6 @@ export function Chats({
                   busyId={resumingSessionId}
                   onClose={() => setSessionPickerOpen(false)}
                   onResume={(row) => void resumeSession(row)}
-                />
-                <RunConfigPicker
-                  open={runConfigPickerOpen}
-                  openTo={runConfigPickerMode}
-                  configs={runConfigs}
-                  agentsApi={agentsApi}
-                  workflows={workflows}
-                  cliDetections={cliDetections}
-                  recentFolders={recentFolders}
-                  recentConfigDirs={recentConfigDirs}
-                  // Asked about the CONFIGURATION's agent, not the composer's.
-                  approvalModesFor={(kind) =>
-                    capabilities ? (approvalModesByAgent.get(kind) ?? []) : null
-                  }
-                  configDirReasonFor={configDirReasonFor}
-                  planSupported={capabilities?.claudeModes.plan === 'pass'}
-                  captureCurrent={captureCurrentRunConfig}
-                  onApply={(config) => void applyRunConfigToComposer(config)}
-                  onSave={saveRunConfig}
-                  onDelete={deleteRunConfig}
-                  onClose={() => setRunConfigPickerOpen(false)}
                 />
               </div>
             </MarkdownImageLoaderContext.Provider>

@@ -31,6 +31,8 @@ import { useUpdateState } from './updates/use-update-state';
 const Graphs = lazy(() =>
   import('./graphs/Graphs').then((m) => ({ default: m.Graphs })),
 );
+import type { SettingsSection } from './settings/Settings';
+
 const Settings = lazy(() =>
   import('./settings/Settings').then((m) => ({ default: m.Settings })),
 );
@@ -61,6 +63,14 @@ export function App(): React.JSX.Element {
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
   const [graphsMounted, setGraphsMounted] = useState(false);
+  /**
+   * Which pane Settings opens on — HERE rather than inside Settings because
+   * another screen can ask for one: Settings is unmounted while hidden, so a
+   * section it remembered privately would be forgotten between visits and,
+   * worse, could not be set from outside at all.
+   */
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSection>('general');
   if (view === 'graphs' && !graphsMounted) {
     setGraphsMounted(true);
   }
@@ -354,6 +364,14 @@ export function App(): React.JSX.Element {
                 handle={handle}
                 active={view === 'chats'}
                 onTitleChange={setChatTitle}
+                // Chats has no route of its own to Settings — the nav rail is
+                // this component's. Handing it one callback is what lets the
+                // composer's "Manage fast actions" land ON the editor rather
+                // than on General with a hunt for it.
+                onOpenSettings={(section) => {
+                  setSettingsSection(section);
+                  setView('settings');
+                }}
               />
             ) : (
               <EmptyState>Connecting to the daemon…</EmptyState>
@@ -379,7 +397,11 @@ export function App(): React.JSX.Element {
             ) : null}
             {view === 'settings' ? (
               <div className="min-h-0 flex-1">
-                <Settings handle={handle} />
+                <Settings
+                  handle={handle}
+                  section={settingsSection}
+                  onSectionChange={setSettingsSection}
+                />
               </div>
             ) : null}
           </Suspense>

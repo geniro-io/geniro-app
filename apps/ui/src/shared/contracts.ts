@@ -57,6 +57,15 @@ export interface DaemonStatus {
  */
 export const MAX_RUN_CONFIGS = 50;
 export const MAX_RUN_CONFIG_NAME = 80;
+/**
+ * How long a fast action's opening message may be.
+ *
+ * Generous rather than tight: this is a whole brief the user writes once and
+ * fires many times — "review the diff on this branch against our conventions
+ * and report findings" is the short end of it. The cap is a guard against a
+ * renderer bug growing settings.json without limit, not an editorial opinion.
+ */
+export const MAX_RUN_CONFIG_MESSAGE = 4000;
 
 /**
  * A saved new-chat setup the user named — a bundle of COMPOSER state and
@@ -97,6 +106,17 @@ export interface RunConfig {
   approval: string | null;
   /** Plugin/profile directory, or null for the CLI's own account. */
   configDir: string | null;
+  /**
+   * The message this action SENDS on start, or null to leave the composer
+   * seeded and empty.
+   *
+   * The one field that turns a saved setup into a button worth pressing: with
+   * it, one press is a chat already working on the thing the user always asks
+   * for. Without it the action is what these have always been — the chips
+   * filled in, the cursor in an empty composer — and both are wanted, which is
+   * why the difference is a nullable field rather than two kinds of entry.
+   */
+  firstMessage: string | null;
 }
 
 /** Persisted, non-secret application settings. Secrets never live here. */

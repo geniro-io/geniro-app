@@ -39,6 +39,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     modelParameters: {},
     approval: null,
     configDir: null,
+    firstMessage: null,
     ...over,
   };
 }

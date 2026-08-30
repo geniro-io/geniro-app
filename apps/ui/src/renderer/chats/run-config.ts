@@ -66,6 +66,7 @@ export function newRunConfigId(): string {
  */
 export function captureRunConfig(input: {
   name: string;
+  firstMessage: string | null;
   target: string;
   cwd: string;
   branch: string | null;
@@ -80,6 +81,10 @@ export function captureRunConfig(input: {
   const workflow = workflowSlugOf(input.target) !== null;
   return {
     name: input.name.trim(),
+    // Trimmed to null rather than kept as whitespace: an action whose message
+    // is three spaces would create a chat and send nothing, which is neither of
+    // the two things this field means.
+    firstMessage: input.firstMessage?.trim() || null,
     target: input.target,
     cwd: input.cwd,
     branch: input.branch,
@@ -99,6 +104,8 @@ export function captureRunConfig(input: {
 export interface AppliedRunConfig {
   target: string;
   agentKind: CliKind;
+  /** The message to send once the run exists, or null to seed and stop. */
+  firstMessage: string | null;
   /**
    * This configuration starts a workflow, so it says NOTHING about any CLI's
    * model or effort — as distinct from a CLI configuration that names none,
@@ -161,6 +168,7 @@ export function applyRunConfig(config: RunConfig): AppliedRunConfig | null {
   return {
     target: config.target,
     agentKind: targetAgentKind(config.target),
+    firstMessage: config.firstMessage,
     isWorkflow: workflow,
     cwd: config.cwd,
     configDir: workflow ? null : config.configDir,

@@ -23,6 +23,7 @@ function config(over: Partial<RunConfig> = {}): RunConfig {
     modelParameters: {},
     approval: null,
     configDir: null,
+    firstMessage: null,
     ...over,
   };
 }
@@ -62,6 +63,7 @@ describe('captureRunConfig', () => {
     // Saving while pointed at cursor must not capture the claude alias sitting
     // in the same per-CLI map — that alias reaches `--model` on the next run.
     const draft = captureRunConfig({
+      firstMessage: null,
       name: 'Work',
       target: 'cursor-agent',
       cwd: '/Users/dev/app',
@@ -81,6 +83,7 @@ describe('captureRunConfig', () => {
   it('trims the name', () => {
     expect(
       captureRunConfig({
+        firstMessage: null,
         name: '  Padded  ',
         target: 'claude',
         cwd: '/Users/dev/app',
@@ -100,6 +103,7 @@ describe('captureRunConfig', () => {
     // workflow (its nodes name their own in the YAML), so capturing whatever
     // they last showed would save choices the user could not see or edit.
     const draft = captureRunConfig({
+      firstMessage: null,
       name: 'Team',
       target: 'wf:ship-it',
       cwd: '/Users/dev/app',
@@ -119,6 +123,7 @@ describe('captureRunConfig', () => {
       modelParameters: {},
       approval: null,
       configDir: null,
+      firstMessage: null,
     });
   });
 });
@@ -141,6 +146,7 @@ describe('applyRunConfig', () => {
     expect(applied).toEqual({
       target: 'cursor-agent',
       agentKind: 'cursor-agent',
+      firstMessage: null,
       isWorkflow: false,
       cwd: '/Users/dev/geniro-app',
       configDir: '/Users/dev/.config/work',
@@ -196,6 +202,7 @@ describe('applyRunConfig', () => {
       modelParameters: {},
       approval: null,
       configDir: null,
+      firstMessage: null,
     });
   });
 

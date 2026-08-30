@@ -103,13 +103,14 @@ describe('readSettings', () => {
       modelParameters: { optimize_for: 'intelligence' },
       approval: 'acceptEdits',
       configDir: '/Users/dev/.config/work',
+      firstMessage: 'Review what changed on this branch.',
     };
     writeRaw({ runConfigs: [config] });
 
     expect(readSettings().runConfigs).toEqual([config]);
   });
 
-  it('reads a configuration written BEFORE the context-window and parameter fields existed', () => {
+  it('reads a configuration written BEFORE the context-window, parameter and message fields existed', () => {
     // The file on disk predates the field and `runConfigSchema` is strict, so
     // required it would fail to parse — and the entry-by-entry salvage this
     // suite exists for would then drop every configuration the user had. It
@@ -128,7 +129,12 @@ describe('readSettings', () => {
     writeRaw({ runConfigs: [legacy] });
 
     expect(readSettings().runConfigs).toEqual([
-      { ...legacy, contextWindow: null, modelParameters: {} },
+      {
+        ...legacy,
+        contextWindow: null,
+        modelParameters: {},
+        firstMessage: null,
+      },
     ]);
   });
 

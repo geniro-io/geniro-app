@@ -10885,39 +10885,6 @@ describe('Chats — starting from a saved configuration', () => {
     expect(container.textContent).not.toContain('could not switch to feat/x');
   });
 
-  it('a rejected save rolls the list back instead of showing an entry that is not on disk', async () => {
-    // Main VALIDATES the patch and throws, rejecting the WHOLE write. Leaving
-    // the optimistic entry on screen both lies about what is saved and makes
-    // every later save fail on the same entry, since the full array is re-sent.
-    withSavedConfig();
-    const { client } = makeClient();
-    const container = await mount(client);
-
-    // Reject only the runConfigs write, so the rest of the fixture still works.
-    window.geniro.updateSettings = vi.fn(
-      async (patch: { runConfigs?: unknown }) => {
-        if (patch.runConfigs !== undefined) {
-          throw new Error('runConfigs: too_big');
-        }
-        return {} as never;
-      },
-    );
-
-    await openConfigManager(container);
-    await act(async () => {
-      pickerButton(container, 'Delete Geniro app').click();
-    });
-    await act(async () => {
-      pickerButton(container, 'Confirm delete Geniro app').click();
-    });
-
-    // The delete was refused, so the configuration must still be listed.
-    expect(() =>
-      pickerButton(container, 'Start a chat set up as \u201cGeniro app\u201d'),
-    ).not.toThrow();
-    expect(container.textContent).toContain('the list is unchanged');
-  });
-
   it('applying from an OPEN thread returns to the new-chat screen', async () => {
     // The picker is reachable from the sidebar with a thread open — where the
     // composer this apply seeds is off screen, and the error strip the branch

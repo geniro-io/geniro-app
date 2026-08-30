@@ -66,12 +66,18 @@ const capabilitiesApi = vi.hoisted(() => ({
 const chatsApi = vi.hoisted(() => ({
   forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
 }));
+// The graphs a fast action can point at. Empty here: the pane's own spec covers
+// the target chip, and this screen only has to survive the listing.
+const workflowsApi = vi.hoisted(() => ({
+  listWorkflows: vi.fn(() => Promise.resolve([])),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
     cliAuth: cliAuthApi,
     capabilities: capabilitiesApi,
     chats: chatsApi,
+    workflows: workflowsApi,
   })),
 }));
 
@@ -114,13 +120,13 @@ function det(
 let container: HTMLDivElement;
 let root: Root | null;
 
-async function mount(): Promise<void> {
+async function mount(section?: 'general' | 'fast-actions'): Promise<void> {
   container = document.createElement('div');
   document.body.appendChild(container);
   const mountedRoot = createRoot(container);
   root = mountedRoot;
   await act(async () => {
-    mountedRoot.render(<Settings handle={handle} />);
+    mountedRoot.render(<Settings handle={handle} section={section} />);
   });
 }
 
@@ -997,5 +1003,109 @@ describe('Settings diagnostics section', () => {
     const section = inspectToggle().closest('section')!;
     expect(section.textContent).toContain(`127.0.0.1:${DAEMON_INSPECT_PORT}`);
     expect(section.textContent).toContain('chrome://inspect');
+  });
+});
+
+describe('Settings — sections', () => {
+  const navButtons = (): string[] =>
+    [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'nav[aria-label="Settings sections"] button',
+      ),
+    ].map((button) => button.textContent ?? '');
+
+  it('offers the sections as a nav beside the pane, General first', async () => {
+    // General first because it is what Settings has always been — a screen
+    // that reordered itself around a new feature would move every control the
+    // user already knows where to find.
+    await mount();
+    expect(navButtons()).toEqual(['General', 'Fast actions']);
+  });
+
+  it('shows ONE pane at a time', async () => {
+    await mount();
+    expect(container.textContent).toContain('Agents');
+    expect(container.textContent).not.toContain('No fast actions yet');
+  });
+
+  it('opens straight at the section it was asked for', async () => {
+    // The whole point of the section being a prop: the composer's "Manage fast
+    // actions" lands ON the editor rather than on General with a hunt for it.
+    await mount('fast-actions');
+    expect(container.textContent).toContain('No fast actions yet');
+    expect(container.textContent).not.toContain('Check for updates');
+  });
+
+  it('marks the open section for a screen reader, not by colour alone', async () => {
+    await mount('fast-actions');
+    const current = [
+      ...container.querySelectorAll(
+        'nav[aria-label="Settings sections"] button',
+      ),
+    ].filter((button) => button.getAttribute('aria-current') === 'page');
+    expect(current.map((button) => button.textContent)).toEqual([
+      'Fast actions',
+    ]);
+  });
+});
+
+describe('Settings — fast actions', () => {
+  const action = {
+    id: 'fa-1',
+    name: 'Geniro app',
+    cwd: '/Users/dev/geniro-app',
+    branch: null,
+    target: 'claude',
+    model: null,
+    effort: null,
+    contextWindow: null,
+    modelParameters: {},
+    approval: null,
+    configDir: null,
+    firstMessage: 'Review what changed.',
+  };
+
+  it('lists what settings.json holds, without a chat ever being opened', async () => {
+    // This screen reads its own data. It used to be a dialog inside Chats,
+    // which had the list already loaded; a Settings pane that waited to be
+    // handed one would be empty on a launch straight into Settings.
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      runConfigs: [action],
+    });
+    await mount('fast-actions');
+    expect(container.textContent).toContain('Geniro app');
+  });
+
+  it('rolls the list back when the write is refused', async () => {
+    // Main VALIDATES the patch and throws, rejecting the WHOLE write. Leaving
+    // the optimistic entry on screen both lies about what is saved and makes
+    // every later save fail on the same entry, since the full array is re-sent.
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      runConfigs: [action],
+    });
+    await mount('fast-actions');
+    geniro.updateSettings.mockRejectedValueOnce(
+      new Error('runConfigs: too_big'),
+    );
+
+    const press = (label: string): void => {
+      const button = [
+        ...container.querySelectorAll<HTMLButtonElement>('button'),
+      ].find((b) => b.getAttribute('aria-label') === label);
+      if (!button) {
+        throw new Error(`no button "${label}"`);
+      }
+      act(() => button.click());
+    };
+    press('Delete Geniro app');
+    press('Confirm delete Geniro app');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The delete was refused, so the action must still be listed.
+    expect(container.textContent).toContain('Geniro app');
   });
 });

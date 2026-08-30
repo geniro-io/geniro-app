@@ -1377,13 +1377,13 @@ export function buildSubagentBlocks(
 }
 
 /**
- * Replace every dynamic-workflow tool call with the {@link WorkflowEntry} card
- * describing what it actually did.
+ * Every dynamic workflow this transcript records, in launch order.
  *
- * Runs AFTER {@link buildSubagentBlocks} and before {@link buildTurnBlocks},
- * for the same reason that one does: the groups are already folded, and the
- * turn fold must see one finished card rather than a tool pair plus a run of
- * invisible rows.
+ * The ONE reading, and it is exported because there are now three views of it:
+ * the transcript's card, the chip above the composer while one is running, and
+ * the panel's list. Folded twice they would disagree about how many agents are
+ * still out — which is exactly the kind of drift `isCardEntry` exists to
+ * prevent one entry-kind lower down.
  *
  * A launch is recognised ONE way — by a `workflow_info` row naming the call —
  * and never by the tool's NAME. Which calls launched a workflow is the adapter
@@ -1393,16 +1393,8 @@ export function buildSubagentBlocks(
  * {@link buildSubagentBlocks} documents, and here it is the only one available:
  * a workflow emits no rows of its own, so there is no second reading to fall
  * back on.
- *
- * The launching pair is pulled OUT of its tool group, exactly as a `Task` pair
- * is: the card already says a workflow ran, what it spawned and how it ended,
- * so leaving the pair in the group would print a poorer telling of it directly
- * above ("Used 1 tool").
  */
-export function buildWorkflowCards(
-  entries: readonly TranscriptEntry[],
-  items: readonly ChatItem[],
-): TranscriptEntry[] {
+export function workflowCardsOf(items: readonly ChatItem[]): WorkflowEntry[] {
   // Merged rather than taken: a workflow announces itself at launch (the name,
   // nothing else) and again on every roster change, so the last non-null field
   // wins — and the roster itself is taken WHOLESALE, per
@@ -1441,9 +1433,6 @@ export function buildWorkflowCards(
       declaration.id,
       Math.max(lastRowSeq.get(declaration.id) ?? 0, item.seq),
     );
-  }
-  if (declarations.size === 0) {
-    return [...entries];
   }
   const launches = new Map<string, SubagentLaunch>();
   for (const item of items) {
@@ -1506,6 +1495,34 @@ export function buildWorkflowCards(
     };
   };
 
+  return [...declarations].map(([id, workflow]) => cardFor(id, workflow));
+}
+
+/**
+ * Replace every dynamic-workflow tool call with the {@link WorkflowEntry} card
+ * describing what it actually did.
+ *
+ * The PLACEMENT half of {@link workflowCardsOf}, which is where the reading
+ * itself lives. Runs AFTER {@link buildSubagentBlocks} and before
+ * {@link buildTurnBlocks}, for the same reason that one does: the groups are
+ * already folded, and the turn fold must see one finished card rather than a
+ * tool pair plus a run of invisible rows.
+ *
+ * The launching pair is pulled OUT of its tool group, exactly as a `Task` pair
+ * is: the card already says a workflow ran, what it spawned and how it ended,
+ * so leaving the pair in the group would print a poorer telling of it directly
+ * above ("Used 1 tool").
+ */
+export function buildWorkflowCards(
+  entries: readonly TranscriptEntry[],
+  items: readonly ChatItem[],
+): TranscriptEntry[] {
+  const cards = new Map(
+    workflowCardsOf(items).map((card) => [card.id, card] as const),
+  );
+  if (cards.size === 0) {
+    return [...entries];
+  }
   const out: TranscriptEntry[] = [];
   const placed = new Set<string>();
   for (const entry of entries) {
@@ -1514,7 +1531,7 @@ export function buildWorkflowCards(
       const launched: string[] = [];
       for (const pair of entry.pairs) {
         const id = payloadString(pair.call.payload, 'id');
-        if (id !== null && declarations.has(id)) {
+        if (id !== null && cards.has(id)) {
           launched.push(id);
           continue;
         }
@@ -1529,12 +1546,12 @@ export function buildWorkflowCards(
       // AFTER the group, so a turn that both worked and launched a workflow
       // still reads in the order it happened.
       for (const id of launched) {
-        const workflow = declarations.get(id);
-        if (workflow === undefined) {
+        const card = cards.get(id);
+        if (card === undefined) {
           continue;
         }
         placed.add(id);
-        out.push(cardFor(id, workflow));
+        out.push(card);
       }
       continue;
     }
@@ -1544,9 +1561,9 @@ export function buildWorkflowCards(
   // the daemon's rows are the evidence it ran, and a transcript replayed from
   // mid-run — or one whose tool pair the group fold consumed — would otherwise
   // drop the most expensive thing in the conversation entirely.
-  for (const [id, workflow] of declarations) {
-    if (!placed.has(id)) {
-      out.push(cardFor(id, workflow));
+  for (const card of cards.values()) {
+    if (!placed.has(card.id)) {
+      out.push(card);
     }
   }
   return out;

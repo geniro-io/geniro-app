@@ -88,7 +88,11 @@ import {
 import { COMPOSER_TEXTAREA_GROWTH, ComposerCard } from './composer-card';
 import { isComposerSendKey } from './composer-keys';
 import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
-import { ComposerShelf, ThreadPullRequestChips } from './composer-shelf';
+import {
+  ActiveWorkflowChips,
+  ComposerShelf,
+  ThreadPullRequestChips,
+} from './composer-shelf';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
@@ -181,6 +185,7 @@ import {
   subagentNamed,
   subagentTitle,
   withLiveText,
+  workflowCardsOf,
 } from './transcript-groups';
 import {
   cardBackedRequestIds,
@@ -1775,6 +1780,39 @@ export function Chats({
    * `smooth`, unlike the open-a-thread jump: this one the user asked for, and
    * the movement is what tells them where they were taken from.
    */
+  /**
+   * Take the reader to one workflow's card in the transcript.
+   *
+   * Arithmetic on the SCROLLER's own `scrollTop`, never `scrollIntoView` —
+   * which is specified to move every scrollable ancestor and is what once
+   * scrolled the whole window off the top (`scroll-to-bottom.ts` records the
+   * measurement). `revealWithinBox` is the same rule expressed in `offsetTop`,
+   * which cannot be used here: a workflow card sits many levels deep inside
+   * turn blocks, so its `offsetTop` is measured against whichever ancestor
+   * happens to be positioned rather than against the scroller.
+   *
+   * The tail-follow is switched OFF by the press: without that, the next
+   * streamed token of a running turn drags the reader straight back down —
+   * which for a card of a workflow that is still running is every second.
+   */
+  const revealWorkflow = useCallback((workflowId: string): void => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    const card = scroller?.querySelector<HTMLElement>(
+      `[data-slot="workflow-card"][data-workflow="${CSS.escape(workflowId)}"]`,
+    );
+    if (!scroller || !card) {
+      return;
+    }
+    followingRef.current = false;
+    // A margin above the card so it does not land flush against the top edge,
+    // where a header would otherwise read as the card's own first line.
+    scroller.scrollTop +=
+      card.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      24;
+    setAboveTail(!isScrolledToBottom(scroller));
+  }, []);
+
   const jumpToLatest = useCallback((): void => {
     const scroller = transcriptEndRef.current?.parentElement;
     if (!scroller) {
@@ -4085,6 +4123,16 @@ export function Chats({
     [durableEntries, liveText, workingAgents],
   );
   /**
+   * The dynamic workflows this run launched — the SAME reading the transcript's
+   * cards are built from, handed to the shelf above the composer and to the
+   * side panel.
+   *
+   * One derivation for three surfaces, which is the point of `workflowCardsOf`
+   * being exported at all: a chip that folded its own roster would sooner or
+   * later say `3 running` beside a card saying two.
+   */
+  const runWorkflows = useMemo(() => workflowCardsOf(items), [items]);
+  /**
    * How long each of this run's turns worked — see `turn-duration.ts`.
    *
    * Derived from the DURABLE rows, like `turnStartedAt` above and for the same
@@ -6101,11 +6149,27 @@ export function Chats({
                           routinely sits on a branch whose pull request somebody
                           else opened. That list keeps its own captioned section
                           in the panel, where it is named as the branch's. */}
-                      <ComposerShelf>
-                        <ThreadPullRequestChips
-                          results={openedByActiveThread}
-                        />
-                      </ComposerShelf>
+                      {/* The provider, because the shelf is a SIBLING subtree
+                          of the transcript and inherits none of its context —
+                          the same trap the sub-agent detail dialog fell into.
+                          Without it a workflow whose call never returned reads
+                          `running` on the chip for the life of the chat, and
+                          the chip's whole point is that it goes away. */}
+                      <RunSettledContext.Provider value={activeRunSettledAt}>
+                        <ComposerShelf>
+                          <ThreadPullRequestChips
+                            results={openedByActiveThread}
+                          />
+                          {/* AFTER the pull requests rather than before: this
+                              chip appears and disappears with a running
+                              workflow, and prepending it would shift the
+                              durable chip beside it every time one starts. */}
+                          <ActiveWorkflowChips
+                            workflows={runWorkflows}
+                            onReveal={revealWorkflow}
+                          />
+                        </ComposerShelf>
+                      </RunSettledContext.Provider>
 
                       {/* The SAME composer card as the new-run screen, with the run's
                 fixed choices (agent/graph, folder, trigger) as inactive
@@ -6482,123 +6546,130 @@ export function Chats({
                 )}
 
                 {showAgentsPanel ? (
-                  <AgentsPanel
-                    // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
-                    // agent id, and every single-agent chat's agent carries the same
-                    // sentinel — so without this the list stayed open across a chat
-                    // switch and the gate stayed raised, dialling the NEW folder's MCP
-                    // servers unprompted. That is the very defect the disclosure exists
-                    // to prevent, merely moved to the second chat.
-                    key={activeRun?.id ?? 'no-run'}
-                    agents={agents}
-                    artifacts={artifacts}
-                    pullRequests={activePullRequests}
-                    threadPullRequests={openedByActiveThread}
-                    tasksByAgent={tasksByAgent}
-                    shellsByAgent={shellsByAgent}
-                    onOpenShell={setOpenShell}
-                    // Withheld for a run with no working directory, so the
-                    // panel cannot draw a control over a folder that is not
-                    // there — the panel itself never sees the path.
-                    onOpenFolderTerminal={
-                      activeRun?.cwd ? openFolderTerminal : undefined
-                    }
-                    // The panel is per-OPEN-run, so the control is only ever
-                    // about the thread on screen — which is also why the handler
-                    // is bound to that run's id here rather than the panel being
-                    // handed one to look up.
-                    onExportChat={
-                      activeRun
-                        ? () => handleExportRun(activeRun.id)
-                        : undefined
-                    }
-                    terminalReasons={terminalReasons}
-                    // A chat only: a workflow run's nodes each hold their own
-                    // process, and this readout is about the one a chat holds.
-                    metricsRunId={
-                      activeRun && !activeRun.workflowId ? activeRun.id : null
-                    }
-                    // The HOVER half of the same resolution the button acts on.
-                    // Never passed until now, so the hint it feeds — the invocation,
-                    // selectable, with a copy control — could not open on this
-                    // screen at all: `OpenInCliButton` treats a missing resolver as
-                    // "nothing to show" and stays silent. That copyable line is the
-                    // documented way out for anyone whose terminal geniro cannot
-                    // launch (a remote host, an open tmux pane), and it was
-                    // unreachable.
-                    onResolveHandoff={resolveHandoff}
-                    // The HOVER half of the same resolution the button acts on.
-                    // Never passed until now, so the hint it feeds — the invocation,
-                    // selectable, with a copy control — could not open on this
-                    // screen at all: `OpenInCliButton` treats a missing resolver as
-                    // "nothing to show" and stays silent. That copyable line is the
-                    // documented way out for anyone whose terminal geniro cannot
-                    // launch (a remote host, an open tmux pane), and it was
-                    // unreachable.
-                    mcpByScope={mcp.byScope}
-                    mcpLoading={mcp.loading}
-                    onRefreshMcp={mcp.refresh}
-                    onSetMcpEnabled={mcp.setEnabled}
-                    onSignInMcp={signInToMcpServer}
-                    // Busy for the WHOLE flow, which is two windows end to end.
-                    // The first is before the panel below can exist: the daemon
-                    // holds its first reply until the CLI prints a URL —
-                    // measured at 4001ms in the running app — and until then
-                    // there is no session to render, which is the reported
-                    // "I press Sign In and there is no loader, nothing".
-                    //
-                    // The second is longer and was not covered: `mcp login`
-                    // EXITS as soon as it has handed the browser the challenge,
-                    // so `starting` clears while the user is still authorizing
-                    // — measured at 15–20s on a real connector, during which
-                    // the row offered a live Sign in button. Pressing it again
-                    // there opens a second challenge and invalidates the first,
-                    // which is the one thing this control must not invite. The
-                    // panel is on screen for exactly that stretch, so its own
-                    // server is what marks the row busy; it comes down when the
-                    // listing says the server is authorized.
-                    mcpSigningIn={
-                      login.starting?.server ?? login.login?.server ?? null
-                    }
-                    mcpLoginServer={login.login?.server ?? null}
-                    mcpLoginPanel={
-                      // The SERVER half of the one controller. An account
-                      // sign-in shares its lifecycle but not its home: it is
-                      // started from a failed turn in the transcript and shown
-                      // there (see the band above the composer), so routing it
-                      // here would put the progress inside a dialog the user
-                      // never opened.
-                      login.login && login.login.server !== null ? (
-                        <CliLoginProgress
-                          session={login.login.session}
-                          onSubmitCode={(code) => void login.submitCode(code)}
-                          onCancel={() => void login.cancel()}
-                          onDismiss={login.dismiss}
-                          error={login.error}
-                          // Among rows rather than across the foot of a card,
-                          // so it does not cancel padding it is not inside —
-                          // the negative margin took the pasted-code field off
-                          // the dialog's edge, which is the second half of the
-                          // reported "broken UI".
-                          variant="inline"
-                          // The one SERVER sign-in in the app — this branch is
-                          // already gated on `server !== null`. It is what
-                          // stops a clean exit reading as "Sign-in finished"
-                          // over a row that still says needs sign-in.
-                          scope="server"
-                        />
-                      ) : null
-                    }
-                    mcpToggleError={mcp.toggleError}
-                    onDismissMcpToggleError={mcp.dismissToggleError}
-                    onMcpOpenChange={(open) =>
-                      setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
-                    }
-                    onOpenThread={(agent, thread) =>
-                      void openThreadTerminal(agent, thread)
-                    }
-                    onOpenSubagent={setDetailSubagentId}
-                  />
+                  // The provider for the panel's workflow rows, on the shelf's
+                  // reason directly above: this aside is outside the
+                  // transcript's own subtree.
+                  <RunSettledContext.Provider value={activeRunSettledAt}>
+                    <AgentsPanel
+                      // Remounted per run ON PURPOSE. The panel keys its open-MCP set by
+                      // agent id, and every single-agent chat's agent carries the same
+                      // sentinel — so without this the list stayed open across a chat
+                      // switch and the gate stayed raised, dialling the NEW folder's MCP
+                      // servers unprompted. That is the very defect the disclosure exists
+                      // to prevent, merely moved to the second chat.
+                      key={activeRun?.id ?? 'no-run'}
+                      agents={agents}
+                      artifacts={artifacts}
+                      pullRequests={activePullRequests}
+                      threadPullRequests={openedByActiveThread}
+                      workflows={runWorkflows}
+                      onRevealWorkflow={revealWorkflow}
+                      tasksByAgent={tasksByAgent}
+                      shellsByAgent={shellsByAgent}
+                      onOpenShell={setOpenShell}
+                      // Withheld for a run with no working directory, so the
+                      // panel cannot draw a control over a folder that is not
+                      // there — the panel itself never sees the path.
+                      onOpenFolderTerminal={
+                        activeRun?.cwd ? openFolderTerminal : undefined
+                      }
+                      // The panel is per-OPEN-run, so the control is only ever
+                      // about the thread on screen — which is also why the handler
+                      // is bound to that run's id here rather than the panel being
+                      // handed one to look up.
+                      onExportChat={
+                        activeRun
+                          ? () => handleExportRun(activeRun.id)
+                          : undefined
+                      }
+                      terminalReasons={terminalReasons}
+                      // A chat only: a workflow run's nodes each hold their own
+                      // process, and this readout is about the one a chat holds.
+                      metricsRunId={
+                        activeRun && !activeRun.workflowId ? activeRun.id : null
+                      }
+                      // The HOVER half of the same resolution the button acts on.
+                      // Never passed until now, so the hint it feeds — the invocation,
+                      // selectable, with a copy control — could not open on this
+                      // screen at all: `OpenInCliButton` treats a missing resolver as
+                      // "nothing to show" and stays silent. That copyable line is the
+                      // documented way out for anyone whose terminal geniro cannot
+                      // launch (a remote host, an open tmux pane), and it was
+                      // unreachable.
+                      onResolveHandoff={resolveHandoff}
+                      // The HOVER half of the same resolution the button acts on.
+                      // Never passed until now, so the hint it feeds — the invocation,
+                      // selectable, with a copy control — could not open on this
+                      // screen at all: `OpenInCliButton` treats a missing resolver as
+                      // "nothing to show" and stays silent. That copyable line is the
+                      // documented way out for anyone whose terminal geniro cannot
+                      // launch (a remote host, an open tmux pane), and it was
+                      // unreachable.
+                      mcpByScope={mcp.byScope}
+                      mcpLoading={mcp.loading}
+                      onRefreshMcp={mcp.refresh}
+                      onSetMcpEnabled={mcp.setEnabled}
+                      onSignInMcp={signInToMcpServer}
+                      // Busy for the WHOLE flow, which is two windows end to end.
+                      // The first is before the panel below can exist: the daemon
+                      // holds its first reply until the CLI prints a URL —
+                      // measured at 4001ms in the running app — and until then
+                      // there is no session to render, which is the reported
+                      // "I press Sign In and there is no loader, nothing".
+                      //
+                      // The second is longer and was not covered: `mcp login`
+                      // EXITS as soon as it has handed the browser the challenge,
+                      // so `starting` clears while the user is still authorizing
+                      // — measured at 15–20s on a real connector, during which
+                      // the row offered a live Sign in button. Pressing it again
+                      // there opens a second challenge and invalidates the first,
+                      // which is the one thing this control must not invite. The
+                      // panel is on screen for exactly that stretch, so its own
+                      // server is what marks the row busy; it comes down when the
+                      // listing says the server is authorized.
+                      mcpSigningIn={
+                        login.starting?.server ?? login.login?.server ?? null
+                      }
+                      mcpLoginServer={login.login?.server ?? null}
+                      mcpLoginPanel={
+                        // The SERVER half of the one controller. An account
+                        // sign-in shares its lifecycle but not its home: it is
+                        // started from a failed turn in the transcript and shown
+                        // there (see the band above the composer), so routing it
+                        // here would put the progress inside a dialog the user
+                        // never opened.
+                        login.login && login.login.server !== null ? (
+                          <CliLoginProgress
+                            session={login.login.session}
+                            onSubmitCode={(code) => void login.submitCode(code)}
+                            onCancel={() => void login.cancel()}
+                            onDismiss={login.dismiss}
+                            error={login.error}
+                            // Among rows rather than across the foot of a card,
+                            // so it does not cancel padding it is not inside —
+                            // the negative margin took the pasted-code field off
+                            // the dialog's edge, which is the second half of the
+                            // reported "broken UI".
+                            variant="inline"
+                            // The one SERVER sign-in in the app — this branch is
+                            // already gated on `server !== null`. It is what
+                            // stops a clean exit reading as "Sign-in finished"
+                            // over a row that still says needs sign-in.
+                            scope="server"
+                          />
+                        ) : null
+                      }
+                      mcpToggleError={mcp.toggleError}
+                      onDismissMcpToggleError={mcp.dismissToggleError}
+                      onMcpOpenChange={(open) =>
+                        setMcpOpenRunId(open ? (activeRun?.id ?? null) : null)
+                      }
+                      onOpenThread={(agent, thread) =>
+                        void openThreadTerminal(agent, thread)
+                      }
+                      onOpenSubagent={setDetailSubagentId}
+                    />
+                  </RunSettledContext.Provider>
                 ) : null}
 
                 <Dialog

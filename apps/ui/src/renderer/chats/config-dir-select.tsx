@@ -1,5 +1,6 @@
 import { IdCard } from 'lucide-react';
 
+import type { ConfigProfile } from '../../shared/contracts';
 import { DirectorySelect } from './directory-select';
 
 /**
@@ -26,6 +27,7 @@ import { DirectorySelect } from './directory-select';
 export function ConfigDirSelect({
   configDir,
   recentConfigDirs,
+  configProfiles = [],
   unavailableReason,
   disabled = false,
   ariaLabel = 'Agent config directory for new chats',
@@ -38,6 +40,22 @@ export function ConfigDirSelect({
   /** The chosen profile, or null for the CLI's default — the normal state. */
   configDir: string | null;
   recentConfigDirs: string[];
+  /**
+   * The user's NAMED configurations (Settings → the claude card), so a
+   * directory they have named wears its colour here.
+   *
+   * A left border on the row, and only that — asked for in those words ("там
+   * должен быть просто левый бордер вот этого же цвета"). The row still says
+   * the PATH: the colour is a way to recognise a directory at a glance, not a
+   * replacement for knowing which one it is, and a picker that showed names
+   * would leave every unnamed recent looking like a different kind of row.
+   *
+   * Defaulted to empty, so a caller that has not read them (the graph
+   * builder's node inspector, the run-configuration editor) renders exactly
+   * what it rendered before rather than being made to thread a list it has no
+   * use for yet.
+   */
+  configProfiles?: readonly ConfigProfile[];
   /**
    * Why this CLI cannot be pointed at a config directory (`null` = it can), or
    * `undefined` while the capability read is still in flight.
@@ -89,6 +107,9 @@ export function ConfigDirSelect({
       // of a profile they picked once.
       clearLabel="Default profile"
       icon={<IdCard />}
+      accents={
+        new Map(configProfiles.map((profile) => [profile.dir, profile.color]))
+      }
       aria-label={ariaLabel}
       title={[configDir ?? hint, note].filter(Boolean).join(' — ')}
       disabled={disabled}

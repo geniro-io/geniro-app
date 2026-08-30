@@ -172,13 +172,39 @@ export function QueuedStrip({
               setDraggingId(message.id);
             }}
             onDragOver={(event) => {
-              if (draggingId === null || draggingId === message.id) {
+              // A drag that did not start in this strip is not ours to accept:
+              // the sidebar's chat rows are draggable too, and a chat dropped
+              // on the queue would land nowhere.
+              if (draggingId === null) {
                 return;
               }
-              // Without this the drop is refused and the whole gesture ends in
-              // the browser's snap-back animation.
+              // BEFORE the same-row check, and that ordering is the whole fix
+              // for a REPORTED "wrong animation when i moving message in
+              // message queue — it's like jumping back to its position before
+              // moving". A drag whose LAST `dragover` was not prevented is an
+              // unsuccessful drop, and the browser answers one by flying the
+              // drag image back to where it was picked up. That is the jump.
+              //
+              // It fired on every reorder rather than occasionally, because
+              // this list rearranges live UNDER the pointer: the carried row
+              // follows the cursor, so the element the pointer is over when the
+              // button comes up is almost always the dragged row itself — the
+              // one case that used to return before reaching this line. The
+              // move had already happened and the queue was right; only the
+              // animation said otherwise, which is the worst kind of bug to
+              // report, since nothing is actually broken to point at.
+              //
+              // The sidebar's sections have always prevented it unconditionally
+              // and carry the same note. This is now the same rule in both
+              // places: accept the drop everywhere the gesture can end, and
+              // decide separately whether there is anything to MOVE.
               event.preventDefault();
               event.dataTransfer.dropEffect = 'move';
+              // Passing over yourself is not a move, and reporting it would put
+              // a `splice` in the caller's queue on every pointer twitch.
+              if (draggingId === message.id) {
+                return;
+              }
               onReorder(draggingId, message.id);
             }}
             onDrop={(event) => event.preventDefault()}

@@ -49,6 +49,63 @@ export interface DaemonStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
+ * Bounds on the saved run configurations. Here rather than beside the IPC
+ * schema because three places must agree and only two are in main: that schema,
+ * the settings READ path (which salvages entry-by-entry and so never evaluates
+ * the array bound), and the renderer's editors, which refuse a save before the
+ * IPC throws and discards the whole patch.
+ */
+export const MAX_RUN_CONFIGS = 50;
+export const MAX_RUN_CONFIG_NAME = 80;
+
+/**
+ * A saved new-chat setup the user named — a bundle of COMPOSER state and
+ * nothing more. Choosing one seeds the normal new-chat screen; it creates no
+ * run and reaches the daemon only later, through the ordinary create call.
+ *
+ * The daemon-vocabulary fields (`target`, `model`, `effort`, `approval`) are
+ * OPAQUE strings, as the single-value settings beside them are: this file holds
+ * no daemon shapes, and the renderer checks each against the generated enum
+ * before it reaches a run. `null` means "the CLI's own default" everywhere.
+ *
+ * NOT a {@link FastAction}, and the two must never be folded together again.
+ * A configuration answers "where and with what does this chat run"; an action
+ * answers "what do I say". Collapsing them made an action usable in exactly one
+ * setup and gave the run's configuration a second, invisible source — so they
+ * are two lists, two editors, and two keys in settings.json.
+ */
+export interface RunConfig {
+  id: string;
+  name: string;
+  /** Absolute working directory the chat starts in. */
+  cwd: string;
+  /**
+   * Branch the folder should be on, or null to take whatever is checked out.
+   *
+   * NOT a chat field — no branch reaches the daemon. Applying one is a guarded
+   * `git switch` on `cwd` before the chat is created, which refuses over a dirty
+   * tree; that refusal is surfaced and the rest of the configuration still
+   * applies.
+   */
+  branch: string | null;
+  /** The composer target — a CLI kind or `wf:<slug>`, exactly as `lastChatTarget`. */
+  target: string;
+  model: string | null;
+  effort: string | null;
+  /** Which of the model's context-window sizes; null = the model's own. */
+  contextWindow: string | null;
+  /**
+   * The OTHER model settings, keyed by the CLI's own parameter id; `{}` = the
+   * model's own defaults. Opaque here for the reason every CLI vocabulary is.
+   */
+  modelParameters: Record<string, string>;
+  /** The daemon's `ChatApprovalMode`. */
+  approval: string | null;
+  /** Plugin/profile directory, or null for the CLI's own account. */
+  configDir: string | null;
+}
+
+/**
  * Bounds on the fast actions. Here rather than beside the IPC schema because
  * three places must agree and only two are in main: that schema, the settings
  * READ path (which salvages entry-by-entry and so never evaluates the array
@@ -84,6 +141,66 @@ export interface FastAction {
   description: string;
 }
 
+/**
+ * How many named configurations a user may keep, and how long a name may be.
+ *
+ * Hand-managed like the fast actions and the run configurations beside them, so
+ * the cap is a guard against a renderer bug growing settings.json without
+ * limit rather than an editorial opinion — nobody keeps twenty accounts.
+ */
+export const MAX_CONFIG_PROFILES = 20;
+export const MAX_CONFIG_PROFILE_NAME = 40;
+
+/**
+ * The app's ONE colour palette, as token NAMES.
+ *
+ * The same eight the chat sidebar's groups already use, over the same
+ * `--color-group-*` tokens — one palette in the app, so a blue profile and a
+ * blue group are the same blue. It is spelled here rather than derived from the
+ * daemon's `RunGroupColor`, and that is forced rather than chosen: this file is
+ * ELECTRON-internal and holds no daemon shapes (see the renderer rules), while
+ * a profile's colour lives in settings.json and never reaches the daemon at
+ * all. The renderer is where the two meet, and it maps both through one lookup
+ * (`components/palette.ts`) so the classes cannot drift even though the unions
+ * must stay separate.
+ */
+export const PROFILE_COLORS = [
+  'blue',
+  'purple',
+  'green',
+  'orange',
+  'pink',
+  'indigo',
+  'teal',
+  'red',
+] as const;
+export type ProfileColor = (typeof PROFILE_COLORS)[number];
+
+/**
+ * One of the user's named agent configurations — a config directory with a name
+ * and a colour on it.
+ *
+ * A config directory is the profile a CLI runs as: its credentials, its
+ * plugins, its history. The app has always been able to point a run at one, but
+ * only ever by PATH — so a user with three accounts picked between
+ * `/Users/x/.claude-work`, `/Users/x/.claude-personal` and
+ * `/Users/x/.claude-lab` by reading their tails. A name says which account it
+ * is in the user's own words, and a colour is what makes it recognisable
+ * without reading at all.
+ *
+ * The DIRECTORY is the identity and the only field a run consumes; the name and
+ * colour are labelling over it. So two entries may not name the same directory
+ * — that would be two names for one account, and nothing could say which of
+ * them a run was using.
+ */
+export interface ConfigProfile {
+  id: string;
+  name: string;
+  /** Absolute path to the agent config directory this profile stands for. */
+  dir: string;
+  color: ProfileColor;
+}
+
 /** Persisted, non-secret application settings. Secrets never live here. */
 export interface Settings {
   /** First-run onboarding finished (gates the renderer's initial route). */
@@ -102,11 +219,28 @@ export interface Settings {
   /** Recently used plugin directories, most recent first (picker rows). */
   recentConfigDirs: string[];
   /**
+   * The user's saved new-chat setups (see {@link RunConfig}). A managed LIST,
+   * unlike `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts
+   * an entry, and the order is the user's, so it is never re-sorted on read.
+   */
+  runConfigs: RunConfig[];
+  /**
    * The user's fast actions (see {@link FastAction}). A managed LIST, unlike
    * `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts an
    * entry, and the order is the user's, so it is never re-sorted on read.
    */
   fastActions: FastAction[];
+  /**
+   * The user's named agent configurations (see {@link ConfigProfile}) — a
+   * managed LIST on exactly the terms of the two above: nothing adds or evicts
+   * an entry, and the order is the user's, so it is never re-sorted on read.
+   *
+   * Distinct from `recentConfigDirs`, which is an MRU of raw paths this file
+   * DOES re-sort. The two answer different questions — "where have I pointed a
+   * chat lately" against "which accounts do I have" — and folding them would
+   * mean a name and a colour the app was free to evict.
+   */
+  configProfiles: ConfigProfile[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
   /**
@@ -321,7 +455,9 @@ export const DEFAULT_SETTINGS: Settings = {
   recentFolders: [],
   configDir: null,
   recentConfigDirs: [],
+  runConfigs: [],
   fastActions: [],
+  configProfiles: [],
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},
@@ -511,6 +647,17 @@ export const TITLEBAR_CONTENT_INSET =
  */
 export const RAIL_COLLAPSED_WIDTH = 64;
 export const RAIL_EXPANDED_WIDTH = 220;
+/**
+ * The chat list's DEFAULT width — what it opens at before anyone drags it.
+ *
+ * It was the width, full stop, until the column became resizable like the
+ * agents panel on the other edge ("Left sidebar with threads list should be
+ * resizible, same as right sidebar with agents"). The live value now lives in
+ * `usePanelWidth`'s localStorage under `chats.listWidth`, and this is only the
+ * seed for an install that has never dragged it. It stays HERE rather than
+ * beside the two rail widths' users because it is the same kind of fact and
+ * moving it would be a rename for its own sake.
+ */
 export const CHAT_LIST_WIDTH = 260;
 
 /**

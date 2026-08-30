@@ -72,15 +72,33 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * exists as the sum of its announcements: two of the three shapes on the wire
  * are patches, so a client that missed one cannot reconstruct the rest.
  *
- * `shell_info` closes a BACKGROUND SHELL — a command the agent detached, whose
- * launching tool call returned within the second while the command ran on for
- * minutes. It is the only end signal such a command has: measured on claude
- * 2.1.237, the CLI reports the completion to the MODEL out of band and to the
- * conversation as a sentence the agent writes, so a reader folding "what is
- * running" out of tool calls alone lists it forever. Persisted rather than
- * streamed for the same reason `task_list` is — a reopened chat replays the
- * transcript, and an ephemeral end would show every past background command as
- * running again. It renders as NOTHING; it exists to close a row that is.
+ * `shell_open` and `shell_info` are the two ends of a BACKGROUND SHELL — a
+ * command the agent detached, whose launching tool call returned within the
+ * second while the command ran on for minutes. Neither renders; both exist so a
+ * reader can say which tool calls are still running on the machine.
+ *
+ * `shell_info` is the CLOSE, and it is the only end signal such a command has:
+ * measured on claude 2.1.237, the CLI reports the completion to the MODEL out of
+ * band and to the conversation as a sentence the agent writes, so a reader
+ * folding "what is running" out of tool calls alone lists it forever. Persisted
+ * rather than streamed for the same reason `task_list` is — a reopened chat
+ * replays the transcript, and an ephemeral end would show every past background
+ * command as running again.
+ *
+ * `shell_open` is the OPEN, and it shipped as no row at all on the reasoning
+ * that the start is already in the transcript as the tool call that detached it.
+ * The call is; the DETACHMENT is not. Which tool calls a CLI put in the
+ * background is a fact the daemon reads off that CLI's own structured frames,
+ * and it was leaving the renderer to recover it by matching the CLI's English —
+ * the announcement it writes back to a detached launch. That match is
+ * deliberately strict, because a loose one promotes a foreground command whose
+ * OUTPUT quotes the sentence into a shell nothing can ever close, so it misses
+ * by design and every miss put the daemon's `shellsOpen` count (which counts
+ * exactly these events) over a transcript naming fewer commands than it. REPORTED
+ * as a sidebar row reading `working · waiting on background work` beside a header
+ * counting zero shells — one question, two answers, from the structured reading
+ * and the prose reading of the same launch. The row carries what the daemon
+ * knows, so the count and the list are now two views of one set.
  *
  * `unanswerable` closes an `approval_request` that can never be answered now:
  * its turn settled while the request was still pending, so the card on screen
@@ -146,6 +164,7 @@ export const ItemKindSchema = z
     'subagent_info',
     'workflow_info',
     'task_list',
+    'shell_open',
     'shell_info',
     'report_findings',
     'show_chart',

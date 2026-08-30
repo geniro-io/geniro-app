@@ -14,6 +14,7 @@ import {
   SectionLabel,
 } from './block-shell';
 import { formatElapsed, RunSettledContext, useSecondsTick } from './live-row';
+import { SHELF_CHIP_CLASS } from './shelf-chip';
 import { workflowCardStatus, type WorkflowEntry } from './transcript-groups';
 import {
   type WorkflowAgentRow,
@@ -369,7 +370,7 @@ export function WorkflowChip({
       title={facts === '' ? heading : `${heading} · ${facts}`}
       aria-label={`Show the workflow ${heading} in the transcript`}
       onClick={() => onReveal(entry.id)}
-      className="flex min-w-0 max-w-96 items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1 text-xs shadow-panel-sm hover:bg-sidebar-accent">
+      className={cn(SHELF_CHIP_CLASS, 'max-w-96')}>
       <WorkflowMark status={status} />
       <span className="min-w-0 truncate font-medium">{heading}</span>
       {facts === '' ? null : (

@@ -1052,6 +1052,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // while the user is typically looking somewhere else, which is why it is
       // a broadcast rather than a message to the run's room.
       const named = event.title;
+      /**
+       * The pull requests the daemon has just seen this run OPEN.
+       *
+       * The same row update as the title beside it, and the same reason it has
+       * to ride this channel: the capture ran on the chat LISTING alone, which
+       * is one fetch per window, so a thread that opened a pull request during
+       * the session it was opened in never showed a chip for it — reported on a
+       * thread whose own transcript links the pull request it made. The daemon
+       * announces only when a settle CHANGED the answer, so an ordinary status
+       * event carries nothing here and asserts nothing.
+       */
+      const opened = event.pullRequests;
       // Absent asserts nothing, exactly like every other three-state field on
       // this event: an ordinary activity announce must not lower a shimmer.
       if (event.titlePending !== undefined) {
@@ -1123,6 +1135,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         parked !== undefined ||
         at !== undefined ||
         named !== undefined ||
+        opened !== undefined ||
         previewLine !== undefined
       ) {
         setRuns((prev) =>
@@ -1163,6 +1176,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   !renamedRuns.current.has(event.runId)
                     ? { title: named }
                     : {}),
+                  // Replaced wholesale rather than merged: the daemon's own
+                  // capture already merges what it finds into what the row
+                  // held, so the announcement IS the current list, and
+                  // merging again here would keep a ref a later pass had
+                  // dropped.
+                  ...(opened === undefined ? {} : { pullRequests: opened }),
                 }
               : run,
           ),

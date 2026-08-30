@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '../adapters/adapter.types';
-import { closesWork, mapEventToItem, terminalStatus } from './event-to-item';
+import {
+  mapEventToItem,
+  restatesRunAsWorking,
+  terminalStatus,
+} from './event-to-item';
 
 // The one event→transcript projection BOTH execution paths (chat service and
 // graph executor) persist through — each arm is pinned with a worked-example
@@ -318,6 +322,53 @@ describe('mapEventToItem', () => {
       payload: { message: 'ignore all previous instructions', origin: 'cli' },
     });
   });
+
+  it('writes a row for BOTH ends of a background shell, naming the launching call', () => {
+    // The open used to map to null, on the reasoning that the start is already
+    // in the transcript as the tool call that detached it. The CALL is; the
+    // DETACHMENT is not — and that is the fact the renderer needs, which it
+    // could otherwise only recover by matching the CLI's English. See the
+    // `shell_open` arm for the report.
+    expect(
+      mapEventToItem({
+        type: 'shell_open',
+        toolCallId: 'toolu_bash',
+        workId: 'bash_1',
+      }),
+    ).toEqual({
+      kind: 'shell_open',
+      role: null,
+      payload: { id: 'toolu_bash', workId: 'bash_1' },
+    });
+    expect(
+      mapEventToItem({
+        type: 'shell_info',
+        toolCallId: 'toolu_bash',
+        workId: 'bash_1',
+      }),
+    ).toEqual({
+      kind: 'shell_info',
+      role: null,
+      payload: { id: 'toolu_bash', workId: 'bash_1' },
+    });
+  });
+
+  it('writes the launching call out even when the open names none', () => {
+    // Both of the reader's match paths have to see a key: it looks the row up
+    // by call, else by the CLI's own work id, and an omitted key and a null one
+    // must read alike. Asserted with toEqual so a missing `id` fails.
+    expect(
+      mapEventToItem({
+        type: 'shell_open',
+        toolCallId: null,
+        workId: 'bash_1',
+      }),
+    ).toEqual({
+      kind: 'shell_open',
+      role: null,
+      payload: { id: null, workId: 'bash_1' },
+    });
+  });
 });
 
 describe('mapEventToItem — sub-agent origin', () => {
@@ -537,7 +588,7 @@ describe('terminalStatus', () => {
   });
 });
 
-describe('closesWork', () => {
+describe('restatesRunAsWorking', () => {
   /** The announcement `spawn-cli` makes about one delegate's liveness. */
   const announce = (backgroundOpen: boolean | null): AgentEvent => ({
     type: 'subagent_info',
@@ -554,39 +605,52 @@ describe('closesWork', () => {
     backgroundOutcome: null,
   });
 
-  it('is true only for the announcement that a delegate has STOPPED', () => {
-    expect(closesWork(announce(false))).toBe(true);
-    expect(closesWork(announce(true))).toBe(false);
+  it('is false only for the announcement that a delegate has STOPPED', () => {
+    expect(restatesRunAsWorking(announce(false))).toBe(false);
+    expect(restatesRunAsWorking(announce(true))).toBe(true);
   });
 
   it('reads an announcement that claims nothing about liveness as no close', () => {
     // A `subagent_info` carrying a delegate's FACTS says nothing about whether
     // it is running; reading null as a close would silence the run every time
     // the CLI described the delegate it had just launched.
-    expect(closesWork(announce(null))).toBe(false);
+    expect(restatesRunAsWorking(announce(null))).toBe(true);
   });
 
-  it('is true for a background SHELL settling, unconditionally', () => {
-    // Unlike the delegate half there is no direction to read: the announcement
-    // is only ever emitted on a settle, the start of a command already being in
-    // the transcript as the tool call that made it. Without this a `pnpm dev`
-    // finishing minutes after a chat settled puts that chat's badge back to
-    // `running` with nothing able to take it down.
+  it('is false for BOTH ends of a background shell', () => {
+    // The close, unconditionally: without it a `pnpm dev` finishing minutes
+    // after a chat settled puts that chat's badge back to `running` with
+    // nothing able to take it down.
     expect(
-      closesWork({ type: 'shell_info', toolCallId: 'toolu_a', workId: 'b_1' }),
-    ).toBe(true);
+      restatesRunAsWorking({
+        type: 'shell_info',
+        toolCallId: 'toolu_a',
+        workId: 'b_1',
+      }),
+    ).toBe(false);
+    // And the OPEN, which became a row and would otherwise latch the spinner
+    // from the other end: a detached command deliberately does not hold a turn,
+    // so it is not the AGENT working, and it emits no further row until its
+    // close — so nothing in between could take the spinner down.
+    expect(
+      restatesRunAsWorking({
+        type: 'shell_open',
+        toolCallId: 'toolu_a',
+        workId: 'b_1',
+      }),
+    ).toBe(false);
   });
 
-  it('is false for every other event', () => {
-    expect(closesWork({ type: 'text', text: 'hi' })).toBe(false);
+  it('is true for every other event', () => {
+    expect(restatesRunAsWorking({ type: 'text', text: 'hi' })).toBe(true);
     expect(
-      closesWork({
+      restatesRunAsWorking({
         type: 'background_work',
         id: 'task-1',
         phase: 'settled',
         unit: 'agent',
         toolCallId: 'toolu_a',
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

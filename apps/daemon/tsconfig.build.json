@@ -1,16 +1,22 @@
 {
   "extends": "../../tsconfig.build.json",
-  "include": ["src/**/*"],
+  "include": [
+    "src/**/*"
+  ],
   "exclude": [
     "node_modules",
     "dist",
     "**/*.spec.ts",
-    "**/__tests__/**"
+    "**/__tests__/**",
+    "src/db/seed.ts",
+    "src/db/seeders/**"
   ],
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true
   }

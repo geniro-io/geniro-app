@@ -1970,6 +1970,21 @@ export interface RunStatusEvent {
   contextWindowTokens?: number | null;
   title?: string;
   /**
+   * The pull requests this run has been seen to OPEN, when a capture pass has
+   * just found one.
+   *
+   * ABSENT asserts nothing, which is the normal case: this is announced only
+   * when a turn ends having changed the answer, so a chat with none broadcasts
+   * nothing on every turn of every conversation.
+   *
+   * It exists because the CAPTURE ran on the chat listing alone — one fetch per
+   * window — so a thread that opened a pull request during the session it was
+   * opened in never showed a chip for it, however long the window stayed open.
+   * The same shape of problem as `title`, and it takes the same answer: the
+   * broadcast that reaches every client for every run carries it.
+   */
+  pullRequests?: RunPullRequest[];
+  /**
    * Whether a NAME for this run is being worked out right now — absent when this
    * announce says nothing about it.
    *

@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { GitInfo } from '../../shared/contracts';
-import { BranchSelect } from './branch-select';
+import { BranchSelect, BranchValueSelect } from './branch-select';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -110,5 +110,78 @@ describe('BranchSelect', () => {
     // not on all of them.
     const plain = rows.find((row) => row.textContent?.includes('main'));
     expect(plain!.textContent).not.toContain('in ');
+  });
+});
+
+describe('BranchValueSelect', () => {
+  /** Render the VALUE chip (records a name; never switches the checkout). */
+  function renderValue(
+    info: GitInfo,
+    value: string | null,
+  ): { el: HTMLDivElement; onChange: ReturnType<typeof vi.fn> } {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const onChange = vi.fn();
+    act(() => {
+      root!.render(
+        <BranchValueSelect info={info} value={value} onChange={onChange} />,
+      );
+    });
+    return { el: container, onChange };
+  }
+
+  function openMenu(el: HTMLDivElement): HTMLElement[] {
+    const trigger = el.querySelector<HTMLElement>('[data-menu-trigger]')!;
+    act(() => {
+      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    return [...el.querySelectorAll<HTMLElement>('[role="option"]')];
+  }
+
+  it('emits null for "whatever is checked out", never the empty sentinel', () => {
+    // The sentinel exists only because `Select` cannot emit null. If it leaks
+    // out, a saved configuration stores `branch: ''` — which the IPC refname
+    // schema rejects, throwing away the ENTIRE settings patch, so the user's
+    // save is silently lost.
+    const { el, onChange } = renderValue(REPO, 'main');
+    const row = openMenu(el).find((o) =>
+      o.textContent?.includes('Whatever is checked out'),
+    )!;
+    act(() => {
+      row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(onChange).toHaveBeenCalledWith(null);
+    expect(onChange).not.toHaveBeenCalledWith('');
+  });
+
+  it('shows a stored branch the folder no longer has, rather than dropping it', () => {
+    // The user's recorded answer survives a branch being deleted elsewhere —
+    // the same add-back rule the model and effort chips follow for an off-list
+    // value. Silently reading as unset would change their configuration.
+    const { el } = renderValue(REPO, 'gone/branch');
+
+    expect(
+      openMenu(el).some((o) => o.textContent?.includes('gone/branch')),
+    ).toBe(true);
+    expect(el.querySelector('[data-menu-trigger]')?.textContent).toContain(
+      'gone/branch',
+    );
+  });
+
+  it('renders nothing for a folder that is not a repository', () => {
+    const { el } = renderValue(
+      {
+        isRepo: false,
+        branch: null,
+        branches: [],
+        dirty: false,
+        worktrees: [],
+      },
+      null,
+    );
+
+    expect(el.querySelector('[data-menu-trigger]')).toBeNull();
   });
 });

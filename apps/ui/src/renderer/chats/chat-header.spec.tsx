@@ -76,14 +76,8 @@ describe('ChatHeader', () => {
     expect(el.querySelector('svg.animate-spin')).toBeNull();
   });
 
-  it('carries no side-panel control at all — the panel stands beside every chat', () => {
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        runningSubagents={2}
-        tasks={{ done: 3, total: 8 }}
-      />,
-    );
+  it('carries no side-panel control, and no counter, at all', () => {
+    const el = render(<ChatHeader {...baseProps} />);
     // The old agent chips must stay gone — the panel is the agents surface.
     expect(el.querySelector('button[aria-label^="Agent "]')).toBeNull();
     // And so must the toggle that used to open it, in both its labels.
@@ -91,195 +85,45 @@ describe('ChatHeader', () => {
     expect(
       el.querySelector('button[aria-label="Close side panel"]'),
     ).toBeNull();
-    // The counts it used to carry survive it. They are pressable again — but
-    // for their OWN readout (the delegates behind the number, the tasks behind
-    // the pair), never to open or close the panel beside the chat.
-    const counts = el.querySelector('[data-slot="side-panel-counts"]')!;
-    expect(counts).not.toBeNull();
-    expect(counts.tagName).toBe('SPAN');
-    expect(counts.textContent).toContain('2');
-    // The task figure names its DENOMINATOR. A lone "3" left the reader unable
-    // to tell three-of-four from three-of-forty, and it only ever shrinks — the
-    // reported "here we need to show all amount of tasks as well".
-    expect(counts.querySelector('[data-slot="open-tasks"]')?.textContent).toBe(
-      '3/8',
-    );
+    // The COUNTS the toggle left behind have since moved on themselves: the
+    // running terminals, the working delegates and the task list are all chips
+    // on the composer shelf now, one row above where the user types. Pinned
+    // here as an absence because the move is only half done if the header goes
+    // on drawing its own copy — two readouts of one number is exactly the
+    // header/sidebar disagreement this app has already had to fix once.
+    expect(el.querySelector('[data-slot="side-panel-counts"]')).toBeNull();
+    expect(el.querySelector('[data-slot="running-subagents"]')).toBeNull();
+    expect(el.querySelector('[data-slot="open-tasks"]')).toBeNull();
+    expect(el.querySelector('[data-slot="running-shells"]')).toBeNull();
   });
 
-  it('never lets the counters wrap onto a line of their own', async () => {
+  it('never lets the right-hand group wrap onto a line of its own', async () => {
     // REPORTED against a screenshot: "subagent icon не должен переноситься на
     // новую строку". The outer row used to wrap, and wrapping there is
     // all-or-nothing — the identity group grows with the thread until the whole
-    // right-hand group drops to a second line.
+    // right-hand group drops to a second line. The delegate counter that was
+    // reported has moved to the shelf; the RULE outlived it, because the group
+    // still holds the identity chip and the figures.
     //
     // Asserted on the emitted classes, not on computed style: Tailwind is a
     // build step and jsdom loads no stylesheet, so `getComputedStyle` reports
     // the default for every element here and would pass with the fix deleted.
     // The class IS the mechanism, so the class is the observable.
     const el = render(
-      <ChatHeader {...baseProps} runningSubagents={2} agentKind="claude" />,
+      <ChatHeader {...baseProps} agentKind="claude" costUsd={1.11} />,
     );
-    const counts = el.querySelector('[data-slot="side-panel-counts"]')!;
-    const row = counts.parentElement!.parentElement!;
+    const row = el.querySelector('[data-slot="chat-header"]')!;
+    const aside = el.querySelector('[data-slot="chat-header-aside"]')!;
 
     expect(row.className).not.toContain('flex-wrap');
     // Nor inside the identity — that variant kept the counters in place while
     // orphaning "· worked 2.7s · $0.20" on a line of its own.
     expect(row.firstElementChild!.className).not.toContain('flex-wrap');
     // It gives up width on the side that can truncate, never on the numbers.
-    expect(counts.parentElement!.className).toContain('shrink-0');
+    expect(aside.className).toContain('shrink-0');
     expect(row.firstElementChild!.className).toContain('min-w-0');
     expect(row.firstElementChild!.className).toContain('flex-1');
     expect(el.querySelector('h2')!.className).toContain('truncate');
-  });
-
-  it('sizes the counters on the BUTTON, where an inherited size cannot reach', async () => {
-    // REPORTED as "давай сделаем меньше вот эти циферки… значки оставь одного
-    // размера": the digits were drawn larger and heavier than the icons beside
-    // them and than every other word on the header line. The row asks for
-    // `text-xs`, but `global.css`'s base rule sets `button { font-size:
-    // var(--text-base) }` — which DEFEATS inheritance, since the size is then
-    // set on the button itself — so the row's size reached the glyphs and not
-    // the numbers. The fix has to be ON each trigger, and that is what this
-    // pins: put the classes back on the wrapper alone and the counters go
-    // 15px medium again.
-    //
-    // Classes, not `getComputedStyle` — jsdom loads no stylesheet, so every
-    // computed size here is the default and the assertion would pass with the
-    // fix deleted. Same reasoning as the wrap test above.
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        runningSubagents={2}
-        tasks={{ done: 3, total: 8 }}
-        shells={[]}
-        agentKind="claude"
-      />,
-    );
-    const triggers = [
-      ...el.querySelectorAll<HTMLElement>(
-        '[data-slot="side-panel-counts"] button',
-      ),
-    ];
-    // All three of them — the constant exists so one cannot be missed.
-    expect(triggers).toHaveLength(3);
-    for (const trigger of triggers) {
-      expect(trigger.className).toContain('text-xs');
-      expect(trigger.className).toContain('font-normal');
-    }
-    // And the ICONS are untouched: the ask was to shrink the numbers, not the
-    // glyphs, so a later "make it all smaller" cannot pass this by shrinking
-    // both.
-    for (const icon of el.querySelectorAll(
-      '[data-slot="side-panel-counts"] svg',
-    )) {
-      expect(icon.getAttribute('class')).toContain('size-3.5');
-    }
-  });
-
-  it('keeps the sub-agent counter on screen at ZERO', async () => {
-    // REPORTED: "здесь должна быть всегда иконка саб-эйджентов, даже если их
-    // ноль". A counter that appears only once something is running answers "are
-    // any working" with the same blank space as a header that never had one.
-    const el = render(<ChatHeader {...baseProps} runningSubagents={0} />);
-
-    const counter = el.querySelector('[data-slot="running-subagents"]')!;
-    expect(counter).not.toBeNull();
-    expect(counter.textContent).toContain('0');
-    // The TASK counter is still conditional: a thread whose agent keeps no
-    // list has no list to report on.
-    expect(el.querySelector('[data-slot="open-tasks"]')).toBeNull();
-  });
-
-  it('holds the delegates themselves behind the count', async () => {
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        runningSubagents={1}
-        subagents={[
-          {
-            id: 't1',
-            kind: 'subagent',
-            label: 'explore',
-            status: 'running',
-            sessionId: null,
-          },
-          {
-            id: 't2',
-            kind: 'subagent',
-            label: 'review the diff',
-            status: 'completed',
-            sessionId: null,
-          },
-        ]}
-      />,
-    );
-
-    const trigger = el
-      .querySelector('[data-slot="running-subagents"]')!
-      .querySelector('button')!;
-    // Closed, the panel is not in the DOM at all — the count is all there is.
-    expect(el.textContent).not.toContain('review the diff');
-
-    await act(async () => {
-      trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(el.textContent).toContain('explore');
-    expect(el.textContent).toContain('review the diff');
-    // Each row states its own status, so a finished delegate is not counted as
-    // one of the working ones the number names.
-    expect(el.textContent).toContain('completed');
-  });
-
-  it('says so in words when there are no delegates to list', async () => {
-    // The counter is drawn at zero now, so an EMPTY panel behind it would read
-    // as a readout that failed to load.
-    const el = render(<ChatHeader {...baseProps} runningSubagents={0} />);
-
-    await act(async () => {
-      el.querySelector('[data-slot="running-subagents"]')!
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(el.textContent).toContain('No sub-agents yet');
-  });
-
-  it('holds the task LIST behind the done/total pair', async () => {
-    // REPORTED: "при наведении на to-do поп-овер с тудушками" — and the count
-    // alone could not say which task was running.
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        tasks={{ done: 1, total: 2 }}
-        taskRows={[
-          {
-            id: '1',
-            title: 'read the spec',
-            status: 'completed',
-            activeForm: null,
-          },
-          {
-            id: '2',
-            title: 'write the adapter',
-            status: 'in_progress',
-            activeForm: 'writing the adapter',
-          },
-        ]}
-      />,
-    );
-
-    await act(async () => {
-      el.querySelector('[data-slot="open-tasks"]')!
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(el.textContent).toContain('read the spec');
-    // The running row reads in its present-continuous form, as it does
-    // everywhere else the same list is drawn.
-    expect(el.textContent).toContain('writing the adapter');
   });
 });
 
@@ -787,75 +631,5 @@ describe('ChatHeader — what this thread SPENT', () => {
     );
 
     expect(el.textContent).toContain('$0.0003');
-  });
-  it('counts the running shells beside the delegates, and holds them behind it', async () => {
-    // The ask: how many commands this thread has open, next to how many
-    // delegates are working. Both are counts of work in flight the transcript
-    // alone would make a reader hunt for.
-    const el = render(
-      <ChatHeader
-        {...baseProps}
-        runningSubagents={1}
-        shells={[
-          {
-            id: 'c1',
-            command: 'pnpm build',
-            description: null,
-            background: false,
-            handle: null,
-            status: 'running',
-            exitCode: null,
-            startedAt: new Date(Date.now() - 5_000).toISOString(),
-            agentId: null,
-          },
-          {
-            id: 'c2',
-            command: 'pnpm dev',
-            description: null,
-            background: true,
-            handle: 'bash_1',
-            status: 'running',
-            exitCode: null,
-            startedAt: new Date(Date.now() - 5_000).toISOString(),
-            agentId: null,
-          },
-        ]}
-      />,
-    );
-
-    const counter = el.querySelector('[data-slot="running-shells"]')!;
-    expect(counter).not.toBeNull();
-    expect(counter.textContent).toContain('2');
-    // Closed, the commands themselves are not in the DOM — the count is all
-    // there is, exactly as with the delegates beside it.
-    expect(el.textContent).not.toContain('pnpm build');
-
-    await act(async () => {
-      counter
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(el.textContent).toContain('pnpm build');
-    expect(el.textContent).toContain('pnpm dev');
-  });
-
-  it('keeps the shell counter on screen at ZERO, and says so in words', async () => {
-    // The same rule as the sub-agent counter it sits beside: a counter that
-    // appears only once something is running answers "is anything running" with
-    // the same blank space as a header that never had one.
-    const el = render(<ChatHeader {...baseProps} shells={[]} />);
-
-    const counter = el.querySelector('[data-slot="running-shells"]')!;
-    expect(counter).not.toBeNull();
-    expect(counter.textContent).toContain('0');
-
-    await act(async () => {
-      counter
-        .querySelector('button')!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
-
-    expect(el.textContent).toContain('Nothing running');
   });
 });

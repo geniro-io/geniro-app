@@ -1,6 +1,8 @@
 import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
+import type { ProfileColor } from '../../../shared/contracts';
+import { PALETTE_BORDER_CLASS } from '../palette';
 import { popoverSurface } from './popover';
 import { cn } from './utils';
 
@@ -10,6 +12,22 @@ export interface MenuItem {
   label: string;
   /** Leading glyph — a folder, a branch, a workflow icon. */
   icon?: React.ReactNode;
+  /**
+   * A colour this row carries as a LEFT BORDER, from the app's one palette.
+   *
+   * A border rather than another glyph, and asked for in those words ("там
+   * должен быть просто левый бордер вот этого же цвета"). The row already
+   * leads with an icon that says what KIND of thing it is, and a second mark
+   * beside it would compete with that; an edge stripe is read by position and
+   * costs the label no width. It is also how the sidebar already draws a
+   * group's colour — a rail down the edge of the rows it owns — so a named
+   * agent configuration and a chat group wear their colour the same way.
+   *
+   * Absent leaves the row exactly as it was: most rows in most menus have no
+   * colour, and a transparent placeholder border would shift every label by
+   * its width for the sake of the few that do.
+   */
+  accent?: ProfileColor;
   /** Right-aligned muted text (a shortcut, a qualifier). */
   hint?: string;
   /** Native tooltip — where `label` is an abbreviation of something longer. */
@@ -316,6 +334,23 @@ export function Menu({
     if (!panel) {
       return;
     }
+    // A floating panel is placed in TWO commits — the effect above reads the
+    // trigger and sets `box`, and only the render after that moves the panel —
+    // so before `box` lands there is nothing here worth measuring: the panel is
+    // still sitting where the ancestor classes put it. The horizontal
+    // correction below survives that (it re-runs on `box` and settles), but the
+    // HEIGHT clamp does not, because nothing ever lowers `maxHeight` again
+    // until the menu closes. A first-pass measurement therefore froze a cap
+    // taken at the wrong position, for good.
+    //
+    // That is what "popover is cut" turned out to be, measured in the running
+    // app on the composer's Profile submenu: an eight-row panel came out
+    // `maxHeight: 120px` — the FLOOR — while sitting at `top: 715` in a 900px
+    // window, where it had over 170px of room and needed no cap at all. The
+    // clamp had fired against the unplaced first commit and stuck.
+    if (floating && box === null) {
+      return;
+    }
     const rect = panel.getBoundingClientRect();
     if (rect.right > window.innerWidth) {
       // A floating panel is placed by an inline offset, so it is corrected by
@@ -343,9 +378,42 @@ export function Menu({
         setFlipped(true);
       }
     }
+    // A SUBMENU is the one placement that could only ever be SHORTENED, and
+    // shortening is the wrong first answer for it. `side='right'` pins the
+    // panel's top to the row that opened it and grows down, so a row low in the
+    // window put the panel's tail off the bottom — REPORTED as "popover is
+    // cut", on the composer's Profile submenu, whose parent opens upward from a
+    // control that sits at the foot of the screen. The height clamp below did
+    // fire, but it is FLOORED at `MIN_MENU_HEIGHT` on purpose, so once the room
+    // under the row falls below that floor the panel overhangs anyway — and the
+    // rows past the edge are unreachable, since what scrolls is the list inside
+    // a panel whose own box is off-screen.
+    //
+    // Moving it UP is the answer every other placement already has in some
+    // form: the horizontal correction right above pulls a panel back from the
+    // right edge, and `side='top'`/`'bottom'` flip. A submenu shifted up still
+    // sits beside its row — which is all its placement ever promised — where a
+    // shortened one silently drops choices.
+    //
+    // It RETURNS rather than falling through to the clamp, and that is not
+    // tidiness: the clamp would otherwise read the un-shifted rect, set a
+    // `maxHeight` for an overflow this shift is about to remove, and nothing
+    // lowers `maxHeight` again until the menu closes. The effect re-runs on
+    // `box`, so the moved panel is measured afresh on the next pass and the
+    // clamp still catches whatever is left — which is the genuinely
+    // taller-than-the-window case, and only that.
+    if (side === 'right' && floating && typeof box?.top === 'number') {
+      const overhang = rect.bottom - (window.innerHeight - VIEWPORT_MARGIN);
+      const corrected = Math.max(VIEWPORT_MARGIN, box.top - overhang);
+      if (overhang > 0 && corrected !== box.top) {
+        setBox({ ...box, top: corrected });
+        return;
+      }
+    }
     // The panel grows AWAY from the trigger — upward from a fixed bottom edge
-    // for `side='top'`, downward for `bottom` — so the edge it can run past is
-    // decided by `side`, and shortening it always pulls the offending end back.
+    // for `side='top'`, downward for `bottom` and `right` — so the edge it can
+    // run past is decided by `side`, and shortening it always pulls the
+    // offending end back.
     const overflow =
       side === 'top' ? -rect.top : rect.bottom - window.innerHeight;
     if (overflow > 0) {
@@ -701,6 +769,17 @@ export function Menu({
                         // highlighted row sitting in the corner traced a second,
                         // disagreeing curve just inside the first.
                         'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors',
+                        // The colour rides a border on the row's own box, so
+                        // it needs no element and no layout of its own. The
+                        // left padding is reduced by exactly the border's width
+                        // — otherwise a coloured row's label sits 2px right of
+                        // its uncoloured neighbours', which on a list where
+                        // only some rows are named reads as two indents.
+                        item.accent !== undefined &&
+                          cn(
+                            'rounded-l-none border-l-2 pl-2',
+                            PALETTE_BORDER_CLASS[item.accent],
+                          ),
                         '[&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground',
                         item.tone === 'destructive' &&
                           'text-destructive [&>svg]:text-destructive',

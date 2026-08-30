@@ -45,6 +45,25 @@ paths:
      pick-one, and NO indicator at all where the click is itself the
      submission. Never reach for `chip` here: chips are `whitespace-nowrap`
      footer controls, and an option label is routinely a whole sentence.
+   - **A SUBMENU moves before it shrinks, and nothing is measured before it is
+     placed.** `menu`'s `side="right"` pins a panel's top to the row that opened
+     it and grows down, so a row low in the window put its tail off the bottom
+     ("popover is cut", on the composer's Profile submenu — whose parent opens
+     upward from a control at the foot of the screen). Shortening is the wrong
+     first answer there: the height clamp is FLOORED at `MIN_MENU_HEIGHT`, so
+     once the room under the row drops below that floor the panel overhangs
+     anyway, and the rows past the edge are unreachable — what scrolls is the
+     list inside a panel whose own box is off-screen. It now shifts up first and
+     clamps only what is left, which is the genuinely taller-than-the-window
+     case. The deeper half of that bug is worth stating on its own: a floating
+     panel is placed in TWO commits, and the height clamp used to fire against
+     the FIRST one, where the panel still sits wherever the ancestor classes put
+     it. The horizontal correction survives that by re-running and settling;
+     `maxHeight` does not, because nothing lowers it again until the menu
+     closes — measured in the running app as an eight-row panel capped at the
+     120px floor while it had 170px of room. **Any new correction in that effect
+     must skip the unplaced commit**, or it freezes a measurement of a panel
+     that was never where it was read.
    - **`popover` keeps its panel INSIDE the window — it flips and it clamps.**
      `anchor="viewport"` places the panel `fixed` so no ancestor can clip it,
      which also means no ancestor can stop it: a trigger on the last sidebar

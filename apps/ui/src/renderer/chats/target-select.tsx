@@ -12,25 +12,35 @@ export interface TargetWorkflow {
 
 /**
  * What a run is pointed at — one of the CLIs on this machine, or a library
- * workflow to run as a team.
+ * workflow to run as a team. Shared by the composer and the editor behind a
+ * saved run configuration.
  */
 export function TargetSelect({
   value,
   workflows,
   cliDetections,
   onChange,
+  'aria-label': ariaLabel = 'Agent or workflow for new runs',
 }: {
   value: string;
   workflows: readonly TargetWorkflow[];
   /** Per-CLI detection, or null while the probe has not answered. */
   cliDetections: readonly CliDetection[] | null;
   onChange: (target: string) => void;
+  /**
+   * Overridden by the run-configuration editor, whose picker is about a saved
+   * setup rather than the next run. Not cosmetic: that editor opens as a dialog
+   * OVER the composer, so both chips are in the accessibility tree at once and
+   * one name would make them indistinguishable — to a screen reader, and to
+   * every test that reaches a control by its accessible name.
+   */
+  'aria-label'?: string;
 }): React.JSX.Element {
   return (
     <Select
       variant="ghost"
       value={value}
-      aria-label="Agent or workflow for new runs"
+      aria-label={ariaLabel}
       searchPlaceholder="Search agents, workflows…"
       groups={[
         {

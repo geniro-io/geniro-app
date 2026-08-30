@@ -46,10 +46,29 @@ afterEach(() => {
 });
 
 describe('FastActionBar', () => {
-  it('draws nothing at all for a user who has configured none', () => {
-    // Which is most users. A surface that costs space for a feature nobody has
-    // set up is a surface in the way — the same rule the composer shelf
-    // follows directly above it.
+  it('invites the first one where a user with none would look for it', () => {
+    // Which is every user on their first launch. The new-chat screen is where a
+    // fast action is wanted, so drawing nothing left the feature findable only
+    // by somebody already hunting through Settings for it.
+    const manage = vi.fn();
+    render([], manage);
+    const add = container.querySelector<HTMLButtonElement>(
+      '[data-slot="fast-action-add"]',
+    );
+    expect(add?.textContent).toBe('Add fast actions');
+    act(() => add?.click());
+    expect(manage).toHaveBeenCalledTimes(1);
+    // And nothing that belongs to a configured bar: no action row, and not the
+    // glyph either — over an empty set the trip to Settings is spelled out.
+    expect(buttons()).toEqual([]);
+    expect(
+      container.querySelector('[data-slot="fast-action-manage"]'),
+    ).toBeNull();
+  });
+
+  it('draws nothing at all with no actions AND no way to Settings', () => {
+    // The harness case: an invitation to a screen the caller cannot open is a
+    // button that does nothing.
     render([]);
     expect(container.querySelector('[data-slot="fast-action-bar"]')).toBeNull();
   });
@@ -85,18 +104,11 @@ describe('FastActionBar', () => {
 });
 
 describe('FastActionBar — reaching the editor', () => {
-  it('offers the way back to Settings only alongside actions that exist', () => {
+  it('rides the bar as a glyph once there are actions beside it', () => {
     // The bar is the only place the actions are visible, so the edit control
-    // rides it — but a manage button over an empty set is the surface this bar
-    // refuses to be, and Settings' own nav entry is how the first one is made.
+    // rides it. Alongside buttons that say what the bar is, a glyph carries the
+    // trip; the empty bar spells it out instead (pinned above).
     const manage = vi.fn();
-    render([], manage);
-    expect(
-      container.querySelector('[data-slot="fast-action-manage"]'),
-    ).toBeNull();
-
-    act(() => root.unmount());
-    container.remove();
     render([action()], manage);
     const edit = container.querySelector<HTMLButtonElement>(
       '[data-slot="fast-action-manage"]',

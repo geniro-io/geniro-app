@@ -234,14 +234,41 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
         payload: { id: event.toolCallId, workId: event.workId },
       };
     case 'shell_open':
-      // NO row, and that is the whole difference from its close above. A
-      // command's start is already in the transcript as the tool call that
-      // detached it, so a row here would double every background command —
-      // which is the reason `shell_info` was settle-only before this existed.
-      // What the event carries is LIVE state: `ChatService.recordShellBracket`
-      // counts it so the run's row can say a command is still out, which is a
-      // fact no replayed transcript can be asked for.
-      return null;
+      // A DURABLE row, symmetric with the close above, and it shipped as `null`
+      // on the reasoning that "the start is already in the transcript as the
+      // tool call that detached it". The CALL is; the DETACHMENT is not, and
+      // that is the fact a reader needs.
+      //
+      // Which tool calls a CLI put in the background is read here off that
+      // CLI's own structured frames (`background_work`, from `system/
+      // task_started`). Without this row the renderer had to recover the same
+      // fact from the CLI's ENGLISH — the `Command running in background with
+      // ID: …` announcement written back to the launch — and that match is
+      // deliberately strict, because a loose one promotes any foreground
+      // command whose OUTPUT quotes the sentence into a shell nothing can ever
+      // close (measured at 11 phantoms in 690 shells before it was tightened).
+      // So it misses by design, and every miss put `Run.shellsOpen` — which
+      // counts exactly these events — over a transcript naming fewer commands
+      // than the count. REPORTED as a sidebar row reading `working · waiting on
+      // background work` beside a header counting zero shells.
+      //
+      // The row is what makes those two views of ONE set. It does not double
+      // anything: the reader marks the tool call it names, it never adds a
+      // command of its own, and it is written once per unit by
+      // `announceShellWork`.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/shell-activity.ts` reads these
+      // keys back to mark the launch they name as detached. An item payload is
+      // `z.unknown()` on the wire BY DESIGN — every kind carries a different
+      // shape — so no generated type spans the two sides. Renaming a key here
+      // means renaming it there. `id` is the LAUNCHING TOOL CALL, spelled as
+      // the close above spells it and written out even when null, so the
+      // reader's two match paths read an omitted key and a null one alike.
+      return {
+        kind: 'shell_open',
+        role: null,
+        payload: { id: event.toolCallId, workId: event.workId },
+      };
     case 'task_list':
       // A DURABLE row, unlike the other progress-shaped events above. The list
       // is not derivable from anything else in the transcript: a patch names
@@ -346,35 +373,48 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
 }
 
 /**
- * Whether this event announces that WORK HAS ENDED — a delegate that has
- * stopped, or a background shell that has.
+ * Whether an OFF-TURN row means the run is working again.
  *
- * The two directions of one announcement (`spawn-cli`'s `announceDelegateWork`)
- * mean opposite things to the run's badge, and only one of them is the run
- * working: a delegate STARTING is work beginning, a delegate FINISHING is work
- * ending. Named here, beside {@link offTurnActivity}, because it is the same
- * kind of question — what does this event say the run is DOING — and because a
- * bare `event.backgroundOpen === false` at the read site says nothing about why
- * that direction is treated differently.
+ * Asked at exactly one place — `ChatService.handleBetweenTurnEvent`, which only
+ * ever sees events that produced a durable row — so the default is YES: a
+ * settled run whose CLI is writing rows again is the CLI carrying on by itself,
+ * and its own continuation settles it a second time. What this names is the
+ * exceptions, which are the rows the DAEMON writes about the run's plumbing
+ * rather than anything the agent produced.
  *
- * `backgroundOpen` is nullable and null is not a close: an announcement that
- * carries the delegate's FACTS (its label, its prompt) claims nothing about its
- * liveness, and reading that as "it has stopped" would silence a run every time
- * the CLI described a delegate it had just launched.
+ * Named here, beside {@link offTurnActivity}, because it is the same kind of
+ * question — what does this event say the run is DOING — and because a bare
+ * `event.backgroundOpen === false` at the read site says nothing about why that
+ * direction is treated differently.
  *
- * `shell_info` is the second such announcement and is UNCONDITIONALLY a close:
- * it is only ever emitted on a settle (`spawn-cli`'s `announceShellWork`), the
- * start of a command already being in the transcript as the tool call that made
- * it. A detached command routinely outlives the turn that launched it, so this
- * is not a corner case — without the exclusion, every `pnpm dev` finishing
- * minutes after a chat settled would put that chat's badge back to `running`
- * with nothing able to take it down, which is precisely the latched spinner the
- * delegate half of this predicate exists to prevent.
+ * A DELEGATE announcement has two directions meaning opposite things
+ * (`spawn-cli`'s `announceDelegateWork`): starting is work beginning, finishing
+ * is work ending, and reading a finish as a start would latch the spinner on
+ * with nothing left to take it down. `backgroundOpen` is nullable and null is
+ * NOT a close — an announcement carrying the delegate's FACTS (its label, its
+ * prompt) claims nothing about its liveness, and reading that as "it has
+ * stopped" would silence a run every time the CLI described a delegate it had
+ * just launched.
+ *
+ * BOTH SHELL ROWS are excluded, and that is the pair rather than one of them.
+ * `shell_info` is a close and always was: a detached command routinely outlives
+ * the turn that launched it, so without the exclusion every `pnpm dev`
+ * finishing minutes after a chat settled would put that chat's badge back to
+ * `running` forever. `shell_open` joined it when it became a row, and it is
+ * excluded for a reason the delegate case makes look backwards — an OPEN really
+ * is work beginning, but a backgrounded command deliberately does NOT hold a
+ * turn (see `trackBackgroundWork`'s `unit === 'agent'` carve-out), so it is not
+ * the AGENT working. The badge it earns is `held`, which the run row's own
+ * `shellsOpen` already drives. Reading it as `running` would be the latch from
+ * the other end: a shell emits no further row, so nothing until its close could
+ * take the spinner down. Its own launching tool call is a main-thread row and
+ * flips the badge on its own where that is genuinely true.
  */
-export function closesWork(event: AgentEvent): boolean {
-  return (
+export function restatesRunAsWorking(event: AgentEvent): boolean {
+  return !(
     (event.type === 'subagent_info' && event.backgroundOpen === false) ||
-    event.type === 'shell_info'
+    event.type === 'shell_info' ||
+    event.type === 'shell_open'
   );
 }
 

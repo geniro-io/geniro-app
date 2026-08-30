@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { useMemo } from 'react';
 
-import type { CliKind } from '../../shared/contracts';
+import type { CliKind, ConfigProfile } from '../../shared/contracts';
 import type {
   AgentContextWindow,
   AgentEffort,
@@ -51,6 +51,12 @@ const PROFILE_BROWSE = '__browse_profile__';
 
 /** Stable, so a caller with no recents does not re-key the memo each render. */
 const EMPTY_RECENTS: readonly string[] = [];
+/**
+ * A stable empty default, like {@link EMPTY_RECENTS} beside it: a fresh `[]` in
+ * the parameter list is a new reference on every render, which would defeat the
+ * memo the whole panel is built inside.
+ */
+const EMPTY_PROFILES: readonly ConfigProfile[] = [];
 
 /** `<kind>:<id>` — and for a parameter, `parameter:<parameterId>:<value>`. */
 const encode = (...parts: string[]): string => parts.join(':');
@@ -166,6 +172,7 @@ export function ModelSettingsSelect({
   onParameterChange,
   configDir = null,
   recentConfigDirs = EMPTY_RECENTS,
+  configProfiles = EMPTY_PROFILES,
   configDirUnavailableReason,
   onConfigDirChange,
   onBrowseConfigDir,
@@ -207,6 +214,15 @@ export function ModelSettingsSelect({
   /** The chosen profile, or null for the CLI's own — the normal state. */
   configDir?: string | null;
   recentConfigDirs?: readonly string[];
+  /**
+   * The user's NAMED configurations (Settings → the claude card), so a
+   * directory they have named wears its colour in the Profile list.
+   *
+   * Defaulted to empty rather than required: every other caller of this control
+   * renders the same panel without one, and an empty list simply leaves every
+   * row uncoloured — which is also what an install that has named nothing sees.
+   */
+  configProfiles?: readonly ConfigProfile[];
   /**
    * Why this CLI cannot be pointed at a config directory (`null` = it can),
    * `undefined` while the capability read is in flight — and `undefined` also
@@ -371,15 +387,32 @@ export function ModelSettingsSelect({
             ? [
                 {
                   label: 'Recents',
-                  items: paths.map((path) => ({
-                    value: encode(PROFILE, path),
-                    // More than the leaf here: two checkouts of one repo are
-                    // both `geniro-app` and would be the same row.
-                    label: shortenPath(path),
-                    title: path,
-                    icon: <IdCard />,
-                    checked: path === configDir,
-                  })),
+                  items: paths.map((path) => {
+                    // The colour of the user's NAMED configuration for this
+                    // directory, drawn by `Menu` as the row's left border —
+                    // asked for as "просто левый бордер вот этого же цвета".
+                    // Only that: the row still says the PATH, because a colour
+                    // is a way to recognise a directory at a glance rather than
+                    // a replacement for knowing which one it is, and a list
+                    // where some rows said a name and others a path would read
+                    // as two kinds of thing.
+                    const accent = configProfiles.find(
+                      (profile) => profile.dir === path,
+                    )?.color;
+                    return {
+                      value: encode(PROFILE, path),
+                      // More than the leaf here: two checkouts of one repo are
+                      // both `geniro-app` and would be the same row.
+                      label: shortenPath(path),
+                      title: path,
+                      icon: <IdCard />,
+                      checked: path === configDir,
+                      // Spread rather than a possibly-`undefined` key: an
+                      // explicit undefined is still a key, and `MenuItem`
+                      // distinguishes "no colour" from "a colour".
+                      ...(accent === undefined ? {} : { accent }),
+                    };
+                  }),
                 },
               ]
             : []),

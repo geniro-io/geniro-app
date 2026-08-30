@@ -8,9 +8,10 @@
     "geniro-daemon": "dist/main.js"
   },
   "scripts": {
-    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts' --ignore '**/__tests__/**'",
+    "build": "swc src -d dist --config-file ../../.swcrc --strip-leading-paths --ignore '**/*.spec.ts' --ignore '**/__tests__/**' --ignore '**/db/seed.ts' --ignore '**/db/seeders/**'",
     "prebuild": "rm -rf ./dist || true",
     "dev": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron --watch -r @swc-node/register -r tsconfig-paths/register ./src/main.ts",
+    "seed": "NODE_ENV=development TS_NODE_PROJECT=../../tsconfig.json ELECTRON_RUN_AS_NODE=1 electron -r @swc-node/register -r tsconfig-paths/register ./src/db/seed.ts",
     "start": "node dist/main.js",
     "check-types": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src",
@@ -44,6 +45,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@mikro-orm/seeder": "^7.1.14",
     "@swc-node/register": "^1.11.1",
     "@swc/cli": "^0.8.1",
     "@swc/core": "^1.15.43",

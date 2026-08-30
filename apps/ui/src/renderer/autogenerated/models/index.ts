@@ -2059,6 +2059,7 @@ export const ItemKind = {
     SubagentInfo: 'subagent_info',
     WorkflowInfo: 'workflow_info',
     TaskList: 'task_list',
+    ShellOpen: 'shell_open',
     ShellInfo: 'shell_info',
     ReportFindings: 'report_findings',
     ShowChart: 'show_chart',

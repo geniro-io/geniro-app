@@ -349,6 +349,88 @@ describe('shellRuns', () => {
       ]),
     ).toEqual([]);
   });
+
+  it("keeps a command the DAEMON detached, whatever the CLI's prose says", () => {
+    // THE REPORTED DEFECT, in its own words: a sidebar row reading `working ·
+    // waiting on background work` beside a header counting zero shells. The
+    // sidebar reads `Run.shellsOpen`, which the daemon counts off the CLI's
+    // structured frames; this fold could only recognise a detachment by
+    // matching the CLI's ENGLISH, and that match is deliberately strict, so it
+    // misses — here the reply is the CLI's own announcement with the trailing
+    // output path absent, which `readLaunchHandle` refuses. Before the
+    // `shell_open` row the reply then read as the command's OUTPUT and the
+    // shell was marked finished, so one question had two answers.
+    const shells = shellRuns([
+      bash('c1', 'sleep 240', { run_in_background: true }),
+      item('shell_open', { id: 'c1', workId: 'bash_1' }),
+      reply('c1', 'Command running in background with ID: bash_1.'),
+    ]);
+    expect(shells).toHaveLength(1);
+    expect(shells[0]?.status).toBe('running');
+    expect(shells[0]?.background).toBe(true);
+    // The open's work id stands in for the handle the prose did not yield, so
+    // the `shell_info` that ends this command can still find the row.
+    expect(shells[0]?.handle).toBe('bash_1');
+    expect(
+      shellRuns([
+        bash('c1', 'sleep 240', { run_in_background: true }),
+        item('shell_open', { id: 'c1', workId: 'bash_1' }),
+        reply('c1', 'Command running in background with ID: bash_1.'),
+        item('shell_info', { id: 'c1', workId: 'bash_1' }),
+      ])[0]?.status,
+    ).toBe('completed');
+  });
+
+  it('detaches a command whose open lands AFTER its reply closed it', () => {
+    // Nothing orders the daemon's row against the CLI's own reply, so the fold
+    // has to undo that close rather than merely decline to make it. Same
+    // transcript as above with the two rows swapped: without the reopen this
+    // reads `completed` and the count and the list disagree again.
+    const shells = shellRuns([
+      bash('c1', 'sleep 240', { run_in_background: true }),
+      reply('c1', 'Command running in background with ID: bash_1.'),
+      item('shell_open', { id: 'c1', workId: 'bash_1' }),
+    ]);
+    expect(shells[0]?.status).toBe('running');
+    expect(shells[0]?.background).toBe(true);
+  });
+
+  it('lets the PROSE handle win, since only a probe can be addressed to it', () => {
+    // The two ids are different namespaces: `shell_info` names the CLI's work
+    // id, while a `BashOutput` probe names the handle the launch announced. The
+    // open only fills a handle nothing else supplied.
+    const shells = shellRuns([
+      bash('c1', 'sleep 240', { run_in_background: true }),
+      item('shell_open', { id: 'c1', workId: 'task-77' }),
+      reply('c1', LAUNCHED('bash_9')),
+    ]);
+    expect(shells[0]?.handle).toBe('bash_9');
+  });
+
+  it('marks and never CREATES: an open for a call below the window adds nothing', () => {
+    // A launch outside the loaded transcript would otherwise become a command
+    // with no name to draw. It is also not an ending, so a foreground command
+    // running beside it is untouched.
+    const shells = shellRuns([
+      item('shell_open', { id: 'c-unknown', workId: 'bash_1' }),
+      bash('c1', 'pnpm build'),
+    ]);
+    expect(shells).toHaveLength(1);
+    expect(shells[0]?.id).toBe('c1');
+    expect(shells[0]?.background).toBe(false);
+  });
+
+  it('still closes a plain foreground command on its own output', () => {
+    // The reply's "no announcement means this is the output" arm is untouched
+    // for a command the daemon never opened — which is what keeps a foreground
+    // command from being listed for ever.
+    const shells = shellRuns([
+      bash('c1', 'pnpm build'),
+      reply('c1', 'built in 3s'),
+    ]);
+    expect(shells[0]?.status).toBe('completed');
+    expect(shells[0]?.background).toBe(false);
+  });
 });
 
 describe('runningShellsByAgent', () => {

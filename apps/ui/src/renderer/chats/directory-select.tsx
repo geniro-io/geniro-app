@@ -1,5 +1,6 @@
 import { FolderOpen } from 'lucide-react';
 
+import type { ProfileColor } from '../../shared/contracts';
 import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
 
@@ -63,6 +64,7 @@ export function DirectorySelect({
   browseLabel,
   clearLabel,
   icon,
+  accents,
   disabled = false,
   onChange,
   onBrowse,
@@ -85,6 +87,17 @@ export function DirectorySelect({
   clearLabel?: string;
   /** Glyph on the trigger and on every recent row. */
   icon: React.ReactNode;
+  /**
+   * A colour per directory, drawn as the row's left border — for a picker whose
+   * directories the user has NAMED (see `config-dir-select.tsx`).
+   *
+   * A map rather than a list of named things, because this picker knows about
+   * directories and nothing else: what a colour MEANS is the caller's, and a
+   * generic control that understood agent configurations would be the wrong
+   * layer to put that in. Absent, or absent for a given path, leaves the row
+   * exactly as it was.
+   */
+  accents?: ReadonlyMap<string, ProfileColor>;
   disabled?: boolean;
   /** A recents pick, or null from the clear row. */
   onChange: (directory: string | null) => void;
@@ -137,6 +150,14 @@ export function DirectorySelect({
                   label: shortenPath(path),
                   title: path,
                   icon,
+                  // Spread rather than `accent: accents?.get(path)`, because an
+                  // explicit `undefined` is still a key: the row would then be
+                  // drawing the absent case through the same branch as the
+                  // present one, which is exactly the distinction `MenuItem`
+                  // documents.
+                  ...(accents?.get(path) === undefined
+                    ? {}
+                    : { accent: accents.get(path) }),
                 })),
               },
             ]

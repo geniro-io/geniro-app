@@ -10,6 +10,7 @@ import {
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -18,6 +19,7 @@ import {
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
@@ -63,6 +65,7 @@ function service(
   plans = new PlanBroker(),
   metrics = new MetricsBroker(),
   comparisons = new ComparisonBroker(),
+  galleries = new GalleryBroker(),
 ): McpServerService {
   return new McpServerService(
     callBroker,
@@ -73,6 +76,7 @@ function service(
     plans,
     metrics,
     comparisons,
+    galleries,
     {
       token: 'launch',
       version: '9.9.9',
@@ -108,6 +112,7 @@ async function everyHostTool(): Promise<
   const plans = new PlanBroker();
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
+  const galleries = new GalleryBroker();
   for (const broker of [
     questions,
     findings,
@@ -116,6 +121,7 @@ async function everyHostTool(): Promise<
     plans,
     metrics,
     comparisons,
+    galleries,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -129,6 +135,7 @@ async function everyHostTool(): Promise<
       plans,
       metrics,
       comparisons,
+      galleries,
     ),
     'run-1',
     'agent',
@@ -145,6 +152,20 @@ function patchService(patches: PatchBroker): McpServerService {
     new FindingsReportBroker(),
     new ChartBroker(),
     patches,
+  );
+}
+
+function galleryService(galleries: GalleryBroker): McpServerService {
+  return service(
+    new CallBroker(),
+    new UserQuestionBroker(),
+    new FindingsReportBroker(),
+    new ChartBroker(),
+    new PatchBroker(),
+    new PlanBroker(),
+    new MetricsBroker(),
+    new ComparisonBroker(),
+    galleries,
   );
 }
 
@@ -900,6 +921,107 @@ describe('McpServerService', () => {
     expect(drawn).toEqual([]);
   });
 
+  it('does not offer show_gallery to a node with nowhere to show one', async () => {
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    const tools = (json().result as { tools: { name: string }[] }).tools;
+    expect(tools.map((t) => t.name)).not.toContain(HOST_GALLERY_TOOL);
+  });
+
+  it('tools/call show_gallery hands the set over and answers with a receipt', async () => {
+    const galleries = new GalleryBroker();
+    const shown: unknown[] = [];
+    galleries.register('run-1', 'agent', async (gallery) => {
+      shown.push(gallery);
+      return { status: 'drawn', images: gallery.images.length };
+    });
+    const { json } = await post(
+      galleryService(galleries),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_GALLERY_TOOL,
+        arguments: {
+          title: 'Before and after',
+          images: [
+            { path: '/tmp/before.png', caption: 'the old header' },
+            'after.png',
+          ],
+        },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(shown).toEqual([
+      {
+        title: 'Before and after',
+        images: [
+          { path: '/tmp/before.png', caption: 'the old header' },
+          { path: 'after.png' },
+        ],
+      },
+    ]);
+    expect(result.isError).toBe(false);
+    // A RECEIPT, never the paths — same bargain as its siblings.
+    expect(result.content[0]!.text).toBe(
+      'Gallery shown to the user: 2 images.',
+    );
+    expect(result.content[0]!.text).not.toContain('.png');
+  });
+
+  it('refuses a gallery naming no picture, without reaching the drawer', async () => {
+    // A gallery of nothing is only ever a mistake, so it is a malformed call
+    // rather than an empty result — the chart's rule, not the findings tool's.
+    const galleries = new GalleryBroker();
+    const shown: unknown[] = [];
+    galleries.register('run-1', 'agent', async (gallery) => {
+      shown.push(gallery);
+      return { status: 'drawn', images: 0 };
+    });
+    const { json } = await post(
+      galleryService(galleries),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_GALLERY_TOOL,
+        arguments: { images: [{ caption: 'no path here' }] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(shown).toEqual([]);
+  });
+
+  it('answers a gallery it cannot show without flagging a tool failure', async () => {
+    // An unavailable channel is an ANSWER the agent carries on from, not a
+    // failed call — it still knows where the files are.
+    const { json } = await post(
+      service(new CallBroker(), new UserQuestionBroker()),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_GALLERY_TOOL,
+        arguments: { images: ['late.png'] },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('could not be shown');
+  });
+
   it('answers a chart it cannot draw without flagging a tool failure', async () => {
     const { json } = await post(
       service(new CallBroker(), new UserQuestionBroker()),
@@ -1073,7 +1195,7 @@ describe('McpServerService', () => {
 
 /**
  * The tool DESCRIPTIONS, which are the routing logic — the only thing that
- * decides which of six near-neighbours a model reaches for. They were written
+ * decides which of seven near-neighbours a model reaches for. They were written
  * one tool at a time and audited only later as a set, which is how `show_chart`
  * came to describe the scorecard case without ever naming `show_metrics`, and
  * how `propose_patch` came to promise "the four outcomes" and list three.
@@ -1131,6 +1253,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_CHART_TOOL,
       HOST_METRICS_TOOL,
       HOST_COMPARISON_TOOL,
+      HOST_GALLERY_TOOL,
     ]) {
       const description = find(tools, name);
       expect(description, `${name} never says ONCE`).toContain('ONCE');
@@ -1152,6 +1275,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_COMPARISON_TOOL,
       HOST_PATCH_TOOL,
       HOST_PLAN_TOOL,
+      HOST_GALLERY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
         /Use it (when|whenever)/,
@@ -1162,10 +1286,32 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_FINDINGS_TOOL,
       HOST_COMPARISON_TOOL,
       HOST_PLAN_TOOL,
+      HOST_GALLERY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
         /(Do NOT use it|Do not use it|instead\.|write a table instead)/,
       );
     }
+  });
+
+  it('sends a SINGLE picture to markdown rather than to the gallery', async () => {
+    // The gallery's real neighbour is not another tool — it is the markdown
+    // image that already renders in this transcript. Without the boundary a
+    // model reaches for the card for one screenshot, which costs a click to
+    // see something that would have been inline.
+    const description = find(await everyHostTool(), HOST_GALLERY_TOOL);
+
+    expect(description).toContain('SEVERAL');
+    expect(description).toMatch(/!\[.*\]\(.*\)/);
+  });
+
+  it('tells the gallery to name FILES rather than paste image data', async () => {
+    // The one way this tool's payload differs from every other card's: it
+    // carries paths and the app reads the files. A model that base64s an image
+    // into `path` produces a tile that can never load, and the failure is
+    // silent — the row persists and the picture is simply missing.
+    const description = find(await everyHostTool(), HOST_GALLERY_TOOL);
+
+    expect(description).toContain('Do not paste');
   });
 });

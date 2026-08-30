@@ -139,6 +139,14 @@ export type NodeStatus = z.infer<typeof NodeStatusSchema>;
  * the winning column visibly greener and a NAMED recommendation. Its cells are
  * POSITIONAL against `options`, the chart's hazard again and handled the same
  * way.
+ *
+ * `show_gallery` is PICTURES: several images shown as a grid that opens into
+ * the full-screen viewer. Alone in this family its payload names FILES rather
+ * than carrying its own content — the daemon stores the paths and never opens
+ * them, and the renderer resolves each through the same image route a markdown
+ * image already uses. Its line is against markdown rather than against a
+ * sibling: ONE picture is a markdown image and reads better inline, while this
+ * is for a SET the reader can step between.
  */
 export const ItemKindSchema = z
   .enum([
@@ -170,6 +178,7 @@ export const ItemKindSchema = z
     'show_chart',
     'show_metrics',
     'show_comparison',
+    'show_gallery',
   ])
   .meta({ id: 'ItemKind' });
 export type ItemKind = z.infer<typeof ItemKindSchema>;

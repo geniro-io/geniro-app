@@ -4,6 +4,7 @@ import { CallBlock } from './call-block';
 import { ChartCard } from './chart-block';
 import { ComparisonCard } from './comparison-block';
 import { FindingsCard } from './findings-block';
+import { GalleryCard } from './gallery-block';
 import { MetricsCard } from './metrics-block';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
@@ -131,6 +132,11 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   if (entry.type === 'comparison') {
     // …and the table, for the same reason.
     return <ComparisonCard comparison={entry.comparison} />;
+  }
+  if (entry.type === 'gallery') {
+    // …and the pictures. The agent handed over where they are, not words about
+    // them, so the turn block around it already names who produced them.
+    return <GalleryCard gallery={entry.gallery} />;
   }
   if (entry.type === 'task-list') {
     // No sender frame: the list is the AGENT's own bookkeeping about the work,

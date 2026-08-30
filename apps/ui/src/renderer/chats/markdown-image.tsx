@@ -1,43 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 
 import { ZoomableImage } from '../components/ui/image-viewer';
-
-/** Reads one agent-referenced local image back as a `data:` URL. */
-export type MarkdownImageLoader = (path: string) => Promise<string>;
-
-/**
- * How a markdown image in an agent's message reaches its bytes.
- *
- * A context for the reason {@link AttachmentLoaderContext} is one: every shell
- * between `Chats` and a message bubble is memoized, and threading a loader
- * through each would defeat that. The RUN is bound by the provider rather than
- * passed per call — `MarkdownContent` renders one run's transcript and has no
- * run id of its own, and giving it one would mean a new prop on all four of its
- * call sites for a value only this needs.
- *
- * Null outside a provider: an image then renders as its own reference rather
- * than throwing or showing a broken box.
- */
-export const MarkdownImageLoaderContext =
-  createContext<MarkdownImageLoader | null>(null);
-
-/** Schemes the renderer will not fetch, and why, in the user's own words. */
-function refusalFor(src: string): string | null {
-  if (src.startsWith('data:')) {
-    return null; // inline bytes — the CSP already allows these
-  }
-  if (/^https?:/i.test(src)) {
-    // Not a limitation to route around: this app makes no outbound requests,
-    // and an agent-authored `![](https://…/?q=secrets)` is exactly the beacon
-    // the renderer's `img-src 'self' data:` exists to stop. Said out loud
-    // rather than shown as a broken image.
-    return 'remote images are not loaded';
-  }
-  if (/^[a-z][a-z0-9+.-]*:/i.test(src)) {
-    return 'this image link is not a file on your machine';
-  }
-  return null;
-}
+import { LocalImageLoaderContext, refusalFor } from './local-image-loader';
 
 /**
  * One image an agent referenced from its own markdown.
@@ -62,7 +26,7 @@ export function MarkdownImage({
   src?: string | Blob;
   alt?: string;
 }): React.JSX.Element {
-  const load = useContext(MarkdownImageLoaderContext);
+  const load = useContext(LocalImageLoaderContext);
   // `src` is typed loosely by the markdown renderer's HTML props; only a string
   // is a reference we can do anything with.
   const reference = typeof src === 'string' ? src.trim() : '';

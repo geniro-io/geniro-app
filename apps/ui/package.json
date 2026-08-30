@@ -20,6 +20,7 @@
   "dependencies": {
     "@geniro/daemon": "workspace:*",
     "@uiw/react-md-editor": "^4.1.1",
+    "react-zoom-pan-pinch": "^4.0.4",
     "recharts": "^3.10.1",
     "socket.io-client": "^4.8.3",
     "zod": "^4.4.3"

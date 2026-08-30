@@ -8,6 +8,7 @@ import { readChart } from './chart-payload';
 import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
+import { type GallerySpec, readGallery } from './gallery-payload';
 import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
@@ -89,6 +90,7 @@ const GENIRO_TOOL_NAMES = [
   'show_chart',
   'show_metrics',
   'show_comparison',
+  'show_gallery',
   'propose_patch',
   'propose_plan',
 ] as const;
@@ -497,6 +499,25 @@ export interface ComparisonEntry {
 }
 
 /**
+ * One set of pictures an agent handed over, drawn as its own card.
+ *
+ * A row each, on {@link FindingsEntry}'s reasoning: it arrives whole, so two
+ * galleries are two grids rather than one that rewrites itself under a reader
+ * who has already scrolled past it.
+ */
+export interface GalleryEntry {
+  type: 'gallery';
+  id: string;
+  createdAt: string;
+  seq: number;
+  nodeId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
+   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  parentToolUseId: string | null;
+  gallery: GallerySpec;
+}
+
+/**
  * One dynamic workflow the agent launched, drawn as its own card.
  *
  * A CARD rather than a block, and the difference is a fact about the CLI rather
@@ -614,6 +635,7 @@ export type TranscriptEntry =
   | ChartEntry
   | MetricsEntry
   | ComparisonEntry
+  | GalleryEntry
   | WorkflowEntry;
 
 /**
@@ -645,6 +667,7 @@ export type CardEntry =
   | ChartEntry
   | MetricsEntry
   | ComparisonEntry
+  | GalleryEntry
   | WorkflowEntry;
 
 export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
@@ -654,6 +677,7 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'chart' ||
     entry.type === 'metrics' ||
     entry.type === 'comparison' ||
+    entry.type === 'gallery' ||
     entry.type === 'workflow'
   );
 }
@@ -1872,6 +1896,25 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         nodeId: item.nodeId,
         parentToolUseId: subagentIdOf(item),
         comparison,
+      });
+      continue;
+    }
+    if (item.kind === 'show_gallery') {
+      const gallery = readGallery(item);
+      if (gallery === null) {
+        continue;
+      }
+      // Closes both open runs, for the reason the findings card does.
+      openGroups.delete(groupKey(item));
+      openTaskCards.delete(groupKey(item));
+      entries.push({
+        type: 'gallery',
+        id: item.id,
+        createdAt: item.createdAt,
+        seq: item.seq,
+        nodeId: item.nodeId,
+        parentToolUseId: subagentIdOf(item),
+        gallery,
       });
       continue;
     }

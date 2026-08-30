@@ -24,6 +24,7 @@ import {
   revealPathSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
+import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
 import { NotificationService } from './notifications/notifications.service';
 import { openInTerminal, openTerminalAt } from './open-terminal';
@@ -100,6 +101,15 @@ export function registerIpc(
     // not to work.
     if (parsed.checkForUpdates !== undefined) {
       updates.start(parsed.checkForUpdates);
+    }
+    // Applied on the spot, and applied HERE rather than in the renderer: this
+    // one write themes the OS chrome the app does not paint AND, through
+    // `prefers-color-scheme`, the page itself — so the renderer needs no push
+    // channel to be told, and the two cannot disagree. `applyTheme` rather than
+    // `applyNativeAppearance` because a window already open also has its own
+    // ground to repaint, which is a construction option nothing else re-reads.
+    if (parsed.theme !== undefined) {
+      applyTheme(parsed.theme);
     }
     return settings;
   });

@@ -1,0 +1,172 @@
+/*
+ * Light — the warm cream / caramel theme, and the app's default.
+ *
+ * One file per theme; a theme is the complete set of token values and nothing
+ * else, so adding a theme is adding a file here plus a row in
+ * `shared/themes.ts`. `global.css` maps these onto utilities in `@theme
+ * inline` and never carries a value of its own.
+ *
+ * Values are kept in lockstep with the sibling Geniro web app
+ * (geniro/apps/web/src/styles/global.css) so the two surfaces stay visually
+ * identical. NEVER hardcode a colour/radius in a component — read it from a
+ * token (as a `bg-primary` / `text-muted-foreground` utility, or `var(--…)`
+ * when a utility doesn't exist).
+ *
+ * The bare `:root` arm is what makes this theme the fallback: it paints the
+ * document before any `data-theme` attribute is written, so a renderer whose
+ * theme resolution has not run yet still has a full palette rather than
+ * transparent boxes.
+ */
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+
+  --font-size: 15px;
+  --font-family-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas,
+    monospace;
+
+  /* Warm cream / caramel palette */
+  /* TWIN PARSER: `shared/themes.ts`'s `windowBackground` for this theme is
+     this same value, used as the Electron window's own `backgroundColor` so
+     the frame shows this rather than white wherever the page has not painted
+     (a resize in flight, the clipped bottom corners). CSS cannot read a TS
+     constant, so the two are spelled separately and MUST move together. */
+  --background: #f5f1eb;
+  --foreground: #3d2e1f;
+  --card: #fdfcfa;
+  --card-foreground: #3d2e1f;
+  --popover: #fdfcfa;
+  --popover-foreground: #3d2e1f;
+  /* Primary/secondary diverge from the web values (#d4915e / #e8a676 with
+     white text — ~2.5:1 and ~2.1:1, far under WCAG AA) the same way the
+     status colours below do: --primary is the lightest hue-matched caramel
+     whose white text AND text-primary links clear ≥4.5:1 on card/background
+     (5.24 / 5.11 / 4.66); --secondary keeps the light caramel fill and flips
+     its foreground dark (6.31:1), matching the --accent pattern. */
+  --primary: #985f2c;
+  --primary-foreground: #ffffff;
+  --secondary: #e8a676;
+  --secondary-foreground: #3d2e1f;
+  --muted: #ebe5dc;
+  --muted-foreground: #7a6b5a;
+  --accent: #f4e5d3;
+  --accent-foreground: #3d2e1f;
+  /* Status colours deliberately darker than the web values
+     (#c95d3f/#5f8f4e/#b8801f): these read as TEXT on the card/background
+     surfaces, where the web tones fail WCAG AA — these clear ≥4.5:1 there (and
+     white-on-them ≥4.5 for the button/badge fills). A known divergence from the
+     sibling web palette, traded for contrast. */
+  --destructive: #b44f33;
+  --destructive-foreground: #ffffff;
+  --success: #507841;
+  --success-foreground: #ffffff;
+  --warning: #916518;
+  --warning-foreground: #ffffff;
+  /* Syntax palette for highlighted code (components/ui/code-block.tsx).
+     Hue-matched to the warm cream palette and contrast-checked as TEXT on
+     --muted (#ebe5dc), the code surface: every tone below clears WCAG AA
+     (>=4.5:1) there, the same bar --primary and the status colours document
+     above. Punctuation sits at AA-large only by design — it is structural
+     noise the eye skips, never content. */
+  --code-comment: #7a6b5a;
+  --code-keyword: #96442b;
+  --code-string: #46702f;
+  --code-number: #8a5a12;
+  --code-function: #7a4a9c;
+  --code-operator: #6b5a48;
+  --code-punctuation: #8a7a67;
+  --code-variable: #2f6a86;
+
+  /* Terminal (ANSI) palette — what a shell's own colours become in the app.
+     ALIASES of the semantic and code palettes wherever one already carries the
+     hue, on the same rule the group palette follows: a terminal's red and an
+     error's red sit in the same window and two independently-maintained reds
+     would drift. They are named by the ANSI COLOUR because that is what the
+     bytes say — a shell writes `ESC[31m`, never "destructive".
+
+     Tuned for THIS background rather than taken from a terminal's own defaults:
+     a terminal's #00ff00 on black is unreadable on cream, and these are the
+     values already proven legible on `--card` by the syntax highlighter.
+     BRIGHT variants (90–97) deliberately map to the same values — on a light
+     background "brighter" means less contrast, and the weight carried by
+     `ESC[1m` says the same thing legibly. */
+  --ansi-black: var(--foreground);
+  --ansi-red: var(--destructive);
+  --ansi-green: var(--success);
+  --ansi-yellow: var(--warning);
+  --ansi-blue: var(--code-variable);
+  --ansi-magenta: var(--code-function);
+  /* The ONE new literal here: nothing in the palette carries a cyan, and the
+     avatar teal (#14b8a6) is a 500-weight built for white cards — measured
+     against this cream it reads as a highlight rather than as text. */
+  --ansi-cyan: #2a7175;
+  --ansi-white: var(--muted-foreground);
+
+  /* Agent avatar palette — mirrors geniro web's AGENT_AVATAR_COLORS
+     (tailwind 500s), hashed deterministically per node id. */
+  --avatar-1: #3b82f6;
+  --avatar-2: #a855f7;
+  --avatar-3: #22c55e;
+  --avatar-4: #f97316;
+  --avatar-5: #ec4899;
+  --avatar-6: #6366f1;
+  --avatar-7: #14b8a6;
+  --avatar-8: #ef4444;
+  --avatar-user: #6b7280;
+
+  /* Sidebar group palette. ALIASES of the avatar hues above rather than a
+     second set of values: a group's dot and an agent's avatar sit inches apart
+     in the same window, and two independently-maintained blues would drift.
+     They are named by COLOUR because that is what the daemon stores — a group
+     row carries `color: 'blue'`, never a hex, since the renderer may not hold
+     a colour literal anywhere outside this file. */
+  --group-blue: var(--avatar-1);
+  --group-purple: var(--avatar-2);
+  --group-green: var(--avatar-3);
+  --group-orange: var(--avatar-4);
+  --group-pink: var(--avatar-5);
+  --group-indigo: var(--avatar-6);
+  --group-teal: var(--avatar-7);
+  --group-red: var(--avatar-8);
+  --border: #ddd4c8;
+  --input: transparent;
+  --input-background: #fdfcfa;
+  --switch-background: #d4c4b3;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+  --ring: #d4915e;
+  --chart-1: #d4915e;
+  --chart-2: #e8a676;
+  --chart-3: #b87d52;
+  --chart-4: #8a6947;
+  --chart-5: #c99167;
+  --radius: 0.5rem;
+
+  /* Elevation — desktop panels use these, web relies on Tailwind defaults */
+  --shadow-sm: 0 1px 2px rgba(61, 46, 31, 0.06);
+  --shadow-md: 0 4px 16px rgba(61, 46, 31, 0.08);
+  /* FLOATING elevation — a panel that hangs over the page rather than sitting
+     in it (the dropdown menu, the anchored popover). Two layers on purpose: a
+     tight contact shadow that separates the panel from whatever is directly
+     beneath it, and a wide ambient one that says how far above it floats. With
+     only --shadow-md, a popover on this warm near-white palette could not lift
+     itself off the page and its 1px border ended up doing all the separating —
+     which is what made the menu read as an outlined wireframe. */
+  --shadow-lg:
+    0 2px 6px rgba(61, 46, 31, 0.07), 0 12px 32px rgba(61, 46, 31, 0.13);
+
+  --sidebar: #fdfcfa;
+  --sidebar-foreground: #3d2e1f;
+  --sidebar-primary: #d4915e;
+  /* Text-safe caramel for the ACTIVE nav label/icon: #d4915e reads 2.43:1 on
+     --sidebar-accent (fails AA); this hue-matched darker step reads 4.52:1.
+     A desktop-only token — no web-palette equivalent. */
+  --sidebar-primary-strong: #a5602c;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f9f6f1;
+  --sidebar-accent-foreground: #3d2e1f;
+  --sidebar-border: #ddd4c8;
+  --sidebar-ring: #d4915e;
+}

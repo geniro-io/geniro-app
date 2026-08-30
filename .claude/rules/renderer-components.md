@@ -8,7 +8,9 @@ paths:
 
 ## Layers (every styled element goes through them, in order)
 
-1. **Token** in `styles/global.css` (see `renderer-design-system.md`)
+1. **Token** — its VALUE in `styles/themes/<id>.css` (one file per theme),
+   mapped to a utility by `styles/global.css`'s `@theme inline` (see
+   `renderer-design-system.md`)
 2. **Primitive** in `components/ui/`, token-driven, shadcn-v4 flavour
    (`data-slot` attribute, `cva` variants, `cn()` composition). Browse the
    directory (`apps/ui/src/renderer/components/ui/`) for the current set —

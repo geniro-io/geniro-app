@@ -27,6 +27,22 @@ file at the start of each run and at every phase-boundary refresh via
   index it reads must be the worktree's own AND freshly synced — an existing index
   is not a current one; the bootstrap + per-run sync run at `## Additional Steps →
   After worktree-setup`.
+  - **In a WORKTREE, pass `projectPath` on EVERY MCP call — the tool does not
+    follow you there.** `mcp__codegraph__codegraph_explore`'s `projectPath` is
+    optional, and omitted it uses "this session's default project", which is the
+    directory the session was LAUNCHED in. `EnterWorktree` moves the shell's cwd
+    and nothing else, so from inside a worktree the tool goes on answering from
+    the MAIN checkout — including that checkout's uncommitted working tree.
+    Measured 2026-08-30 (v1.1.1): from a session inside
+    `.claude/worktrees/app-themes`, a bare call returned a `Settings.tsx`
+    carrying a feature that exists only in uncommitted work on `main`; the same
+    call with `projectPath` set to the worktree returned the worktree's own
+    file. Nothing in the reply says which checkout it came from — it is
+    confident, verbatim, current source from the wrong tree, which is the worst
+    shape a wrong answer can take. So `projectPath: <absolute worktree root>` on
+    every call once you are in a worktree, or use the shell form (`codegraph
+    explore`), which resolves from the process cwd and also accepts
+    `-p <path>`. Outside a worktree the default is already right.
   - **A deferred MCP tool looks exactly like a missing one.** If
     `mcp__codegraph__codegraph_explore` is not in your tool surface, load its schema
     by name before concluding codegraph is unavailable — or use the shell form,
@@ -39,8 +55,10 @@ file at the start of each run and at every phase-boundary refresh via
   Geniro repo — keep changes minimal and local-first so fixes can flow between
   the two repos.
 - **Renderer design system** (`apps/ui/src/renderer`) — two hard rules: (1)
-  never hardcode a colour, every colour/radius/shadow comes from a token in
-  `styles/global.css` — enforced where possible, by an eslint override on
+  never hardcode a colour, every colour/radius/shadow comes from a token whose
+  VALUE lives in `styles/themes/<id>.css` (one file per theme) and which
+  `styles/global.css` maps to a utility — enforced where possible, by an eslint
+  override on
   `apps/ui/src/renderer/**`; (2) never duplicate a component, reuse a primitive
   in `components/ui/` or a shared component in `components/` — review-only, no
   mechanical enforcement exists for this one. Compose with `cn()`/`cva`. Full
@@ -126,6 +144,22 @@ file at the start of each run and at every phase-boundary refresh via
   until the next one. Re-sync after a batch of edits (or a merge/rebase) before
   trusting a lookup. Never reach for `init`/`index` to refresh: both are full
   rebuilds costing ~580 MB per checkout.
+
+  **A worktree never gets a daemon, so nothing ever syncs it for you.** Verified
+  2026-08-30 (v1.1.1): after `init` AND `sync` inside
+  `.claude/worktrees/app-themes`, `codegraph daemons` still listed only the three
+  PROJECT roots and none for the worktree. The cost of forgetting is silence
+  rather than an error — a symbol in a file written after the last sync answers
+  `No results found`, which reads exactly like "this does not exist". Measured on
+  that worktree: `initTheme` was missing until `codegraph sync <worktree>` picked
+  up 18 changed files in 320ms, after which it resolved. Both commands take the
+  worktree path as an argument (`codegraph sync <path>`), so they can be run from
+  anywhere.
+
+  Pair this with the `projectPath` rule above — they are the two halves of one
+  trap, and each alone still gives wrong answers. A synced worktree index the MCP
+  tool never consults is as useless as a fresh call against an index nobody
+  synced.
 
 ## Constraints
 

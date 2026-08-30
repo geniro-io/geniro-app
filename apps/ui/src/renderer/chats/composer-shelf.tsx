@@ -1,26 +1,20 @@
-import { useState } from 'react';
-
 import type { PullRequestRefResult } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
+import { revealThreadPullRequests } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
+import { currentThreadPullRequest } from './use-thread-pull-requests';
 
 /**
  * The row of small cards directly above the composer.
  *
- * It replaced a single pull-request LINE, and the reason is the feature that
- * outgrew it: a thread opens as many pull requests as it opens — thirty-one
- * across six repositories in the case this was built for — so the surface had
- * to stop being "the one pull request" and start being a shelf. Chips wrap, so
- * two or six read the same way, and each takes a bounded width and gives the
- * rest back: what truncates is the TITLE, never the number, since the number is
- * what identifies it.
- *
- * A shelf rather than a pull-request strip on purpose. What sits here is
- * whatever the thread has produced that the user might want to reach without
- * scrolling the transcript, and pull requests are the first of those rather
- * than the only one — anything added later is another chip in this row, not
- * another line above the composer, which is how the area became a stack of
- * one-item rows in the first place.
+ * ONE LINE, always. What sits here is whatever the thread has produced that the
+ * user might want to reach without scrolling the transcript — pull requests are
+ * the first of those rather than the only one, and anything added later is
+ * another chip in this row, not another line above the composer, which is how
+ * the area became a stack of one-item rows in the first place. A row that
+ * wrapped would push the textarea down by however much the thread happened to
+ * produce, so each chip takes a bounded width and gives the rest back: what
+ * truncates is the TITLE, never the number, since the number identifies it.
  *
  * It renders NOTHING when it holds nothing (`empty:hidden`), so a thread that
  * has produced none of this costs no space and no gap.
@@ -33,73 +27,46 @@ export function ComposerShelf({
   return (
     <div
       data-slot="composer-shelf"
-      className="flex flex-wrap items-center gap-1.5 px-1 empty:hidden">
+      className="flex items-center gap-1.5 overflow-hidden px-1 empty:hidden">
       {children}
     </div>
   );
 }
 
 /**
- * How many chips the shelf shows before folding the rest behind a count.
+ * The thread's CURRENT pull request as a shelf chip, and a way to the rest.
  *
- * The shelf sits above the composer, and a thread with thirty-one pull requests
- * would otherwise push the textarea most of the way up the pane. Three is what
- * fits on one line at a typical width; the rest are one press away, and the
- * panel lists them all regardless.
- */
-const SHELF_CHIP_LIMIT = 3;
-
-/**
- * The pull requests this thread opened, as shelf chips — newest first, folded
- * past {@link SHELF_CHIP_LIMIT}.
- *
- * The fold is component state rather than persisted: it is a glance at a list
- * whose full form lives in the panel, so it starts folded every time rather
- * than remembering a thread where the user once expanded it.
+ * One chip rather than a fold that opens in place. A thread opens as many pull
+ * requests as it opens — thirty-one across six repositories in the case this
+ * was built for — and every one of them drawn here pushed the textarea most of
+ * the way up the pane. So the shelf names the one the thread is on and the
+ * button hands the list to the PANEL, which is a scrolling column built for it.
  */
 export function ThreadPullRequestChips({
   results,
 }: {
   results: readonly PullRequestRefResult[];
 }): React.JSX.Element | null {
-  const [expanded, setExpanded] = useState(false);
-  if (results.length === 0) {
+  const current = currentThreadPullRequest(results);
+  if (current === null) {
     return null;
   }
   const repos = new Set(
     results.map((row) => `${row.ref.owner}/${row.ref.repo}`),
   );
-  const shown = expanded ? results : results.slice(0, SHELF_CHIP_LIMIT);
-  const hidden = results.length - shown.length;
   return (
     <>
-      {shown.map((result) => (
-        <ThreadPullRequestChip
-          key={result.ref.url}
-          result={result}
-          showRepo={repos.size > 1}
-        />
-      ))}
-      {hidden > 0 ? (
+      <ThreadPullRequestChip result={current} showRepo={repos.size > 1} />
+      {results.length > 1 ? (
         <Button
           type="button"
           variant="outline"
           size="sm"
-          aria-expanded={false}
-          className="h-[26px] rounded-lg px-2 text-xs text-muted-foreground"
-          onClick={() => setExpanded(true)}>
-          +{hidden}
-        </Button>
-      ) : null}
-      {expanded && results.length > SHELF_CHIP_LIMIT ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          aria-expanded={true}
-          className="h-[26px] rounded-lg px-2 text-xs text-muted-foreground"
-          onClick={() => setExpanded(false)}>
-          Show fewer
+          title="Show every pull request this thread opened"
+          aria-label={`Show all ${results.length} pull requests this thread opened`}
+          className="h-[26px] shrink-0 rounded-lg px-2 text-xs text-muted-foreground"
+          onClick={revealThreadPullRequests}>
+          All {results.length}
         </Button>
       ) : null}
     </>

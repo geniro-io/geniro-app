@@ -34,6 +34,10 @@ import {
 } from './agent-activity';
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
+import {
+  AGENTS_PANEL_COLLAPSED_FLAG,
+  THREAD_PULL_REQUESTS_SETTLED_FLAG,
+} from './panel-flags';
 import { splitPullRequests } from './pull-request';
 import { PullRequestRow, ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
@@ -360,13 +364,45 @@ function PullRequestList({
 }
 
 /**
- * The pull requests THIS THREAD opened, whatever repository each landed in.
+ * Whether this row is OVER — merged or closed-unmerged, the two states that
+ * share one fold. Each row's own status word tells them apart, and a separate
+ * heading would give abandoned work its own block on a panel whose subject is
+ * what is still in flight.
+ */
+function isSettled(result: PullRequestRefResult): boolean {
+  const state = result.pullRequest?.state;
+  return state === 'merged' || state === 'closed';
+}
+
+function ThreadPullRequestList({
+  results,
+  showRepo,
+}: {
+  results: readonly PullRequestRefResult[];
+  showRepo: boolean;
+}): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col gap-1 p-0">
+      {results.map((result) => (
+        <li key={result.ref.url}>
+          <ThreadPullRequestRow result={result} showRepo={showRepo} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The pull requests THIS THREAD opened, whatever repository each landed in —
+ * newest first, with the finished ones behind the same fold its neighbour uses.
  *
- * Flat and newest-first rather than split open/settled the way its neighbour
- * is: this list is a record of what the conversation did, so a merged pull
- * request is not a finished thing to be folded away — it is half the answer to
- * "what came out of this thread". The repository is part of each name exactly
- * when there is more than one.
+ * Folded for the reason the branch list is: a thread that ran for a week is
+ * mostly merged pull requests, and thirty-one settled rows listed flat buried
+ * the one still in review under work that is over. Reported exactly that way —
+ * "они в большинстве случаев в Merged … должны быть Collapsed". What is still
+ * open stays in the open, which is the whole point of the section.
+ *
+ * The repository is part of each name exactly when there is more than one.
  */
 function ThreadPullRequestsSection({
   results,
@@ -377,15 +413,43 @@ function ThreadPullRequestsSection({
     results.map((row) => `${row.ref.owner}/${row.ref.repo}`),
   );
   const showRepo = repos.size > 1;
+  // An UNRESOLVED row sits with the open ones: `gh` having nothing to say is
+  // not a state, and folding it away would hide the thread's newest pull
+  // request on a machine that is merely logged out.
+  const open = results.filter((row) => !isSettled(row));
+  const settled = results.filter(isSettled);
+  const [settledOpen, setSettledOpen] = usePersistedFlag(
+    THREAD_PULL_REQUESTS_SETTLED_FLAG,
+    false,
+  );
   return (
     <PanelSection label="Opened by this thread">
-      <ul className="m-0 flex list-none flex-col gap-1 p-0">
-        {results.map((result) => (
-          <li key={result.ref.url}>
-            <ThreadPullRequestRow result={result} showRepo={showRepo} />
-          </li>
-        ))}
-      </ul>
+      {open.length > 0 ? (
+        <ThreadPullRequestList results={open} showRepo={showRepo} />
+      ) : null}
+      {settled.length > 0 ? (
+        <>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={settledOpen}
+            className="h-6 w-fit gap-1 px-1 text-xs text-muted-foreground"
+            onClick={() => setSettledOpen((wasOpen) => !wasOpen)}>
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                'size-3 shrink-0 transition-transform',
+                settledOpen && 'rotate-90',
+              )}
+            />
+            Merged &amp; closed · {settled.length}
+          </Button>
+          {settledOpen ? (
+            <ThreadPullRequestList results={settled} showRepo={showRepo} />
+          ) : null}
+        </>
+      ) : null}
     </PanelSection>
   );
 }
@@ -702,7 +766,7 @@ export function AgentsPanel({
   // panel that vanished entirely would need a second control somewhere else to
   // bring it back, which is the arrangement that was just retired.
   const [collapsed, setCollapsed] = usePersistedFlag(
-    'chats.agentsPanelCollapsed',
+    AGENTS_PANEL_COLLAPSED_FLAG,
     false,
   );
   // ONE at a time, and that is a statement of fact rather than a policy:

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { PullRequestInfo, PullRequestState } from '../../shared/contracts';
-import {
-  currentPullRequest,
-  splitPullRequests,
-  threadPullRequests,
-} from './pull-request';
+import { splitPullRequests, threadPullRequests } from './pull-request';
 
 function pr(
   number: number,
@@ -182,37 +178,6 @@ describe('threadPullRequests', () => {
         pullRequests: [pr(1, 'main')],
       }),
     ).toEqual([]);
-  });
-});
-
-describe('currentPullRequest', () => {
-  it('prefers an OPEN pull request over a merged one from the same branch', () => {
-    // Reusing a branch after its pull request merged is routine; naming the
-    // merged one as this thread's would describe work that is already over.
-    expect(
-      currentPullRequest([
-        pr(9, 'feat/reused', 'merged'),
-        pr(10, 'feat/reused'),
-      ])?.number,
-    ).toBe(10);
-  });
-
-  it('falls back to the newest when none is open', () => {
-    // The list arrives newest-first, so the first row is the newest. The
-    // fixtures carry DISTINCT stamps and the assertion reads the chosen one's,
-    // so taking the last instead of the first fails here rather than passing on
-    // two rows that happen to look alike.
-    const chosen = currentPullRequest([
-      pr(10, 'feat/reused', 'closed', false, '2026-08-25T00:00:00Z'),
-      pr(9, 'feat/reused', 'merged', false, '2026-07-01T00:00:00Z'),
-    ]);
-
-    expect(chosen?.number).toBe(10);
-    expect(chosen?.updatedAt).toBe('2026-08-25T00:00:00Z');
-  });
-
-  it('names none when the thread has no pull request', () => {
-    expect(currentPullRequest([])).toBeNull();
   });
 });
 

@@ -33,7 +33,11 @@ export function PanelLinkRow({
       {icon}
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {meta === undefined ? null : (
-        <span className="shrink-0 text-xs text-muted-foreground">{meta}</span>
+        <span
+          data-slot="panel-link-meta"
+          className="shrink-0 text-xs text-muted-foreground">
+          {meta}
+        </span>
       )}
       <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
     </a>

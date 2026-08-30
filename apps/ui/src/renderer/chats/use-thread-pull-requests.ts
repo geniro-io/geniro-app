@@ -199,3 +199,23 @@ export function threadPullRequestsOf(
       (row) => store.get(keyOf(row)) ?? { ref: refOf(row), pullRequest: null },
     );
 }
+
+/**
+ * The ONE of them the thread is currently on — what the shelf above the
+ * composer names.
+ *
+ * An OPEN one outranks a settled one, and among open ones the newest wins: a
+ * thread that opened six pull requests over a week is working on the one still
+ * in review, not on the first one it merged. An unresolved row can still be the
+ * answer — the thread demonstrably opened it, and `gh` having nothing to say is
+ * not a state.
+ */
+export function currentThreadPullRequest(
+  results: readonly PullRequestRefResult[],
+): PullRequestRefResult | null {
+  return (
+    results.find((row) => row.pullRequest?.state === 'open') ??
+    results[0] ??
+    null
+  );
+}

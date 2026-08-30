@@ -19,6 +19,21 @@ describe('GENIRO_UI_PREAMBLE', () => {
     expect(GENIRO_UI_PREAMBLE).toContain('![alt](path)');
   });
 
+  it('does not send an agent with numbers off to draw its own chart', () => {
+    // The preamble LEADS the instruction stack, so its wording is the default
+    // habit. As first written the image bullet said "a chart or diagram you
+    // rendered to a file", which is the job `show_chart` does properly — the
+    // tool draws a live card, an embedded PNG is a picture of one — and the
+    // agent read the preamble first. The bullet must stay about a picture the
+    // agent ALREADY has.
+    expect(GENIRO_UI_PREAMBLE).not.toContain('chart');
+    // Conditional, and that is not a hedge: this text is not gated on the MCP
+    // endpoint having been delivered, and on ACP it is said once per session
+    // and never repeated, so it has to stay true on a turn where no such tool
+    // is registered.
+    expect(GENIRO_UI_PREAMBLE).toContain('where a tool is offered');
+  });
+
   it('does not promise remote image URLs, which the renderer CSP refuses', () => {
     // `img-src 'self' data:` means an http(s) source renders as a broken box.
     // Promising it is the one instruction here that would visibly damage a

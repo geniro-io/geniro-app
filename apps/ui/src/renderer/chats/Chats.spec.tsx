@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeniroApi, PullRequestsResult } from '../../shared/contracts';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
@@ -521,7 +522,7 @@ beforeEach(() => {
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
   Element.prototype.scrollTo = vi.fn();
-  (window as unknown as { geniro: Partial<GeniroApi> }).geniro = {
+  window.geniro = createPreloadStub({
     getSettings: vi.fn().mockResolvedValue({
       onboardingComplete: true,
       projectFolder: '/proj',
@@ -570,7 +571,7 @@ beforeEach(() => {
     ]),
     notify,
     onNotificationActivated: vi.fn().mockReturnValue(() => {}),
-  };
+  });
   notify.mockReset().mockResolvedValue(undefined);
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();

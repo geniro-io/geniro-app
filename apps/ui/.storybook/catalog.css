@@ -1,0 +1,14 @@
+/*
+ * The catalog's stylesheet: the app's own, plus the stories themselves.
+ *
+ * `global.css` excludes `*.stories.tsx` from Tailwind's scan so a utility
+ * written only in a story is never generated into the app bundle users ship.
+ * Storybook loads the SAME stylesheet, so that exclusion would also strip the
+ * classes the stories need to render — the 900px title-bar demo collapsing to
+ * auto width, the 520px nav-rail demo to zero height.
+ *
+ * So the app entry stays exclusive and the catalog adds the stories back here.
+ * Only `preview.tsx` imports this file; nothing in `src/` may.
+ */
+@import '../src/renderer/styles/global.css';
+@source '../src/renderer/**/*.stories.tsx';

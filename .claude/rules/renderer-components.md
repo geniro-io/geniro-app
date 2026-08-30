@@ -185,6 +185,32 @@ paths:
 - Keep screens thin: layout + state wiring; visual building blocks come from
   the shared layers.
 
+## Component stories (the catalog)
+
+- **Every component in `components/` and `components/ui/` has a co-located
+  `*.stories.tsx`, in the same commit that adds the component.** This is
+  mechanized: `components/catalog-coverage.spec.ts` fails the suite when a
+  component has no story, when a story outlives its component, or when either
+  is filed outside its layer's namespace (`Primitives/` for `ui/`,
+  `Components/` for the root).
+- **It enforces DISCOVERABILITY, not de-duplication.** No spec can see that two
+  components do the same thing; what it can guarantee is that both are in the
+  catalog, where the next person finds them before writing a third. That is the
+  half of the Reuse rules below a machine can carry.
+- Run the catalog with `pnpm storybook`, or from **View → Component Catalog**
+  in a dev launch of the app. Storybook is dev-only and never packaged.
+- A story that needs open/close state drives it from a stateful wrapper inside
+  `render`, or opens by default — a story whose only state is "closed" shows an
+  empty canvas and documents nothing.
+- `window.geniro` is stubbed by `renderer/__fixtures__/preload-stub.ts`, which
+  answers plausible EMPTY state so a component shows its zero state rather than
+  fabricated data. Populated data comes through PROPS.
+- **That fixture is the ONE preload double** — the catalog installs it whole and
+  a spec passes `overrides` for the channels it asserts on. It is TYPED as
+  `GeniroApi` rather than cast, so a channel added to the interface stops it
+  compiling; a spec that reaches `window.geniro` through
+  `as unknown as Partial<GeniroApi>` defeats exactly that and must not.
+
 ## Component tests
 
 - Co-located `*.spec.tsx` next to the component.

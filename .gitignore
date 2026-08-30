@@ -69,3 +69,6 @@ Thumbs.db
 .playwright-mcp/
 !.geniro/actions/
 !.geniro/actions/**
+
+# Storybook static build (CI artifact only; never packaged)
+storybook-static/

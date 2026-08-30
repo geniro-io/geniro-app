@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
   CliDetection,
   CliKind,
-  GeniroApi,
   Settings as SettingsShape,
   UpdateState,
 } from '../../shared/contracts';
@@ -16,6 +15,7 @@ import {
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
 } from '../../shared/contracts';
 import { THEMES } from '../../shared/themes';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { Settings, type SettingsSection } from './Settings';
 
 (
@@ -162,8 +162,7 @@ beforeEach(() => {
   cliAuthApi.getCliLogin.mockReset();
   cliAuthApi.submitCliLoginCode.mockReset();
   cliAuthApi.cancelCliLogin.mockReset();
-  (window as unknown as { geniro: Partial<GeniroApi> }).geniro =
-    geniro as unknown as Partial<GeniroApi>;
+  window.geniro = createPreloadStub(geniro);
 });
 
 afterEach(async () => {

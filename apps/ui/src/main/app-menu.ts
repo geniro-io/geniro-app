@@ -1,11 +1,32 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   Menu,
   type MenuItemConstructorOptions,
+  shell,
 } from 'electron';
 
 import { IPC } from '../shared/contracts';
+
+/**
+ * Where `pnpm storybook` serves the component catalog.
+ *
+ * TWIN: the host and port are spelled here and in `apps/ui/package.json`'s
+ * `storybook` script (`storybook dev -p 6006 --host 127.0.0.1`). Nothing can
+ * read one from the other — a package script is not importable — so
+ * `app-menu.spec.ts` reads that script and asserts the two agree.
+ *
+ * `127.0.0.1` rather than `localhost`, matching the bind exactly: that script
+ * binds v4 loopback only, and on an IPv6-first resolver `localhost` resolves to
+ * `::1`, where nothing would be listening. The bind is not negotiable — the
+ * wildcard default serves the whole workspace over the LAN through Vite's
+ * `/@fs/` handler, in an app whose own daemon binds loopback only.
+ */
+export const COMPONENT_CATALOG_URL = 'http://127.0.0.1:6006';
+
+/** How long to wait for the catalog to answer before saying it is not up. */
+const CATALOG_PROBE_MS = 1500;
 
 /**
  * The macOS menu bar — Electron's own default, minus the one entry that is
@@ -36,11 +57,22 @@ import { IPC } from '../shared/contracts';
 export function applicationMenuTemplate({
   name,
   version,
+  componentCatalogUrl = null,
 }: {
   /** What macOS calls this app — electron-builder's `productName`. */
   name: string;
   /** The running build, for the row the title bar gave up. */
   version: string;
+  /**
+   * Where the component catalog is served, or null to omit its row entirely.
+   *
+   * Null in every packaged build: Storybook is a development dependency that is
+   * never bundled, so a shipped app offering the row would offer a link to a
+   * port nothing on the user's machine is listening on. Omitted rather than
+   * disabled — a greyed row states that a feature exists and is unavailable,
+   * which is true for a developer and simply wrong for everyone else.
+   */
+  componentCatalogUrl?: string | null;
 }): MenuItemConstructorOptions[] {
   return [
     {
@@ -85,6 +117,20 @@ export function applicationMenuTemplate({
           label: 'Clear Agent Cache',
           click: () => sendToFocusedWindow(IPC.onClearAgentCaches),
         },
+        // Development only — see `componentCatalogUrl` above. Spread so the row
+        // is ABSENT rather than present-and-falsy: `buildFromTemplate` throws on
+        // an item carrying none of label/role/type, which is what a bare
+        // `condition && {...}` would hand it.
+        ...(componentCatalogUrl === null
+          ? []
+          : [
+              {
+                label: 'Component Catalog',
+                click: () => {
+                  void openComponentCatalog(componentCatalogUrl);
+                },
+              } satisfies MenuItemConstructorOptions,
+            ]),
         // HIDDEN, not deleted. The report is about the menu, and a hidden item
         // is not in the menu — while Electron keeps its accelerator registered
         // (`acceleratorWorksWhenHidden` defaults to true on macOS), so ⌥⌘I goes
@@ -118,11 +164,79 @@ function sendToFocusedWindow(channel: string): void {
   BrowserWindow.getFocusedWindow()?.webContents.send(channel);
 }
 
+/**
+ * Open the catalog in the user's browser, or say why it cannot be.
+ *
+ * The probe is the whole point of this not being a bare `openExternal`: the
+ * catalog is a separate dev server this app neither starts nor supervises, so
+ * the common case on a fresh `pnpm dev` is that nothing is listening — and a
+ * browser tab reading ERR_CONNECTION_REFUSED names no way forward. Spawning
+ * Storybook instead was considered and rejected: it is a long-lived child this
+ * process would then own the lifecycle of, for a convenience a one-line
+ * message buys.
+ */
+async function openComponentCatalog(url: string): Promise<void> {
+  let listening = true;
+  try {
+    await fetch(url, {
+      method: 'HEAD',
+      signal: AbortSignal.timeout(CATALOG_PROBE_MS),
+    });
+  } catch {
+    listening = false;
+  }
+
+  // A failed hand-off is not a silent one: the dialog has not been used yet on
+  // this branch, so it is still available to say what happened. Tracked apart
+  // from `listening` because the two are different failures and the user is
+  // told which — a server that never answered, or a browser that would not open.
+  let handoffFailed = false;
+  if (listening) {
+    try {
+      await shell.openExternal(url);
+      return;
+    } catch {
+      handoffFailed = true;
+    }
+  }
+
+  // Total by construction: the caller can only `void` this, so a rejection
+  // escaping it reaches Electron's uncaught-exception dialog — a "JavaScript
+  // error in the main process" popup raised by a menu click. Swallowed here
+  // because the dialog IS the last channel; there is nothing left to report a
+  // failed report with.
+  try {
+    await dialog.showMessageBox({
+      type: 'info',
+      message: handoffFailed
+        ? 'The component catalog could not be opened.'
+        : 'The component catalog is not running.',
+      detail: handoffFailed
+        ? `It is running — open ${url} in your browser.`
+        : `Start it with \`pnpm storybook\`, then open ${url}.`,
+      buttons: ['OK'],
+    });
+  } catch {
+    // Nothing further to try.
+  }
+}
+
 /** Replace Electron's default menu with {@link applicationMenuTemplate}. */
-export function installApplicationMenu(): void {
+export function installApplicationMenu({
+  isDev,
+}: {
+  /**
+   * Whether this launch is a development one — `main/index.ts` reads it from
+   * `ELECTRON_RENDERER_URL`, the signal it already uses for renderer-adjacent
+   * gating. Passed in rather than read here so the template stays a pure
+   * function of its arguments, which is what makes both arms spec-testable.
+   */
+  isDev: boolean;
+}): void {
   Menu.setApplicationMenu(
     Menu.buildFromTemplate(
       applicationMenuTemplate({
+        componentCatalogUrl: isDev ? COMPONENT_CATALOG_URL : null,
         name: app.getName(),
         // The same reading the About panel above this row and the updater's
         // `currentVersion` already take, so the three cannot disagree. Under a

@@ -7,8 +7,8 @@ import {
   type CliDetection,
   type CliKind,
   DEFAULT_SETTINGS,
-  type GeniroApi,
 } from '../../shared/contracts';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import { Onboarding } from './Onboarding';
 
 // Tell React this is an act()-aware environment (testing-library sets this for
@@ -93,8 +93,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ ...DEFAULT_SETTINGS, onboardingComplete: true });
   geniro.pickAgentBinary.mockReset().mockResolvedValue(null);
-  (window as unknown as { geniro: Partial<GeniroApi> }).geniro =
-    geniro as unknown as Partial<GeniroApi>;
+  window.geniro = createPreloadStub(geniro);
 });
 
 afterEach(async () => {

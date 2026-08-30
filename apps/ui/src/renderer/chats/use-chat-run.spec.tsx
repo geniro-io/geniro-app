@@ -43,6 +43,7 @@ const run1: ChatRun = {
   groupId: null,
   createdAt: 'now',
   updatedAt: 'now',
+  archivedAt: null,
   lastMessage: null,
   pullRequests: [],
 };

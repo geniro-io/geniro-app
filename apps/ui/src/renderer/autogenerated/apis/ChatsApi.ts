@@ -33,6 +33,10 @@ import type {
   UpdateChatSettingsDto,
 } from '../models/index';
 
+export interface ChatsApiArchiveChatRequest {
+    runId: string;
+}
+
 export interface ChatsApiCancelChatRequest {
     runId: string;
 }
@@ -47,6 +51,10 @@ export interface ChatsApiDeleteChatRequest {
 
 export interface ChatsApiExportChatRequest {
     runId: string;
+}
+
+export interface ChatsApiListChatsRequest {
+    scope?: ListChatsScopeEnum;
 }
 
 export interface ChatsApiListRunItemsRequest {
@@ -94,6 +102,10 @@ export interface ChatsApiSetRunGroupRequest {
     setRunGroupDto: SetRunGroupDto;
 }
 
+export interface ChatsApiUnarchiveChatRequest {
+    runId: string;
+}
+
 export interface ChatsApiUpdateChatSettingsRequest {
     runId: string;
     updateChatSettingsDto: UpdateChatSettingsDto;
@@ -103,6 +115,51 @@ export interface ChatsApiUpdateChatSettingsRequest {
  * 
  */
 export class ChatsApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async archiveChatRaw(requestParameters: ChatsApiArchiveChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling archiveChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/archive`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async archiveChat(requestParameters: ChatsApiArchiveChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.archiveChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -326,8 +383,12 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listChatsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
+    async listChatsRaw(requestParameters: ChatsApiListChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
         const queryParameters: any = {};
+
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -355,8 +416,8 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listChats(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
-        const response = await this.listChatsRaw(initOverrides);
+    async listChats(requestParameters: ChatsApiListChatsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
+        const response = await this.listChatsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -840,6 +901,51 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async unarchiveChatRaw(requestParameters: ChatsApiUnarchiveChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling unarchiveChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/unarchive`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async unarchiveChat(requestParameters: ChatsApiUnarchiveChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
+        const response = await this.unarchiveChatRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async updateChatSettingsRaw(requestParameters: ChatsApiUpdateChatSettingsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<RunDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -893,3 +999,13 @@ export class ChatsApi extends runtime.BaseAPI {
     }
 
 }
+
+/**
+ * @export
+ */
+export const ListChatsScopeEnum = {
+    Active: 'active',
+    All: 'all',
+    Archived: 'archived'
+} as const;
+export type ListChatsScopeEnum = typeof ListChatsScopeEnum[keyof typeof ListChatsScopeEnum];

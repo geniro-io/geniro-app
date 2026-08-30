@@ -2540,6 +2540,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     pullRequests: Array<RunPullRequest>;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    archivedAt: string | null;
 }
 
 

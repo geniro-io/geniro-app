@@ -6,6 +6,7 @@ import {
   AttachmentMediaTypeSchema,
   ChatApprovalModeSchema,
   ChatExportWireSchema,
+  ChatListScopeSchema,
   ChatMetricsWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
@@ -226,6 +227,22 @@ export const historyQuerySchema = z.object({
   beforeSeq: z.coerce.number().int().optional(),
 });
 export class HistoryQueryDto extends createZodDto(historyQuerySchema) {}
+
+export const listChatsQuerySchema = z.object({
+  /**
+   * How much of the archive to list. Absent means `active` — the desk, with
+   * everything shelved held back, which is the only reading under which
+   * archiving a thread does anything to the list it was filed out of.
+   *
+   * An ENUM rather than the boolean this started as: a boolean can only ever
+   * name two of the three answers, and the one it cannot name (`all`) is the
+   * one a user reaches for to find a shelved thread among the live ones. It is
+   * also what stops a query string from deciding by truthiness — `?archived=false`
+   * under `z.coerce.boolean()` reads as TRUE and hands back the shelf.
+   */
+  scope: ChatListScopeSchema.optional(),
+});
+export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 
 // ── Responses ───────────────────────────────────────────────────────────────
 

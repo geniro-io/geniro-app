@@ -2346,8 +2346,24 @@ export const RunWireSchema = z.object({
     .describe(
       'Pull requests this run opened, oldest first, as captured from the agent output',
     ),
+  archivedAt: z
+    .string()
+    .nullable()
+    .describe('When this run was archived, or null while it is not'),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
+
+/**
+ * How much of the archive a chat listing covers.
+ *
+ * Three answers rather than a boolean, because `all` is not the union of the
+ * other two seen from a distance — it is the reading a user takes when they
+ * want an archived thread found IN PLACE, beside the live ones, rather than on
+ * a shelf of its own. `active` is the default and the only one that HIDES
+ * anything, which is what makes archiving worth doing at all.
+ */
+export const ChatListScopeSchema = z.enum(['active', 'all', 'archived']);
+export type ChatListScope = z.infer<typeof ChatListScopeSchema>;
 
 /**
  * One conversation a CLI already holds on this machine, offered so the user can

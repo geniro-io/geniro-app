@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
+import type { ChatListScope } from '../chat.types';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -10,10 +11,23 @@ export class RunDao extends BaseDao<Run> {
     super(em, Run);
   }
 
-  /** Single-agent chat runs (no workflow), newest first. */
-  async listChats(txEm?: EntityManager): Promise<Run[]> {
+  /**
+   * Single-agent chat runs (no workflow), newest first, filtered by how much
+   * of the archive the caller asked for.
+   *
+   * `all` states NO condition on `archivedAt` rather than a condition matching
+   * both sides — an `$in` over null and non-null is the same rows written as a
+   * predicate SQL cannot use an index for, and one that a nullable column
+   * makes easy to get subtly wrong.
+   */
+  async listChats(scope: ChatListScope, txEm?: EntityManager): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { workflowId: null },
+      {
+        workflowId: null,
+        ...(scope === 'all'
+          ? {}
+          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
+      },
       // Read-only list paths: skip identity-map tracking so a long run history
       // doesn't accumulate managed entities in the forked EM (see item.dao).
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },

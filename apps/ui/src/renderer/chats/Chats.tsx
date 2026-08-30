@@ -171,6 +171,7 @@ import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
+  buildWorkflowCards,
   collectSubagentBlocks,
   groupTranscript,
   pullFileChangesOutOfGroups,
@@ -3939,7 +3940,9 @@ export function Chats({
     const flow = collapseToolSteps
       ? folded
       : pullFileChangesOutOfGroups(folded);
-    return buildTurnBlocks(buildSubagentBlocks(flow, items));
+    return buildTurnBlocks(
+      buildWorkflowCards(buildSubagentBlocks(flow, items), items),
+    );
   }, [items, collapseToolSteps]);
   /**
    * The run's row has SETTLED — whatever it settled as.

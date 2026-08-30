@@ -32,6 +32,12 @@ import {
   toolResultText,
 } from './tool-render';
 import { payloadString } from './transcript-payload';
+import {
+  mergeWorkflowDeclarations,
+  readWorkflowDeclaration,
+  type WorkflowDeclaration,
+  workflowTally,
+} from './workflow-payload';
 
 /**
  * The open-group bucket an item belongs to: its node AND its originating
@@ -490,6 +496,113 @@ export interface ComparisonEntry {
   comparison: ComparisonSpec;
 }
 
+/**
+ * One dynamic workflow the agent launched, drawn as its own card.
+ *
+ * A CARD rather than a block, and the difference is a fact about the CLI rather
+ * than a layout choice: a workflow's agents run inside the orchestrator with
+ * transcripts of their own and emit NOTHING onto this stream, so there are no
+ * rows to enclose. What the app knows about them is entirely what the daemon's
+ * `workflow_info` rows say, which is why this card has a roster where a
+ * sub-agent block has a conversation.
+ *
+ * ONE card per workflow, unlike the findings card's one-per-row: a workflow
+ * announces itself dozens of times as its roster changes, and every
+ * announcement is a fresh snapshot of the SAME work — so a card each would be
+ * the same fleet redrawn forty times down the transcript.
+ */
+export interface WorkflowEntry {
+  type: 'workflow';
+  /** The launching tool call's id — the key every `workflow_info` row names. */
+  id: string;
+  createdAt: string;
+  seq: number;
+  nodeId: string | null;
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is. */
+  parentToolUseId: string | null;
+  workflow: WorkflowDeclaration;
+  /** The script the tool was handed — the card's REQUEST panel. */
+  script: string | null;
+  /**
+   * The launching call returned — the only signal on the wire that the workflow
+   * is over, since its own progress channel simply stops.
+   */
+  returned: boolean;
+  /** That return was an error (`isError` on the paired `tool_result`). */
+  failed: boolean;
+  /** The launching call's result TEXT, or null when it carried none. */
+  result: string | null;
+  /**
+   * Whether {@link result} is the WORKFLOW's own answer, or merely the reply
+   * its launching call got.
+   *
+   * The two are not the same thing and one field cannot mean both — the same
+   * distinction, for the same measured reason, as
+   * {@link SubagentBlockEntry.resultIsOwn}. A workflow the agent WAITS for
+   * answers its own call with the script's return value. A BACKGROUNDED one has
+   * its call answered in seconds with a launch receipt and works on, and that
+   * receipt is not merely uninteresting: observed on 2.1.251 through this card,
+   * it is `Workflow launched in background. Task ID: waflo2zl2 … Use /workflows
+   * to watch live progress` — a paragraph of transcript paths and a command
+   * this app does not have, framed under the heading `RESULT`.
+   *
+   * Decided STRUCTURALLY — did a roster arrive AFTER the call was answered —
+   * never by matching that sentence, which is one CLI's prose and belongs to
+   * its adapter if it belongs anywhere.
+   */
+  resultIsOwn: boolean;
+  /**
+   * When the daemon last said anything about this workflow (ms), or null when
+   * it never did.
+   *
+   * Read exactly as {@link SubagentBlockEntry.lastRowAt} is, and for the same
+   * defect: a run settling paints every unreturned card at once, and a workflow
+   * that has announced a roster change SINCE that settle is plainly still
+   * running. The transcript is the evidence and the status is the claim.
+   */
+  lastRowAt: number | null;
+}
+
+/**
+ * Where a workflow stands — the ONE derivation, so the card and anything else
+ * that reports on a workflow cannot disagree about whether it is still out.
+ *
+ * The ROSTER outranks the launching call's return, and that ordering was
+ * measured rather than reasoned: a workflow can be BACKGROUNDED, and then its
+ * call is answered in seconds with "The workflow is running in the background —
+ * I'll report when it completes" while the fleet works on. Observed live on
+ * 2.1.251 through this very card, which read `completed` beside its own header
+ * saying `3 agents · 1 running`. An agent the newest roster still lists as out
+ * is evidence; the return is only a claim about the tool call.
+ *
+ * A run that has settled outranks the roster in turn, on
+ * `subagentBlockStatus`'s reasoning: with the CLI gone, an agent left `running`
+ * on the last roster is UNREPORTED work rather than running work, and reading
+ * it as running latches the spinner on for good.
+ */
+export function workflowCardStatus(
+  entry: WorkflowEntry,
+  runSettledAt: RunSettleAt = null,
+): 'running' | BackgroundOutcome {
+  if (entry.failed) {
+    return 'failed';
+  }
+  // The run settling ends a workflow that has said nothing SINCE — the same
+  // reading, and the same measured defect, as `subagentBlockStatus`'s.
+  const endedByRun =
+    runSettledAt !== null &&
+    (runSettledAt === 'unknown' ||
+      entry.lastRowAt === null ||
+      entry.lastRowAt <= runSettledAt);
+  if (workflowTally(entry.workflow.agents).running > 0 && !endedByRun) {
+    return 'running';
+  }
+  if (entry.returned) {
+    return 'completed';
+  }
+  return endedByRun ? 'stopped' : 'running';
+}
+
 export type TranscriptEntry =
   | ItemEntry
   | ToolGroupEntry
@@ -500,7 +613,8 @@ export type TranscriptEntry =
   | FindingsEntry
   | ChartEntry
   | MetricsEntry
-  | ComparisonEntry;
+  | ComparisonEntry
+  | WorkflowEntry;
 
 /**
  * A CARD entry: a folded row that stands on its own — not a raw item, not a
@@ -526,7 +640,12 @@ export type TranscriptEntry =
  * point of it: six silent misses became one loud one.
  */
 export type CardEntry =
-  TaskListEntry | FindingsEntry | ChartEntry | MetricsEntry | ComparisonEntry;
+  | TaskListEntry
+  | FindingsEntry
+  | ChartEntry
+  | MetricsEntry
+  | ComparisonEntry
+  | WorkflowEntry;
 
 export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
   return (
@@ -534,7 +653,8 @@ export function isCardEntry(entry: TranscriptEntry): entry is CardEntry {
     entry.type === 'findings' ||
     entry.type === 'chart' ||
     entry.type === 'metrics' ||
-    entry.type === 'comparison'
+    entry.type === 'comparison' ||
+    entry.type === 'workflow'
   );
 }
 
@@ -1257,6 +1377,182 @@ export function buildSubagentBlocks(
 }
 
 /**
+ * Replace every dynamic-workflow tool call with the {@link WorkflowEntry} card
+ * describing what it actually did.
+ *
+ * Runs AFTER {@link buildSubagentBlocks} and before {@link buildTurnBlocks},
+ * for the same reason that one does: the groups are already folded, and the
+ * turn fold must see one finished card rather than a tool pair plus a run of
+ * invisible rows.
+ *
+ * A launch is recognised ONE way — by a `workflow_info` row naming the call —
+ * and never by the tool's NAME. Which calls launched a workflow is the adapter
+ * layer's fact and it is stated on the wire, so nothing here has to learn that
+ * claude spells its orchestrator `Workflow`; a second CLI that grows one is a
+ * daemon change alone. That is the stronger of the two admission routes
+ * {@link buildSubagentBlocks} documents, and here it is the only one available:
+ * a workflow emits no rows of its own, so there is no second reading to fall
+ * back on.
+ *
+ * The launching pair is pulled OUT of its tool group, exactly as a `Task` pair
+ * is: the card already says a workflow ran, what it spawned and how it ended,
+ * so leaving the pair in the group would print a poorer telling of it directly
+ * above ("Used 1 tool").
+ */
+export function buildWorkflowCards(
+  entries: readonly TranscriptEntry[],
+  items: readonly ChatItem[],
+): TranscriptEntry[] {
+  // Merged rather than taken: a workflow announces itself at launch (the name,
+  // nothing else) and again on every roster change, so the last non-null field
+  // wins — and the roster itself is taken WHOLESALE, per
+  // `mergeWorkflowDeclarations`.
+  const declarations = new Map<string, WorkflowDeclaration>();
+  // The FIRST row about each workflow, which is where a card that has lost its
+  // launching call takes its place in the conversation from.
+  const anchors = new Map<string, ChatItem>();
+  /** The newest row about each workflow — see {@link WorkflowEntry.lastRowAt}. */
+  const lastRowAt = new Map<string, number>();
+  /** Its `seq`, which is what decides whether a result is the workflow's own. */
+  const lastRowSeq = new Map<string, number>();
+  for (const item of items) {
+    if (item.kind !== 'workflow_info') {
+      continue;
+    }
+    const declaration = readWorkflowDeclaration(item);
+    if (declaration === null) {
+      continue;
+    }
+    const previous = declarations.get(declaration.id);
+    declarations.set(
+      declaration.id,
+      previous === undefined
+        ? declaration
+        : mergeWorkflowDeclarations(previous, declaration),
+    );
+    if (!anchors.has(declaration.id)) {
+      anchors.set(declaration.id, item);
+    }
+    const at = Date.parse(item.createdAt);
+    if (Number.isFinite(at) && at > (lastRowAt.get(declaration.id) ?? 0)) {
+      lastRowAt.set(declaration.id, at);
+    }
+    lastRowSeq.set(
+      declaration.id,
+      Math.max(lastRowSeq.get(declaration.id) ?? 0, item.seq),
+    );
+  }
+  if (declarations.size === 0) {
+    return [...entries];
+  }
+  const launches = new Map<string, SubagentLaunch>();
+  for (const item of items) {
+    if (item.kind !== 'tool_call') {
+      continue;
+    }
+    const id = payloadString(item.payload, 'id');
+    if (id !== null && declarations.has(id)) {
+      launches.set(id, { call: item, result: null });
+    }
+  }
+  for (const item of items) {
+    if (item.kind !== 'tool_result') {
+      continue;
+    }
+    const id = payloadString(item.payload, 'id');
+    const launch = id ? launches.get(id) : undefined;
+    if (launch) {
+      launch.result = item;
+    }
+  }
+
+  const cardFor = (
+    id: string,
+    workflow: WorkflowDeclaration,
+  ): WorkflowEntry => {
+    const launch = launches.get(id);
+    const payload = launch?.result?.payload as {
+      result?: unknown;
+      isError?: unknown;
+    } | null;
+    const body = payload?.result;
+    // The launching call when there is one, else the first row the daemon wrote
+    // about this workflow — which is a row of the same turn, so the card lands
+    // where the work happened either way.
+    const anchor = launch?.call ?? anchors.get(id) ?? null;
+    return {
+      type: 'workflow',
+      id,
+      createdAt: anchor?.createdAt ?? '',
+      seq: anchor?.seq ?? 0,
+      nodeId: anchor?.nodeId ?? null,
+      // The launching call's own thread: a workflow started by a delegate is
+      // the delegate's, and its card belongs inside that block's flow.
+      parentToolUseId: anchor === null ? null : subagentIdOf(anchor),
+      workflow,
+      script: inputString(launch?.call, 'script'),
+      returned: launch?.result != null,
+      failed: payload?.isError === true,
+      // Only stringify a body that EXISTS. `toolResultText(null)` returns the
+      // four characters `null`, which the result panel would then frame as the
+      // workflow's own answer.
+      result: body == null ? null : toolResultText(body),
+      // A roster that arrived AFTER the answer says the workflow was plainly
+      // not reporting through it — see {@link WorkflowEntry.resultIsOwn}.
+      resultIsOwn:
+        launch?.result != null &&
+        (lastRowSeq.get(id) ?? 0) <= launch.result.seq,
+      lastRowAt: lastRowAt.get(id) ?? null,
+    };
+  };
+
+  const out: TranscriptEntry[] = [];
+  const placed = new Set<string>();
+  for (const entry of entries) {
+    if (entry.type === 'tools') {
+      const kept: ToolPair[] = [];
+      const launched: string[] = [];
+      for (const pair of entry.pairs) {
+        const id = payloadString(pair.call.payload, 'id');
+        if (id !== null && declarations.has(id)) {
+          launched.push(id);
+          continue;
+        }
+        kept.push(pair);
+      }
+      if (kept.length > 0) {
+        // `id` carried over UNCHANGED even when the pair it names was the one
+        // stripped — it is a React key, and re-deriving it would remount the
+        // row and discard whatever the reader had expanded.
+        out.push({ ...entry, pairs: kept });
+      }
+      // AFTER the group, so a turn that both worked and launched a workflow
+      // still reads in the order it happened.
+      for (const id of launched) {
+        const workflow = declarations.get(id);
+        if (workflow === undefined) {
+          continue;
+        }
+        placed.add(id);
+        out.push(cardFor(id, workflow));
+      }
+      continue;
+    }
+    out.push(entry);
+  }
+  // A workflow whose launching call never reached this fold still gets a card:
+  // the daemon's rows are the evidence it ran, and a transcript replayed from
+  // mid-run — or one whose tool pair the group fold consumed — would otherwise
+  // drop the most expensive thing in the conversation entirely.
+  for (const [id, workflow] of declarations) {
+    if (!placed.has(id)) {
+      out.push(cardFor(id, workflow));
+    }
+  }
+  return out;
+}
+
+/**
  * Caller-attributed rows of the SAME call (the parked question, its answer,
  * the settle envelope) — everything about a sub-agent call belongs inside
  * its block, so these claim into the bucket by callId alone (their nodeId
@@ -1412,13 +1708,16 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       }
       continue;
     }
-    if (item.kind === 'shell_info') {
-      // Bookkeeping, not narrative: it says a detached command has finished and
-      // renders as nothing (`shell-activity.ts` is its only reader). Skipped
-      // OUTRIGHT rather than left to the fall-through below, which treats any
-      // other kind as the node having "said something" and closes its open tool
-      // group — so a burst of background commands would chop one turn's tools
-      // into a run of one-call rows for a row nobody can see.
+    if (item.kind === 'shell_info' || item.kind === 'workflow_info') {
+      // Bookkeeping, not narrative: one says a detached command has finished
+      // (`shell-activity.ts` is its only reader), the other describes a running
+      // workflow and is folded into that workflow's own card by
+      // `buildWorkflowCards`. Neither renders anything here. Skipped OUTRIGHT
+      // rather than left to the fall-through below, which treats any other kind
+      // as the node having "said something" and closes its open tool group — so
+      // a burst of them would chop one turn's tools into a run of one-call rows
+      // for rows nobody can see. A workflow announces itself once per roster
+      // change, dozens of times over its run, so it is precisely such a burst.
       continue;
     }
     if (item.kind === 'tool_call') {
@@ -1768,7 +2067,10 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     // loose into the call block, invisible to the panel and to the run badge —
     // and `collectSubagentBlocks`' recursion into call blocks could never find
     // anything, making its "at any depth" claim false.
-    entries: buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+    entries: buildWorkflowCards(
+      buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+      visibleInner,
+    ),
   };
 }
 

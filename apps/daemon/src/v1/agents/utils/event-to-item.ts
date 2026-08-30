@@ -174,6 +174,42 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           backgroundOutcome: event.backgroundOutcome,
         },
       };
+    case 'workflow_info':
+      // A row ABOUT a dynamic workflow, on exactly the terms `subagent_info`
+      // above sets: `id` is the LAUNCHING TOOL CALL's, never
+      // `AgentEventOrigin.parentToolUseId`, because the main thread wrote this
+      // about work the workflow is doing elsewhere.
+      //
+      // DURABLE, and for `task_list`'s reason rather than `shell_info`'s: the
+      // workflow's agents never appear in the transcript at all, so the only
+      // record that a tool call costing half a million tokens spawned thirty
+      // agents is this row. A reopened chat replays items, so an ephemeral
+      // signal would leave every past workflow as the opaque `Workflow` row
+      // this exists to replace.
+      //
+      // TWIN PARSER: `apps/ui/src/renderer/chats/workflow-payload.ts` reads
+      // these keys back and merges them. An item payload is `z.unknown()` on
+      // the wire BY DESIGN — every kind carries a different shape — so no
+      // generated type spans the two sides. Renaming a key here means renaming
+      // it there.
+      //
+      // Nulls are written OUT rather than omitted, on the merge rule
+      // `subagent_info` follows: the consumer prefers the last non-null field,
+      // and an omitted key and a null one must read alike for that to be safe.
+      return {
+        kind: 'workflow_info',
+        role: null,
+        payload: {
+          id: event.id,
+          name: event.name,
+          title: event.title,
+          activity: event.activity,
+          tokens: event.tokens,
+          toolUses: event.toolUses,
+          durationMs: event.durationMs,
+          agents: event.agents,
+        },
+      };
     case 'shell_info':
       // A DURABLE row for the same reason `task_list` is one, and unlike the
       // `background_work` line it is derived from: it is the ONLY record that a

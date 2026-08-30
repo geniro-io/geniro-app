@@ -12,6 +12,7 @@ import type {
   AgentMcpServerStatus,
   AgentUsage,
   BackgroundUnitUsage,
+  WorkflowAgentSnapshot,
 } from '../../adapter.types';
 import {
   CLAUDE_ABORTED_TERMINAL_REASONS,
@@ -24,11 +25,15 @@ import {
   CLAUDE_RUN_FAILED_MESSAGE,
   CLAUDE_STATUS_SUBTYPE,
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
+  CLAUDE_TASK_PROGRESS_SUBTYPE,
   CLAUDE_TASK_STARTED_SUBTYPE,
   CLAUDE_TASK_TERMINAL_STATUSES,
   CLAUDE_TASK_TYPE_AGENT,
+  CLAUDE_TASK_TYPE_WORKFLOW,
   CLAUDE_TASK_UPDATED_SUBTYPE,
   CLAUDE_TURN_ABORTED_MESSAGE,
+  CLAUDE_WORKFLOW_AGENT_ENTRY,
+  CLAUDE_WORKFLOW_AGENT_STATES,
 } from '../claude.const';
 import { readCommandsChanged } from './claude-commands.utils';
 import {
@@ -249,6 +254,61 @@ function readClaudeTaskUsage(
 }
 
 /**
+ * A dynamic workflow's agent ROSTER, off a `system/task_progress` line.
+ *
+ * Undefined — never an empty array — when the line carries no
+ * `workflow_progress` at all, and that difference is the whole discriminator:
+ * a line WITH a roster is a workflow's, a line without it is a delegate's
+ * progress (which names a `subagent_type` instead) or a workflow line the CLI
+ * throttled the roster off. The consumer merges by preferring the last non-null
+ * field, so "said nothing" must not arrive as "the roster is empty" — that
+ * would empty a card every time a snapshot was throttled away.
+ *
+ * `workflow_phase` entries share the array and are dropped here. They carry a
+ * phase's title, which every agent row already repeats as `phaseTitle`, so
+ * keeping them would mean a second list to join against for a string already in
+ * hand — and a phase with no agents yet is not something the card can draw.
+ *
+ * Key names are the CLI's own, read off the 2.1.251 capture recorded at
+ * {@link CLAUDE_TASK_PROGRESS_SUBTYPE} rather than from any document.
+ */
+function readWorkflowAgents(
+  root: Record<string, unknown>,
+): WorkflowAgentSnapshot[] | undefined {
+  const progress = root.workflow_progress;
+  if (!Array.isArray(progress)) {
+    return undefined;
+  }
+  const agents: WorkflowAgentSnapshot[] = [];
+  for (const entry of asArray(progress)) {
+    const row = asRecord(entry);
+    if (row === null || asString(row.type) !== CLAUDE_WORKFLOW_AGENT_ENTRY) {
+      continue;
+    }
+    const index = asNumber(row.index);
+    if (index === null) {
+      continue;
+    }
+    agents.push({
+      index,
+      label: asString(row.label),
+      phase: asString(row.phaseTitle),
+      // Unrecognised reads as `running`, per CLAUDE_WORKFLOW_AGENT_STATES: an
+      // agent the roster still lists has not been said to have finished.
+      state:
+        CLAUDE_WORKFLOW_AGENT_STATES.get(asString(row.state) ?? '') ??
+        'running',
+      model: asString(row.model),
+      tokens: asNumber(row.tokens),
+      toolCalls: asNumber(row.toolCalls),
+      durationMs: asNumber(row.durationMs),
+      error: asString(row.error),
+    });
+  }
+  return agents;
+}
+
+/**
  * The `mcp_servers` rows of a `system/init` line.
  *
  * `target`/`transport`/`detail` are null because init genuinely does not carry
@@ -407,26 +467,80 @@ function mapClaudeLine(
       }
       if (asString(root.subtype) === CLAUDE_TASK_STARTED_SUBTYPE) {
         const id = asString(root.task_id);
-        return id === null
-          ? []
-          : [
-              {
-                type: 'background_work',
-                id,
-                phase: 'started',
-                // `local_agent` is this CLI's word for a delegate; a `local_bash`
-                // on the same channel is the shell command one of them ran, and
-                // `owned_by_subagent` marks work a delegate started rather than
-                // work that IS one (probed 2026-08-17 on 2.1.232 — one turn
-                // produced both, from one Task call).
-                unit:
-                  asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
-                  root.owned_by_subagent !== true
-                    ? 'agent'
-                    : 'other',
-                toolCallId: asString(root.tool_use_id),
-              },
-            ];
+        if (id === null) {
+          return [];
+        }
+        const toolCallId = asString(root.tool_use_id);
+        const events: AgentEvent[] = [
+          {
+            type: 'background_work',
+            id,
+            phase: 'started',
+            // `local_agent` is this CLI's word for a delegate; a `local_bash`
+            // on the same channel is the shell command one of them ran, and
+            // `owned_by_subagent` marks work a delegate started rather than
+            // work that IS one (probed 2026-08-17 on 2.1.232 — one turn
+            // produced both, from one Task call).
+            unit:
+              asString(root.task_type) === CLAUDE_TASK_TYPE_AGENT &&
+              root.owned_by_subagent !== true
+                ? 'agent'
+                : 'other',
+            toolCallId,
+          },
+        ];
+        // A workflow's ANCHOR, and the only line that ever states its name: the
+        // progress lines after it carry `summary` (the description) and never
+        // `workflow_name`, so a card built from those alone could say what the
+        // workflow does and never what it IS. Emitted here rather than waiting
+        // for the first roster so the card opens the moment the tool call does,
+        // which for a workflow is minutes before its first agent settles.
+        if (
+          toolCallId !== null &&
+          asString(root.task_type) === CLAUDE_TASK_TYPE_WORKFLOW
+        ) {
+          events.push({
+            type: 'workflow_info',
+            id: toolCallId,
+            name: asString(root.workflow_name),
+            title: asString(root.description),
+            activity: null,
+            tokens: null,
+            toolUses: null,
+            durationMs: null,
+            agents: null,
+          });
+        }
+        return events;
+      }
+      if (asString(root.subtype) === CLAUDE_TASK_PROGRESS_SUBTYPE) {
+        // Workflow lines ONLY, and the roster is what tells them apart — a
+        // delegate's progress rides this same subtype (see
+        // CLAUDE_TASK_PROGRESS_SUBTYPE). Dropping the roster-less lines is also
+        // what keeps this channel from writing a transcript row every few
+        // milliseconds: the CLI emits progress per batch and attaches the roster
+        // only when an agent changed state, which is the same moment the totals
+        // move, so nothing is lost by ignoring the rest.
+        const agents = readWorkflowAgents(root);
+        const toolCallId = asString(root.tool_use_id);
+        if (agents === undefined || toolCallId === null) {
+          return [];
+        }
+        const usage = asRecord(root.usage);
+        return [
+          {
+            type: 'workflow_info',
+            id: toolCallId,
+            // Never on a progress line — the anchor is where a name comes from.
+            name: null,
+            title: asString(root.summary),
+            activity: asString(root.description),
+            tokens: usage ? asNumber(usage.total_tokens) : null,
+            toolUses: usage ? asNumber(usage.tool_uses) : null,
+            durationMs: usage ? asNumber(usage.duration_ms) : null,
+            agents,
+          },
+        ];
       }
       if (
         asString(root.subtype) === CLAUDE_TASK_UPDATED_SUBTYPE ||

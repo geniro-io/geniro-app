@@ -144,6 +144,7 @@ export const ItemKindSchema = z
     'call_question',
     'call_answer',
     'subagent_info',
+    'workflow_info',
     'task_list',
     'shell_info',
     'report_findings',

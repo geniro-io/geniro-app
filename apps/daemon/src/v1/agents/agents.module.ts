@@ -50,6 +50,7 @@ import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
 import { ProcessRegistry } from './services/process-registry';
+import { PullRequestCaptureService } from './services/pull-request-capture.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
@@ -84,6 +85,7 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     ChatService,
+    PullRequestCaptureService,
     UserQuestionBroker,
     FindingsReportBroker,
     ChartBroker,

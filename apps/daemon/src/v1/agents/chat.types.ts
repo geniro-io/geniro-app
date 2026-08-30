@@ -2177,6 +2177,37 @@ export const ConfigDirPinSchema = z
 export type ConfigDirPinWire = z.infer<typeof ConfigDirPinSchema>;
 
 /** A run projected to the wire (chat and workflow runs share the shape). */
+/**
+ * One pull request a run OPENED, as captured from the agent's own output.
+ *
+ * The IDENTITY only — owner, repo, number, url. Deliberately no title and no
+ * state: those change on GitHub's side after the capture (a pull request is
+ * reviewed, merged, closed), and a copy stored here would be a second, stale
+ * answer sitting beside the live one the UI already reads with `gh`. What the
+ * daemon knows and nothing else can recover is WHICH pull requests belong to
+ * this thread; what they currently are is a live question.
+ *
+ * `owner`/`repo` rather than a folder, because a thread routinely spans several
+ * repositories — `cd ../mobile-app && gh pr create` — and the URL is the only
+ * thing that survives that. It is also self-sufficient: `gh pr view <url>`
+ * resolves from any working directory, so the UI never has to know where the
+ * work happened.
+ *
+ * `seq` is the transcript position the URL was captured at — the order the
+ * thread opened them, and the dedupe key's tie-breaker. See
+ * `utils/pull-request-capture.ts`.
+ */
+export const RunPullRequestSchema = z
+  .object({
+    owner: z.string(),
+    repo: z.string(),
+    number: z.number().int(),
+    url: z.string(),
+    seq: z.number().int(),
+  })
+  .meta({ id: 'RunPullRequest' });
+export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
+
 export const RunWireSchema = z.object({
   id: z.string(),
   status: RunStatusSchema,
@@ -2303,6 +2334,18 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe("Text of the run's latest message item — the list preview line"),
+  /**
+   * The pull requests this run OPENED, oldest first.
+   *
+   * Captured from the transcript rather than derived from the checkout — see
+   * {@link RunPullRequestSchema} and `utils/pull-request-capture.ts` for why
+   * the branch a folder happens to have checked out cannot answer this.
+   */
+  pullRequests: z
+    .array(RunPullRequestSchema)
+    .describe(
+      'Pull requests this run opened, oldest first, as captured from the agent output',
+    ),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

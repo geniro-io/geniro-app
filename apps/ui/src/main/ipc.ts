@@ -11,7 +11,7 @@ import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import { pullBranch, readGitInfo, switchBranch } from './git-info';
-import { readPullRequests } from './github-prs';
+import { readPullRequests, readPullRequestsByRef } from './github-prs';
 import {
   branchNameSchema,
   chatExportSaveSchema,
@@ -20,6 +20,7 @@ import {
   onboardingInputSchema,
   openTerminalAtSchema,
   openTerminalSchema,
+  pullRequestRefsSchema,
   revealPathSchema,
   settingsPatchSchema,
 } from './ipc-schemas';
@@ -141,6 +142,12 @@ export function registerIpc(
 
   ipcMain.handle(IPC.getPullRequests, (_event, dir: unknown) =>
     readPullRequests(gitDirSchema.parse(dir)),
+  );
+
+  // Shape-validated for the reason `openInTerminal` below is: every field here
+  // becomes argv for `gh`.
+  ipcMain.handle(IPC.getPullRequestsByRef, (_event, refs: unknown) =>
+    readPullRequestsByRef(pullRequestRefsSchema.parse(refs)),
   );
 
   // Shape-validated here rather than trusted: this ends in an executable

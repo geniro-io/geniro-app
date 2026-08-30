@@ -103,6 +103,7 @@ import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
 import { ProcessRegistry } from './process-registry';
+import { PullRequestCaptureService } from './pull-request-capture.service';
 import { RunContextRegistry } from './run-context.registry';
 import { RunGroupsService } from './run-groups.service';
 import { RunTeardownService } from './run-teardown.service';
@@ -362,6 +363,16 @@ export class ChatService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
+    /**
+     * Which pull requests each listed run opened — read off its own transcript
+     * and kept on the row (`PullRequestCaptureService`).
+     *
+     * On the LIST rather than on a route of its own, because the sidebar, the
+     * panel and the composer shelf all draw from the run rows they already
+     * hold: a separate route would be a second fetch per thread for a value the
+     * list is about to send anyway.
+     */
+    private readonly pullRequests: PullRequestCaptureService,
     private readonly bus: AgentEventBus,
     /**
      * The newest context reading per run — what every status broadcast is
@@ -1191,6 +1202,9 @@ export class ChatService implements OnModuleInit {
   async listChats(): Promise<RunWire[]> {
     const em = this.em.fork();
     const runs = await this.runDao.listChats(em);
+    // Incremental and error-swallowing by construction, so this is a `max(seq)`
+    // read per run in the steady state and can never fail the listing.
+    await this.pullRequests.sync(runs, em);
     const previews = await this.itemDao.latestMessageTextPerRun(
       runs.map((run) => run.id),
       em,

@@ -180,6 +180,46 @@ export const settingsPatchSchema = z.strictObject({
 export const gitDirSchema = absolutePath;
 
 /**
+ * How many pull requests one resolve may be asked about.
+ *
+ * The renderer batches every thread on screen into one call, so this bounds
+ * the whole sidebar rather than one conversation; the resolve itself is bounded
+ * again, and more tightly, by repository count (`github-prs.ts`).
+ */
+const MAX_PULL_REQUEST_REFS = 500;
+
+/**
+ * The pull requests a thread opened, as the renderer asks about them.
+ *
+ * Shape-validated rather than trusted because `owner`, `repo` and `url` become
+ * ARGV for `gh`. A leading dash would be read as a flag, so it is refused here
+ * rather than relied on being passed as its own token — and `url` must be a
+ * github.com pull-request URL, since `gh pr view <url>` accepts a URL and the
+ * only thing that should ever reach it is one this app's own capture produced.
+ */
+const pullRequestSegment = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9][\w.-]*$/u, 'must be a GitHub owner or repository name');
+
+export const pullRequestRefsSchema = z
+  .array(
+    z.object({
+      owner: pullRequestSegment,
+      repo: pullRequestSegment,
+      number: z.number().int().positive(),
+      url: z
+        .string()
+        .regex(
+          /^https:\/\/github\.com\/[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*\/pull\/\d+$/u,
+          'must be a github.com pull request URL',
+        ),
+    }),
+  )
+  .max(MAX_PULL_REQUEST_REFS);
+
+/**
  * A file the renderer asks to be revealed in Finder.
  *
  * Shape only — an absolute path. Being inside the daemon's log directory is

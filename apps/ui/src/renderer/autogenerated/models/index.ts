@@ -2533,6 +2533,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     lastMessage: string | null;
+    /**
+     * Pull requests this run opened, oldest first, as captured from the agent output
+     * @type {Array<RunPullRequest>}
+     * @memberof RunDto
+     */
+    pullRequests: Array<RunPullRequest>;
 }
 
 
@@ -2617,6 +2623,43 @@ export interface RunGroupDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface RunPullRequest
+ */
+export interface RunPullRequest {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunPullRequest
+     */
+    owner: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunPullRequest
+     */
+    repo: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunPullRequest
+     */
+    number: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunPullRequest
+     */
+    url: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunPullRequest
+     */
+    seq: number;
+}
 
 /**
  * 

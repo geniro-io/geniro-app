@@ -7,20 +7,12 @@ import {
   type CliDetection,
   type CliKind,
   DAEMON_INSPECT_PORT,
+  type FastAction,
   hasControlCharacters,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   resolveDaemonInspect,
-  type RunConfig,
   type Settings as SettingsShape,
 } from '../../shared/contracts';
-import type { RunConfigDraft } from '../chats/run-config';
-import {
-  isChatApprovalMode,
-  newRunConfigId,
-  replaceRunConfig,
-  targetAgentKind,
-} from '../chats/run-config';
-import type { TargetWorkflow } from '../chats/target-select';
 import { AgentConfigList } from '../components/agent-config-list';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
@@ -36,7 +28,7 @@ import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
-import { FastActionsPane } from './fast-actions';
+import { type FastActionDraft, FastActionsPane } from './fast-actions';
 import { useDebouncedPersist } from './use-debounced-persist';
 
 /**
@@ -120,46 +112,6 @@ function normalizedCliPaths(
  */
 export type SettingsSection = 'general' | 'fast-actions';
 
-/**
- * What a NEW fast action starts from: the choices the composer itself opens
- * on, read straight out of settings.json.
- *
- * Not an approximation of composer state — it IS the state the composer would
- * open with, since those are the same remembered values it seeds from. So a new
- * action is a naming step rather than six pickers, with no coupling between
- * this screen and the chat one.
- *
- * `null` when no folder has ever been chosen: there is nothing to seed from,
- * and the editor's own empty draft asks for a folder outright.
- */
-function seedDraftFrom(settings: SettingsShape): RunConfigDraft | null {
-  const cwd = settings.projectFolder;
-  if (!cwd) {
-    return null;
-  }
-  const target = settings.lastChatTarget ?? 'claude';
-  const kind = targetAgentKind(target);
-  const approval = settings.lastApprovalMode;
-  return {
-    name: '',
-    firstMessage: null,
-    cwd,
-    // Deliberately NOT the folder's current branch: a fast action that names
-    // one switches to it on every press, and inheriting whatever happened to be
-    // checked out would make every action a branch switch nobody asked for.
-    branch: null,
-    target,
-    model: settings.lastModels[kind] ?? null,
-    effort: settings.lastEfforts[kind] ?? null,
-    contextWindow: settings.lastContextWindows[kind] ?? null,
-    modelParameters: settings.lastModelParameters[kind] ?? {},
-    // Checked against the enum here for the reason `run-config.ts` records:
-    // settings.json is a file the user can edit and an older build can write.
-    approval: isChatApprovalMode(approval) ? approval : null,
-    configDir: settings.configDir,
-  };
-}
-
 const SECTION_LABEL: Record<SettingsSection, string> = {
   general: 'General',
   'fast-actions': 'Fast actions',
@@ -191,15 +143,11 @@ export function Settings({
   );
   const [clis, setClis] = useState<CliDetection[] | null>(null);
   /**
-   * The fast actions and everything the editor needs to fill one in — read
-   * from settings.json here rather than handed down from Chats, so this screen
-   * owns its own data and works whether or not a chat has ever been opened.
+   * The fast actions, read from settings.json here rather than handed down from
+   * Chats, so this screen owns its own data and works whether or not a chat has
+   * ever been opened.
    */
-  const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
-  const [recentFolders, setRecentFolders] = useState<string[]>([]);
-  const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
-  const [actionSeed, setActionSeed] = useState<RunConfigDraft | null>(null);
-  const [workflows, setWorkflows] = useState<TargetWorkflow[]>([]);
+  const [fastActions, setFastActions] = useState<FastAction[]>([]);
   const [open, setOpen] = useState<Partial<Record<CliKind, boolean>>>({});
   const [binaryPaths, setBinaryPaths] = useState<
     Partial<Record<CliKind, string>>
@@ -324,23 +272,11 @@ export function Settings({
         // a missing optional field. Same default `Chats.tsx` applies.
         setCustomInstructions(s.customInstructions ?? '');
       }
-      setRunConfigs(s.runConfigs ?? []);
-      setRecentFolders(s.recentFolders ?? []);
-      setRecentConfigDirs(s.recentConfigDirs ?? []);
-      setActionSeed(seedDraftFrom(s));
+      setFastActions(s.fastActions ?? []);
     });
     void window.geniro.getStatus().then((s) => setIsPackaged(s.isPackaged));
     void window.geniro.detectClis().then(setClis);
   }, []);
-
-  const configDirReasonFor = useCallback(
-    (kind: CliKind): string | null | undefined =>
-      capabilities
-        ? capabilities.configDirs.find((row) => row.agent === kind)
-            ?.unavailableReason
-        : undefined,
-    [capabilities],
-  );
 
   // Pre-fill each detected binary's resolved path into its (empty) field, so a
   // found agent shows exactly which binary will be used. Never clobbers a saved
@@ -402,21 +338,6 @@ export function Settings({
     [flashSaved],
   );
 
-  // The graphs a fast action can point at. Silent on failure, like every other
-  // optional list on this screen: the target chip then offers the CLIs alone,
-  // which is a working editor rather than a broken screen.
-  useEffect(() => {
-    if (!apis) {
-      return;
-    }
-    void apis.workflows
-      .listWorkflows()
-      .then((list) =>
-        setWorkflows(list.map((w) => ({ slug: w.slug, name: w.name }))),
-      )
-      .catch(() => setWorkflows([]));
-  }, [apis]);
-
   /**
    * Write the whole list, rolling back on refusal.
    *
@@ -425,9 +346,9 @@ export function Settings({
    * action settings.json does not have — which the user would find out about
    * on the next launch.
    */
-  const persistRunConfigs = useCallback(
-    (next: RunConfig[], previous: RunConfig[]): void => {
-      setRunConfigs(next);
+  const persistFastActions = useCallback(
+    (next: FastAction[], previous: FastAction[]): void => {
+      setFastActions(next);
       setError(null);
       // NOT through `persist`, and that is the whole of why this is written
       // out: `persist` swallows the rejection into `setError`, so a rollback
@@ -435,45 +356,42 @@ export function Settings({
       // action settings.json does not have, and every later save would fail on
       // the same entry since the full array is re-sent.
       void window.geniro
-        .updateSettings({ runConfigs: next })
+        .updateSettings({ fastActions: next })
         .then(flashSaved)
         .catch((err: unknown) => {
-          setRunConfigs(previous);
+          setFastActions(previous);
           setError(String(err));
         });
     },
     [flashSaved],
   );
 
-  const saveRunConfig = useCallback(
-    (draft: RunConfigDraft, id: string | null): void => {
-      persistRunConfigs(
+  /**
+   * Create or replace one action. A new entry is APPENDED, never unshifted: the
+   * order is the user's own arrangement of their buttons, not an MRU. The id is
+   * random rather than name-derived — the name is the field most likely to
+   * change, and two actions may share one.
+   */
+  const saveFastAction = useCallback(
+    (draft: FastActionDraft, id: string | null): void => {
+      persistFastActions(
         id === null
-          ? [...runConfigs, { ...draft, id: newRunConfigId() }]
-          : replaceRunConfig(runConfigs, { ...draft, id }),
-        runConfigs,
+          ? [...fastActions, { ...draft, id: crypto.randomUUID() }]
+          : fastActions.map((a) => (a.id === id ? { ...draft, id } : a)),
+        fastActions,
       );
     },
-    [runConfigs, persistRunConfigs],
+    [fastActions, persistFastActions],
   );
 
-  const deleteRunConfig = useCallback(
+  const deleteFastAction = useCallback(
     (id: string): void => {
-      persistRunConfigs(
-        runConfigs.filter((c) => c.id !== id),
-        runConfigs,
+      persistFastActions(
+        fastActions.filter((a) => a.id !== id),
+        fastActions,
       );
     },
-    [runConfigs, persistRunConfigs],
-  );
-
-  const approvalModesFor = useCallback(
-    (kind: CliKind) =>
-      capabilities
-        ? (capabilities.approvals.find((row) => row.agent === kind)?.modes ??
-          [])
-        : null,
-    [capabilities],
+    [fastActions, persistFastActions],
   );
 
   /** Debounced auto-save of the binary-path overrides (reads the latest ref). */
@@ -831,25 +749,16 @@ export function Settings({
             </div>
             <p className="text-sm text-muted-foreground">
               {section === 'fast-actions'
-                ? 'Your own buttons on the new-chat screen. Each one carries a folder, a branch, an agent and its options — and, when you give it one, the message it sends the moment you press it.'
+                ? 'Your own buttons under the composer. Each one is a name and a piece of text; pressing it writes that text into the message box, whatever agent and folder you happen to be set to.'
                 : 'Configure the CLI agents Geniro drives. Changes are saved automatically.'}
             </p>
           </header>
 
           {section === 'fast-actions' ? (
             <FastActionsPane
-              configs={runConfigs}
-              agentsApi={apis?.agents ?? null}
-              workflows={workflows}
-              cliDetections={clis}
-              recentFolders={recentFolders}
-              recentConfigDirs={recentConfigDirs}
-              approvalModesFor={approvalModesFor}
-              configDirReasonFor={configDirReasonFor}
-              planSupported={capabilities?.claudeModes.plan === 'pass'}
-              seed={actionSeed}
-              onSave={saveRunConfig}
-              onDelete={deleteRunConfig}
+              actions={fastActions}
+              onSave={saveFastAction}
+              onDelete={deleteFastAction}
             />
           ) : (
             <>

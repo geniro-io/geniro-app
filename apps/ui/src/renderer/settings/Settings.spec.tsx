@@ -66,8 +66,8 @@ const capabilitiesApi = vi.hoisted(() => ({
 const chatsApi = vi.hoisted(() => ({
   forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
 }));
-// The graphs a fast action can point at. Empty here: the pane's own spec covers
-// the target chip, and this screen only has to survive the listing.
+// Listed by the graphs screen, not by this one — kept because
+// `createDaemonApis` is mocked whole and every key it returns must exist.
 const workflowsApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(() => Promise.resolve([])),
 }));
@@ -1053,16 +1053,7 @@ describe('Settings — fast actions', () => {
   const action = {
     id: 'fa-1',
     name: 'Geniro app',
-    cwd: '/Users/dev/geniro-app',
-    branch: null,
-    target: 'claude',
-    model: null,
-    effort: null,
-    contextWindow: null,
-    modelParameters: {},
-    approval: null,
-    configDir: null,
-    firstMessage: 'Review what changed.',
+    description: 'Review what changed.',
   };
 
   it('lists what settings.json holds, without a chat ever being opened', async () => {
@@ -1071,7 +1062,7 @@ describe('Settings — fast actions', () => {
     // handed one would be empty on a launch straight into Settings.
     geniro.getSettings.mockResolvedValue({
       ...settings,
-      runConfigs: [action],
+      fastActions: [action],
     });
     await mount('fast-actions');
     expect(container.textContent).toContain('Geniro app');
@@ -1083,11 +1074,11 @@ describe('Settings — fast actions', () => {
     // every later save fail on the same entry, since the full array is re-sent.
     geniro.getSettings.mockResolvedValue({
       ...settings,
-      runConfigs: [action],
+      fastActions: [action],
     });
     await mount('fast-actions');
     geniro.updateSettings.mockRejectedValueOnce(
-      new Error('runConfigs: too_big'),
+      new Error('fastActions: too_big'),
     );
 
     const press = (label: string): void => {

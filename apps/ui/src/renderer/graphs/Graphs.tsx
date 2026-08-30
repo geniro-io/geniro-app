@@ -1227,8 +1227,7 @@ export function Graphs({
                   ) : (
                     <>
                       {/* Every per-run setting as a LABELLED ROW, in one divided
-                        card — the run-configuration editor's shape, over the
-                        composer's own chips.
+                        card — a label column over the composer's own chips.
 
                         The controls are already right and stay untouched: an
                         earlier report ("effort select and model should be same
@@ -1254,12 +1253,12 @@ export function Graphs({
                         (`inspector`'s `minWidth`) where the dialog's 7rem label
                         column would leave the control ~100px.
 
-                        ORDER mirrors the run-configuration editor — profile,
-                        approval, then the model and everything the model
-                        offers — so the two screens that both use a label column
-                        teach one order rather than two. MCP is last because it
-                        is the one row that opens something instead of setting
-                        a value. */}
+                        ORDER is profile, approval, then the model and
+                        everything the model offers — the same order the
+                        composer's model-settings panel lists them in, so a
+                        label column and a popover teach one order rather than
+                        two. MCP is last because it is the one row that opens
+                        something instead of setting a value. */}
                       <Field label="Agent settings">
                         {/* `@container`: the rows fit themselves to THIS card,
                           whose width comes from the panel's drag handle rather
@@ -1336,8 +1335,8 @@ export function Graphs({
                             model offers no such axis, and a labelled row around
                             nothing is a label with a hole under it — louder in a
                             fixed column than the missing chip ever was. The
-                            guards are the run-configuration editor's, so the two
-                            label-column screens drop a row on the same test. */}
+                            guard is the chip's own "renders nothing with
+                            nothing to pick", asked one level out. */}
                           {agentEfforts.efforts.length === 0 ? null : (
                             <SettingRow width="compact" label="Effort">
                               <EffortSelect

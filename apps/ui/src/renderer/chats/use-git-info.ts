@@ -182,9 +182,8 @@ export function useGitInfo(dir: string | null): {
    * Re-read a folder's git state without switching anything.
    *
    * The effect above only fires when `dir` CHANGES, so a branch moved by some
-   * other path — applying a saved run configuration, which switches through the
-   * IPC directly — leaves this hook painting the branch the folder was on
-   * before.
+   * other path — anything that switches through the IPC directly — leaves this
+   * hook painting the branch the folder was on before.
    *
    * **The directory is a PARAMETER, not read from the closure.** A caller that
    * has just changed the folder is the main reason to call this, and React

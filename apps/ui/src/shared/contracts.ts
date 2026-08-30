@@ -49,74 +49,39 @@ export interface DaemonStatus {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Bounds on the saved run configurations. Here rather than beside the IPC
- * schema because three places must agree and only two are in main: that schema,
- * the settings READ path (which salvages entry-by-entry and so never evaluates
- * the array bound), and the renderer's editor, which refuses a save before the
- * IPC throws and discards the whole patch.
+ * Bounds on the fast actions. Here rather than beside the IPC schema because
+ * three places must agree and only two are in main: that schema, the settings
+ * READ path (which salvages entry-by-entry and so never evaluates the array
+ * bound), and the renderer's editor, which refuses a save before the IPC throws
+ * and discards the whole patch.
  */
-export const MAX_RUN_CONFIGS = 50;
-export const MAX_RUN_CONFIG_NAME = 80;
+export const MAX_FAST_ACTIONS = 50;
+export const MAX_FAST_ACTION_NAME = 80;
 /**
- * How long a fast action's opening message may be.
+ * How long a fast action's description may be.
  *
  * Generous rather than tight: this is a whole brief the user writes once and
  * fires many times — "review the diff on this branch against our conventions
  * and report findings" is the short end of it. The cap is a guard against a
  * renderer bug growing settings.json without limit, not an editorial opinion.
  */
-export const MAX_RUN_CONFIG_MESSAGE = 4000;
+export const MAX_FAST_ACTION_TEXT = 4000;
 
 /**
- * A saved new-chat setup the user named — a bundle of COMPOSER state and
- * nothing more. Choosing one seeds the normal new-chat screen; it creates no
- * run and reaches the daemon only later, through the ordinary create call.
+ * A named piece of text the user drops into the composer with one press.
  *
- * The daemon-vocabulary fields (`target`, `model`, `effort`, `approval`) are
- * OPAQUE strings, as the single-value settings beside them are: this file holds
- * no daemon shapes, and the renderer checks each against the generated enum
- * before it reaches a run. `null` means "the CLI's own default" everywhere.
+ * A NAME and a DESCRIPTION, and deliberately nothing else. It carries no
+ * folder, no agent, no model and no approval mode, so it is usable under
+ * whatever the composer is already set to — which is the whole of what makes it
+ * fast. An action that also chose the setup would be a second, invisible place
+ * the run's configuration came from, and pressing one would silently move the
+ * chips the user had just set.
  */
-export interface RunConfig {
+export interface FastAction {
   id: string;
   name: string;
-  /** Absolute working directory the chat starts in. */
-  cwd: string;
-  /**
-   * Branch the folder should be on, or null to take whatever is checked out.
-   *
-   * NOT a chat field — no branch reaches the daemon. Applying one is a guarded
-   * `git switch` on `cwd` before the chat is created, which refuses over a dirty
-   * tree; that refusal is surfaced and the rest of the configuration still
-   * applies.
-   */
-  branch: string | null;
-  /** The composer target — a CLI kind or `wf:<slug>`, exactly as `lastChatTarget`. */
-  target: string;
-  model: string | null;
-  effort: string | null;
-  /** Which of the model's context-window sizes; null = the model's own. */
-  contextWindow: string | null;
-  /**
-   * The OTHER model settings, keyed by the CLI's own parameter id; `{}` = the
-   * model's own defaults. Opaque here for the reason every CLI vocabulary is.
-   */
-  modelParameters: Record<string, string>;
-  /** The daemon's `ChatApprovalMode`. */
-  approval: string | null;
-  /** Plugin/profile directory, or null for the CLI's own account. */
-  configDir: string | null;
-  /**
-   * The message this action SENDS on start, or null to leave the composer
-   * seeded and empty.
-   *
-   * The one field that turns a saved setup into a button worth pressing: with
-   * it, one press is a chat already working on the thing the user always asks
-   * for. Without it the action is what these have always been — the chips
-   * filled in, the cursor in an empty composer — and both are wanted, which is
-   * why the difference is a nullable field rather than two kinds of entry.
-   */
-  firstMessage: string | null;
+  /** The instruction a press writes into the message box. Never sent by itself. */
+  description: string;
 }
 
 /** Persisted, non-secret application settings. Secrets never live here. */
@@ -137,11 +102,11 @@ export interface Settings {
   /** Recently used plugin directories, most recent first (picker rows). */
   recentConfigDirs: string[];
   /**
-   * The user's saved new-chat setups (see {@link RunConfig}). A managed LIST,
-   * unlike `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts
-   * an entry, and the order is the user's, so it is never re-sorted on read.
+   * The user's fast actions (see {@link FastAction}). A managed LIST, unlike
+   * `recentFolders`/`recentConfigDirs` beside it: nothing adds or evicts an
+   * entry, and the order is the user's, so it is never re-sorted on read.
    */
-  runConfigs: RunConfig[];
+  fastActions: FastAction[];
   /** The chat composer's last target — a CLI kind or `wf:<slug>`. */
   lastChatTarget: string | null;
   /**
@@ -356,7 +321,7 @@ export const DEFAULT_SETTINGS: Settings = {
   recentFolders: [],
   configDir: null,
   recentConfigDirs: [],
-  runConfigs: [],
+  fastActions: [],
   lastChatTarget: null,
   lastApprovalMode: null,
   lastModels: {},

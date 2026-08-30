@@ -80,7 +80,7 @@ export function ModelParameterSelect({
    * Whether the chip states the PARAMETER as well as its value.
    *
    * True everywhere the chip stands in a row of its own, and false only where a
-   * label column already names it (the run-configuration editor), because two
+   * label column already names it (the graph node inspector), because two
    * renderings of one name inches apart is the redundancy this app keeps
    * removing.
    */
@@ -89,7 +89,7 @@ export function ModelParameterSelect({
   className?: string;
   /**
    * `ghost` is the composer's flat chip, `default` the bordered form field the
-   * graph builder's node inspector and the run-configuration editor use.
+   * graph builder's node inspector uses.
    */
   variant?: 'ghost' | 'default';
   /** Ties the form-field variant to its `Field` label. */

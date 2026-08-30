@@ -174,9 +174,9 @@ export function Menu({
    * `viewport` measures the trigger and places the panel `fixed`, the ONLY way
    * out of a clipping ancestor: `overflow-x: visible` cannot be restored on a
    * box that scrolls vertically, since CSS forces both axes non-visible
-   * together. Measured in the run-configuration editor, whose branch picker
-   * opens upward inside `Dialog`'s `overflow-y-auto` body — the panel's top
-   * rows were cut at the body's edge ("the branch list popover is cut").
+   * together. Measured in a dialog whose branch picker opened upward inside
+   * `Dialog`'s `overflow-y-auto` body — the panel's top rows were cut at the
+   * body's edge ("the branch list popover is cut").
    *
    * Requires a `triggerRef`; without one there is nothing to measure and the
    * panel falls back to `ancestor`.

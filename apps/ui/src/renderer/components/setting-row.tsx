@@ -15,10 +15,12 @@ import { cn } from './ui/utils';
  * nothing can wrap because the control's cell truncates instead
  * (`minmax(0,1fr)` over `min-w-0`).
  *
- * Shared by the run-configuration editor and the graph node inspector. It was
- * private to the editor until the inspector needed the same thing; a second
- * copy is how the two would come to disagree about the column width, the gap,
- * or where a hint sits.
+ * The graph node inspector's layout. It was written private to a fast-action
+ * editor that bundled a whole run setup and was shared when the inspector
+ * needed the same thing; that editor is gone (an action is a name and a piece
+ * of text now), and this stayed because the shape was never the editor's — a
+ * second copy is how two label columns come to disagree about the column
+ * width, the gap, or where a hint sits.
  *
  * **The ROW goes with its control.** Every picker in this app renders NOTHING
  * when its axis has no values (the standing "a picker with nothing to pick is

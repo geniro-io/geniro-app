@@ -35,9 +35,8 @@ const DEFAULT_CHIP_LABEL = 'default';
  * should be able to select it everywhere". It is the same shape as the effort
  * chip because it is the same kind of thing — a per-MODEL parameter whose
  * vocabulary belongs to the CLI — and it is deliberately ONE component for
- * every surface (the composer, a saved run configuration, a graph node), so
- * the rows, the default sentinel and the add-back row below cannot drift
- * between three copies.
+ * every surface (the composer, a graph node), so the rows, the default sentinel
+ * and the add-back row below cannot drift between copies.
  *
  * THE NUMBERS ARE THE CLI's OWN. Nothing here maps `1m` to a token count: the
  * count that matters is the one the agent then reports about its own window,
@@ -98,7 +97,7 @@ export function ContextWindowSelect({
   className?: string;
   /**
    * `ghost` is the composer's flat chip, `default` the bordered form field the
-   * graph builder's node inspector and the run-configuration editor use.
+   * graph builder's node inspector uses.
    */
   variant?: 'ghost' | 'default';
   /** Ties the form-field variant to its `Field` label. */

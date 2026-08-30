@@ -3,6 +3,7 @@ import {
   Clock,
   FolderPlus,
   History,
+  Plus,
   Square,
   Trash2,
   Zap,
@@ -20,8 +21,8 @@ import type {
   CliDetection,
   CliKind,
   DaemonHandle,
+  FastAction,
   PullRequestInfo,
-  RunConfig,
 } from '../../shared/contracts';
 import { CHAT_LIST_WIDTH } from '../../shared/contracts';
 import type {
@@ -94,6 +95,11 @@ import {
   ComposerShelf,
   ThreadPullRequestChips,
 } from './composer-shelf';
+import {
+  isChatApprovalMode,
+  targetAgentKind,
+  workflowSlugOf,
+} from './composer-values';
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
@@ -108,21 +114,10 @@ import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
-import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
 import { threadPullRequests } from './pull-request';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
-import type { RunConfigDraft } from './run-config';
-import {
-  applyRunConfig,
-  captureRunConfig,
-  isChatApprovalMode,
-  newRunConfigId,
-  replaceRunConfig,
-  targetAgentKind,
-  workflowSlugOf,
-} from './run-config';
 import {
   GROUP_RAIL_CLASS,
   previewSectionRuns,
@@ -485,9 +480,9 @@ export function Chats({
   const [resumingSessionId, setResumingSessionId] = useState<string | null>(
     null,
   );
-  // Both from `run-config.ts`: these two must agree with what a saved
-  // configuration keys its model under, and an invariant held by two copies is
-  // one edit from being false.
+  // Both from `composer-values.ts`: a workflow target has no CLI of its own, so
+  // which key its model is remembered under is a rule, and an invariant held by
+  // two copies is one edit from being false.
   const workflowSlug = workflowSlugOf(target);
   const agentKind = targetAgentKind(target);
   // Approval mode for the NEXT new chat, narrowed to what its CLI honours.
@@ -528,20 +523,21 @@ export function Chats({
   // the run records its own at creation and can never change it afterwards.
   const [configDir, setConfigDir] = useState<string | null>(null);
   const [recentConfigDirs, setRecentConfigDirs] = useState<string[]>([]);
-  // The user's saved new-chat setups, and whether their picker is open. Held
-  // here rather than in the picker because the composer is what a pick SEEDS —
-  // the dialog only chooses which one.
-  const [runConfigs, setRunConfigs] = useState<RunConfig[]>([]);
-  /** Which surface the picker opens on — the `+` menu offers both entry points. */
   /**
-   * Why a configuration's branch could not be checked out, if it could not —
-   * surfaced rather than swallowed, and non-blocking: the switch is refused
-   * over a dirty tree, and a configuration that could not move the checkout is
-   * still a correct answer about everything else it named.
+   * The user's fast actions — read here rather than in the bar, because the
+   * composer is what a press writes into and this screen already owns that
+   * text. Editing them lives in Settings; this side only reads.
    */
-  const [runConfigBranchNotice, setRunConfigBranchNotice] = useState<
-    string | null
-  >(null);
+  const [fastActions, setFastActions] = useState<FastAction[]>([]);
+  /**
+   * How many fast actions have been pressed this session. Not a statistic — it
+   * is what the caret effect below keys on, since the interesting moment is
+   * "another press happened" and two presses of the same action are two of
+   * them.
+   */
+  const [fastActionPresses, setFastActionPresses] = useState(0);
+  /** The new-chat textarea, so a pressed action can put the cursor back in it. */
+  const newChatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   /**
    * Is the reader above the tail? The one piece of scroll position that is
@@ -1614,7 +1610,7 @@ export function Chats({
     }
     void window.geniro
       .getSettings()
-      .then((s) => setRunConfigs(s.runConfigs ?? []));
+      .then((s) => setFastActions(s.fastActions ?? []));
   }, [active]);
 
   useEffect(() => {
@@ -1623,7 +1619,7 @@ export function Chats({
       setRecentFolders(s.recentFolders ?? []);
       setConfigDir(s.configDir ?? null);
       setRecentConfigDirs(s.recentConfigDirs ?? []);
-      setRunConfigs(s.runConfigs ?? []);
+      setFastActions(s.fastActions ?? []);
       if (s.lastChatTarget) {
         setTarget(s.lastChatTarget);
       }
@@ -1918,56 +1914,6 @@ export function Chats({
       });
     },
     [recentConfigDirs],
-  );
-
-  /**
-   * Persist the whole configuration list — the one write path for all three
-   * edits, and the one place a rejected write is undone.
-   *
-   * The optimistic set is ROLLED BACK on rejection rather than merely reported:
-   * main validates this patch and throws on a violation, rejecting the whole
-   * write, so a list left showing the refused entry both lies about what is
-   * saved and makes every LATER save fail on the same entry, since the whole
-   * array is re-sent each time.
-   */
-  const persistRunConfigs = useCallback(
-    (next: RunConfig[], previous: RunConfig[]): void => {
-      setRunConfigs(next);
-      void window.geniro
-        .updateSettings({ runConfigs: next })
-        .catch((err: unknown) => {
-          setRunConfigs(previous);
-          setError(
-            `Could not save that configuration — the list is unchanged and your other settings are untouched. ${String(err)}`,
-          );
-        });
-    },
-    [],
-  );
-
-  /**
-   * Create or replace one configuration. A new entry is APPENDED, never
-   * unshifted: the order is the user's own arrangement, not an MRU.
-   */
-  const saveRunConfig = useCallback(
-    (draft: RunConfigDraft, id: string | null): void => {
-      persistRunConfigs(
-        id === null
-          ? [...runConfigs, { ...draft, id: newRunConfigId() }]
-          : replaceRunConfig(runConfigs, { ...draft, id }),
-        runConfigs,
-      );
-    },
-    [runConfigs, persistRunConfigs],
-  );
-
-  const deleteRunConfig = useCallback(
-    (id: string): void =>
-      persistRunConfigs(
-        runConfigs.filter((c) => c.id !== id),
-        runConfigs,
-      ),
-    [runConfigs, persistRunConfigs],
   );
 
   // The native dialog is the same directory picker the folder chip opens —
@@ -3549,222 +3495,48 @@ export function Chats({
   const git = useGitInfo(folder);
 
   /**
-   * Seed the composer from a saved configuration, then try to put the folder on
-   * its branch.
+   * Press a fast action: write its description into the message box.
    *
-   * The settings writes mirror what each chip would have persisted had the user
-   * set it by hand, so the choices survive the next launch as the composer's
-   * own do. The branch switch is LAST and non-blocking: `switchBranch` is
-   * refused over a dirty tree, and nothing else here depends on it.
+   * That is the whole of it — nothing is sent, and no chip moves. An action
+   * carries no folder and no agent precisely so that it works under whatever
+   * the composer is already set to; a press that also re-pointed the run would
+   * make the button a second, invisible source of the setup and silently undo
+   * choices the user had just made by hand.
+   *
+   * Appended rather than substituted when the box already holds text: what is
+   * there is the user's own typing, and a button that eats it is a button
+   * nobody presses twice. A blank line between them, so two actions pressed in
+   * a row read as two instructions rather than one run-on sentence.
    */
-  const applyRunConfigToComposer = useCallback(
-    async (config: RunConfig): Promise<void> => {
-      const applied = applyRunConfig(config);
-      if (applied === null) {
-        setError(
-          `“${config.name}” starts ${config.target}, which this version cannot run. Edit the configuration to pick another agent.`,
-        );
-        return;
-      }
-      setRunConfigBranchNotice(null);
-      setError(null);
-      // The strip reads `error ?? attachments.error ?? git.error ?? notice`, so
-      // a leftover message from an earlier manual branch switch would OUTRANK
-      // this apply's own refusal and silently stand in for it.
-      git.clearError();
-      // Land on the new-chat screen: it is what the feature promises, and the
-      // only view that renders both the seeded chips AND the strip the branch
-      // notice below reports through. The picker is reachable from the sidebar
-      // with a thread open, where applying would otherwise seed a composer off
-      // screen and swallow the refusal.
-      newChat();
+  const insertFastAction = useCallback((action: FastAction): void => {
+    setInput((current) =>
+      current.trim() === ''
+        ? action.description
+        : `${current.replace(/\s+$/, '')}\n\n${action.description}`,
+    );
+    // A COUNTER rather than a direct focus call: the caret belongs at the end
+    // of the text this press just added, and the textarea's DOM value is still
+    // the old one until React commits. The effect below runs after that.
+    setFastActionPresses((n) => n + 1);
+  }, []);
 
-      changeTarget(applied.target);
-      chooseFolder(applied.cwd);
-      // A workflow says NOTHING about any CLI's model, effort or profile — its
-      // nodes each name their own. These setters PERSIST and `null` through
-      // them DELETES the remembered entry, so writing the blanks a workflow
-      // reports would erase the user's own claude choices.
-      if (!applied.isWorkflow) {
-        chooseConfigDir(applied.configDir);
-        if (applied.approval !== null) {
-          changeApprovalMode(applied.approval);
-        }
-        changeModel(applied.agentKind, applied.model);
-        changeEffort(applied.agentKind, applied.effort);
-        changeContextWindow(applied.agentKind, applied.contextWindow);
-        // Written WHOLE rather than per parameter: the configuration is the
-        // answer for this CLI, so a setting it does not name is one the user
-        // deliberately left at the model's default — and merging would leave
-        // whatever the composer happened to be carrying from the last chat.
-        setModelParameters((current) => {
-          const next = { ...current };
-          if (Object.keys(applied.modelParameters).length === 0) {
-            delete next[applied.agentKind];
-          } else {
-            next[applied.agentKind] = applied.modelParameters;
-          }
-          void window.geniro.updateSettings({ lastModelParameters: next });
-          return next;
-        });
-      }
-
-      if (applied.branch === null) {
-        return;
-      }
-      const info = await window.geniro.getGitInfo(applied.cwd);
-      if (!info.isRepo) {
-        setRunConfigBranchNotice(
-          `“${config.name}” names the branch ${applied.branch}, but that folder is not a git repository.`,
-        );
-        return;
-      }
-      if (info.branch === applied.branch) {
-        return;
-      }
-      const result = await window.geniro.switchBranch(
-        applied.cwd,
-        applied.branch,
-      );
-      if (!result.ok) {
-        // `?? null`, never a bare read: this crosses the IPC boundary, and a
-        // reply without the field would otherwise take the worktree arm and
-        // name the folder `undefined` to the user.
-        const heldBy = result.worktree ?? null;
-        setRunConfigBranchNotice(
-          // The worktree refusal states the PATH, which the generic wrapping
-          // would not: git's own refusal is not something the user can act on
-          // without knowing where the branch actually is, and this is the one
-          // surface that cannot offer to go there (see `composerNotice`).
-          heldBy === null
-            ? `Still on ${info.branch ?? 'a detached HEAD'} — could not switch to ${applied.branch}: ${result.error}`
-            : `“${config.name}” names ${applied.branch}, which is checked out in the worktree at ${heldBy} — this folder stays on ${info.branch ?? 'a detached HEAD'}.`,
-        );
-      }
-      // Re-read either way, and NAME the folder: the chip must show the branch
-      // the folder is ACTUALLY on. The hook's own read fires only when the
-      // folder CHANGES, so a configuration naming the folder already selected
-      // refetches nothing. Passing `applied.cwd` is also what stops this
-      // re-reading the PREVIOUS folder — `chooseFolder` above set React state
-      // this callback cannot see.
-      await git.refresh(applied.cwd);
-      refreshPullRequestsFor(applied.cwd);
-    },
-    [
-      newChat,
-      changeTarget,
-      chooseFolder,
-      chooseConfigDir,
-      changeApprovalMode,
-      changeModel,
-      changeEffort,
-      git,
-      refreshPullRequestsFor,
-    ],
-  );
   /**
-   * Press a fast action: seed the composer from it and, when it carries a
-   * message, start the chat and send that message.
-   *
-   * The run is built from the APPLIED configuration rather than from composer
-   * state, and that is not an optimisation — it is the only correct reading.
-   * `applyRunConfigToComposer` above sets React state, which this callback's
-   * closure cannot see: creating the chat from `agentKind`/`models`/`folder`
-   * would use whatever the composer held BEFORE the press, so an action naming
-   * cursor would start claude with the last chat's model. Every value the run
-   * needs is already on `applied`.
-   *
-   * The composer is still seeded, because the user must be able to SEE what
-   * they pressed — and because the branch switch, its refusal notice and the
-   * folder's git read all live on that path.
+   * Put the cursor back where the user types, after a fast action wrote into
+   * it. Skipped on mount — `0` is "no action has been pressed", and stealing
+   * focus on arrival would scroll the new-chat screen to the composer before
+   * the user has looked at anything.
    */
-  const runFastAction = useCallback(
-    async (config: RunConfig): Promise<void> => {
-      const applied = applyRunConfig(config);
-      if (applied === null) {
-        setError(
-          `“${config.name}” starts ${config.target}, which this version cannot run. Edit the action to pick another agent.`,
-        );
-        return;
-      }
-      await applyRunConfigToComposer(config);
-      const text = applied.firstMessage;
-      if (text === null || streaming) {
-        // No message is a complete action: the chips are filled in and the
-        // cursor is in an empty composer, which is what these setups have
-        // always done and is still what some of them are for.
-        return;
-      }
-      try {
-        if (applied.isWorkflow) {
-          const slug = workflowSlugOf(applied.target);
-          if (slug === null) {
-            return;
-          }
-          const run = await workflowApi.startWorkflowRun({
-            slug,
-            runWorkflowDto: {
-              cwd: applied.cwd,
-              prompt: text,
-              ...(await currentRunSettings()),
-            },
-          });
-          setRuns((prev) => [run, ...prev]);
-          await activateRun(run.id);
-          if (!sawTerminalRef.current) {
-            setStreaming(true);
-          }
-          return;
-        }
-        // Asked about the ACTION's agent, never the composer's: a mode or a
-        // profile directory this CLI does not honour is dropped rather than
-        // sent, exactly as the composer drops its own.
-        const modes = capabilities
-          ? (approvalModesByAgent.get(applied.agentKind) ?? [])
-          : null;
-        const configDir =
-          configDirReasonFor(applied.agentKind) === null
-            ? applied.configDir
-            : null;
-        const run = await chatApi.createChat({
-          createChatDto: {
-            agentKind: applied.agentKind,
-            cwd: applied.cwd,
-            ...(await currentRunSettings()),
-            ...(applied.model ? { model: applied.model } : {}),
-            ...(applied.effort ? { effort: applied.effort } : {}),
-            ...(Object.keys(applied.modelParameters).length > 0
-              ? { modelParameters: applied.modelParameters }
-              : {}),
-            ...(applied.contextWindow
-              ? { contextWindow: applied.contextWindow }
-              : {}),
-            ...(applied.approval !== null && modes?.includes(applied.approval)
-              ? { approval: applied.approval }
-              : {}),
-            ...(configDir === null ? {} : { configDir }),
-          },
-        });
-        setRuns((prev) => [run, ...prev]);
-        await activateRun(run.id);
-        await startTurn(run.id, text, [], run.status);
-      } catch (err) {
-        setError(daemonErrorDetail(err) ?? String(err));
-        setStreaming(false);
-      }
-    },
-    [
-      applyRunConfigToComposer,
-      streaming,
-      workflowApi,
-      chatApi,
-      activateRun,
-      startTurn,
-      capabilities,
-      approvalModesByAgent,
-      configDirReasonFor,
-    ],
-  );
+  useEffect(() => {
+    if (fastActionPresses === 0) {
+      return;
+    }
+    const field = newChatInputRef.current;
+    if (field === null) {
+      return;
+    }
+    field.focus();
+    field.setSelectionRange(field.value.length, field.value.length);
+  }, [fastActionPresses]);
 
   // What each composer's error strip shows. The screen-level `error` wins, then
   // the shared attachment reader, then that composer's own git read — and the
@@ -3774,18 +3546,11 @@ export function Chats({
   /**
    * The strip under the composer: what it says, and how loudly.
    *
-   * Layered exactly as before — screen error, then the shared attachment
-   * reader, then this composer's own git read, then a run configuration's
-   * refused checkout — but carrying a TONE, because the third of the four is
-   * not always a failure: a branch switch refused over uncommitted work is the
-   * guard doing its job, and it comes with an offer to pull the branch up to
-   * date without losing that work.
-   *
-   * The run-configuration notice keeps the plain error tone it was written
-   * with. It is the same REFUSAL, but it arrives as a bare sentence with no
-   * `dirty` flag beside it, and inferring the warning tone — and with it a Pull
-   * control — from a message this file did not produce would be guessing at
-   * which of the two it is.
+   * Layered — screen error, then the shared attachment reader, then this
+   * composer's own git read — but carrying a TONE, because the last of the
+   * three is not always a failure: a branch switch refused over uncommitted
+   * work is the guard doing its job, and it comes with an offer to pull the
+   * branch up to date without losing that work.
    */
   const composerNotice: GitNotice | null =
     error !== null
@@ -3797,19 +3562,7 @@ export function Chats({
             offerPull: false,
             useFolder: null,
           }
-        : (git.notice ??
-          (runConfigBranchNotice === null
-            ? null
-            : {
-                message: runConfigBranchNotice,
-                tone: 'error',
-                offerPull: false,
-                // No offer here, deliberately: a configuration names a FOLDER
-                // as well as a branch, so pointing the run at the worktree that
-                // holds the branch would run it somewhere the user's own saved
-                // answer does not name. The sentence still says where it is.
-                useFolder: null,
-              }));
+        : git.notice;
   /**
    * The worktree the strip is offering, hoisted out of the notice so the click
    * handler closes over a `const` string: TypeScript drops the narrowing of a
@@ -3827,7 +3580,6 @@ export function Chats({
     setError(null);
     attachments.clearError();
     git.clearError();
-    setRunConfigBranchNotice(null);
   };
   const skillQuery = slashQuery(input);
   const skillMatches = useMemo(
@@ -5402,22 +5154,22 @@ export function Chats({
                         }}>
                         <History className="shrink-0" />
                       </Button>
-                      {/* The saved setups hang off the + itself: they are ways
-                          of starting a new chat, so the control that starts one
-                          is where the user is already aiming. A click still
-                          means the plain new thread. */}
-                      <NewChatButton
-                        configs={runConfigs}
-                        onNewChat={newChat}
-                        onApply={(config) =>
-                          void applyRunConfigToComposer(config)
-                        }
-                        // Both rows lead to the same screen, which is the ONE
-                        // place fast actions are edited — see
-                        // `settings/fast-actions.tsx`.
-                        onCreate={() => onOpenSettings?.('fast-actions')}
-                        onManage={() => onOpenSettings?.('fast-actions')}
-                      />
+                      {/* A plain button again. It carried a hover menu of saved
+                          new-chat setups while a fast action was one; now that
+                          an action is a piece of text rather than a
+                          configuration, there is nothing to start a chat FROM
+                          and the menu was two rows that both said "open
+                          Settings". */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        aria-label="New chat"
+                        title="New chat"
+                        onClick={newChat}>
+                        <Plus className="shrink-0" />
+                      </Button>
                     </span>
                   </div>
                   <ul className="m-0 flex min-h-0 flex-1 list-none flex-col gap-1 overflow-y-auto p-3 pt-1">
@@ -5738,6 +5490,7 @@ export function Chats({
                                 onRemove={attachments.remove}
                               />
                               <Textarea
+                                ref={newChatInputRef}
                                 value={input}
                                 rows={4}
                                 aria-label="Task for the new run"
@@ -5864,13 +5617,17 @@ export function Chats({
                 chips only restated, below the card, choices the card already
                 offered, and were capped at three besides.
 
-                              What stands here now is not that row rebuilt: a fast action is
-                              the user's OWN button, and pressing one is a whole chat rather
-                              than a value dropped into a chip. */}
+                              What stands here now is not that row rebuilt: those chips
+                              wrote a value the app already knew about into a chip, while a
+                              fast action writes the user's OWN sentence into the message. */}
                           <FastActionBar
-                            actions={runConfigs}
-                            disabled={streaming}
-                            onRun={(action) => void runFastAction(action)}
+                            actions={fastActions}
+                            onPress={insertFastAction}
+                            onManage={
+                              onOpenSettings
+                                ? () => onOpenSettings('fast-actions')
+                                : undefined
+                            }
                           />
                           {workflowSlug && triggers.length > 1 ? (
                             <p className="text-center text-xs text-muted-foreground">

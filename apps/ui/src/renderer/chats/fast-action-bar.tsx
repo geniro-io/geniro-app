@@ -1,19 +1,20 @@
-import { Folder, Play, Zap } from 'lucide-react';
+import { SlidersHorizontal, Zap } from 'lucide-react';
 
-import type { RunConfig } from '../../shared/contracts';
+import type { FastAction } from '../../shared/contracts';
 import { Button } from '../components/ui/button';
-import { shortenPath } from './directory-select';
-import { workflowSlugOf } from './run-config';
 
 /**
  * The user's own buttons, under the composer on the new-chat screen.
  *
- * One press is a whole chat: the action carries the folder, the branch, the
- * agent and its options, and — when it names one — the opening message, so the
- * chat is already working before the user has typed anything. That is the whole
- * of what these are for; a saved setup you still have to write a message into
- * is the thing they were before, and both are still possible (an action with no
- * message seeds the composer and stops).
+ * One press writes that action's description into the message box — and that is
+ * the whole of it. It sends nothing and it touches no chip, so an action is
+ * usable under WHATEVER setup the composer is already carrying: the same
+ * "review the diff and report findings" is one press whether the folder is this
+ * repo or another and whether the agent is claude or cursor.
+ *
+ * That independence is the feature. An action that also chose the folder and
+ * the model would be a second, invisible source of the run's configuration, and
+ * pressing one would move chips the user had just set by hand.
  *
  * The set is EMPTY for most users and draws nothing at all then, on the rule
  * the composer shelf follows: a surface that costs space for a feature nobody
@@ -21,13 +22,13 @@ import { workflowSlugOf } from './run-config';
  */
 export function FastActionBar({
   actions,
-  onRun,
-  disabled = false,
+  onPress,
+  onManage,
 }: {
-  actions: readonly RunConfig[];
-  onRun: (action: RunConfig) => void;
-  /** A turn is already running — pressing would queue nothing and do nothing. */
-  disabled?: boolean;
+  actions: readonly FastAction[];
+  onPress: (action: FastAction) => void;
+  /** Open the screen where they are edited, or undefined where there is none. */
+  onManage?: () => void;
 }): React.JSX.Element | null {
   if (actions.length === 0) {
     return null;
@@ -43,74 +44,42 @@ export function FastActionBar({
       // shelf was rebuilt around. A user with nine actions gets two lines.
       className="flex flex-wrap items-center justify-center gap-1.5">
       {actions.map((action) => (
-        <FastActionButton
+        <Button
           key={action.id}
-          action={action}
-          disabled={disabled}
-          onRun={onRun}
-        />
+          type="button"
+          variant="outline"
+          size="sm"
+          data-slot="fast-action"
+          // The description in full, because the button shows only the name and
+          // the text is about to become the user's own message — the one moment
+          // before a press when reading it can still change the answer.
+          title={action.description}
+          aria-label={`Write the fast action “${action.name}” into the message`}
+          className="h-7 max-w-64 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs"
+          onClick={() => onPress(action)}>
+          <Zap aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="min-w-0 truncate">{action.name}</span>
+        </Button>
       ))}
+      {/* The way back to where these are written, from where they are used. It
+          rides the bar rather than sitting beside the `+`, because the bar is
+          the only place the actions are visible — and it is drawn only when
+          there ARE some, since a manage button over an empty set is the surface
+          this bar refuses to be. Settings' own nav entry is how the first one
+          gets made. */}
+      {onManage ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          data-slot="fast-action-manage"
+          aria-label="Edit your fast actions"
+          title="Edit your fast actions"
+          className="size-7 shrink-0 text-muted-foreground"
+          onClick={onManage}>
+          <SlidersHorizontal className="size-3.5 shrink-0" />
+        </Button>
+      ) : null}
     </div>
   );
-}
-
-/**
- * One action. The NAME is the label; what it opens is the tooltip.
- *
- * The glyph says which of the two kinds it is — a bolt for one that fires its
- * own message, an outline play for one that only fills the chips in. They are
- * different actions and pressing them has visibly different consequences, so
- * the button says which before it is pressed rather than after.
- */
-function FastActionButton({
-  action,
-  disabled,
-  onRun,
-}: {
-  action: RunConfig;
-  disabled: boolean;
-  onRun: (action: RunConfig) => void;
-}): React.JSX.Element {
-  const sends = action.firstMessage !== null;
-  const target = workflowSlugOf(action.target) ?? action.target;
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      data-slot="fast-action"
-      data-sends={sends ? 'message' : 'setup'}
-      disabled={disabled}
-      title={[
-        sends ? `Starts ${target} and sends:` : `Sets up ${target} in`,
-        sends ? action.firstMessage : shortenPath(action.cwd),
-      ].join('\n')}
-      aria-label={
-        sends
-          ? `Start a chat from the fast action ${action.name}`
-          : `Set the composer up from the fast action ${action.name}`
-      }
-      className="h-7 max-w-64 shrink-0 gap-1.5 rounded-lg px-2.5 text-xs"
-      onClick={() => onRun(action)}>
-      {sends ? (
-        <Zap aria-hidden="true" className="size-3.5 shrink-0" />
-      ) : (
-        <Play aria-hidden="true" className="size-3.5 shrink-0" />
-      )}
-      <span className="min-w-0 truncate">{action.name}</span>
-      {/* The folder, only where the name does not already carry it. A machine
-          holds several checkouts and the actions across them are otherwise
-          told apart by a tooltip nobody hovers. */}
-      <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
-        <Folder aria-hidden="true" className="size-3 shrink-0" />
-        <span className="max-w-24 truncate">{folderLeaf(action.cwd)}</span>
-      </span>
-    </Button>
-  );
-}
-
-/** The folder's own name — the last segment, which is what identifies it. */
-function folderLeaf(cwd: string): string {
-  const parts = cwd.split('/').filter((part) => part !== '');
-  return parts[parts.length - 1] ?? cwd;
 }

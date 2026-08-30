@@ -34,10 +34,12 @@ const mocks = vi.hoisted(() => {
     daemonInspect: false,
     claudeBrowserTools: false,
     customInstructions: '',
+    theme: 'system',
   };
   return {
     handlers,
     settings,
+    applyTheme: vi.fn(() => 'light' as const),
     handle: vi.fn((channel: string, handler: IpcHandler) => {
       handlers.set(channel, handler);
     }),
@@ -57,6 +59,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: mocks.handle },
 }));
 vi.mock('./cli-detect', () => ({ detectClis: vi.fn(() => []) }));
+vi.mock('./native-appearance', () => ({ applyTheme: mocks.applyTheme }));
 vi.mock('./settings', () => ({
   readSettings: mocks.readSettings,
   updateSettings: mocks.updateSettings,
@@ -146,6 +149,34 @@ describe('registerIpc daemon configuration refresh', () => {
     restart.mockClear();
     await handler(IPC.updateSettings)(event, { daemonInspect: false });
     expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it('applies a theme change to the OS at once, and does not respawn the daemon for it', async () => {
+    await handler(IPC.updateSettings)(event, { theme: 'dark' });
+
+    // Applied in MAIN, because this one write themes the OS chrome the app does
+    // not paint AND — through `prefers-color-scheme` — the page itself. A
+    // renderer that themed only itself would leave the traffic lights, the
+    // context menu and the system dialogs on the other appearance. `applyTheme`
+    // specifically: it also repaints the open window's own ground, which is a
+    // construction option nothing else re-reads.
+    expect(mocks.applyTheme).toHaveBeenCalledWith('dark');
+    // Nothing about a theme rides the daemon's env or its launch flags, so a
+    // respawn here would cost the user a running turn for a colour.
+    expect(restart).not.toHaveBeenCalled();
+
+    mocks.applyTheme.mockClear();
+    await handler(IPC.updateSettings)(event, { notificationsEnabled: false });
+    expect(mocks.applyTheme).not.toHaveBeenCalled();
+  });
+
+  it('refuses a theme the app does not ship', async () => {
+    // ENUMERATED, unlike the CLI-vocabulary fields: a theme is a file this repo
+    // ships, so a value outside the list names nothing that can be painted.
+    await expect(
+      handler(IPC.updateSettings)(event, { theme: 'solarized' }),
+    ).rejects.toThrow();
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
   it('toggles DevTools on the calling window only', async () => {

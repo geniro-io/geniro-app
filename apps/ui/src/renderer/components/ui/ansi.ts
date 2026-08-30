@@ -29,6 +29,16 @@ export interface AnsiSpan {
   text: string;
   /** Null is the surface's own colour — no `text-*` class is applied. */
   color: AnsiColor | null;
+  /**
+   * Whether the colour came from the BRIGHT half of the range (90–97, and the
+   * 256-colour palette's 8–15).
+   *
+   * A separate flag rather than eight more names, because it is one axis over
+   * the same eight colours and a `brightRed` member would have to be spelled
+   * out at every switch that already handles `red`. It is only ever true
+   * alongside a colour: nothing turns brightness on by itself.
+   */
+  bright: boolean;
   bold: boolean;
   dim: boolean;
   italic: boolean;
@@ -70,6 +80,7 @@ const ESCAPE =
 /** The attributes in force at a point in the stream. */
 interface AnsiState {
   color: AnsiColor | null;
+  bright: boolean;
   bold: boolean;
   dim: boolean;
   italic: boolean;
@@ -78,6 +89,7 @@ interface AnsiState {
 
 const CLEAR: AnsiState = {
   color: null,
+  bright: false,
   bold: false,
   dim: false,
   italic: false,
@@ -116,33 +128,38 @@ function applySgr(state: AnsiState, params: string): AnsiState {
     } else if (code === 24) {
       next = { ...next, underline: false };
     } else if (code >= 30 && code <= 37) {
-      next = { ...next, color: COLORS[code - 30] ?? null };
+      next = { ...next, color: COLORS[code - 30] ?? null, bright: false };
     } else if (code === 39) {
-      next = { ...next, color: null };
+      next = { ...next, color: null, bright: false };
     } else if (code >= 90 && code <= 97) {
-      // The bright half maps to the same eight: see the palette's own note —
-      // on a light background a brighter ink is a fainter one.
-      next = { ...next, color: COLORS[code - 90] ?? null };
+      // The bright half is the SAME eight names carrying a flag, and the two
+      // themes answer it differently — which is the point of resolving it in
+      // CSS rather than here. On the dark theme all eight are genuinely
+      // brighter; on the light one only the greys differ, since "brighter" on
+      // cream means fainter. See the `--ansi-bright-*` blocks in
+      // `styles/themes/`.
+      next = { ...next, color: COLORS[code - 90] ?? null, bright: true };
     } else if (code === 38) {
       // An extended colour, whose own parameters follow: `5;N` (the 256-colour
       // palette) or `2;R;G;B` (24-bit). Only the first sixteen of the 256 are
-      // the named colours, and everything past them — the 216-colour cube, the
-      // greys, and every truecolour — has no token to be drawn in, so it takes
-      // the surface's colour rather than an invented one. The parameters are
-      // still CONSUMED either way, or their digits print as text.
+      // the named colours — 0–7 the normal eight and 8–15 the bright eight, in
+      // the same order, which is why the bright half is the SAME index shifted
+      // rather than a second table. Everything past them — the 216-colour cube,
+      // the greys, and every truecolour — has no token to be drawn in, so it
+      // takes the surface's colour rather than an invented one. The parameters
+      // are still CONSUMED either way, or their digits print as text.
       const mode = codes[i + 1];
       if (mode === 5) {
         const index = codes[i + 2];
+        const named = index !== undefined && index >= 0 && index < 16;
         next = {
           ...next,
-          color:
-            index !== undefined && index >= 0 && index < 16
-              ? (COLORS[index % 8] ?? null)
-              : null,
+          color: named ? (COLORS[index % 8] ?? null) : null,
+          bright: named && index >= 8,
         };
         i += 2;
       } else if (mode === 2) {
-        next = { ...next, color: null };
+        next = { ...next, color: null, bright: false };
         i += 4;
       }
     }
@@ -195,6 +212,7 @@ export function parseAnsi(text: string): AnsiSpan[] {
     if (
       last !== undefined &&
       last.color === state.color &&
+      last.bright === state.bright &&
       last.bold === state.bold &&
       last.dim === state.dim &&
       last.italic === state.italic &&

@@ -70,6 +70,23 @@ describe('readSettings', () => {
     expect(readSettings()).toEqual(DEFAULT_SETTINGS);
   });
 
+  it('a stored theme survives a read', () => {
+    writeRaw({ theme: 'dark' });
+
+    expect(readSettings().theme).toBe('dark');
+  });
+
+  it('a theme this build no longer ships costs only that key, and falls back to System', () => {
+    // Version skew is normal under the notify-only brew flow, so a settings.json
+    // written by a newer build can name a theme whose CSS file this one does not
+    // have. Painting nothing is not an option; System is.
+    writeRaw({ theme: 'solarized', onboardingComplete: true });
+
+    const settings = readSettings();
+    expect(settings.theme).toBe('system');
+    expect(settings.onboardingComplete).toBe(true);
+  });
+
   it("a future agent kind inside cliPaths costs only that entry — this build's known CLI paths survive", () => {
     // The salvage exists for version skew (a settings.json written by a NEWER
     // build under the notify-only brew flow). The most likely schema growth is

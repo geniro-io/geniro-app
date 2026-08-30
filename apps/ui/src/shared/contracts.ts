@@ -11,6 +11,8 @@
  * instead of silently drifting from a hand-written copy.
  */
 
+import { DEFAULT_THEME_PREFERENCE, type ThemePreference } from './themes';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Daemon connection (read from the pidfile by main, passed to the renderer)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -406,6 +408,17 @@ export interface Settings {
    * than respawning the CLI process of one already open.
    */
   customInstructions: string;
+  /**
+   * Which theme the app paints, or `'system'` to follow the OS.
+   *
+   * The names and their values live in `shared/themes.ts` and
+   * `renderer/styles/themes/`; this holds only the choice. It is applied by
+   * MAIN rather than by the renderer — `nativeTheme.themeSource` drives both
+   * the OS chrome this app does not paint (the traffic lights, context menus,
+   * system dialogs) and the renderer's own `prefers-color-scheme`, so one
+   * write covers every surface and the two can never disagree.
+   */
+  theme: ThemePreference;
 }
 
 /**
@@ -473,6 +486,7 @@ export const DEFAULT_SETTINGS: Settings = {
   daemonInspect: null,
   claudeBrowserTools: false,
   customInstructions: '',
+  theme: DEFAULT_THEME_PREFERENCE,
 };
 
 /**
@@ -659,25 +673,6 @@ export const RAIL_EXPANDED_WIDTH = 220;
  * moving it would be a rename for its own sake.
  */
 export const CHAT_LIST_WIDTH = 260;
-
-/**
- * What the WINDOW is painted with underneath the page.
- *
- * A `BrowserWindow` with no `backgroundColor` is WHITE, and the window is not
- * always fully covered by painted web contents: macOS clips the bottom corners
- * out of the frame, and a resize exposes the newly revealed strip until the
- * renderer repaints it — which on a busy renderer is long enough to look
- * permanent. REPORTED as a white line across the bottom of the window, and
- * measured from inside the page at the same moment: the document filled
- * `window.innerHeight` exactly and `body` was already this colour, so the band
- * was never the page. It was the window showing through.
- *
- * TWIN PARSER: `renderer/styles/global.css`'s `--background`. CSS cannot read
- * a TypeScript constant and main cannot read a custom property, so the value is
- * spelled once on each side and the two MUST be changed together — the failure
- * is silent and only visible for the moment a resize is in flight.
- */
-export const WINDOW_BACKGROUND = '#f5f1eb';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // System notifications (a banner outside the app, for a thread nobody is

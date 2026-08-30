@@ -15,6 +15,7 @@ import {
   DEFAULT_SETTINGS,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
 } from '../../shared/contracts';
+import { THEMES } from '../../shared/themes';
 import { Settings, type SettingsSection } from './Settings';
 
 (
@@ -1116,5 +1117,100 @@ describe('Settings — fast actions', () => {
 
     // The delete was refused, so the action must still be listed.
     expect(container.textContent).toContain('Geniro app');
+  });
+});
+
+describe('Settings appearance section', () => {
+  beforeEach(() => {
+    // jsdom ships no matchMedia, and picking a theme resolves through it —
+    // `apply-theme.ts` reads the OS appearance to answer "System".
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+    delete document.documentElement.dataset.theme;
+  });
+
+  function openThemeMenu(): void {
+    const trigger =
+      container.querySelector<HTMLButtonElement>('#settings-theme');
+    if (!trigger) {
+      throw new Error('no theme picker');
+    }
+    act(() => trigger.click());
+  }
+
+  function optionNamed(label: string): HTMLElement {
+    const option = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((candidate) => (candidate.textContent ?? '').trim() === label);
+    if (!option) {
+      throw new Error(`no "${label}" option`);
+    }
+    return option;
+  }
+
+  it('offers System and every theme the app ships', async () => {
+    await mount();
+
+    openThemeMenu();
+
+    // Expected from the MANIFEST so a third theme needs no edit here. It does
+    // not yet DISCRIMINATE — with two themes, a hardcoded picker produces the
+    // same three labels — so what this pins today is the rows and their order;
+    // the manifest-derived expectation is what carries the claim once a third
+    // theme exists.
+    expect(
+      [...container.querySelectorAll('[role="option"]')].map((option) =>
+        (option.textContent ?? '').trim(),
+      ),
+    ).toEqual(['System', ...THEMES.map((theme) => theme.label)]);
+  });
+
+  it('opens on the stored preference rather than on the default', async () => {
+    geniro.getSettings.mockResolvedValue({ ...settings, theme: 'dark' });
+
+    await mount();
+
+    expect(container.querySelector('#settings-theme')?.textContent).toContain(
+      'Dark',
+    );
+  });
+
+  it('persists the pick and repaints the document without waiting for a reload', async () => {
+    await mount();
+    openThemeMenu();
+
+    await act(async () => {
+      optionNamed('Dark').click();
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({ theme: 'dark' });
+    // The repaint is the half a persist alone would not give: `data-theme` is
+    // what every token selector keys on.
+    expect(document.documentElement.dataset.theme).toBe('dark');
+  });
+
+  it('rolls the page back when the write is refused, so it cannot disagree with the OS chrome', async () => {
+    // The page repaints HERE; the OS chrome repaints in MAIN when the write
+    // lands. Swallowing the rejection would leave a dark page under light
+    // traffic lights until the next launch — the split main-side application
+    // exists to prevent.
+    geniro.updateSettings.mockRejectedValueOnce(new Error('disk full'));
+    await mount();
+    openThemeMenu();
+
+    await act(async () => {
+      optionNamed('Dark').click();
+    });
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(container.querySelector('#settings-theme')?.textContent).toContain(
+      'System',
+    );
   });
 });

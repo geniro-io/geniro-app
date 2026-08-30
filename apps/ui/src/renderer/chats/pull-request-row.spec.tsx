@@ -49,7 +49,7 @@ async function mount(ui: ReactNode): Promise<void> {
 }
 
 describe('PullRequestRow', () => {
-  it('links to the pull request and names its number and state', async () => {
+  it('links to the pull request and names its number', async () => {
     await mount(<PullRequestRow pullRequest={pr('merged')} />);
 
     const link = container.querySelector('a');
@@ -57,10 +57,41 @@ describe('PullRequestRow', () => {
     // target=_blank so main's window-open handler routes it to the browser.
     expect(link?.getAttribute('target')).toBe('_blank');
     expect(link?.textContent).toContain('builder polish');
-    expect(link?.textContent).toContain('#70');
-    // Spelled out, not left to the glyph: inside the settled group a merged
-    // pull request and an abandoned one are the same row shape.
-    expect(link?.textContent).toContain('merged');
+    expect(
+      container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
+    ).toBe('#70');
+  });
+
+  it('states the state in the ICON, not as a word beside the number', async () => {
+    // Asked for directly: every row carried a trailing `· merged` that said
+    // what the glyph already said. The word has to stay reachable — the tooltip
+    // and the icon's screen-reader text — since colour alone is not a label.
+    await mount(<PullRequestRow pullRequest={pr('merged')} />);
+
+    expect(
+      container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
+    ).not.toContain('merged');
+    expect(container.querySelector('a')?.getAttribute('title')).toContain(
+      'merged',
+    );
+    expect(container.querySelector('.sr-only')?.textContent).toBe('merged');
+  });
+
+  it('colours the glyph by state', async () => {
+    // Green merged, yellow open, grey draft, red closed — the whole visible
+    // signal now that the word is gone, and every colour a token.
+    const colourOf = async (
+      state: PullRequestState,
+      isDraft = false,
+    ): Promise<string> => {
+      await mount(<PullRequestRow pullRequest={pr(state, isDraft)} />);
+      return container.querySelector('svg')?.getAttribute('class') ?? '';
+    };
+
+    expect(await colourOf('merged')).toContain('text-success');
+    expect(await colourOf('open')).toContain('text-warning');
+    expect(await colourOf('open', true)).toContain('text-muted-foreground');
+    expect(await colourOf('closed')).toContain('text-destructive');
   });
 
   it('calls a draft a draft rather than open', async () => {

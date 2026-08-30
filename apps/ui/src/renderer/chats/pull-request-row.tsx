@@ -31,7 +31,7 @@ interface PullRequestLook {
 
 function lookOf(pullRequest: PullRequestInfo): PullRequestLook {
   if (pullRequest.state === 'merged') {
-    return { word: 'merged', icon: GitMerge, className: 'text-primary' };
+    return { word: 'merged', icon: GitMerge, className: 'text-success' };
   }
   if (pullRequest.state === 'closed') {
     return {
@@ -47,12 +47,16 @@ function lookOf(pullRequest: PullRequestInfo): PullRequestLook {
       className: 'text-muted-foreground',
     };
   }
-  return { word: 'open', icon: GitPullRequest, className: 'text-success' };
+  return { word: 'open', icon: GitPullRequest, className: 'text-warning' };
 }
 
 /**
- * The state as a glyph, with its word carried for a reader who cannot see the
- * colour — the colour and the shape are the whole signal otherwise.
+ * The state as a glyph, and the ONLY place a row states it: green merged,
+ * yellow open, grey draft, red closed. It carries its word for a reader who
+ * cannot see the colour, since colour and shape are the whole visible signal —
+ * every list here draws one row per pull request, so the state repeated as text
+ * beside every number was a column of words that said what the icon already
+ * said.
  */
 export function PullRequestStateIcon({
   pullRequest,
@@ -75,23 +79,24 @@ export function PullRequestStateIcon({
 /**
  * One pull request in the right-hand panel's list.
  *
- * The state is spelled out beside the number rather than left to the glyph
- * alone: within the settled group a merged pull request and an abandoned one
- * are the same row shape, and which one it is is the reason to look.
+ * The state is the ICON's — its colour and its shape — never a word beside the
+ * number. Within the settled group a merged pull request and an abandoned one
+ * are the same row shape, and green-versus-red separates them at a glance where
+ * a trailing `· merged` had to be read. The word survives in the row's tooltip
+ * and in the icon's own screen-reader text.
  */
 export function PullRequestRow({
   pullRequest,
 }: {
   pullRequest: PullRequestInfo;
 }): React.JSX.Element {
-  const look = lookOf(pullRequest);
   return (
     <PanelLinkRow
       href={pullRequest.url}
       title={pullRequest.title}
-      tooltip={`#${pullRequest.number} ${pullRequest.title}`}
+      tooltip={`#${pullRequest.number} ${pullRequest.title} · ${lookOf(pullRequest).word}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={`#${pullRequest.number} · ${look.word}`}
+      meta={`#${pullRequest.number}`}
     />
   );
 }
@@ -201,9 +206,9 @@ export function ThreadPullRequestRow({
     <PanelLinkRow
       href={pullRequest.url}
       title={pullRequest.title}
-      tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title}`}
+      tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={`${name} · ${lookOf(pullRequest).word}`}
+      meta={name}
     />
   );
 }

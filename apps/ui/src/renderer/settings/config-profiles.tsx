@@ -147,11 +147,21 @@ export function ConfigProfileList({
                   menu ignores every token and cannot draw a swatch at all. The
                   colour NAME rides the trigger beside the dot: colour is not a
                   label, and a row of eight identical dots is unreadable to
-                  anyone who cannot tell them apart. */}
+                  anyone who cannot tell them apart.
+
+                  FIXED width, and that is what makes the list line up. It was
+                  the one content-sized cell in the row AND the first, so `Blue`
+                  and `Orange` started their neighbours at different x and every
+                  column after them was ragged — the delete buttons agreed only
+                  because they are pushed against the right edge. `w-28` clears
+                  the longest label the palette holds (`Orange`) beside the dot
+                  and the chevron; the row's other three cells were already
+                  fixed, flexible or shrink-0. */}
               <Select
                 aria-label={`Colour for ${profile.name}`}
                 value={profile.color}
                 variant="ghost"
+                className="w-28 shrink-0"
                 leadingIcon={<ColorDot color={profile.color} />}
                 triggerLabel={PALETTE_LABEL[profile.color]}
                 groups={[
@@ -205,8 +215,17 @@ export function ConfigProfileList({
                   });
                 }}>
                 <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
+                {/* TWO segments, not the default three. This cell is the last
+                    thing in a row that has already spent its width on a colour,
+                    a name field and a delete button, and at three segments the
+                    path overran it and was CSS-truncated — which eats the TAIL,
+                    the one end that says which directory it is:
+                    `/Users/me/.claude-perso…`. Eliding the head instead is the
+                    rule `shortenPath` exists for, and two is the count that
+                    makes it fit here (the same reason the context panel passes
+                    two). The full path is still on the row's title. */}
                 <span className="min-w-0 truncate">
-                  {shortenPath(profile.dir)}
+                  {shortenPath(profile.dir, 2)}
                 </span>
               </button>
               <Button

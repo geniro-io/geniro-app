@@ -1,4 +1,13 @@
-import { Clock, GripVertical, Pencil, SendHorizontal, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Clock,
+  GripVertical,
+  Pause,
+  Pencil,
+  Play,
+  SendHorizontal,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { Button } from '../components/ui/button';
@@ -42,9 +51,18 @@ export interface QueuedStripMessage {
  * one gets the control inert carrying its own sentence, because a queued
  * message that cannot jump the turn is still going out and the user deserves
  * to know it is waiting rather than stuck.
+ *
+ * **And the automatic half is itself opt-out** (`paused`): the queue can be
+ * held, so that what leaves it is only ever a press. That is a different
+ * question from `onSteer`'s — steering asks WHEN a message reaches the agent
+ * relative to the turn in flight, pausing asks whether the queue advances at
+ * all without being asked — which is why the two controls coexist rather than
+ * one covering the other.
  */
 export function QueuedStrip({
   messages,
+  paused,
+  turnInFlight,
   steerUnavailableReason,
   steerInterrupts = false,
   steerStatus,
@@ -52,8 +70,29 @@ export function QueuedStrip({
   onRemove,
   onReorder,
   onSteer,
+  onTogglePause,
 }: {
   messages: readonly QueuedStripMessage[];
+  /**
+   * The queue is HELD: nothing leaves it until the user releases a message.
+   *
+   * The default is off, and the strip says which mode it is in either way —
+   * "waiting" and "held" look identical on a row, and the difference is the
+   * whole question a reader has about a queue.
+   */
+  paused: boolean;
+  /**
+   * Whether a turn is running right now.
+   *
+   * Send-now means two different things across that line, which is why the
+   * strip has to be told rather than inferring it from `steerUnavailableReason`
+   * being set: with a turn in flight the message is handed to a CLI mid-turn,
+   * which not every CLI has a channel for; with none, it simply starts the next
+   * turn — something every CLI can do. Without this, a paused queue on an agent
+   * that takes no mid-turn message had its release control permanently inert,
+   * i.e. no way out of the pause at all.
+   */
+  turnInFlight: boolean;
   /**
    * Why this run's CLI cannot be handed a message mid-turn, or null when it
    * can. Straight off the daemon's capability report.
@@ -95,12 +134,17 @@ export function QueuedStrip({
    * it. A no-op when either id has already gone out.
    */
   onReorder: (id: string, overId: string) => void;
+  /** Hold the queue, or let it flow again. */
+  onTogglePause: () => void;
 }): React.JSX.Element | null {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const steerBlocked = steerUnavailableReason !== null;
+  // The daemon's reason is about the MID-TURN channel, so it can only block a
+  // press that would use one. With no turn running, Send-now is an ordinary
+  // turn start.
+  const steerBlocked = turnInFlight && steerUnavailableReason !== null;
 
   useEffect(() => {
     if (editingId !== null) {
@@ -136,6 +180,11 @@ export function QueuedStrip({
     setEditingId(null);
   };
 
+  // Both forms spelled out rather than derived with an `s`: this app has
+  // shipped `2 categorys` to the screen once already.
+  const waiting =
+    messages.length === 1 ? '1 message' : `${messages.length} messages`;
+
   return (
     // `role="group"` is what makes the label below stick: ARIA ignores an
     // accessible name on a generic element.
@@ -143,6 +192,53 @@ export function QueuedStrip({
       role="group"
       aria-label="Queued messages"
       className="flex flex-col gap-1">
+      {/* ONE header line, and it exists for the pause — the rows already say
+          what each of them is (`sends next`, `sending…`), so before there was
+          a mode to be in, a heading over them would have been chrome counting
+          the lines beneath it. What a row cannot say is why it is NOT moving,
+          which is exactly the state the toggle creates: `held` and `waiting`
+          are the same row. So the line states the mode in words, and carries
+          the one control that acts on the queue as a whole.
+
+          It carried a SECOND one for a release — a `Send next` button that
+          released the head — and that was the same operation as the head row's
+          own Send control, drawn a second way, six inches from it. Two
+          affordances for one act is what the reuse rules exist to stop, and the
+          duplicate is the one that had to go: an action belongs to the thing it
+          acts on, and this line's subject is the queue's MODE. What replaced it
+          is the head row's Send, promoted (below) — still one press. */}
+      <div className="flex items-center gap-1.5 px-2 text-xs text-muted-foreground">
+        <Clock aria-hidden="true" className="size-3 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">
+          {paused
+            ? `Queue paused — ${waiting} held until you send them`
+            : `${waiting} queued — the next goes out when this turn ends`}
+        </span>
+        {/* A toggle button rather than a Switch: a switch belongs to a settings
+            row with a label beside it, and this states its own action in the
+            word on it. `aria-pressed` is what makes it a toggle to a screen
+            reader — the label names what pressing does, so the state would
+            otherwise be unreadable. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-pressed={paused}
+          className="h-6 shrink-0 gap-1 px-1.5 text-xs text-muted-foreground"
+          title={
+            paused
+              ? 'Resume — the queue empties itself again as turns end'
+              : 'Pause — nothing leaves the queue until you send it'
+          }
+          onClick={onTogglePause}>
+          {paused ? (
+            <Play aria-hidden="true" className="size-3 shrink-0" />
+          ) : (
+            <Pause aria-hidden="true" className="size-3 shrink-0" />
+          )}
+          {paused ? 'Resume' : 'Pause'}
+        </Button>
+      </div>
       {messages.map((message, index) => {
         const imageCount = message.images.length;
         const label =
@@ -153,6 +249,10 @@ export function QueuedStrip({
         return (
           <div
             key={message.id}
+            // NAMED, because the strip is no longer only rows: `>  div` now
+            // reaches the header too, and every index read off it would be one
+            // out. The same reason the agents panel's card list carries a slot.
+            data-slot="queued-message"
             // Dragged to reorder — REPORTED as "я хочу иметь возможность
             // drag-and-drop передвигать queue сообщений, чтобы контролировать,
             // какое сообщение следующим отправится первым". Same gesture as the
@@ -361,14 +461,43 @@ export function QueuedStrip({
                     }>
                     {steer === 'sending' ? 'sending…' : 'still queued'}
                   </span>
-                ) : index === 0 ? (
+                ) : index === 0 && !paused ? (
+                  // `sends next` is a PROMISE, and a paused queue does not make
+                  // it. Paused, this note is gone rather than reworded: the row
+                  // carries a labelled Send instead, which says which row is
+                  // next by being the one that offers the press — and a note
+                  // beside a button that names the same fact is the queue strip
+                  // saying it twice on one line.
                   <span className="shrink-0">sends next</span>
                 ) : null}
+                {/* The head of a PAUSED queue is where the mode's release
+                    lives, so there it stops being one ghost glyph among three
+                    and becomes the row's action: a round filled pill with the
+                    ArrowUp the composer's own Send uses. Same button, same
+                    handler, same refusal — only its weight changes, with what
+                    the row is FOR.
+
+                    Round and filled because that is this app's one language for
+                    "this dispatches the message" (`Chats.tsx`'s Send), and a
+                    release that looks like the Edit and Remove glyphs beside it
+                    is a primary action drawn as a third icon. Every other row
+                    keeps the glyph: those are out-of-order releases, which are
+                    real but are not what the mode is about. */}
                 <Button
                   type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="size-5 shrink-0"
+                  variant={paused && index === 0 ? 'default' : 'ghost'}
+                  size={paused && index === 0 ? 'sm' : 'icon'}
+                  className={cn(
+                    'shrink-0',
+                    // `h-5`, matching the glyph buttons it sits beside rather
+                    // than the `sm` size's own 32px: a taller control sets the
+                    // ROW's height, so the head stood 4px prouder than every
+                    // row under it and the list read as ragged rather than as
+                    // one row carrying an action.
+                    paused && index === 0
+                      ? 'h-5 gap-1 rounded-full px-2 text-xs'
+                      : 'size-5',
+                  )}
                   aria-label={`Send queued message ${position} now`}
                   // `aria-disabled`, never `disabled`: the shared Button sets
                   // `disabled:pointer-events-none`, so a truly disabled control
@@ -381,10 +510,12 @@ export function QueuedStrip({
                   // the same message twice.
                   aria-disabled={steerBlocked || steer === 'sending'}
                   title={
-                    steerUnavailableReason ??
-                    (steerInterrupts
-                      ? 'Send now — this stops what the agent is doing and answers this instead'
-                      : 'Send now — into the turn already running')
+                    !turnInFlight
+                      ? 'Send now — it starts the next turn'
+                      : (steerUnavailableReason ??
+                        (steerInterrupts
+                          ? 'Send now — this stops what the agent is doing and answers this instead'
+                          : 'Send now — into the turn already running'))
                   }
                   onClick={() => {
                     if (steerBlocked || steer === 'sending') {
@@ -392,7 +523,14 @@ export function QueuedStrip({
                     }
                     onSteer(message.id);
                   }}>
-                  <SendHorizontal className="size-3 shrink-0" />
+                  {paused && index === 0 ? (
+                    <>
+                      <ArrowUp aria-hidden="true" className="size-3 shrink-0" />
+                      Send
+                    </>
+                  ) : (
+                    <SendHorizontal className="size-3 shrink-0" />
+                  )}
                 </Button>
                 <Button
                   type="button"

@@ -27,7 +27,7 @@ import {
 
 /**
  * Drag payload MIME for dropping a palette entry onto the canvas. The value
- * is a JSON `PaletteItem`; `Graphs`' canvas `onDrop` reads it back and adds
+ * is a JSON `PaletteItem`; `Workflows`' canvas `onDrop` reads it back and adds
  * the node at the drop position. Clicking a tile opens its info dialog — it
  * does NOT add a node (matches geniro: drag to add, click for details).
  */

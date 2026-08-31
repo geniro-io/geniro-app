@@ -67,7 +67,7 @@ const capabilitiesApi = vi.hoisted(() => ({
 const chatsApi = vi.hoisted(() => ({
   forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
 }));
-// Listed by the graphs screen, not by this one — kept because
+// Listed by the workflows screen, not by this one — kept because
 // `createDaemonApis` is mocked whole and every key it returns must exist.
 const workflowsApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(() => Promise.resolve([])),

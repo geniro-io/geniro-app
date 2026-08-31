@@ -46,7 +46,7 @@ const CUSTOM_MODEL = '__custom__';
  * says out loud.
  *
  * …and the graph builder's node inspector, under {@link allowCustom}. ONE chip
- * for all three rather than a second picker in `graphs/`, on the rule the
+ * for all three rather than a second picker in `workflows/`, on the rule the
  * effort chip beside it already follows: which rows the CLI reports, that a
  * stored model outside them still has to be named on screen, and what the
  * default row means are the parts worth getting right once.

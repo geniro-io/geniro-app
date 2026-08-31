@@ -838,7 +838,7 @@ export function Chats({
       .then((s) => setCollapseToolSteps(s.collapseToolSteps ?? false));
   }, [active]);
 
-  // The workflow library is editable on the Graphs page while this tab stays
+  // The workflow library is editable on the Workflows page while this tab stays
   // mounted (hidden), so refetch it every time the tab becomes visible — a
   // mount-only fetch would leave the target selector stale after a save or
   // delete over there.
@@ -856,7 +856,7 @@ export function Chats({
       .catch(() => setWorkflows([]));
   }, [active, workflowApi]);
 
-  // A remembered workflow target can be gone (deleted/renamed on the Graphs
+  // A remembered workflow target can be gone (deleted/renamed on the Workflows
   // page): once the library has ACTUALLY loaded, fall back instead of keeping
   // a dead selection. Gated on workflowsLoaded so the initial empty list (or
   // a failed fetch) never clobbers a target the restore just set.

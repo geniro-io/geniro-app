@@ -107,8 +107,8 @@ import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useNodeMcp } from './use-node-mcp';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
-import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
+import { WorkflowRow } from './workflow-row';
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -168,7 +168,7 @@ const NOTICE_TTL_MS = 6_000;
  * canvas is a static builder (no live-run animation in M3); runs start from
  * the Chats page.
  */
-export function Graphs({
+export function Workflows({
   handle,
 }: {
   handle: DaemonHandle | null;
@@ -946,7 +946,19 @@ export function Graphs({
       <div className="flex h-full min-h-0 flex-col">
         <header className="flex items-center gap-2 border-b border-border px-4 py-3">
           <div className="flex flex-col">
-            <h2 className="font-medium">Workflows</h2>
+            <div className="flex items-baseline gap-2">
+              {/* Matches the Stats header's scale — these are the two pages
+                  that are a whole surface rather than a document. */}
+              <h2 className="text-lg font-semibold">Workflows</h2>
+              {/* A count only once one is known: `0` while the list is still
+                  loading is a claim, and the empty state below is the one
+                  place allowed to make it. */}
+              {summaries === null ? null : (
+                <span className="text-sm text-muted-foreground tabular-nums">
+                  {summaries.length}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               Compose a team of agents as a graph. Runs start from the Chats
               page.
@@ -994,16 +1006,19 @@ export function Graphs({
           </EmptyState>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]">
+            {/* One ruled surface, hairline-separated — the same construction
+                as the Stats page's `StatGrid` (gap-px over a `bg-border`
+                container), so the two pages read as the same material. */}
+            <ul className="grid gap-px overflow-hidden rounded-xl border border-border bg-border shadow-panel-sm">
               {summaries.map((summary) => (
-                <WorkflowCard
+                <WorkflowRow
                   key={summary.slug}
                   summary={summary}
                   onOpen={() => void openWorkflow(summary.slug)}
                   onDelete={() => setPendingDelete(summary)}
                 />
               ))}
-            </div>
+            </ul>
           </div>
         )}
 

@@ -98,7 +98,7 @@ const VARIANTS = {
   },
   // Keyed by the kind union, not by `string`: `flowEdgeType` now emits a React
   // Flow `type` for EVERY kind, so one without a variant here (and a component
-  // in `Graphs.tsx`'s EDGE_TYPES) would silently fall back to the library
+  // in `Workflows.tsx`'s EDGE_TYPES) would silently fall back to the library
   // default — which is exactly the state this file was written to end.
 } as const satisfies Record<EdgeKind, EdgeVariant>;
 

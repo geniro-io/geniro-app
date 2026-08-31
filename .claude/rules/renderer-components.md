@@ -147,7 +147,7 @@ paths:
      be sent out from under the editor by the drain, so the strip has to
      close the field itself.
 4. **Feature screen**, one directory per screen (`chats/`, `onboarding/`,
-   `settings/`, `graphs/`, `notifications/`, `debug/`, …) — browse
+   `settings/`, `workflows/`, `notifications/`, `debug/`, …) — browse
    `apps/ui/src/renderer/` for the current set. `chats/` also holds its row
    component, `message-bubble.tsx`. App shell (`App.tsx`, `main.tsx`) and
    daemon clients live at the renderer root — the REST clients and every
@@ -166,7 +166,7 @@ paths:
   exists — `WorkflowNode['kind']`, `Object.values(TriggerKind)`,
   `NonNullable<Workflow['layout']>` — so a daemon change surfaces as a type
   error rather than silent drift. Those derivations live in
-  `graphs/node-schema.ts` and `graphs/graph-doc.ts`.
+  `workflows/node-schema.ts` and `workflows/graph-doc.ts`.
 - After changing a daemon route or schema, run `pnpm generate:api` and commit
   the regenerated client with the change.
 

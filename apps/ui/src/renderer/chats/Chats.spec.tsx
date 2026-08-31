@@ -3478,7 +3478,7 @@ describe('Chats workflow runs', () => {
 
   it('refetches the workflow library when the tab becomes active again', async () => {
     // The tab stays mounted (hidden) while the user saves a workflow on the
-    // Graphs page — coming back must refresh the target selector, not serve
+    // Workflows page — coming back must refresh the target selector, not serve
     // the mount-time snapshot.
     const { client } = makeClient();
     const container = document.createElement('div');
@@ -3493,7 +3493,7 @@ describe('Chats workflow runs', () => {
       'demo-duo',
     );
 
-    // Hidden behind the Graphs page (no refetch fires)…
+    // Hidden behind the Workflows page (no refetch fires)…
     workflowApi.listWorkflows.mockResolvedValue([
       {
         slug: 'demo-duo',

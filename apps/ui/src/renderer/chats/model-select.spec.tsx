@@ -112,7 +112,7 @@ describe('ModelSelect', () => {
 
 /**
  * The graph builder's half of the same chip. It used to be a second component
- * in `graphs/` — a bordered select over a text input, which is what the reported
+ * in `workflows/` — a bordered select over a text input, which is what the reported
  * "model should be the same design as when we create chat" was about.
  */
 describe('ModelSelect — allowCustom (the node inspector)', () => {

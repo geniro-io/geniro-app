@@ -160,7 +160,7 @@ describe('the component catalog', () => {
 
   it('keeps every story in the renderer inside a catalogued directory', () => {
     // `.storybook/main.ts` globs ALL of `src/renderer/**`, so a story authored
-    // under `chats/` or `graphs/` is loaded into the catalog while escaping
+    // under `chats/` or `workflows/` is loaded into the catalog while escaping
     // every check above. Either it moves into a component directory, or that
     // directory joins NAMESPACES.
     const known = new Set(directories.map((dir) => join(COMPONENTS_DIR, dir)));

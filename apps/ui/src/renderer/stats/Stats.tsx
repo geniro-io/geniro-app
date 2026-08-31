@@ -299,7 +299,7 @@ export function Stats({
                 title="By workflow"
                 groups={data.byWorkflow}
                 // A null key is a single-agent chat, and it is named rather
-                // than hidden: what the graphs cost is only meaningful beside
+                // than hidden: what the workflows cost is only meaningful beside
                 // what the plain chats cost. Turns recorded before the ledger
                 // stored a workflow name land here too — the name was never
                 // written and cannot be recovered, and inventing one would be

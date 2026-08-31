@@ -41,6 +41,6 @@ export const Collapsed: Story = {
   args: { collapsed: true },
 };
 
-export const OnGraphsView: Story = {
-  args: { view: 'graphs' },
+export const OnWorkflowsView: Story = {
+  args: { view: 'workflows' },
 };

@@ -973,7 +973,8 @@ export function AgentsPanel({
       </div>
       {mcpToggleError !== null && onDismissMcpToggleError ? (
         <ErrorBanner
-          className="px-3 pb-1"
+          // MARGIN, not padding — the strip owns its inset now.
+          className="mx-3 mb-1"
           message={mcpToggleError}
           onDismiss={onDismissMcpToggleError}
         />

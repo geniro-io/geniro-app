@@ -6441,7 +6441,11 @@ export function Chats({
 
                     {transcriptError ? (
                       <ErrorBanner
-                        className="border-t border-border px-4 py-2"
+                        // Was a full-bleed band with its own rule, drawn that
+                        // way because the strip had no surface to be seen by.
+                        // It has one now, so this is an inset card and the
+                        // rule would be a second separator around it.
+                        className="mx-4 mb-2"
                         message={transcriptError}
                         // The run outlived the workflow it ran: there is nothing to
                         // retry and nothing to fix, so the only thing left to offer

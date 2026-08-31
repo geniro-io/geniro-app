@@ -46,6 +46,12 @@ const LISTING: AgentMcpListing = {
 const meta = {
   title: 'Components/McpDialogButton',
   component: McpDialogButton,
+  // A modal is `fixed`, so it fills whatever box the docs preview gives it —
+  // and the docs wrapper is sized by its content, which for a bare trigger is
+  // one row. Without a height here the dialog is squeezed into that row and
+  // shows its title bar alone. Story view is unaffected: the canvas is taller
+  // than this either way.
+  decorators: [(story) => <div className="h-[420px]">{story()}</div>],
   args: {
     // open/onOpenChange are dummy defaults satisfying the required-args
     // type — the render below owns real open state and ignores these.

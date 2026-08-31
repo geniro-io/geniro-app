@@ -202,6 +202,23 @@ paths:
 - A story that needs open/close state drives it from a stateful wrapper inside
   `render`, or opens by default — a story whose only state is "closed" shows an
   empty canvas and documents nothing.
+- **A story that opens a MODAL gives its wrapper a height.** A dialog is
+  `fixed`, so it fills whatever containing block it is given; in the STORY view
+  that is the canvas, but a Docs page sizes each preview by its content, which
+  for a bare trigger is one row — and the dialog is then squeezed into that row
+  and shows its title bar alone. `decorators: [(story) => <div
+  className="h-[420px]">{story()}</div>]`, sized to what the dialog holds.
+  `parameters.docs.story.inline = false` is NOT the fix: the option is still in
+  addon-docs' types, and setting it changed nothing (measured on Storybook
+  10.5, before and after a dev-server restart).
+- **The catalog re-enables document scrolling, and must keep doing so.**
+  `global.css` sets `html, body, #root { overflow: clip }` so the Electron
+  shell can never be scrolled — deliberately `clip` rather than `hidden`, so
+  not even script can move it. `catalog.css` imports that file wholesale, so
+  without its own override every Docs page longer than the viewport is frozen:
+  measured at scrollHeight 5674 against a 537px viewport with `scrollTop = 600`
+  reading back 0. Anything else the app's base layer does to the DOCUMENT is
+  the same trap — the catalog is a scrolling web page, the app is not.
 - `window.geniro` is stubbed by `renderer/__fixtures__/preload-stub.ts`, which
   answers plausible EMPTY state so a component shows its zero state rather than
   fabricated data. Populated data comes through PROPS.

@@ -62,7 +62,12 @@ const withTheme: Decorator = (story, context) => {
         background: 'var(--background)',
         color: 'var(--foreground)',
         fontFamily: 'var(--font-family-sans)',
-        minHeight: '100vh',
+        // A story VIEW is a canvas the component should fill; a DOCS page is a
+        // column of small previews, and `100vh` each turned every one of them
+        // into a viewport of mostly empty ground — four stories deep on the
+        // McpDialogButton page, which is the plain the dialog was reported
+        // floating at the bottom of.
+        minHeight: context.viewMode === 'docs' ? undefined : '100vh',
         padding: '1.5rem',
       }}>
       {story()}

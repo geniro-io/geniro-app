@@ -17,6 +17,9 @@ const PLACEHOLDER_SRC =
 const meta = {
   title: 'Primitives/ImageViewer',
   component: ZoomableImage,
+  // The opened viewer is a modal and fills the box the docs preview gives it,
+  // which is sized by its content — see the note in `renderer-components.md`.
+  decorators: [(story) => <div className="h-[420px]">{story()}</div>],
   args: { src: PLACEHOLDER_SRC },
 } satisfies Meta<typeof ZoomableImage>;
 

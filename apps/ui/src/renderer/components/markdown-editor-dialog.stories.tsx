@@ -12,6 +12,10 @@ const SAMPLE_ROLE = `You are the release-notes agent.
 const meta = {
   title: 'Components/MarkdownEditorDialog',
   component: MarkdownEditorDialog,
+  // A modal fills the box the docs preview gives it, and that box is sized by
+  // its content — see the note in `renderer-components.md`. Taller than the
+  // others: this one holds an editor.
+  decorators: [(story) => <div className="h-[560px]">{story()}</div>],
   args: {
     // open/onSave/onCancel are dummy defaults satisfying the required-args
     // type — the render below owns real open state and ignores these.

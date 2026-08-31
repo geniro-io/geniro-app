@@ -5,6 +5,9 @@ import { ConfirmDialog } from './confirm-dialog';
 const meta = {
   title: 'Components/ConfirmDialog',
   component: ConfirmDialog,
+  // A modal fills the box the docs preview gives it, and that box is sized by
+  // its content — see the note in `renderer-components.md`.
+  decorators: [(story) => <div className="h-[320px]">{story()}</div>],
   args: {
     open: true,
     title: 'Delete workflow',

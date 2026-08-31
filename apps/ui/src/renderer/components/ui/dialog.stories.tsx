@@ -9,6 +9,9 @@ import { Label } from './label';
 const meta = {
   title: 'Primitives/Dialog',
   component: Dialog,
+  // A modal fills the box the docs preview gives it, and that box is sized by
+  // its content — see the note in `renderer-components.md`.
+  decorators: [(story) => <div className="h-[420px]">{story()}</div>],
   args: { open: true, onClose: () => {}, children: null },
 } satisfies Meta<typeof Dialog>;
 

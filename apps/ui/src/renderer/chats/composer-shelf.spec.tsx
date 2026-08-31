@@ -56,6 +56,9 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   vi.restoreAllMocks();
+  // The sub-agent panel's finished-delegates fold is persisted, so a test that
+  // opens it would otherwise decide the starting state of every test after it.
+  localStorage.clear();
 });
 
 describe('RunningShellChips', () => {
@@ -207,8 +210,20 @@ describe('RunningSubagentChips', () => {
     await press(el, 'running-subagents');
 
     // And the list is ALL of them — a chip reading `1` over a box holding one
-    // row says nothing the reader could not already see.
+    // row says nothing the reader could not already see. The FINISHED half is
+    // counted rather than listed (see `SubagentRows`), so it takes the fold to
+    // reach the name.
     expect(el.textContent).toContain('explore the adapters');
+    expect(el.textContent).not.toContain('review the diff');
+    expect(el.textContent).toContain('1 finished');
+
+    const fold = [...el.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.includes('finished'),
+    )!;
+    act(() => {
+      fold.click();
+    });
+
     expect(el.textContent).toContain('review the diff');
     expect(el.textContent).toContain('completed');
   });

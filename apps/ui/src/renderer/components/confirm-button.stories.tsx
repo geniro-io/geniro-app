@@ -24,6 +24,13 @@ export const Disabled: Story = {
   args: { disabled: true },
 };
 
-export const DestructiveVariant: Story = {
-  args: { variant: 'destructive', children: 'End session' },
+/**
+ * The RESTING look is the only thing `variant` sets — press once and the button
+ * paints itself destructive whatever it started as. This story was
+ * `DestructiveVariant`, which is exactly the misuse the prop now excludes: it
+ * documented starting the control in its own end state, so arming changed
+ * nothing but the label. Press it to see the difference this story exists for.
+ */
+export const GhostVariant: Story = {
+  args: { variant: 'ghost', children: 'End session' },
 };

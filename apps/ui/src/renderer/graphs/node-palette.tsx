@@ -266,16 +266,23 @@ function PaletteTile({
   );
 }
 
-/** One collapsible category block (Triggers / Agents). */
+/**
+ * One collapsible category block (Triggers / Agents).
+ *
+ * It carried a bare numeral beside the title — `TRIGGER_KINDS.length`, i.e. how
+ * many TYPES the drawer offers — and that numeral sat a few centimetres from a
+ * canvas holding a different number of the same thing: `Agents 2` beside four
+ * agent nodes. A count with no noun next to a graph is read as a count OF the
+ * graph, which is the mistake the node ports made in the other direction. It
+ * also bought nothing, since opening the block shows one or two tiles.
+ */
 function CategoryBlock({
   title,
-  count,
   open,
   onToggle,
   children,
 }: {
   title: string;
-  count: number;
   open: boolean;
   onToggle: () => void;
   children: React.ReactNode;
@@ -288,9 +295,6 @@ function CategoryBlock({
         onClick={onToggle}
         className="flex w-full items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-accent/40">
         <span className="text-sm font-medium">{title}</span>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {count}
-        </span>
         <ChevronDown
           aria-hidden="true"
           className={cn(
@@ -532,7 +536,6 @@ export function NodePalette({
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
         <CategoryBlock
           title="Triggers"
-          count={TRIGGER_KINDS.length}
           open={triggersOpen}
           onToggle={() => setTriggersOpen((v) => !v)}>
           {TRIGGER_KINDS.map((trigger) => (
@@ -546,7 +549,6 @@ export function NodePalette({
 
         <CategoryBlock
           title="Agents"
-          count={CLI_KINDS.length}
           open={agentsOpen}
           onToggle={() => setAgentsOpen((v) => !v)}>
           {CLI_KINDS.map((agent) => (
@@ -560,7 +562,6 @@ export function NodePalette({
 
         <CategoryBlock
           title="Instructions"
-          count={1}
           open={instructionsOpen}
           onToggle={() => setInstructionsOpen((v) => !v)}>
           <PaletteTile item={{ kind: 'instruction' }} onInfo={setInfoItem} />

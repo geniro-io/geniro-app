@@ -1,7 +1,12 @@
-import { Handle, Position, useUpdateNodeInternals } from '@xyflow/react';
+import {
+  Handle,
+  Position,
+  useEdges,
+  useUpdateNodeInternals,
+} from '@xyflow/react';
 import { cva } from 'class-variance-authority';
 import { ChevronDown, ChevronUp } from 'lucide-react';
-import { type CSSProperties, useEffect, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 
 import { cn } from '../components/ui/utils';
 import type { NodeKind } from './node-schema';
@@ -31,6 +36,25 @@ const pill = cva('rounded px-2 py-1', {
       output: 'bg-success/10 text-success',
       call: 'bg-warning/10 text-warning',
       missing: 'bg-destructive/10 text-destructive',
+    },
+  },
+});
+
+/**
+ * The COLLAPSED side's caption — text alone, no fill.
+ *
+ * Muted rather than tinted in the ordinary case, because a filled pill per side
+ * put two coloured blocks on every card and they competed with the node's own
+ * name; here the tone is spent on the one state worth spotting across a canvas,
+ * a side that is missing a wire it requires.
+ */
+const caption = cva('', {
+  variants: {
+    tone: {
+      input: 'text-muted-foreground',
+      output: 'text-muted-foreground',
+      call: 'text-muted-foreground',
+      missing: 'font-medium text-destructive',
     },
   },
 });
@@ -69,11 +93,14 @@ function PortsSide({
   kind,
   expanded,
   missing,
+  wired,
 }: {
   side: 'input' | 'output';
   kind: NodeKind;
   expanded: boolean;
   missing: boolean;
+  /** How many edges are ACTUALLY attached to this side — see {@link NodePorts}. */
+  wired: number;
 }): React.JSX.Element | null {
   // An unknown kind (daemon/renderer version skew) has no rules — render no
   // ports rather than crash; the card's validation strip names the problem.
@@ -99,15 +126,31 @@ function PortsSide({
     rule.edge === 'call' ? 'call' : tone;
 
   if (!expanded) {
-    // Geniro's collapsed slot: a uniform two-line summary pill on each side
-    // — plural label + the rule-type count — so input and output always
-    // mirror each other visually. ALL rule handles (the annotation ones
-    // included) stay mounted in the stack so existing edges never detach; only
-    // the top is painted, so a collapsed drag lands on the kind's FIRST rule —
-    // data for an agent or a trigger, `instruction` for a block, which has no
-    // other. Call wires are drawn from the expanded rows.
+    // COLLAPSED is a caption, not a block. It used to be a two-line filled pill
+    // per side, which cost a flat 53px of every card — measured 41% of a
+    // trigger's whole height and 31% of an agent's — to restate, on a canvas,
+    // what the wires themselves already draw.
+    //
+    // And the figure it restated was NOT what its word said. `rules.length` is
+    // how many connection RULES this node KIND accepts, so every agent card on
+    // every graph read `inputs 4 connections · outputs 2 connections`,
+    // identically, whether it was wired to six nodes or to none. It looked like
+    // a live reading and was a constant. The count here is the edges ACTUALLY
+    // attached to this side, which is the thing a reader was trying to learn
+    // from it — and it is worth keeping precisely because zero is the case the
+    // eye misses on a busy canvas.
+    //
+    // ALL rule handles (the annotation ones included) stay mounted in the stack
+    // so existing edges never detach; only the top is painted, so a collapsed
+    // drag lands on the kind's FIRST rule — data for an agent or a trigger,
+    // `instruction` for a block, which has no other. Call wires are drawn from
+    // the expanded rows.
     return (
-      <div className="relative flex w-full items-center">
+      <div
+        className={cn(
+          'relative flex w-full items-center text-[10px] leading-none',
+          side === 'output' && 'justify-end',
+        )}>
         {rules.map((rule, index) => (
           <Handle
             key={`${rule.edge}-${rule.kind}`}
@@ -122,12 +165,10 @@ function PortsSide({
             )}
           />
         ))}
-        <div className={cn(pill({ tone }), 'w-full')}>
-          <div className="text-[10px] font-semibold leading-tight">{side}s</div>
-          <div className="text-[10px] leading-tight opacity-60">
-            {rules.length} connection{rules.length === 1 ? '' : 's'}
-          </div>
-        </div>
+        <span className={cn(caption({ tone }))}>
+          {wired} {side}
+          {wired === 1 ? '' : 's'}
+        </span>
       </div>
     );
   }
@@ -182,6 +223,28 @@ export function NodePorts({
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const updateNodeInternals = useUpdateNodeInternals();
+  const edges = useEdges();
+
+  // What is actually WIRED to this node, per side — the figure the collapsed
+  // caption reports. Counted off the live canvas edges rather than the node's
+  // rule table, which is what the block used to print; see `PortsSide`.
+  //
+  // One pass over the edges rather than two filters, because this runs for
+  // every node on every edge change — a drag across a forty-node graph is
+  // forty of these per frame.
+  const wired = useMemo(() => {
+    let inputs = 0;
+    let outputs = 0;
+    for (const edge of edges) {
+      if (edge.target === nodeId) {
+        inputs += 1;
+      }
+      if (edge.source === nodeId) {
+        outputs += 1;
+      }
+    }
+    return { inputs, outputs };
+  }, [edges, nodeId]);
 
   // Toggling re-lays-out the handles; re-measure after the DOM committed so
   // the attached edges follow them.
@@ -191,13 +254,22 @@ export function NodePorts({
 
   return (
     <>
-      <div className="flex gap-4 px-3 pt-3 pb-2.5">
+      {/* Collapsed this is one caption-height row; expanded it opens into the
+          named rule rows and needs the room. The padding follows the state
+          rather than being sized for the taller of the two, which is what left
+          a flat 53px under every collapsed card. */}
+      <div
+        className={cn(
+          'flex gap-4 px-3',
+          expanded ? 'pt-3 pb-2.5' : 'pt-1.5 pb-2',
+        )}>
         <div className="flex min-w-0 flex-1 justify-start">
           <PortsSide
             side="input"
             kind={kind}
             expanded={expanded}
             missing={missingInput}
+            wired={wired.inputs}
           />
         </div>
         <div className="flex min-w-0 flex-1 justify-end">
@@ -206,6 +278,7 @@ export function NodePorts({
             kind={kind}
             expanded={expanded}
             missing={missingOutput}
+            wired={wired.outputs}
           />
         </div>
       </div>

@@ -1070,14 +1070,25 @@ export function Graphs({
               <Button
                 type="button"
                 variant="outline"
-                aria-label="Change workflow"
+                aria-label="Edit name and description"
+                title="Edit name and description"
                 onClick={() => setRenameOpen(true)}>
                 <Pencil className="shrink-0" />
               </Button>
+              {/* NO `variant="destructive"`. `ConfirmButton` arms ITSELF to
+                  destructive on the first press, so naming that variant here
+                  painted the resting state the colour the armed state uses —
+                  which cost the control both of its jobs at once. It was the
+                  loudest thing on the whole builder, a filled red block in the
+                  window's top corner beside two outline buttons, on the one
+                  action that destroys the user's workflow. And arming it then
+                  changed NOTHING but the word inside it, so the two-step guard
+                  gave no signal that the next press was the one that fires.
+                  Letting the variant default puts the red where it is earned. */}
               <ConfirmButton
-                variant="destructive"
-                className="gap-1.5"
+                className="gap-1.5 text-muted-foreground hover:text-destructive"
                 aria-label="Delete workflow"
+                title="Delete workflow"
                 confirmLabel="Delete?"
                 onConfirm={remove}>
                 <Trash2 className="shrink-0" />

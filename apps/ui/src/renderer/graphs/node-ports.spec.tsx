@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   updateNodeInternals: vi.fn(),
+  /** The canvas edges the collapsed caption counts. Set per test. */
+  edges: [] as { id: string; source: string; target: string }[],
 }));
 
 // React Flow needs a live canvas store; the node cards only consume this
@@ -28,6 +30,7 @@ vi.mock('@xyflow/react', () => ({
   ),
   Position: { Left: 'left', Right: 'right' },
   useUpdateNodeInternals: () => mocks.updateNodeInternals,
+  useEdges: () => mocks.edges,
 }));
 
 import { NodePorts } from './node-ports';
@@ -41,6 +44,7 @@ let root: Root;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.edges = [];
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -74,7 +78,12 @@ function toggle(): void {
 }
 
 describe('NodePorts', () => {
-  it('collapsed by default: summary pills with every rule handle stacked', () => {
+  it('collapsed by default: a caption per side, with every rule handle stacked', () => {
+    mocks.edges = [
+      { id: 'e1', source: 'up', target: 'a1' },
+      { id: 'e2', source: 'a1', target: 'down' },
+      { id: 'e3', source: 'a1', target: 'other' },
+    ];
     render(
       <NodePorts
         nodeId="a1"
@@ -83,14 +92,18 @@ describe('NodePorts', () => {
         missingOutput={false}
       />,
     );
-    // Geniro's collapsed slots: both sides show the same two-line pill —
-    // plural label + rule-type count — so input and output stay symmetric.
-    expect(container.textContent).toContain('inputs');
-    expect(container.textContent).toContain('outputs');
-    // Four input rules: data from an agent, data from a trigger, a call wire,
-    // and an instruction block.
-    expect(container.textContent).toContain('4 connections');
-    expect(container.textContent).toContain('2 connections');
+    // The caption counts the EDGES ON THE CANVAS, not the node kind's rule
+    // table. That is the whole point of the change: `rules.length` is a
+    // constant per kind, so every agent card on every graph used to read
+    // `4 connections` / `2 connections` whether it was wired to six nodes or
+    // to none — a static property printed under a word that promised a
+    // reading. This node has one edge in and two out.
+    expect(container.textContent).toContain('1 input');
+    expect(container.textContent).toContain('2 outputs');
+    // The rule counts must NOT appear — reverting to `rules.length` puts a 4
+    // and a 2 back on an agent whose canvas says 1 and 2.
+    expect(container.textContent).not.toContain('4 ');
+    expect(container.textContent).not.toContain('connection');
     // Per-type labels are NOT visible while collapsed.
     expect(container.textContent).not.toContain('trigger');
     // Every rule handle exists (the annotation ones included, so persisted
@@ -124,10 +137,11 @@ describe('NodePorts', () => {
     expect(container.textContent).toContain('agent');
     expect(container.textContent).toContain('trigger');
     // …with its arity flag (call rows also name their edge kind), and no
-    // summary pills anymore.
+    // collapsed captions anymore.
     expect(container.textContent).toContain('multiple');
     expect(container.textContent).toContain('call');
-    expect(container.textContent).not.toContain('connection');
+    expect(container.textContent).not.toContain('inputs');
+    expect(container.textContent).not.toContain('outputs');
     expect(handles().every((h) => !h.hidden)).toBe(true);
     // The annotation handles are individually wireable once expanded.
     expect(handles().map((h) => h.id)).toEqual([
@@ -154,10 +168,26 @@ describe('NodePorts', () => {
       />,
     );
     expect(container.textContent).not.toContain('input');
-    expect(container.textContent).toContain('outputs');
-    expect(container.textContent).toContain('1 connection');
+    expect(container.textContent).toContain('0 outputs');
     // Triggers carry no call rules — call wires never touch a trigger.
     expect(handles()).toEqual([{ id: 'source-data-agent', hidden: false }]);
+  });
+
+  it('agrees with itself on a single wire', () => {
+    // The caption is a count with a noun, and the one-wire case is where a
+    // naive `${n} ${side}s` reads `1 inputs`.
+    mocks.edges = [{ id: 'e1', source: 'up', target: 'a1' }];
+    render(
+      <NodePorts
+        nodeId="a1"
+        kind="agent"
+        missingInput={false}
+        missingOutput={false}
+      />,
+    );
+    expect(container.textContent).toContain('1 input');
+    expect(container.textContent).not.toContain('1 inputs');
+    expect(container.textContent).toContain('0 outputs');
   });
 
   it('tints a side destructive when its requirement is unmet', () => {
@@ -170,13 +200,16 @@ describe('NodePorts', () => {
       />,
     );
     const byTone = (tone: string): Element | undefined =>
-      [...container.querySelectorAll('div')].find((el) =>
+      [...container.querySelectorAll('span')].find((el) =>
         el.className.includes(tone),
       );
-    // The unmet input side goes destructive; the satisfied output side keeps
-    // its normal success tone.
+    // The unmet input side goes destructive. The satisfied side is MUTED, not
+    // tinted: a fill on both sides of every card competed with the node's own
+    // name, so the one state worth spotting across a canvas is the only one
+    // that gets colour.
     expect(byTone('text-destructive')?.textContent).toContain('input');
-    expect(byTone('text-success')?.textContent).toContain('output');
+    expect(byTone('text-muted-foreground')?.textContent).toContain('output');
+    expect(byTone('text-success')).toBeUndefined();
     expect(byTone('text-primary')).toBeUndefined();
   });
 

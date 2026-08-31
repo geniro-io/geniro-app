@@ -34,6 +34,15 @@ const bash = (
 const reply = (id: string, result: unknown, isError = false) =>
   item('tool_result', { id, name: 'Bash', result, isError });
 
+/**
+ * Stamp a row as a DELEGATE's, exactly as `event-to-item.ts` does — the payload
+ * key `subagentIdOf` reads, spread onto the same payload the fixture built.
+ */
+const fromDelegate = (row: ChatItem, parentToolUseId = 'sub-1'): ChatItem => ({
+  ...row,
+  payload: { ...(row.payload as Record<string, unknown>), parentToolUseId },
+});
+
 const namedCall = (id: string, name: string, input: unknown) =>
   item('tool_call', { id, name, input });
 
@@ -420,6 +429,22 @@ describe('shellRuns', () => {
     expect(shells[0]?.background).toBe(false);
   });
 
+  it("cannot be revived: the daemon's own rows find no delegate shell", () => {
+    // The drop is at the ITEM, before anything is indexed, which is what lets
+    // `shell_open` and `shell_info` stay unguarded — each can only ever reach a
+    // shell this fold created, and there is none. Guarding at the OUTPUT
+    // instead would leave the open's `background = true` and the reopen it
+    // performs acting on a row nobody wanted, and passes this only by accident.
+    expect(
+      shellRuns([
+        fromDelegate(bash('c1', 'sleep 240', { run_in_background: true })),
+        item('shell_open', { id: 'c1', workId: 'bash_1' }),
+        reply('c1', LAUNCHED('bash_1')),
+        item('shell_info', { id: 'c1', workId: 'bash_1' }),
+      ]),
+    ).toEqual([]);
+  });
+
   it('still closes a plain foreground command on its own output', () => {
     // The reply's "no announcement means this is the output" arm is untouched
     // for a command the daemon never opened — which is what keeps a foreground
@@ -446,11 +471,20 @@ describe('runningShellsByAgent', () => {
     expect(byAgent.get(null)?.map((s) => s.command)).toEqual(['sleep 60']);
   });
 
-  it("keeps a DELEGATE's shell, which the task-list fold drops", () => {
-    // A delegate's task list is its own bookkeeping; a delegate's `pnpm build`
-    // is a process on the user's machine, which is the question this answers.
-    const call = bash('c1', 'pnpm build');
-    (call.payload as Record<string, unknown>).parentToolUseId = 'sub-1';
-    expect(runningShellsByAgent([call]).get(null)?.length).toBe(1);
+  it("drops a DELEGATE's shell, reversing what shipped first", () => {
+    // REPORTED as "we should not show terminals from subagents". In a 1:1 chat
+    // every row carries `nodeId: null`, so a delegate's commands land in the
+    // same bucket as the agent's own — and a fan-out of ten reviewers then owns
+    // most of a list the reader opened to see what the agent they are talking
+    // to has in flight. The main thread's command beside it is what makes this
+    // a pin rather than an assertion that the fold returned nothing.
+    expect(
+      runningShellsByAgent([
+        fromDelegate(bash('c1', 'pnpm build')),
+        bash('c2', 'pnpm test'),
+      ])
+        .get(null)
+        ?.map((shell) => shell.command),
+    ).toEqual(['pnpm test']);
   });
 });

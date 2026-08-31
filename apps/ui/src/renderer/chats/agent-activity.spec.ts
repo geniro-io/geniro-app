@@ -330,10 +330,31 @@ describe('formatTokens / formatUsd', () => {
     expect(formatTokens(1_200_000)).toBe('1.2M');
   });
 
+  it('compacts a BILLION rather than growing the M figure', () => {
+    // Measured on a real 26-day ledger: 16.6e9 cache-read tokens rendered as
+    // `16603.4M` — five significant digits under a suffix that had stopped
+    // compacting — and it was the largest figure on the Stats page.
+    expect(formatTokens(16_603_400_000)).toBe('16.6B');
+    expect(formatTokens(2_000_000_000)).toBe('2B');
+    // The step is at the billion exactly: one token below it is still an M.
+    expect(formatTokens(999_900_000)).toBe('999.9M');
+  });
+
   it('formats spend with a sub-cent floor', () => {
     expect(formatUsd(0.236)).toBe('$0.24');
     expect(formatUsd(0.004)).toBe('<$0.01');
     expect(formatUsd(0)).toBe('$0.00');
+  });
+
+  it('groups a total in thousands', () => {
+    // This same function renders one turn's cost AND a lifetime total, and the
+    // total is where it failed: `$21547.80` is seven digits the reader has to
+    // count in threes to place the magnitude of.
+    expect(formatUsd(21_547.8)).toBe('$21,547.80');
+    expect(formatUsd(1_000)).toBe('$1,000.00');
+    // A figure below the grouping threshold is unchanged, which is every
+    // per-turn cost in the transcript.
+    expect(formatUsd(16.37)).toBe('$16.37');
   });
 });
 

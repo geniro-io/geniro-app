@@ -388,8 +388,22 @@ export function computeAgentActivity(
   return byAgent;
 }
 
-/** Compact token count: 950 → "950", 12_400 → "12.4k", 1_200_000 → "1.2M". */
+/**
+ * Compact token count: 950 → "950", 12_400 → "12.4k", 1_200_000 → "1.2M",
+ * 16_603_400_000 → "16.6B".
+ *
+ * The BILLION step is not hypothetical padding. A month of cache reads reaches
+ * it easily — measured on a real 26-day ledger, `cacheReadTokens` was 16.6e9,
+ * which without this step rendered as `16603.4M`: five significant digits under
+ * a suffix that no longer compacts anything, printed as the largest figure on
+ * the Stats page. Anything past a trillion keeps growing the `B` figure rather
+ * than gaining another suffix — a `T` of tokens is not a scale this app has a
+ * reason to be ready for, and an unfamiliar suffix costs more than a long number.
+ */
 export function formatTokens(count: number): string {
+  if (count >= 1_000_000_000) {
+    return `${(count / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;
+  }
   if (count >= 1_000_000) {
     return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   }
@@ -399,10 +413,28 @@ export function formatTokens(count: number): string {
   return String(count);
 }
 
-/** Compact spend: "$0.24"; sub-cent spend still shows as "<$0.01". */
+/**
+ * The one money format: "$0.24", "$21,547.80"; sub-cent spend as "<$0.01".
+ *
+ * GROUPED, because this renders a lifetime total as well as a single turn's
+ * cost. Ungrouped, that total was `$21547.80` — seven digits the reader has to
+ * count in threes to know whether it is twenty-one thousand or two hundred and
+ * fifteen.
+ *
+ * Pinned to `en-US` rather than the machine's locale, unlike the day labels
+ * beside it, and that is deliberate: the `$` is hardcoded because the daemon
+ * records USD and nothing else, so a machine-locale number would pair a dollar
+ * sign with `21.547,80` — a figure that reads as twenty-one dollars to half of
+ * Europe. One currency, one notation.
+ */
+const USD_DIGITS = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
 export function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.01) {
     return '<$0.01';
   }
-  return `$${amount.toFixed(2)}`;
+  return `$${USD_DIGITS.format(amount)}`;
 }

@@ -9,13 +9,23 @@ import { NOT_MEASURED } from '../stats-format';
  * than a copy of its values. That matters twice over here: the renderer's eslint
  * config makes a colour literal an error, and a hardcoded hex would not follow
  * the theme when the tokens change underneath it.
+ *
+ * Colour on this page names the QUANTITY, and there are two: money is caramel,
+ * tokens are cool. That is a rule the charts did not follow — the daily spend
+ * area was caramel while the cumulative spend line directly under it was teal,
+ * so one quantity was drawn in two colours on two panels a scroll apart, and a
+ * reader who takes a repeated colour to mean something was being misled by
+ * both. Within one chart the series still have to differ from each other, which
+ * is what the two token hues are for; ACROSS charts, the hue answers "what is
+ * this measuring".
  */
 export const SERIES = {
+  /** Money — the daily area and the running total, which are one quantity. */
   spend: 'var(--color-chart-1)',
-  spendSoft: 'var(--color-chart-2)',
-  cumulative: 'var(--color-chart-3)',
-  tokensIn: 'var(--color-chart-4)',
-  tokensOut: 'var(--color-chart-2)',
+  /** Tokens — the daily area when it is plotting them, and the stack's input. */
+  tokens: 'var(--color-chart-3)',
+  tokensIn: 'var(--color-chart-3)',
+  tokensOut: 'var(--color-chart-4)',
 } as const;
 
 /**

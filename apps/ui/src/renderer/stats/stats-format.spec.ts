@@ -3,13 +3,49 @@ import { describe, expect, it } from 'vitest';
 import {
   cacheHitRate,
   dayRangeTitle,
+  formatCount,
   formatDayLabel,
   formatDayTitle,
   formatDuration,
+  formatPercent,
   formatTurns,
   formatUsdAxis,
 } from './stats-format';
 import { periodRange, STATS_PERIODS } from './use-stats';
+
+describe('formatCount', () => {
+  it('groups a four-figure count', () => {
+    // The turn count was the one figure on the page still rendered by
+    // `String(n)`, so beside a grouped `$21,547.80` it read as an oversight.
+    expect(formatCount(1_882)).toBe('1,882');
+    expect(formatCount(4)).toBe('4');
+  });
+});
+
+describe('formatPercent', () => {
+  it('never rounds UP to a whole the rate did not reach', () => {
+    // Measured: 16.6e9 cache reads against 155e3 input tokens is 99.999%, which
+    // `Math.round` printed as `100%` — a claim that not one prompt token in the
+    // period was ever a cache miss. A reader who knows that cannot be true stops
+    // trusting the rest of the page.
+    expect(formatPercent(99.999)).toBe('99.9%');
+    expect(formatPercent(99.6)).toBe('99.9%');
+    // A genuine whole still prints as one.
+    expect(formatPercent(100)).toBe('100%');
+  });
+
+  it('never rounds a real rate DOWN to nothing', () => {
+    // The mirror of the same error: a measured 0% and a rate too small to round
+    // to one percent are different claims about the cache.
+    expect(formatPercent(0.2)).toBe('<1%');
+    expect(formatPercent(0)).toBe('0%');
+  });
+
+  it('leaves an ordinary rate whole', () => {
+    expect(formatPercent(75)).toBe('75%');
+    expect(formatPercent(74.4)).toBe('74%');
+  });
+});
 
 describe('formatDayLabel', () => {
   it('reads the key as a LOCAL calendar day', () => {

@@ -6284,9 +6284,22 @@ export function Chats({
                   the reader's place itself (`scrollTop += ` the height that
                   arrived) — with anchoring on, that adjustment was applied on
                   top of the browser's own. */}
+                    {/* `[&>*:first-child]:mt-auto` bottom-anchors a SHORT
+                    conversation: the free space goes above the first row, so a
+                    two-message thread sits just over the composer instead of
+                    hanging from the top of the pane with the gap below it —
+                    measured at 490px of an empty 672px transcript. Once the
+                    content is taller than the pane the auto margin resolves to
+                    zero and this does nothing at all, which is why it needs no
+                    branch on item count.
+
+                    An auto MARGIN on the first child, not `justify-end` on the
+                    container: in a scrolling flex box, end-justification pushes
+                    overflow past the scroll origin, where it cannot be reached
+                    by scrolling up. The margin has no such failure mode. */}
                     <div
                       data-slot="transcript"
-                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none]">
+                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
                       {/* A chat opens on its newest 1,000 items, so a long one
                     begins part-way through itself. SAID, rather than left as a
                     conversation that appears to start mid-sentence — and it is

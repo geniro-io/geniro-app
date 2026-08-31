@@ -10,7 +10,7 @@ import {
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
-import { SettingsList } from '../components/settings-panel';
+import { SettingsList, SettingsPanel } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 
@@ -115,9 +115,12 @@ export function FastActionsPane({
         // against (`MAX_FAST_ACTIONS`), so somebody filling it up learns that
         // here rather than from a refusal after writing an action.
         <div className="flex items-center justify-between gap-3">
+          {/* Silent on an EMPTY list — see the twin note in
+              `chats/run-config-picker.tsx`. The empty state below says it
+              better, and the two together said it twice. */}
           <span className="text-xs text-muted-foreground">
             {actions.length === 0
-              ? 'No actions yet'
+              ? null
               : `${actions.length} of ${MAX_FAST_ACTIONS}`}
           </span>
           <Button
@@ -146,13 +149,17 @@ export function FastActionsPane({
           onCommit={commit}
         />
       ) : actions.length === 0 ? (
-        <EmptyState className="flex-col gap-1">
-          <span className="text-foreground">No fast actions yet</span>
-          <span>
-            Name one and write what it should say — its button appears under the
-            composer, and a press drops that text into the message box.
-          </span>
-        </EmptyState>
+        // Inside the SAME enclosure the list gets — see the twin note in
+        // `chats/run-config-picker.tsx`.
+        <SettingsPanel>
+          <EmptyState className="flex-col gap-1 py-10">
+            <span className="text-foreground">No fast actions yet</span>
+            <span className="max-w-sm">
+              Name one and write what it should say — its button appears under
+              the composer, and a press drops that text into the message box.
+            </span>
+          </EmptyState>
+        </SettingsPanel>
       ) : (
         // `overflow-hidden` so a row's hover fill clips to the card's radius —
         // the corner rows would otherwise paint square over a rounded edge. Safe

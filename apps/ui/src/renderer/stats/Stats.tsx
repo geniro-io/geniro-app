@@ -6,7 +6,9 @@ import {
   HardDriveDownload,
   MessagesSquare,
   PiggyBank,
+  Repeat2,
   TrendingDown,
+  Wallet,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -20,18 +22,20 @@ import { Card, CardContent } from '../components/ui/card';
 import { SegmentedControl } from '../components/ui/segmented-control';
 import { createDaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
-import { BreakdownCard } from './breakdown-card';
+import { BreakdownColumn } from './breakdown-card';
 import { toDayPoints } from './chart-data';
 import {
   CumulativeSpendChart,
   DailySeriesChart,
   TokenSplitChart,
 } from './charts/time-charts';
-import { HeroStat, StatCard } from './stat-card';
+import { StatCell, StatGrid } from './stat-card';
 import {
   cacheHitRate,
   dayRangeTitle,
+  formatCount,
   formatDuration,
+  formatPercent,
   NOT_MEASURED,
 } from './stats-format';
 import { STATS_PERIODS, type StatsPeriodId, useStats } from './use-stats';
@@ -149,102 +153,107 @@ export function Stats({
           <EmptyState>Loading…</EmptyState>
         ) : data && totals ? (
           <>
-            <HeroStat
-              // Just "Spent" — the header directly above already states the
-              // period, and the cost-per-turn figure is deliberately NOT
-              // repeated here: it has its own card below, and one figure
-              // rendered twice inches apart is what the context readout was
-              // already criticised for.
-              caption="Spent"
-              value={formatOrDash(totals.costUsd, formatUsd)}
-              aside={[
-                { label: 'Turns', value: String(totals.turns) },
-                {
-                  label: 'Tokens',
-                  value: formatOrDash(
-                    sumTokens(totals.inputTokens, totals.outputTokens),
-                    formatTokens,
-                  ),
-                },
-              ]}
-            />
+            {/* The four figures somebody OPENS this page for, on one ruled
+                surface. It replaced a hero card whose right two thirds were
+                empty — "SPENT" at the far left, two small figures pinned to the
+                far right, and a thousand pixels of nothing between them at any
+                normal window width.
 
-            {/* REPORTED as "move those to the top". The eight measured figures
-                sit directly under the headline they qualify, where they read as
-                the rest of the answer to "what did this cost" — before, they
-                were the LAST thing on the page, three full sections and a
-                scroll below the number they belong to, so the split of the
-                hero's own token count was somewhere the reader had to go
-                looking for.
+                Cost per turn and Agent time were MOVED up out of the grid
+                below rather than repeated here: what a session costs and how
+                long it took are headline answers, not two of eight token
+                counts, and the note about rendering one figure twice inches
+                apart is honoured by the move being a move.
 
-                Four columns, not six. Eight cards in a six-column grid is a row
-                of six over a row of two with four empty cells trailing it, which
-                is survivable at the foot of a page and reads as broken at the
-                top of one. Four gives a clean 2×4 block, and it is the column
-                count the breakdown grid below already uses, so the page has one
-                rhythm rather than two.
-
-                Two columns until `lg`, never three: eight cards over three
-                columns is 3+3+2, the same ragged tail one breakpoint further
-                down. And four columns only from `lg` because the widest value
-                these cards hold is a duration — measured at 900px, "15h 43m"
-                truncated to "15h 4…", which on a page whose whole job is
-                reporting figures is the one thing a cell must not do. */}
-            <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatCard
-                icon={HardDriveDownload}
-                label="Tokens in"
-                value={formatOrDash(totals.inputTokens, formatTokens)}
+                Type carries the emphasis, not a spanning cell — see
+                `StatCell`'s `size`. */}
+            <StatGrid className="grid-cols-2 lg:grid-cols-4">
+              <StatCell
+                size="lead"
+                icon={Wallet}
+                // Just "Spent" — the header directly above already states the
+                // period this is the spend for.
+                label="Spent"
+                value={formatOrDash(totals.costUsd, formatUsd)}
               />
-              <StatCard
-                icon={MessagesSquare}
-                label="Tokens out"
-                value={formatOrDash(totals.outputTokens, formatTokens)}
-              />
-              <StatCard
-                icon={DatabaseZap}
-                label="Cache read"
-                value={formatOrDash(totals.cacheReadTokens, formatTokens)}
-              />
-              <StatCard
-                icon={PiggyBank}
-                label="Cache written"
-                value={formatOrDash(totals.cacheCreationTokens, formatTokens)}
-              />
-              <StatCard
-                icon={Brain}
-                label="Thinking"
-                value={formatOrDash(totals.thinkingTokens, formatTokens)}
-              />
-              <StatCard
-                icon={Clock}
-                label="Agent time"
-                value={formatOrDash(totals.workedMs, formatDuration)}
-              />
-              <StatCard
-                icon={Gauge}
-                label="Cache hit rate"
-                value={formatOrDash(
-                  cacheHitRate(totals.cacheReadTokens, totals.inputTokens),
-                  (rate) => `${Math.round(rate)}%`,
-                )}
-                hint="Share of prompt tokens served from cache — the difference between a cheap session and an expensive one."
-              />
-              <StatCard
+              <StatCell
+                size="lead"
                 icon={TrendingDown}
                 label="Cost per turn"
                 value={formatOrDash(perTurn, formatUsd)}
                 footnote={
                   // Stated whenever the two differ, because the denominator is
-                  // then not the turn count sitting directly above it, and an
-                  // average whose divisor is a mystery invites the reader to
-                  // recompute it and find a different number.
+                  // then not the turn count sitting beside it, and an average
+                  // whose divisor is a mystery invites the reader to recompute
+                  // it and find a different number.
                   totals.costedTurns === totals.turns
                     ? undefined
-                    : `over ${totals.costedTurns} costed turns`
+                    : `over ${formatCount(totals.costedTurns)} costed turns`
                 }
               />
-            </section>
+              <StatCell
+                size="lead"
+                icon={Repeat2}
+                label="Turns"
+                value={formatCount(totals.turns)}
+              />
+              <StatCell
+                size="lead"
+                icon={Clock}
+                label="Agent time"
+                value={formatOrDash(totals.workedMs, formatDuration)}
+              />
+            </StatGrid>
+
+            {/* REPORTED as "move those to the top". The measured figures sit
+                directly under the headline they qualify, where they read as the
+                rest of the answer to "what did this cost" — before, they were
+                the LAST thing on the page, three full sections and a scroll
+                below the number they belong to.
+
+                SIX cells now, not eight, and six is what makes the block
+                divide: three columns is 3+3 and two is 2+2+2, so there is no
+                breakpoint at which this grid ends in a ragged tail. Eight had
+                one at every breakpoint but four. It is also one coherent
+                subject — where the tokens went — rather than the mixed bag the
+                eight were, the two that were about money and time having gone
+                up into the summary where they belong. */}
+            <StatGrid className="grid-cols-2 lg:grid-cols-3">
+              <StatCell
+                icon={HardDriveDownload}
+                label="Tokens in"
+                value={formatOrDash(totals.inputTokens, formatTokens)}
+              />
+              <StatCell
+                icon={MessagesSquare}
+                label="Tokens out"
+                value={formatOrDash(totals.outputTokens, formatTokens)}
+              />
+              <StatCell
+                icon={DatabaseZap}
+                label="Cache read"
+                value={formatOrDash(totals.cacheReadTokens, formatTokens)}
+              />
+              <StatCell
+                icon={PiggyBank}
+                label="Cache written"
+                value={formatOrDash(totals.cacheCreationTokens, formatTokens)}
+              />
+              <StatCell
+                icon={Brain}
+                label="Thinking"
+                value={formatOrDash(totals.thinkingTokens, formatTokens)}
+              />
+              <StatCell
+                icon={Gauge}
+                label="Cache hit rate"
+                value={formatOrDash(
+                  cacheHitRate(totals.cacheReadTokens, totals.inputTokens),
+                  formatPercent,
+                )}
+                hint="Share of prompt tokens served from cache — the difference between a cheap session and an expensive one."
+              />
+            </StatGrid>
 
             <ChartPanel
               title="Per day"
@@ -259,20 +268,26 @@ export function Stats({
               <DailySeriesChart points={points} metric={metric} />
             </ChartPanel>
 
-            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <BreakdownCard
+            {/* ONE ruled surface, four columns — not four cards. A grid of
+                cards stretches every one to the tallest, so the workflow
+                breakdown, which routinely holds a single row, was a 345px box
+                with 300px of nothing inside it, and the agent one beside it was
+                another. The air is unavoidable while the columns are ranked
+                lists of different lengths; drawing four boxes around it is not. */}
+            <StatGrid className="sm:grid-cols-2 xl:grid-cols-4">
+              <BreakdownColumn
                 title="By agent"
                 groups={data.byAgent}
                 labelOf={(key) => key ?? 'Unattributed'}
                 emptyLabel="No agent activity in this period."
               />
-              <BreakdownCard
+              <BreakdownColumn
                 title="By model"
                 groups={data.byModel}
                 labelOf={(key) => key ?? 'CLI default'}
                 emptyLabel="No model activity in this period."
               />
-              <BreakdownCard
+              <BreakdownColumn
                 title="By project"
                 groups={data.byProject}
                 labelOf={(key) =>
@@ -280,11 +295,11 @@ export function Stats({
                 }
                 emptyLabel="No project activity in this period."
               />
-              <BreakdownCard
+              <BreakdownColumn
                 title="By workflow"
                 groups={data.byWorkflow}
                 // A null key is a single-agent chat, and it is named rather
-                // than hidden: what the graphs cost is only meaningful beside
+                // than hidden: what the workflows cost is only meaningful beside
                 // what the plain chats cost. Turns recorded before the ledger
                 // stored a workflow name land here too — the name was never
                 // written and cannot be recovered, and inventing one would be
@@ -292,7 +307,7 @@ export function Stats({
                 labelOf={(key) => key ?? 'Chats'}
                 emptyLabel="No workflow activity in this period."
               />
-            </section>
+            </StatGrid>
 
             <section className="grid gap-4 lg:grid-cols-2">
               <ChartPanel
@@ -341,19 +356,6 @@ function ChartPanel({
       </CardContent>
     </Card>
   );
-}
-
-/**
- * Input + output where either was reported, null where neither was.
- *
- * A plain `(a ?? 0) + (b ?? 0)` would turn a period nobody measured into a
- * measured zero, which is the one substitution this page exists not to make.
- */
-function sumTokens(input: number | null, output: number | null): number | null {
-  if (input === null && output === null) {
-    return null;
-  }
-  return (input ?? 0) + (output ?? 0);
 }
 
 /** A measured figure, or the not-measured mark. */

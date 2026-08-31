@@ -57,6 +57,12 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The only gate that compiles the story files. `check-types` covers their
+      # types and the unit suite never renders them, so without this a broken
+      # story reaches the catalog with every other check green.
+      - name: Build component catalog
+        run: pnpm build-storybook
+
   unit-tests:
     runs-on: ubuntu-22.04
     name: Unit Tests

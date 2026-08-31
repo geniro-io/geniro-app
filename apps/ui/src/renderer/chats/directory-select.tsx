@@ -64,7 +64,7 @@ export function DirectorySelect({
   browseLabel,
   clearLabel,
   icon,
-  accents,
+  named,
   disabled = false,
   onChange,
   onBrowse,
@@ -88,16 +88,26 @@ export function DirectorySelect({
   /** Glyph on the trigger and on every recent row. */
   icon: React.ReactNode;
   /**
-   * A colour per directory, drawn as the row's left border — for a picker whose
-   * directories the user has NAMED (see `config-dir-select.tsx`).
+   * Directories the user has NAMED, which get a row of their own whatever the
+   * recents hold (see `config-dir-select.tsx`).
    *
-   * A map rather than a list of named things, because this picker knows about
-   * directories and nothing else: what a colour MEANS is the caller's, and a
-   * generic control that understood agent configurations would be the wrong
-   * layer to put that in. Absent, or absent for a given path, leaves the row
-   * exactly as it was.
+   * This REPLACED an `accents` map that carried only a colour, and the
+   * replacement is a bug fix rather than a widening. Rows here were built from
+   * `recents` alone — an MRU that only grows when a directory is picked THROUGH
+   * this menu — so a directory named in Settings had no row at all, and the
+   * colour was being attached to a row that could not exist yet. REPORTED as
+   * "I've added a configuration but don't see it in the list", correctly, in
+   * the one place it should have appeared first.
+   *
+   * Still a map keyed by PATH rather than a list of the caller's own objects:
+   * this picker knows about directories and nothing else, and what a name or a
+   * colour MEANS stays the caller's. The group `label` comes with the entries
+   * so there is no state where rows exist under no heading.
    */
-  accents?: ReadonlyMap<string, ProfileColor>;
+  named?: {
+    label: string;
+    entries: ReadonlyMap<string, { name: string; accent?: ProfileColor }>;
+  };
   disabled?: boolean;
   /** A recents pick, or null from the clear row. */
   onChange: (directory: string | null) => void;
@@ -109,8 +119,41 @@ export function DirectorySelect({
 }): React.JSX.Element {
   // The current directory leads the list even if it is not among the persisted
   // recents yet (the very first pick), so the menu always shows the checkmark.
-  const rows =
-    value && !recents.includes(value) ? [value, ...recents] : recents;
+  // A NAMED directory is excluded: it has its own row above, and listing it
+  // twice would offer one account as two rows, one by name and one by path.
+  const rows = (
+    value && !recents.includes(value) ? [value, ...recents] : recents
+  ).filter((path) => !named?.entries.has(path));
+
+  /**
+   * The row that sets the value back to null — for the config picker, the CLI's
+   * own account.
+   *
+   * NOT an `action` row, which is what it used to be, and that was the visible
+   * half of what got reported about it. An action renders without a checkmark
+   * column (`menu.tsx`), so the one row that is CURRENT whenever nothing is
+   * picked was the one row that could never say so — a menu on its default
+   * value marked none of its rows. It also had no icon while every row around
+   * it did, so its label started where their glyphs were.
+   *
+   * Being a choice rather than an action also makes it filterable, which is
+   * right: typing `def` should find it.
+   */
+  const clearRow =
+    clearLabel === undefined
+      ? []
+      : [
+          {
+            value: CLEAR,
+            label: clearLabel,
+            icon,
+            // Stated rather than derived. `Menu` marks a row by comparing its
+            // value to the picker's, and this row's value is a SENTINEL — it
+            // can never equal the `null` it stands for, so the default
+            // comparison would leave it unmarked exactly when it is current.
+            checked: value === null,
+          },
+        ];
 
   return (
     <Select
@@ -120,7 +163,14 @@ export function DirectorySelect({
       // older build) can leave a key out of, so an absent directory reaches
       // here as undefined just as legitimately as null, and a leaf name is not
       // something to crash a whole composer over.
-      triggerLabel={value ? folderName(value) : undefined}
+      // A named directory says its NAME on the chip. The leaf is what the user
+      // is trying to stop reading by naming it — and two accounts routinely
+      // live in directories whose leaf is `.claude`.
+      triggerLabel={
+        value
+          ? (named?.entries.get(value)?.name ?? folderName(value))
+          : undefined
+      }
       placeholder={placeholder}
       searchPlaceholder={searchPlaceholder}
       aria-label={ariaLabel}
@@ -139,6 +189,31 @@ export function DirectorySelect({
       flexible
       leadingIcon={icon}
       groups={[
+        // FIRST, and unconditional on the recents: a directory the user took
+        // the trouble to name is the one they mean to pick. The CLEAR row
+        // LEADS them, because it is the same kind of thing — for this picker it
+        // is the CLI's own account, a peer of the named ones and not of the
+        // browse row it used to sit beside.
+        ...(named && named.entries.size > 0
+          ? [
+              {
+                label: named.label,
+                items: [
+                  ...clearRow,
+                  ...[...named.entries].map(([path, entry]) => ({
+                    value: path,
+                    label: entry.name,
+                    // The path is still reachable — a name says which ACCOUNT,
+                    // the tooltip says which directory, and only one of those
+                    // can fit on a row this narrow.
+                    title: path,
+                    icon,
+                    accent: entry.accent,
+                  })),
+                ],
+              },
+            ]
+          : []),
         ...(rows.length > 0
           ? [
               {
@@ -150,21 +225,15 @@ export function DirectorySelect({
                   label: shortenPath(path),
                   title: path,
                   icon,
-                  // Undefined for a directory the user has not named, which is
-                  // exactly what `MenuItem.accent` reads as "no colour" — the
-                  // absent and the explicitly-undefined case are one branch
-                  // there, so neither this nor a conditional spread would draw
-                  // anything.
-                  accent: accents?.get(path),
                 })),
               },
             ]
           : []),
         {
           items: [
-            ...(clearLabel === undefined
-              ? []
-              : [{ value: CLEAR, label: clearLabel, action: true }]),
+            // Only when there was no named group to lead — otherwise it is
+            // already up there.
+            ...(named && named.entries.size > 0 ? [] : clearRow),
             {
               value: BROWSE,
               label: browseLabel,

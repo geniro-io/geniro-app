@@ -139,14 +139,26 @@ export function DailySeriesChart({
   const format = isCost ? formatUsd : formatTokens;
   // Exact in the tooltip, compact on the axis — see `formatUsdAxis`.
   const axisFormat = isCost ? formatUsdAxis : formatTokens;
+  // The hue follows the QUANTITY, so switching the metric recolours the curve —
+  // see `SERIES`. One panel plotting two different things in one colour is the
+  // same error the cumulative line made, from the other direction.
+  const color = isCost ? SERIES.spend : SERIES.tokens;
 
   return (
     <ResponsiveContainer width="100%" height={HERO_HEIGHT}>
       <AreaChart data={points as DayPoint[]} margin={CHART_MARGIN}>
         <defs>
-          <linearGradient id="stats-spend-fill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={SERIES.spend} stopOpacity={0.55} />
-            <stop offset="100%" stopColor={SERIES.spend} stopOpacity={0.04} />
+          {/* Keyed by metric, because an SVG gradient is referenced by ID and a
+              single one would keep the previous metric's stops after the switch
+              — the fill and the stroke would then disagree about the colour. */}
+          <linearGradient
+            id={`stats-fill-${metric}`}
+            x1="0"
+            y1="0"
+            x2="0"
+            y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.55} />
+            <stop offset="100%" stopColor={color} stopOpacity={0.04} />
           </linearGradient>
         </defs>
         <Axes points={points} tickFormatter={axisFormat} />
@@ -165,7 +177,7 @@ export function DailySeriesChart({
                   {
                     label: isCost ? 'Spend' : 'Tokens',
                     value: value === null ? '' : format(value),
-                    color: SERIES.spend,
+                    color,
                     unmeasured: value === null,
                   },
                   { label: 'Turns', value: formatTurns(day.turns) },
@@ -177,11 +189,11 @@ export function DailySeriesChart({
         <Area
           type="monotone"
           dataKey={dataKey}
-          stroke={SERIES.spend}
+          stroke={color}
           strokeWidth={2}
-          fill="url(#stats-spend-fill)"
+          fill={`url(#stats-fill-${metric})`}
           connectNulls={false}
-          dot={loneDot(points, SERIES.spend)}
+          dot={loneDot(points, color)}
           activeDot={{ r: 4, strokeWidth: 0 }}
           isAnimationActive={false}
         />
@@ -220,7 +232,7 @@ export function CumulativeSpendChart({
                   {
                     label: 'Total so far',
                     value: formatUsd(day.cumulativeUsd),
-                    color: SERIES.cumulative,
+                    color: SERIES.spend,
                   },
                   {
                     label: 'That day',
@@ -235,9 +247,9 @@ export function CumulativeSpendChart({
         <Line
           type="monotone"
           dataKey="cumulativeUsd"
-          stroke={SERIES.cumulative}
+          stroke={SERIES.spend}
           strokeWidth={2}
-          dot={loneDot(points, SERIES.cumulative)}
+          dot={loneDot(points, SERIES.spend)}
           activeDot={{ r: 4, strokeWidth: 0 }}
           isAnimationActive={false}
         />

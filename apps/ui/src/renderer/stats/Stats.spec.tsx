@@ -258,7 +258,7 @@ describe('Stats', () => {
   });
 
   it('names a single-agent chat in the workflow breakdown', async () => {
-    // A null workflow key is a real row, not an absence: what the graphs cost
+    // A null workflow key is a real row, not an absence: what the workflows cost
     // only means something beside what the plain chats cost.
     const el = await render(<Stats handle={HANDLE} />);
 

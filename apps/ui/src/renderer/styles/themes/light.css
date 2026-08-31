@@ -6,11 +6,34 @@
  * `shared/themes.ts`. `global.css` maps these onto utilities in `@theme
  * inline` and never carries a value of its own.
  *
- * Values are kept in lockstep with the sibling Geniro web app
- * (geniro/apps/web/src/styles/global.css) so the two surfaces stay visually
- * identical. NEVER hardcode a colour/radius in a component — read it from a
- * token (as a `bg-primary` / `text-muted-foreground` utility, or `var(--…)`
- * when a utility doesn't exist).
+ * The values below are DIRECTION A ("Tempered") of the redesign study, chosen
+ * over two alternatives. It is the same warm family as before, moved in four
+ * deliberate ways:
+ *
+ * 1. THE GROUND COOLS AND THE INK DARKENS. `#f5f1eb` → `#f3f2ec` takes the
+ *    orange out of the page without making it grey, and `#3d2e1f` → `#201f1a`
+ *    is the change you feel first: body text went from 9.8:1 to 14.7:1 on the
+ *    background. The caramel stays where it was, so the accent now carries the
+ *    warmth alone rather than competing with a tinted page.
+ * 2. THE SIDEBAR SITS BELOW THE CARD, not above it. It was `#fdfcfa` — LIGHTER
+ *    than the page — so the only thing separating a column from the content
+ *    beside it was a hairline and a shadow. It is now `#eeece4`, a step DOWN,
+ *    and the structure is read off the surfaces themselves. That is what lets
+ *    the elevation below get quieter.
+ * 3. ELEVATION STOPS DOING STRUCTURE'S JOB. `--shadow-sm` is a contact hairline
+ *    rather than a drop shadow; the drop shadows are kept for the things that
+ *    genuinely float (menu, popover, dialog).
+ * 4. NON-TEXT CONTRAST IS MEASURED, NOT ASSUMED — see `--border-strong`,
+ *    `--ring` and the chart palette, each of which replaces a value that failed
+ *    a bar this file already claimed to hold its text to.
+ *
+ * This is a DELIBERATE DIVERGENCE from the sibling Geniro web app
+ * (geniro/apps/web/src/styles/global.css), which the values here were
+ * previously kept in lockstep with. The lockstep is worth restoring — carry
+ * this palette over there rather than reverting it here. NEVER hardcode a
+ * colour/radius in a component — read it from a token (as a `bg-primary` /
+ * `text-muted-foreground` utility, or `var(--…)` when a utility doesn't
+ * exist).
  *
  * The bare `:root` arm is what makes this theme the fallback: it paints the
  * document before any `data-theme` attribute is written, so a renderer whose
@@ -33,36 +56,41 @@
      the frame shows this rather than white wherever the page has not painted
      (a resize in flight, the clipped bottom corners). CSS cannot read a TS
      constant, so the two are spelled separately and MUST move together. */
-  --background: #f5f1eb;
-  --foreground: #3d2e1f;
-  --card: #fdfcfa;
-  --card-foreground: #3d2e1f;
-  --popover: #fdfcfa;
-  --popover-foreground: #3d2e1f;
+  --background: #f3f2ec;
+  --foreground: #201f1a;
+  --card: #fbfaf6;
+  --card-foreground: #201f1a;
+  --popover: #fbfaf6;
+  --popover-foreground: #201f1a;
   /* Primary/secondary diverge from the web values (#d4915e / #e8a676 with
      white text — ~2.5:1 and ~2.1:1, far under WCAG AA) the same way the
      status colours below do: --primary is the lightest hue-matched caramel
      whose white text AND text-primary links clear ≥4.5:1 on card/background
-     (5.24 / 5.11 / 4.66); --secondary keeps the light caramel fill and flips
-     its foreground dark (6.31:1), matching the --accent pattern. */
-  --primary: #985f2c;
+     (5.36 / 5.13 / 4.78); --secondary keeps the light caramel fill and flips
+     its foreground dark (7.98:1), matching the --accent pattern. */
+  --primary: #955e2e;
   --primary-foreground: #ffffff;
   --secondary: #e8a676;
-  --secondary-foreground: #3d2e1f;
-  --muted: #ebe5dc;
-  --muted-foreground: #7a6b5a;
-  --accent: #f4e5d3;
-  --accent-foreground: #3d2e1f;
+  --secondary-foreground: #201f1a;
+  --muted: #e9e7de;
+  /* The one ink that moved for a reason other than the darker foreground: at
+     #7a6b5a a "muted" line was 4.5:1 on the card and 4.16:1 on --muted, i.e.
+     already failing on the surface code and notes are actually read on. This
+     reads 7.35 / 6.20 and is still visibly secondary against a 15.8 body. */
+  --muted-foreground: #56534b;
+  --accent: #efe6d8;
+  --accent-foreground: #201f1a;
   /* Status colours deliberately darker than the web values
      (#c95d3f/#5f8f4e/#b8801f): these read as TEXT on the card/background
-     surfaces, where the web tones fail WCAG AA — these clear ≥4.5:1 there (and
-     white-on-them ≥4.5 for the button/badge fills). A known divergence from the
-     sibling web palette, traded for contrast. */
-  --destructive: #b44f33;
+     surfaces, where the web tones fail WCAG AA — these clear ≥4.5:1 there
+     (5.50 / 5.47 / 5.29) and white-on-them likewise (5.74 / 5.72 / 5.52) for
+     the button and badge fills. A known divergence from the sibling web
+     palette, traded for contrast. */
+  --destructive: #a8492f;
   --destructive-foreground: #ffffff;
-  --success: #507841;
+  --success: #4b7038;
   --success-foreground: #ffffff;
-  --warning: #916518;
+  --warning: #8a6116;
   --warning-foreground: #ffffff;
   /* Syntax palette for highlighted code (components/ui/code-block.tsx).
      Hue-matched to the warm cream palette and contrast-checked as TEXT on
@@ -70,7 +98,7 @@
      (>=4.5:1) there, the same bar --primary and the status colours document
      above. Punctuation sits at AA-large only by design — it is structural
      noise the eye skips, never content. */
-  --code-comment: #7a6b5a;
+  --code-comment: #676157;
   --code-keyword: #96442b;
   --code-string: #46702f;
   --code-number: #8a5a12;
@@ -150,43 +178,84 @@
   --group-indigo: var(--avatar-6);
   --group-teal: var(--avatar-7);
   --group-red: var(--avatar-8);
-  --border: #ddd4c8;
+  /* TWO border levels, and the split is what WCAG 1.4.11 actually asks for.
+     `--border` is a DIVIDER — the hairline between two surfaces that already
+     differ, where contrast is decorative and 1.22:1 is correct. What the old
+     single token could not express is the other case: the boundary of a CONTROL
+     the user has to find (a text field, a checkbox, a select), which the spec
+     holds to 3:1 and which was being drawn at 1.30:1 — invisible against the
+     page on a bright screen.
+
+     `--border-strong` is that boundary: 3.28:1 on --background, 3.53:1 on
+     --card. It is deliberately NOT what the redesign study proposed (#b1ac9e),
+     which measured 2.02:1 and would have re-shipped the same failure a shade
+     darker — the study asserted the fix without checking it. Use it on inputs
+     and control edges ONLY; putting it on the app's dividers would draw every
+     hairline in the window three times as heavily, which is the wireframe look
+     --shadow-lg exists to avoid. */
+  --border: #dfdcd1;
+  --border-strong: #8a8577;
   --input: transparent;
-  --input-background: #fdfcfa;
-  --switch-background: #d4c4b3;
+  --input-background: #fbfaf6;
+  --switch-background: #c4bfb1;
   --font-weight-medium: 500;
   --font-weight-normal: 400;
-  --ring: #d4915e;
-  --chart-1: #d4915e;
-  --chart-2: #e8a676;
-  --chart-3: #b87d52;
-  --chart-4: #8a6947;
-  --chart-5: #c99167;
+  /* The focus ring was #d4915e — 2.33:1 on the background, under the same 3:1
+     bar as a control's edge and worse in consequence: a keyboard user cannot
+     find the ring at all. This is --primary darkened one step (6.33 / 6.80),
+     which also stops the ring reading as a soft glow. */
+  --ring: #7d4d24;
+  /* A CATEGORICAL palette: five hues 72° apart, not one caramel at five
+     lightnesses. The old set was exactly that — every entry sat at hue 25–30°,
+     so two series of a chart were the same colour twice (chart-1 vs chart-5
+     measured 1.04:1) and no legend could rescue them. Luminance ratio is the
+     wrong bar for series that differ by HUE, so what is held here instead is
+     3:1 against the surface, so a 1.5px line is visible at all, and an uneven
+     lightness spread (31–45) so the set still separates in greyscale and for a
+     dichromat. chart-1 stays the brand caramel. */
+  --chart-1: #8e5829;
+  --chart-2: #4b7138;
+  --chart-3: #2e7067;
+  --chart-4: #555095;
+  --chart-5: #894d79;
   --radius: 0.5rem;
 
-  /* Elevation — desktop panels use these, web relies on Tailwind defaults */
-  --shadow-sm: 0 1px 2px rgba(61, 46, 31, 0.06);
-  --shadow-md: 0 4px 16px rgba(61, 46, 31, 0.08);
+  /* Elevation — desktop panels use these, web relies on Tailwind defaults.
+
+     --shadow-sm is a CONTACT HAIRLINE rather than a drop shadow, and that is
+     direction A's third move: with the sidebar now a step below the card, the
+     surfaces themselves say what is a panel and what is the page, so the small
+     elevation no longer has to. A drop shadow under something that is not
+     floating reads as a sticker. */
+  --shadow-sm: 0 0 0 1px rgb(32 31 26 / 0.05);
+  --shadow-md:
+    0 1px 2px rgb(32 31 26 / 0.05), 0 4px 12px -6px rgb(32 31 26 / 0.12);
   /* FLOATING elevation — a panel that hangs over the page rather than sitting
      in it (the dropdown menu, the anchored popover). Two layers on purpose: a
      tight contact shadow that separates the panel from whatever is directly
      beneath it, and a wide ambient one that says how far above it floats. With
      only --shadow-md, a popover on this warm near-white palette could not lift
      itself off the page and its 1px border ended up doing all the separating —
-     which is what made the menu read as an outlined wireframe. */
+     which is what made the menu read as an outlined wireframe. The ambient
+     layer is pulled in by a negative spread rather than weakened, so the float
+     is tighter than it was without giving that separation back. */
   --shadow-lg:
-    0 2px 6px rgba(61, 46, 31, 0.07), 0 12px 32px rgba(61, 46, 31, 0.13);
+    0 2px 4px rgb(32 31 26 / 0.07), 0 10px 28px -8px rgb(32 31 26 / 0.2);
 
-  --sidebar: #fdfcfa;
-  --sidebar-foreground: #3d2e1f;
-  --sidebar-primary: #d4915e;
-  /* Text-safe caramel for the ACTIVE nav label/icon: #d4915e reads 2.43:1 on
-     --sidebar-accent (fails AA); this hue-matched darker step reads 4.52:1.
+  /* A step DOWN from --card, not up. See point 2 in the file header: this is
+     what lets the elevation above get quieter, because the column and the
+     content beside it no longer need a shadow to be told apart. */
+  --sidebar: #eeece4;
+  --sidebar-foreground: #201f1a;
+  --sidebar-primary: #955e2e;
+  /* Text-safe caramel for the ACTIVE nav label/icon, read on --sidebar-accent.
+     That surface got darker with the sidebar, so the old #a5602c fell to
+     3.69:1; this darker step reads 4.71 there and 5.27 on the sidebar itself.
      A desktop-only token — no web-palette equivalent. */
-  --sidebar-primary-strong: #a5602c;
+  --sidebar-primary-strong: #8f5124;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #f9f6f1;
-  --sidebar-accent-foreground: #3d2e1f;
-  --sidebar-border: #ddd4c8;
-  --sidebar-ring: #d4915e;
+  --sidebar-accent: #e3e0d5;
+  --sidebar-accent-foreground: #201f1a;
+  --sidebar-border: #dfdcd1;
+  --sidebar-ring: #7d4d24;
 }

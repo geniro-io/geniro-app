@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "turbo run dev --filter=@geniro/ui",
     "daemon:dev": "pnpm --filter @geniro/daemon dev",
+    "storybook": "turbo run storybook --filter=@geniro/ui",
+    "build-storybook": "turbo run build-storybook --filter=@geniro/ui",
     "full-check": "pnpm -s build && pnpm -s check-types && pnpm -s build:tests && pnpm -s lint:fix && pnpm -s test:unit && pnpm -s test:integration",
     "build": "turbo run build",
     "build:tests": "turbo run build:tests",

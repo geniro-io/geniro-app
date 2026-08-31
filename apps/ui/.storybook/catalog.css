@@ -1,0 +1,37 @@
+/*
+ * The catalog's stylesheet: the app's own, plus the stories themselves.
+ *
+ * `global.css` excludes `*.stories.tsx` from Tailwind's scan so a utility
+ * written only in a story is never generated into the app bundle users ship.
+ * Storybook loads the SAME stylesheet, so that exclusion would also strip the
+ * classes the stories need to render — the 900px title-bar demo collapsing to
+ * auto width, the 520px nav-rail demo to zero height.
+ *
+ * So the app entry stays exclusive and the catalog adds the stories back here.
+ * Only `preview.tsx` imports this file; nothing in `src/` may.
+ */
+@import '../src/renderer/styles/global.css';
+@source '../src/renderer/**/*.stories.tsx';
+
+/*
+ * Give the catalog's document its scroll back.
+ *
+ * `global.css` sets `html, body, #root { overflow: clip }` so the Electron
+ * shell can never be moved — `clip` rather than `hidden` precisely so nothing,
+ * not even script, can scroll it. That is right for a window whose scrolling
+ * belongs to named boxes inside it, and wrong for the catalog, whose Docs page
+ * is a long DOCUMENT.
+ *
+ * Imported wholesale it made every Docs page unscrollable by wheel AND by
+ * script: measured on the McpDialogButton docs at scrollHeight 5674 against a
+ * 537px viewport, with `scrollTop = 600` reading back 0. Reported as "i cant
+ * scroll this page", and it was never about the dialogs on it.
+ *
+ * Unlayered, so it beats the `@layer base` rule it is overriding. `#root` is
+ * left alone — Storybook renders into `#storybook-root`, and the app's own
+ * root element never exists here.
+ */
+html,
+body {
+  overflow: auto;
+}

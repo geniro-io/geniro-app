@@ -355,7 +355,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const lastSeqRef = useRef(-1);
   const reconnectAfterSeqRef = useRef(-1);
   const runsRef = useRef<ChatRun[]>([]);
-  // A boolean rather than Graphs' `| null` sentinel deliberately: `runs` has
+  // A boolean rather than Workflows' `| null` sentinel deliberately: `runs` has
   // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
   // null union would force to re-guard.
   const [runsLoaded, setRunsLoaded] = useState(false);

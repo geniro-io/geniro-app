@@ -75,7 +75,7 @@ export function EffortSelect({
   /**
    * `ghost` is the composer's flat chip, `default` the bordered form field the
    * graph builder's node inspector uses. One component for both rather than a
-   * second picker in `graphs/`: the rows, the default sentinel and the
+   * second picker in `workflows/`: the rows, the default sentinel and the
    * add-back row for a level the CLI no longer lists are the parts worth
    * getting right once, and they are identical wherever the control appears.
    */

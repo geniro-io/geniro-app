@@ -838,7 +838,7 @@ export function Chats({
       .then((s) => setCollapseToolSteps(s.collapseToolSteps ?? false));
   }, [active]);
 
-  // The workflow library is editable on the Graphs page while this tab stays
+  // The workflow library is editable on the Workflows page while this tab stays
   // mounted (hidden), so refetch it every time the tab becomes visible — a
   // mount-only fetch would leave the target selector stale after a save or
   // delete over there.
@@ -856,7 +856,7 @@ export function Chats({
       .catch(() => setWorkflows([]));
   }, [active, workflowApi]);
 
-  // A remembered workflow target can be gone (deleted/renamed on the Graphs
+  // A remembered workflow target can be gone (deleted/renamed on the Workflows
   // page): once the library has ACTUALLY loaded, fall back instead of keeping
   // a dead selection. Gated on workflowsLoaded so the initial empty list (or
   // a failed fetch) never clobbers a target the restore just set.
@@ -6284,9 +6284,22 @@ export function Chats({
                   the reader's place itself (`scrollTop += ` the height that
                   arrived) — with anchoring on, that adjustment was applied on
                   top of the browser's own. */}
+                    {/* `[&>*:first-child]:mt-auto` bottom-anchors a SHORT
+                    conversation: the free space goes above the first row, so a
+                    two-message thread sits just over the composer instead of
+                    hanging from the top of the pane with the gap below it —
+                    measured at 490px of an empty 672px transcript. Once the
+                    content is taller than the pane the auto margin resolves to
+                    zero and this does nothing at all, which is why it needs no
+                    branch on item count.
+
+                    An auto MARGIN on the first child, not `justify-end` on the
+                    container: in a scrolling flex box, end-justification pushes
+                    overflow past the scroll origin, where it cannot be reached
+                    by scrolling up. The margin has no such failure mode. */}
                     <div
                       data-slot="transcript"
-                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none]">
+                      className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-x-hidden overflow-y-auto p-4 [overflow-anchor:none] [&>*:first-child]:mt-auto">
                       {/* A chat opens on its newest 1,000 items, so a long one
                     begins part-way through itself. SAID, rather than left as a
                     conversation that appears to start mid-sentence — and it is
@@ -6441,7 +6454,11 @@ export function Chats({
 
                     {transcriptError ? (
                       <ErrorBanner
-                        className="border-t border-border px-4 py-2"
+                        // Was a full-bleed band with its own rule, drawn that
+                        // way because the strip had no surface to be seen by.
+                        // It has one now, so this is an inset card and the
+                        // rule would be a second separator around it.
+                        className="mx-4 mb-2"
                         message={transcriptError}
                         // The run outlived the workflow it ran: there is nothing to
                         // retry and nothing to fix, so the only thing left to offer

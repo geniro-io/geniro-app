@@ -2,6 +2,12 @@
 @import './themes/light.css';
 @import './themes/dark.css';
 @source '../**/*.{ts,tsx}';
+/*
+ * Stories are development-only, so a utility used ONLY in the catalog must not
+ * be generated into the app's stylesheet. Without this the scan above sweeps up
+ * 51 story files and ships their classes to every user.
+ */
+@source not '../**/*.stories.tsx';
 
 /*
  * Re-keyed onto `data-theme` (written on <html> by `renderer/theme/
@@ -67,6 +73,7 @@
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-input: var(--input);
   --color-input-background: var(--input-background);
   --color-switch-background: var(--switch-background);

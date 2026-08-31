@@ -713,7 +713,7 @@ export const CLAUDE_MCP_NOT_READY_MESSAGE =
 // `MCP server "<name>" is not connected` for the rest of the PROCESS, and
 // claude keeps one process per chat — so a chat that loses a server loses it
 // until something retires that process. REPORTED with a screenshot: four calls
-// on `claude.ai Manifest OS Google Workspace` over 23 seconds, every one of
+// on `claude.ai Example Google Workspace` over 23 seconds, every one of
 // them that sentence, in a chat whose profile had been switched five minutes
 // earlier (a switch closes the session, so the failure was that new process's
 // opening dial).

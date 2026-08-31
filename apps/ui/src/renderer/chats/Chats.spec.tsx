@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { GeniroApi, PullRequestsResult } from '../../shared/contracts';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   ItemDto as ChatItem,
   RunDto as ChatRun,
@@ -521,7 +522,7 @@ beforeEach(() => {
   // effect calls `scrollTo` on the scroll box itself — never `scrollIntoView`,
   // which would take every scrollable ancestor, the window included, with it.
   Element.prototype.scrollTo = vi.fn();
-  (window as unknown as { geniro: Partial<GeniroApi> }).geniro = {
+  window.geniro = createPreloadStub({
     getSettings: vi.fn().mockResolvedValue({
       onboardingComplete: true,
       projectFolder: '/proj',
@@ -570,7 +571,7 @@ beforeEach(() => {
     ]),
     notify,
     onNotificationActivated: vi.fn().mockReturnValue(() => {}),
-  };
+  });
   notify.mockReset().mockResolvedValue(undefined);
   api.listChats.mockReset().mockResolvedValue([run1]);
   api.setRunGroup.mockReset();
@@ -3477,7 +3478,7 @@ describe('Chats workflow runs', () => {
 
   it('refetches the workflow library when the tab becomes active again', async () => {
     // The tab stays mounted (hidden) while the user saves a workflow on the
-    // Graphs page — coming back must refresh the target selector, not serve
+    // Workflows page — coming back must refresh the target selector, not serve
     // the mount-time snapshot.
     const { client } = makeClient();
     const container = document.createElement('div');
@@ -3492,7 +3493,7 @@ describe('Chats workflow runs', () => {
       'demo-duo',
     );
 
-    // Hidden behind the Graphs page (no refetch fires)…
+    // Hidden behind the Workflows page (no refetch fires)…
     workflowApi.listWorkflows.mockResolvedValue([
       {
         slug: 'demo-duo',
@@ -9119,6 +9120,31 @@ describe('Chats — the open question is pinned, not scrolled away', () => {
     expect(classesOf(transcript(container))).toContain(
       '[overflow-anchor:none]',
     );
+  });
+
+  it('grows a SHORT conversation up from the composer, not down from the top', async () => {
+    // A two-message thread hung from the top of the pane with the gap under
+    // it — measured at 490px empty of a 672px transcript — so the newest reply
+    // sat as far as possible from the box the reader types in.
+    //
+    // An auto MARGIN on the first child rather than `justify-end` on the
+    // container, and that is the part worth pinning by name: in a scrolling
+    // flex box, end-justification pushes overflow past the scroll origin where
+    // it cannot be reached by scrolling up. The margin has no such failure
+    // mode — verified in the real browser, where forcing the pane below its
+    // content resolved the margin to 0px, left `scrollTop = 0` reachable, and
+    // put the first child at the padding edge.
+    //
+    // The class again, because jsdom lays nothing out; here it is also the
+    // whole mechanism, and the wrong mechanism is the regression to catch.
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const classes = classesOf(transcript(container));
+    expect(classes).toContain('[&>*:first-child]:mt-auto');
+    expect(classes).not.toContain('justify-end');
   });
 
   it('lifts the open card out of the transcript and leaves a marker in its slot', async () => {

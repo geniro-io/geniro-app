@@ -98,10 +98,10 @@ describe('notConnectedMcpServer', () => {
     expect(
       notConnectedMcpServer(
         toolResult(
-          'MCP server "claude.ai Manifest OS Google Workspace" is not connected',
+          'MCP server "claude.ai Example Google Workspace" is not connected',
         ),
       ),
-    ).toBe('claude.ai Manifest OS Google Workspace');
+    ).toBe('claude.ai Example Google Workspace');
   });
 
   it('reads the sentence out of a text block too', () => {

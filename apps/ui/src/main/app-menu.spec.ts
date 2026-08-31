@@ -1,18 +1,49 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import type { MenuItemConstructorOptions } from 'electron';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { IPC } from '../shared/contracts';
-import { applicationMenuTemplate } from './app-menu';
+import {
+  applicationMenuTemplate,
+  COMPONENT_CATALOG_URL,
+  installApplicationMenu,
+} from './app-menu';
 
 const mocks = vi.hoisted(() => ({
   sent: [] as string[],
   focused: null as { webContents: { send: (channel: string) => void } } | null,
+  opened: [] as string[],
+  dialogs: [] as string[],
+  built: [] as MenuItemConstructorOptions[][],
 }));
 
 vi.mock('electron', () => ({
-  app: { getVersion: () => '9.9.9' },
-  Menu: { buildFromTemplate: () => ({}), setApplicationMenu: () => undefined },
+  app: { getVersion: () => '9.9.9', getName: () => 'Geniro' },
+  Menu: {
+    // Captured rather than discarded: the `isDev` ternary lives in
+    // `installApplicationMenu`, and the template it hands over is the only
+    // place that decision is observable.
+    buildFromTemplate: (template: MenuItemConstructorOptions[]) => {
+      mocks.built.push(template);
+      return {};
+    },
+    setApplicationMenu: () => undefined,
+  },
   BrowserWindow: { getFocusedWindow: () => mocks.focused },
+  shell: {
+    openExternal: (url: string) => {
+      mocks.opened.push(url);
+      return Promise.resolve();
+    },
+  },
+  dialog: {
+    showMessageBox: (options: { message: string }) => {
+      mocks.dialogs.push(options.message);
+      return Promise.resolve({ response: 0, checkboxChecked: false });
+    },
+  },
 }));
 
 /**
@@ -43,9 +74,31 @@ const appSubmenu = (): MenuItemConstructorOptions[] => {
   return submenu;
 };
 
+/** The View submenu of a DEV template — the one that carries the catalog row. */
+const devViewSubmenu = (): MenuItemConstructorOptions[] => {
+  const view = applicationMenuTemplate({
+    ...APP,
+    componentCatalogUrl: COMPONENT_CATALOG_URL,
+  }).find((item) => item.label === 'View');
+  if (!view || !Array.isArray(view.submenu)) {
+    throw new Error('the template has no View submenu');
+  }
+  return view.submenu;
+};
+
 beforeEach(() => {
   mocks.sent.length = 0;
   mocks.focused = null;
+  mocks.opened.length = 0;
+  mocks.dialogs.length = 0;
+  mocks.built.length = 0;
+});
+
+// Not an inline call at the end of each stubbing test: a failed assertion
+// throws before it, leaving a stubbed `fetch` for every test after it and
+// turning one real failure into a cascade of misleading ones.
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('applicationMenuTemplate', () => {
@@ -98,7 +151,14 @@ describe('applicationMenuTemplate', () => {
     // leaves Electron's own default menu — dev-tools row included — standing.
     // The first cut of the app submenu shipped with only `submenu` on it and
     // did exactly that in the running app, with every unit test green.
-    const items = applicationMenuTemplate(APP).flatMap((item) => [
+    //
+    // Built from the DEV template, which is a superset: the conditionally
+    // spread catalog row contributes nothing to the packaged arm, so checking
+    // that one would leave the only conditionally-built item unchecked.
+    const items = applicationMenuTemplate({
+      ...APP,
+      componentCatalogUrl: COMPONENT_CATALOG_URL,
+    }).flatMap((item) => [
       item,
       ...(Array.isArray(item.submenu) ? item.submenu : []),
     ]);
@@ -175,6 +235,139 @@ describe('applicationMenuTemplate', () => {
     expect(row).toBeDefined();
     expect(row?.accelerator).toBeUndefined();
     expect(submenu.indexOf(row!)).toBe(2);
+  });
+
+  it('omits the component catalog entirely when no URL is given', () => {
+    // Asserted against the whole submenu rather than the row's own `visible`,
+    // because "hidden" is what the dev-tools row above does, and absent is the
+    // other decision.
+    expect(viewSubmenu().map((item) => item.label)).not.toContain(
+      'Component Catalog',
+    );
+  });
+
+  it('offers the component catalog in a dev launch, beside the other View rows', () => {
+    const submenu = devViewSubmenu();
+    const row = submenu.find((item) => item.label === 'Component Catalog');
+
+    expect(row).toBeDefined();
+    // Directly after Clear Agent Cache, which is where the rest of this app's
+    // own rows sit. No accelerator, on the rule the row above states.
+    expect(submenu.indexOf(row!)).toBe(3);
+    expect(row?.accelerator).toBeUndefined();
+  });
+
+  it('gates the catalog row on isDev, and opens the URL it was built with', async () => {
+    // The template's default parameter is NOT this decision — the ternary in
+    // `installApplicationMenu` is, and it is the one a packaged build depends
+    // on. Both halves are pinned from the INSTALLED template rather than one
+    // this spec composed: presence (a shipped build must not offer the row) and
+    // the URL it carries (pointing it at another port must not stay green).
+    const catalogRow = (): MenuItemConstructorOptions | undefined => {
+      const view = mocks.built.at(-1)?.find((item) => item.label === 'View');
+      const submenu = Array.isArray(view?.submenu) ? view.submenu : [];
+      return submenu.find((item) => item.label === 'Component Catalog');
+    };
+
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(null)));
+
+    installApplicationMenu({ isDev: true });
+    const row = catalogRow();
+    expect(row).toBeDefined();
+
+    row?.click?.(null as never, undefined, null as never);
+    await vi.waitFor(() =>
+      expect(mocks.opened).toEqual([COMPONENT_CATALOG_URL]),
+    );
+
+    installApplicationMenu({ isDev: false });
+    expect(catalogRow()).toBeUndefined();
+  });
+
+  it('serves the catalog at the address the storybook script binds', () => {
+    // A TWIN with no importable side: `app-menu.ts` spells the address and so
+    // does `package.json`'s `storybook` script, and a package script cannot be
+    // imported. Read the script and compare, rather than restating 6006 here —
+    // the same shape as `theme-tokens.spec.ts` reading global.css. BOTH halves
+    // are derived from the constant, so changing either side alone fails.
+    const manifest = readFileSync(
+      join(__dirname, '../../package.json'),
+      'utf8',
+    );
+    const script = (JSON.parse(manifest) as { scripts: Record<string, string> })
+      .scripts.storybook;
+    const { hostname, port } = new URL(COMPONENT_CATALOG_URL);
+
+    expect(script).toBeDefined();
+    // Anchored at a boundary: a bare `toContain('-p 6006')` is satisfied by
+    // `-p 60061`, which is a different server.
+    expect(script).toMatch(new RegExp(`-p ${port}(\\s|$)`));
+    // And it binds THAT host — the wildcard default puts the whole workspace on
+    // the LAN through Vite's /@fs/ handler, and a `localhost` constant against a
+    // v4-only bind fails on an IPv6-first resolver.
+    expect(script).toMatch(new RegExp(`--host ${hostname}(\\s|$)`));
+  });
+
+  it('opens the catalog when it answers', async () => {
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(null)));
+    const row = devViewSubmenu().find(
+      (item) => item.label === 'Component Catalog',
+    );
+
+    row?.click?.(null as never, undefined, null as never);
+    await vi.waitFor(() =>
+      expect(mocks.opened).toEqual([COMPONENT_CATALOG_URL]),
+    );
+
+    expect(mocks.dialogs).toEqual([]);
+  });
+
+  it('gives up on a port that accepts and never answers', async () => {
+    // What CATALOG_PROBE_MS is for, and the case no other test reaches:
+    // Storybook mid-boot accepts the connection and holds it open.
+    //
+    // `sawSignal` is what makes this a real pin. Reading `init.signal` inside
+    // the executor is NOT enough on its own: with the signal removed from the
+    // production call, that read throws, the executor turns the throw into a
+    // rejection, and the dialog appears anyway — so the dialog assertion alone
+    // passes against the very deletion it claims to catch.
+    let sawSignal = false;
+    vi.stubGlobal(
+      'fetch',
+      (_url: string, init?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          sawSignal = init?.signal instanceof AbortSignal;
+          init?.signal?.addEventListener('abort', () => {
+            reject(new Error('aborted'));
+          });
+        }),
+    );
+    const row = devViewSubmenu().find(
+      (item) => item.label === 'Component Catalog',
+    );
+
+    row?.click?.(null as never, undefined, null as never);
+    await vi.waitFor(() => expect(mocks.dialogs).toHaveLength(1), {
+      timeout: 5000,
+    });
+
+    // Asserted out here, never inside the stub: production catches everything
+    // the probe throws, so a failed `expect` in there is swallowed.
+    expect(sawSignal).toBe(true);
+    expect(mocks.opened).toEqual([]);
+  });
+
+  it('says the catalog is not running instead of opening a dead tab', async () => {
+    vi.stubGlobal('fetch', () => Promise.reject(new Error('ECONNREFUSED')));
+    const row = devViewSubmenu().find(
+      (item) => item.label === 'Component Catalog',
+    );
+
+    row?.click?.(null as never, undefined, null as never);
+    await vi.waitFor(() => expect(mocks.dialogs).toHaveLength(1));
+
+    // The browser is never reached — which is the whole behaviour being pinned.
+    expect(mocks.opened).toEqual([]);
   });
 
   it('sends the reset to the FOCUSED window, and does nothing without one', () => {

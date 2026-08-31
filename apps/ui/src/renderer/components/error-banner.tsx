@@ -46,7 +46,28 @@ export function ErrorBanner({
 }): React.JSX.Element {
   const warning = tone === 'warning';
   return (
-    <div data-tone={tone} className={cn('flex items-start gap-2', className)}>
+    <div
+      data-tone={tone}
+      className={cn(
+        // The strip carries its OWN surface, and that is what makes the
+        // far-edge close control legible as part of it.
+        //
+        // Without one it was bare text and a ✕ on the page's own ground, with
+        // `flex-1` holding them apart: measured in the catalog at 224px of
+        // nothing between a 174px message and the button, in a 420px strip —
+        // and on Stats, where the strip runs the page width, the gap is the
+        // whole content column. Reported as "a lot of margin between text and
+        // icon", and the margin was never the defect: nothing tied the two
+        // ends together, so a conventional banner layout read as a stray
+        // glyph parked at the far edge.
+        //
+        // Padding is the component's now, so a caller insets with MARGIN —
+        // one that keeps passing `px-*` merges away this padding and puts the
+        // text back on the fill's own edge.
+        'flex items-start gap-2 rounded-md px-3 py-2',
+        warning ? 'bg-warning/10' : 'bg-destructive/10',
+        className,
+      )}>
       {/* `break-words`: daemon failures carry a full route and body, and an
           unbroken one would otherwise widen the strip past its container. */}
       <ErrorText

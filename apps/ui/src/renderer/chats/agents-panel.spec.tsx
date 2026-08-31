@@ -236,6 +236,59 @@ describe('AgentsPanel', () => {
     expect(reviewer.textContent).not.toContain('ctx');
   });
 
+  it('drops the CLI badge when it only repeats the agent’s own name', () => {
+    // A 1:1 chat's agent is NAMED after its CLI, so the card read
+    // `claude … claude` — the same word twice on one row, on the most common
+    // chat in the app. The badge answers "which CLI drives this agent", which
+    // is news beside `Reviewer` and nothing beside `claude`.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[{ ...agents[0]!, name: 'claude', agent: 'claude' }]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const card = el.querySelector(CARD_SELECTOR)!;
+    expect(card.textContent).toContain('claude');
+    // The name survives; only the duplicate badge goes. Reverting the guard
+    // puts a second `claude` back and fails this.
+    expect(card.querySelectorAll('[data-slot="badge"]')).toHaveLength(0);
+
+    // …and the badge is still drawn where it says something the name does not,
+    // which is the half a blanket removal would have cost.
+    //
+    // The rule keys on "would this REPEAT the text beside it", NOT on "is this
+    // a workflow" — so both workflow shapes have to hold. `Chats.tsx` builds
+    // the two kinds of card from different places: a 1:1 chat sets BOTH fields
+    // from `activeRun.agentKind`, so they are the same string by construction,
+    // while a node sets `name` from `node.name ?? node.id` and `agent` from
+    // `node.agent`, which are separate fields of the graph.
+    const named = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const cards = [...named.querySelectorAll(CARD_SELECTOR)];
+    const reviewer = cards.find((row) =>
+      row.textContent?.includes('Reviewer'),
+    )!;
+    expect(reviewer.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'cursor-agent',
+    );
+    // A named node on the SAME CLI as the doubled case above — the one worth
+    // spelling out, because it is where "hide the badge on claude" and "hide
+    // the badge when it repeats the name" give opposite answers. `Orchestrator`
+    // runs claude and keeps its badge.
+    const orchestrator = cards.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    expect(orchestrator.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude',
+    );
+  });
+
   it('shows a parked agent as “needs more info”, not the raw status key', () => {
     // Two halves of the same defect. The panel printed `{agent.status}`
     // verbatim, so this row read `needs-input` — a slug, which is exactly why

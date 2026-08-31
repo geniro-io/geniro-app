@@ -5,10 +5,15 @@ import { cn } from './ui/utils';
  * activation. Content is either the default title/subtitle stack or, for
  * richer rows, custom `children`.
  *
- * Its one consumer today is the chat list (`chats/chat-list-item.tsx`) — the
- * Graphs library renders `WorkflowCard` tiles, not list rows. It lives in
- * `components/` anyway because the a11y structure below is the part worth
- * maintaining once, and any future sidebar list needs exactly it.
+ * Two consumers: the chat list (`chats/chat-list-item.tsx`) and the workflow
+ * library (`workflows/workflow-row.tsx`), which took it when its tiles became
+ * rows. The library passes `active={false}` throughout — nothing there is
+ * "current" — and overrides the sidebar dress (`rounded-none bg-card`), since
+ * what it needs is the a11y structure below. That structure is not optional
+ * decoration: the library previously hand-rolled it as a `role="button"` div
+ * with an Enter/Space keydown handler and a nested delete button, which ARIA
+ * forbids and which needed an event dam to keep a delete click out of the
+ * open handler.
  *
  * Structure: the li keeps its listitem semantics ("x of N" enumeration) and
  * the activation surface is a REAL button layered under the content — ARIA

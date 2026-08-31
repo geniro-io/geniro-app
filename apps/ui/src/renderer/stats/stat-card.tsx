@@ -1,34 +1,80 @@
 import type { LucideIcon } from 'lucide-react';
 
-import { Card, CardContent } from '../components/ui/card';
 import { cn } from '../components/ui/utils';
 import { NOT_MEASURED, NOT_MEASURED_TITLE } from './stats-format';
 
 /**
- * One measured figure.
+ * The enclosure every figure on this page sits in — ONE surface, ruled into
+ * cells.
  *
- * The icon is not decoration: eight of these sit in a grid, and a reader
- * looking for spend or for time finds the shape before they finish reading the
- * label. It is tinted with the card's own accent so the row reads as one family
- * rather than eight competing colours.
+ * It replaced a row of individually-bordered `Card`s, which is the same move
+ * the Settings panels made and for the same reason: eight cards is eight
+ * borders, eight radii and eight shadows drawn around eight short numbers, so
+ * the chrome outweighed the content it was framing. Ruling one surface says the
+ * cells belong together, which is the true statement — they are all one
+ * period's reading.
+ *
+ * The rules are the container's own background showing through a `gap-px`,
+ * NEVER `divide-x`. Tailwind's divide utilities put a border on every child but
+ * the first IN DOCUMENT ORDER, so on a wrapping grid the first cell of the
+ * second row wears a left rule that opens onto nothing. A one-pixel gap over a
+ * `bg-border` ground is correct on every row by construction, needs no
+ * per-child exceptions, and clips to the enclosure's own radius.
+ */
+const CELL_GRID =
+  'grid gap-px overflow-hidden rounded-xl border border-border bg-border shadow-panel-sm';
+
+/** One ruled surface of figures. `className` carries the column count. */
+export function StatGrid({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <section data-slot="stat-grid" className={cn(CELL_GRID, className)}>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * One measured figure, as a cell of a {@link StatGrid}.
+ *
+ * The icon is not decoration: a reader looking for spend or for time finds the
+ * shape before they finish reading the label. It is a bare glyph beside the
+ * label rather than the filled tile it used to sit in — a 32px accent square
+ * per cell was the loudest thing in the grid, so eight of them read as eight
+ * buttons rather than as eight numbers.
  *
  * A NOT-MEASURED value is styled DOWN — muted, lighter weight — because it is
  * not a figure at all, and giving it the same visual weight as a real one is
  * how "—" starts reading as a number.
  */
-export function StatCard({
+export function StatCell({
   label,
   value,
   icon,
   hint,
   footnote,
+  size = 'md',
 }: {
   label: string;
   value: string;
-  icon: LucideIcon;
+  icon?: LucideIcon;
   hint?: string;
   /** A second line under the figure — a rate, a share, a denominator. */
   footnote?: string;
+  /**
+   * `lead` is the figure a reader opened the page for; `md` is the rest.
+   *
+   * TYPE carries the hierarchy rather than a wider cell, so the grid stays a
+   * plain equal-column one at every breakpoint — a spanning hero cell has to be
+   * re-spanned at each, and lands as a half-width orphan on the breakpoint
+   * nobody checked.
+   */
+  size?: 'lead' | 'md';
 }): React.JSX.Element {
   // Bound to a local rather than renamed in the destructure: a PascalCase
   // PARAMETER is an eslint error, and JSX needs the capital to read it as a
@@ -36,100 +82,37 @@ export function StatCard({
   const Icon = icon;
   const unmeasured = value === NOT_MEASURED;
   return (
-    <Card className="transition-colors hover:border-primary/30">
-      <CardContent
-        data-slot="stat"
-        className="flex items-start gap-3 p-4"
-        title={unmeasured ? NOT_MEASURED_TITLE : hint}>
-        <span
-          aria-hidden="true"
-          className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground">
-          <Icon className="size-4" />
+    <div
+      data-slot="stat"
+      className={cn(
+        'flex min-w-0 flex-col gap-1 bg-card px-4',
+        size === 'lead' ? 'py-5' : 'py-4',
+      )}
+      title={unmeasured ? NOT_MEASURED_TITLE : hint}>
+      <span
+        data-slot="stat-label"
+        className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+        {Icon ? (
+          <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+        ) : null}
+        <span className="truncate">{label}</span>
+      </span>
+      <span
+        data-slot="stat-value"
+        className={cn(
+          'truncate tabular-nums',
+          size === 'lead'
+            ? 'text-3xl font-semibold tracking-tight'
+            : 'text-xl font-semibold',
+          unmeasured && 'font-normal text-muted-foreground',
+        )}>
+        {value}
+      </span>
+      {footnote ? (
+        <span className="text-xs leading-snug text-muted-foreground">
+          {footnote}
         </span>
-        <span className="flex min-w-0 flex-col gap-0.5">
-          <span
-            data-slot="stat-label"
-            className="text-xs text-muted-foreground">
-            {label}
-          </span>
-          <span
-            data-slot="stat-value"
-            className={cn(
-              'truncate text-xl font-semibold tabular-nums',
-              unmeasured && 'font-normal text-muted-foreground',
-            )}>
-            {value}
-          </span>
-          {footnote ? (
-            <span className="text-xs leading-snug text-muted-foreground">
-              {footnote}
-            </span>
-          ) : null}
-        </span>
-      </CardContent>
-    </Card>
-  );
-}
-
-/**
- * The one figure the page is really about, given the room to say so.
- *
- * Spend gets its own card at the top rather than a cell in the grid: it is the
- * question people open this page with, and at grid size it sat level with
- * "Tokens in" — which nobody opens this page to learn.
- */
-export function HeroStat({
-  value,
-  caption,
-  aside,
-}: {
-  value: string;
-  caption: string;
-  /** The supporting figures shown alongside — label/value pairs. */
-  aside: readonly { label: string; value: string }[];
-}): React.JSX.Element {
-  return (
-    <Card className="overflow-hidden">
-      <CardContent className="flex flex-wrap items-end justify-between gap-6 p-6">
-        <div data-slot="stat" className="flex min-w-0 flex-col gap-1">
-          <span
-            data-slot="stat-label"
-            className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {caption}
-          </span>
-          <span
-            data-slot="stat-value"
-            className={cn(
-              'text-4xl font-semibold tabular-nums',
-              value === NOT_MEASURED && 'text-muted-foreground',
-            )}
-            title={value === NOT_MEASURED ? NOT_MEASURED_TITLE : undefined}>
-            {value}
-          </span>
-        </div>
-        <dl className="flex flex-wrap gap-x-8 gap-y-2">
-          {aside.map((item) => (
-            <div
-              key={item.label}
-              data-slot="stat"
-              className="flex flex-col gap-0.5">
-              <dt
-                data-slot="stat-label"
-                className="text-xs text-muted-foreground">
-                {item.label}
-              </dt>
-              <dd
-                data-slot="stat-value"
-                className={cn(
-                  'text-base font-medium tabular-nums',
-                  item.value === NOT_MEASURED && 'text-muted-foreground',
-                )}>
-                {item.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </CardContent>
-    </Card>
+      ) : null}
+    </div>
   );
 }

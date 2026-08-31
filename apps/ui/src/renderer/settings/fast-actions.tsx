@@ -10,6 +10,7 @@ import {
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { ExpandableTextarea } from '../components/expandable-textarea';
+import { SettingsList, SettingsPanel } from '../components/settings-panel';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 
@@ -109,7 +110,19 @@ export function FastActionsPane({
     // the one description.
     <section className="flex flex-col gap-3" aria-label="Fast actions">
       {editing ? null : (
-        <div className="flex items-center justify-end">
+        // A toolbar rather than a lone right-aligned button. The count is the
+        // half that earns it: this list has a CEILING the editor refuses a save
+        // against (`MAX_FAST_ACTIONS`), so somebody filling it up learns that
+        // here rather than from a refusal after writing an action.
+        <div className="flex items-center justify-between gap-3">
+          {/* Silent on an EMPTY list — see the twin note in
+              `chats/run-config-picker.tsx`. The empty state below says it
+              better, and the two together said it twice. */}
+          <span className="text-xs text-muted-foreground">
+            {actions.length === 0
+              ? null
+              : `${actions.length} of ${MAX_FAST_ACTIONS}`}
+          </span>
           <Button
             type="button"
             variant="outline"
@@ -136,15 +149,24 @@ export function FastActionsPane({
           onCommit={commit}
         />
       ) : actions.length === 0 ? (
-        <EmptyState className="flex-col gap-1">
-          <span className="text-foreground">No fast actions yet</span>
-          <span>
-            Name one and write what it should say — its button appears under the
-            composer, and a press drops that text into the message box.
-          </span>
-        </EmptyState>
+        // Inside the SAME enclosure the list gets — see the twin note in
+        // `chats/run-config-picker.tsx`.
+        <SettingsPanel>
+          <EmptyState className="flex-col gap-1 py-10">
+            <span className="text-foreground">No fast actions yet</span>
+            {/* `text-xs` — see the twin note in `chats/run-config-picker.tsx`. */}
+            <span className="max-w-sm text-xs">
+              Name one and write what it should say — its button appears under
+              the composer, and a press drops that text into the message box.
+            </span>
+          </EmptyState>
+        </SettingsPanel>
       ) : (
-        <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        // `overflow-hidden` so a row's hover fill clips to the card's radius —
+        // the corner rows would otherwise paint square over a rounded edge. Safe
+        // here and NOT on `SettingsPanel`, whose rows can hold a `Select` whose
+        // panel would then be cut off.
+        <SettingsList className="overflow-hidden">
           {actions.map((action) => (
             <FastActionRow
               key={action.id}
@@ -164,7 +186,7 @@ export function FastActionsPane({
               }}
             />
           ))}
-        </ul>
+        </SettingsList>
       )}
     </section>
   );
@@ -187,13 +209,13 @@ function FastActionRow({
   onDeleteConfirm: () => void;
 }): React.JSX.Element {
   return (
-    <li className="flex items-center gap-1 rounded-md hover:bg-sidebar-accent">
+    <li className="flex items-center gap-1 pr-2 hover:bg-sidebar-accent">
       <button
         type="button"
         onClick={onEdit}
         aria-label={`Edit the fast action “${action.name}”`}
         title={action.description}
-        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left outline-none focus-visible:bg-sidebar-accent">
+        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left outline-none focus-visible:bg-sidebar-accent">
         <span className="w-full truncate text-sm text-foreground">
           {action.name}
         </span>
@@ -223,7 +245,7 @@ function FastActionRow({
             type="button"
             variant="destructive"
             size="sm"
-            className="mr-1 shrink-0"
+            className="shrink-0"
             aria-label={`Confirm delete ${action.name}`}
             onClick={onDeleteConfirm}>
             Delete?
@@ -245,7 +267,7 @@ function FastActionRow({
             type="button"
             variant="ghost"
             size="icon"
-            className="mr-1 size-7 shrink-0 text-muted-foreground"
+            className="size-7 shrink-0 text-muted-foreground"
             aria-label={`Delete ${action.name}`}
             title="Delete"
             onClick={onDeletePress}>

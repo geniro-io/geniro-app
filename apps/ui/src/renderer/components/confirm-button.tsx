@@ -24,7 +24,22 @@ export function ConfirmButton({
   children,
   ...rest
 }: Omit<React.ComponentProps<'button'>, 'onClick'> &
-  Pick<VariantProps<typeof buttonVariants>, 'variant' | 'size'> & {
+  Pick<VariantProps<typeof buttonVariants>, 'size'> & {
+    /**
+     * The RESTING look — anything but `destructive`, which this control paints
+     * itself when armed.
+     *
+     * Excluded at the type level rather than documented, because the one caller
+     * this had did pass it (the builder's Delete workflow button): the resting
+     * state was then already the armed colour, so pressing it changed nothing
+     * but the word inside, and the two-step guard gave the user no signal that
+     * the NEXT press was the one that fires. A control whose whole job is a
+     * visible state change cannot be allowed to start in its end state.
+     */
+    variant?: Exclude<
+      NonNullable<VariantProps<typeof buttonVariants>['variant']>,
+      'destructive'
+    >;
     /** The destructive action; awaited — the button stays disabled meanwhile. */
     onConfirm: () => void | Promise<void>;
     /** Label shown while armed. */

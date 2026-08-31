@@ -28,7 +28,7 @@ describe('readCursorSessionTitle', () => {
     // Verbatim from geniro's own store, 2026-08-22 (cursor-agent
     // 2026.08.11-e8db854).
     const path = meta(
-      '{"schemaVersion":1,"cwd":"/Users/x/ManifestOS","title":"Fix Conflicts Worktree"}',
+      '{"schemaVersion":1,"cwd":"/Users/x/example-app","title":"Fix Conflicts Worktree"}',
     );
     expect(readCursorSessionTitle(path)).toBe('Fix Conflicts Worktree');
   });

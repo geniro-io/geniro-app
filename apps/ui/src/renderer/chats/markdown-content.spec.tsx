@@ -38,6 +38,64 @@ const ALIGNED_TABLE = [
   '| a | b | c |',
 ].join('\n');
 
+describe('MarkdownContent — the reading measure', () => {
+  // Measured in the running app before this: an assistant paragraph ran 896px,
+  // about 118 characters a line, with `max-width: none` the whole way up to
+  // the transcript — so nothing capped it and a wider window made it worse.
+  // jsdom lays nothing out, so the utility IS the observable here; it is also
+  // the entire mechanism, not a proxy for one.
+  const MEASURE = 'max-w-[72ch]';
+
+  it('caps every kind of PROSE block', () => {
+    const el = render(
+      <MarkdownContent
+        content={[
+          'A paragraph.',
+          '',
+          '# A heading',
+          '',
+          '- a list item',
+          '',
+          '> a quote',
+        ].join('\n')}
+      />,
+    );
+    // Headings render as `p` here (the component maps h1-h4 to sized
+    // paragraphs), so both paragraphs are covered by this sweep.
+    for (const selector of ['p', 'ul', 'blockquote']) {
+      const nodes = [...el.querySelectorAll(selector)];
+      expect(nodes.length).toBeGreaterThan(0);
+      for (const node of nodes) {
+        expect(node.className).toContain(MEASURE);
+      }
+    }
+  });
+
+  it('leaves CODE BLOCKS and TABLES at full width', () => {
+    // The half a cap on the transcript container would have destroyed, and the
+    // reason the measure lives on the text elements instead: a wrapped
+    // 100-column diff is unreadable in a way a wide paragraph merely is
+    // tiring. Reverting the cap upward fails here, not in the test above.
+    const el = render(
+      <MarkdownContent
+        content={['```ts', 'const wide = 1;', '```', '', ALIGNED_TABLE].join(
+          '\n',
+        )}
+      />,
+    );
+    const block = el.querySelector('[data-slot="code-block"]')!;
+    expect(block.className).not.toContain(MEASURE);
+    const table = el.querySelector('table')!;
+    expect(table.className).not.toContain(MEASURE);
+    // …and no ancestor of either smuggled the cap in from above.
+    for (const start of [block, table]) {
+      for (let node = start.parentElement; node; node = node.parentElement) {
+        expect(node.className).not.toContain(MEASURE);
+      }
+    }
+  });
+});
+
 describe('MarkdownContent code', () => {
   it('routes a fenced block through the app CodeBlock, with its language', () => {
     const el = render(<MarkdownContent content={'```ts\nconst a = 1;\n```'} />);

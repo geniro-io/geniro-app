@@ -107,9 +107,20 @@ export function ConfigDirSelect({
       // of a profile they picked once.
       clearLabel="Default profile"
       icon={<IdCard />}
-      accents={
-        new Map(configProfiles.map((profile) => [profile.dir, profile.color]))
-      }
+      // The profiles ALWAYS get rows, whatever the recents hold. Before this
+      // they got none: rows came from `recentConfigDirs`, which only grows when
+      // a directory is picked through this very menu, so a profile named in
+      // Settings was invisible here until the user had separately browsed to
+      // the same directory — the one action naming it was meant to replace.
+      named={{
+        label: 'Profiles',
+        entries: new Map(
+          configProfiles.map((profile) => [
+            profile.dir,
+            { name: profile.name, accent: profile.color },
+          ]),
+        ),
+      }}
       aria-label={ariaLabel}
       title={[configDir ?? hint, note].filter(Boolean).join(' — ')}
       disabled={disabled}

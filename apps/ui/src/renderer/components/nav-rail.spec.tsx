@@ -57,7 +57,7 @@ describe('NavRail', () => {
   it('offers every top-level destination', () => {
     const el = rail('chats');
 
-    for (const label of ['Chats', 'Graphs', 'Stats', 'Settings']) {
+    for (const label of ['Chats', 'Workflows', 'Stats', 'Settings']) {
       expect(buttonNamed(el, label)).toBeTruthy();
     }
   });
@@ -85,12 +85,12 @@ describe('NavRail', () => {
     const labels = [...el.querySelectorAll('button')]
       .map((node) => node.textContent)
       .filter((text): text is string =>
-        ['Chats', 'Graphs', 'Stats', 'Settings'].includes(text ?? ''),
+        ['Chats', 'Workflows', 'Stats', 'Settings'].includes(text ?? ''),
       );
 
-    // Stats is a primary destination, so it belongs with Chats and Graphs
+    // Stats is a primary destination, so it belongs with Chats and Workflows
     // rather than in the utility group Settings sits in.
-    expect(labels).toEqual(['Chats', 'Graphs', 'Stats', 'Settings']);
+    expect(labels).toEqual(['Chats', 'Workflows', 'Stats', 'Settings']);
   });
 
   it('keeps its own width toggle, in both directions', () => {

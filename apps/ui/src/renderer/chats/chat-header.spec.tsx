@@ -318,7 +318,7 @@ describe('ChatHeader — how long this turn has been running', () => {
     // pin row is gone — a config directory is the same kind of long absolute
     // path, and the clamp is a property of the row rather than of any one fact.
     const configDir =
-      '/Users/me/Desktop/Projects/Lab/profiles/.claude-manifest-lab-personal';
+      '/Users/me/Desktop/Projects/Lab/profiles/.claude-work-personal';
     const el = render(
       <ChatHeader
         {...baseProps}

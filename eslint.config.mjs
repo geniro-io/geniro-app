@@ -100,7 +100,13 @@ const config = defineConfig([
     // never a raw hex/rgb/hsl. Non-colour arbitrary values (`ring-[3px]`,
     // `size-[26px]`, `shadow-[…var(--border)]`) stay allowed — only colour
     // literals are banned. See apps/ui/src/renderer/styles/global.css.
-    files: ['apps/ui/src/renderer/**/*.{ts,tsx}'],
+    // `.storybook/**` is held to the same bar: it renders the same components
+    // against the same tokens, so a colour literal there is the one place the
+    // catalog could show a palette the app does not actually have.
+    files: [
+      'apps/ui/src/renderer/**/*.{ts,tsx}',
+      'apps/ui/.storybook/**/*.{ts,tsx}',
+    ],
     rules: {
       'no-restricted-syntax': [
         'error',

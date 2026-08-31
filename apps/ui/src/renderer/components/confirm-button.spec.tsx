@@ -56,6 +56,25 @@ describe('ConfirmButton', () => {
     expect(container.textContent).toContain('Delete');
   });
 
+  it('LOOKS armed, not merely reads armed', () => {
+    // The word swapping to "Sure?" is half the signal; the colour is the half
+    // a reader takes in without reading. Both matter because the builder's
+    // Delete button passed `variant="destructive"`, which painted the RESTING
+    // state the armed colour — so arming it changed nothing but the label, and
+    // the guard silently stopped guarding. That prop is now excluded at the
+    // type level; this is the behaviour that exclusion protects.
+    const onConfirm = vi.fn();
+    render(onConfirm);
+
+    const button = container.querySelector('button')!;
+    const resting = button.className;
+    expect(resting).not.toContain('bg-destructive');
+
+    click();
+    expect(button.className).not.toBe(resting);
+    expect(button.className).toContain('bg-destructive');
+  });
+
   it('disarms after the window elapses without firing', () => {
     vi.useFakeTimers();
     const onConfirm = vi.fn();

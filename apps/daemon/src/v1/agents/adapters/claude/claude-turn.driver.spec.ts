@@ -659,12 +659,12 @@ describe('repairing an MCP server that dropped out of the session', () => {
     // able to repair or explain it.
     const { driver, sent } = repairing();
 
-    driver.onMessage(notConnected('claude.ai Manifest OS Google Workspace'));
+    driver.onMessage(notConnected('claude.ai Example Google Workspace'));
 
     expect(sent()).toHaveLength(1);
     expect(sent()[0]?.request).toEqual({
       subtype: 'mcp_reconnect',
-      serverName: 'claude.ai Manifest OS Google Workspace',
+      serverName: 'claude.ai Example Google Workspace',
     });
   });
 
@@ -692,7 +692,7 @@ describe('repairing an MCP server that dropped out of the session', () => {
       'Error POSTing to endpoint: {"error":{"type":"not_found_error","message":"Server not found"}}';
     const { driver, sent } = repairing();
 
-    driver.onMessage(notConnected('claude.ai Manifest OS Google Workspace'));
+    driver.onMessage(notConnected('claude.ai Example Google Workspace'));
     const events = driver.onMessage(
       reconnectReply(sent()[0]?.request_id ?? '', error),
     );
@@ -703,7 +703,7 @@ describe('repairing an MCP server that dropped out of the session', () => {
         severity: 'warning',
         message: CLAUDE_MCP_RECONNECT_FAILED_MESSAGE.replace(
           '%s',
-          'claude.ai Manifest OS Google Workspace',
+          'claude.ai Example Google Workspace',
         ).replace('%r', error),
       },
     ]);

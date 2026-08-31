@@ -76,8 +76,8 @@ export interface ThemeDescriptor {
  * what enforces one entry per theme.
  */
 const THEME_BY_ID: Record<ThemeId, Omit<ThemeDescriptor, 'id'>> = {
-  light: { label: 'Light', appearance: 'light', windowBackground: '#f5f1eb' },
-  dark: { label: 'Dark', appearance: 'dark', windowBackground: '#171615' },
+  light: { label: 'Light', appearance: 'light', windowBackground: '#f3f2ec' },
+  dark: { label: 'Dark', appearance: 'dark', windowBackground: '#141312' },
 };
 
 export const THEMES: readonly ThemeDescriptor[] = THEME_IDS.map((id) => ({

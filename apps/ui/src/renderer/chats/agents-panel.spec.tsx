@@ -256,6 +256,13 @@ describe('AgentsPanel', () => {
 
     // …and the badge is still drawn where it says something the name does not,
     // which is the half a blanket removal would have cost.
+    //
+    // The rule keys on "would this REPEAT the text beside it", NOT on "is this
+    // a workflow" — so both workflow shapes have to hold. `Chats.tsx` builds
+    // the two kinds of card from different places: a 1:1 chat sets BOTH fields
+    // from `activeRun.agentKind`, so they are the same string by construction,
+    // while a node sets `name` from `node.name ?? node.id` and `agent` from
+    // `node.agent`, which are separate fields of the graph.
     const named = render(
       <AgentsPanel
         terminalReasons={TERMINALS}
@@ -263,11 +270,22 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
-    const reviewer = [...named.querySelectorAll(CARD_SELECTOR)].find((row) =>
+    const cards = [...named.querySelectorAll(CARD_SELECTOR)];
+    const reviewer = cards.find((row) =>
       row.textContent?.includes('Reviewer'),
     )!;
     expect(reviewer.querySelector('[data-slot="badge"]')?.textContent).toBe(
       'cursor-agent',
+    );
+    // A named node on the SAME CLI as the doubled case above — the one worth
+    // spelling out, because it is where "hide the badge on claude" and "hide
+    // the badge when it repeats the name" give opposite answers. `Orchestrator`
+    // runs claude and keeps its badge.
+    const orchestrator = cards.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    expect(orchestrator.querySelector('[data-slot="badge"]')?.textContent).toBe(
+      'claude',
     );
   });
 

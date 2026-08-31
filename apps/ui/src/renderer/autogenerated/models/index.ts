@@ -2548,6 +2548,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     archivedAt: string | null;
+    /**
+     * Each agent's own task list as it stands now, folded from the whole transcript
+     * @type {Array<RunTaskGroup>}
+     * @memberof RunDto
+     */
+    taskList: Array<RunTaskGroup>;
 }
 
 
@@ -2682,6 +2688,68 @@ export const RunStatus = {
     Cancelled: 'cancelled'
 } as const;
 export type RunStatus = typeof RunStatus[keyof typeof RunStatus];
+
+/**
+ * 
+ * @export
+ * @interface RunTaskGroup
+ */
+export interface RunTaskGroup {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTaskGroup
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {Array<RunTaskRow>}
+     * @memberof RunTaskGroup
+     */
+    tasks: Array<RunTaskRow>;
+}
+/**
+ * 
+ * @export
+ * @interface RunTaskRow
+ */
+export interface RunTaskRow {
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTaskRow
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTaskRow
+     */
+    title: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTaskRow
+     */
+    status: RunTaskRowStatusEnum | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunTaskRow
+     */
+    activeForm: string | null;
+}
+
+
+/**
+ * @export
+ */
+export const RunTaskRowStatusEnum = {
+    Pending: 'pending',
+    InProgress: 'in_progress',
+    Completed: 'completed'
+} as const;
+export type RunTaskRowStatusEnum = typeof RunTaskRowStatusEnum[keyof typeof RunTaskRowStatusEnum];
 
 /**
  * 

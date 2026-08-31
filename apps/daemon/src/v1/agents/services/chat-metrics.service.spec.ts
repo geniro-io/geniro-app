@@ -18,6 +18,7 @@ import type { AgentAdapterRegistry } from './agent-adapter.registry';
 import type { AgentEventBus } from './agent-events.bus';
 import type { AgentSessionRegistry } from './agent-session.registry';
 import { ChatMetricsService } from './chat-metrics.service';
+import type { CursorUsageService } from './cursor-usage.service';
 
 /**
  * Every NAMED component of the wire shape populated, not just the top level.
@@ -142,6 +143,10 @@ function build(opts: {
     // The prewarm's own channel. A Subject rather than a stub, so a spec can
     // play a real turn ending and watch what the service does about it.
     { all: () => turns.asObservable() } as unknown as AgentEventBus,
+    // The cursor spend poll. A no-op double: every spec here is about the
+    // BREAKDOWN, and the service only ever fires this without awaiting it, so a
+    // real one would put a network read behind assertions about a readout.
+    { refresh: () => Promise.resolve() } as unknown as CursorUsageService,
   );
   service.onModuleInit();
   return {

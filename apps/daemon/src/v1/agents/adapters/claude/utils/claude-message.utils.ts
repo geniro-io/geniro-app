@@ -217,13 +217,35 @@ function describesNoWork(
  * Anything still unrecognised degrades to `unknown` rather than being dropped —
  * the server is real either way, and a status this mapper could not read is not
  * a reason to hide it from the panel.
+ *
+ * A MAP rather than a set, because the CLI and this app do not spell the
+ * sign-in state alike: init says `needs-auth` and `AgentMcpServerStatus` says
+ * `needs_auth`. It was a set of the four this app already spelled identically,
+ * so that row fell through to `unknown` — and unknown is the one status with no
+ * affordance on it, which is exactly the state a server the user has to sign in
+ * to must not be shown in. REPORTED as an MCP panel of "a lot of unknown ones",
+ * and it is most of the list rather than an edge: measured on the reporter's own
+ * harvest, 27 of 51 rows in one folder, 28 of 53 in another.
+ *
+ * MEASURED rather than read off the binary — the literal is in there, but among
+ * spellcheck and github strings, which says nothing about this field. One real
+ * `claude -p --output-format stream-json --verbose` on 2.1.251, reading the
+ * `system/init` line's own `mcp_servers`:
+ *
+ *   {'pending': 3, 'connected': 8, 'needs-auth': 1}
+ *   {name: 'claude.ai Wispr Flow', status: 'needs-auth'}
+ *
+ * `loading` is deliberately NOT here: it is cursor's own sixth status, and
+ * nothing has observed claude reporting one. This map holds what this CLI was
+ * seen to send.
  */
-const INIT_STATUSES: ReadonlySet<string> = new Set<AgentMcpServerStatus>([
-  'connected',
-  'failed',
-  'pending',
-  'disabled',
-]);
+const INIT_STATUSES: Readonly<Record<string, AgentMcpServerStatus>> = {
+  connected: 'connected',
+  failed: 'failed',
+  pending: 'pending',
+  disabled: 'disabled',
+  'needs-auth': 'needs_auth',
+};
 
 /**
  * What one background unit spent, off a `system/task_notification` line.
@@ -332,9 +354,7 @@ function readInitMcpServers(root: Record<string, unknown>): AgentMcpServer[] {
       target: null,
       transport: null,
       status:
-        status !== null && INIT_STATUSES.has(status)
-          ? (status as AgentMcpServerStatus)
-          : 'unknown',
+        (status === null ? undefined : INIT_STATUSES[status]) ?? 'unknown',
       detail: null,
     });
   }

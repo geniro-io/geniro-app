@@ -4217,11 +4217,28 @@ export function Chats({
     // `CHAT_AGENT_KEY`, and that mapping is this screen's own — the fold has no
     // business knowing it.
     const byAgent = new Map<string, AgentTaskRow[]>();
+    // The DAEMON's fold wins, and that is the whole of the fix: it folded every
+    // announcement the run has ever written, while the fold below can only see
+    // the transcript WINDOW this client loaded. Neither shipped CLI re-states
+    // the list — measured, claude sends one-row patches and no snapshot at all —
+    // so past `HISTORY_PAGE` items the opening announcement falls out and the
+    // local fold reports a total that has shrunk (`3/3` for a list of six).
+    //
+    // The local fold stays as the fallback rather than being deleted: a run row
+    // written before this column existed carries an empty list until its agent
+    // announces again, and the transcript can still answer for it meanwhile.
+    const folded = activeRun?.taskList ?? [];
+    if (folded.length > 0) {
+      for (const group of folded) {
+        byAgent.set(group.nodeId ?? CHAT_AGENT_KEY, group.tasks);
+      }
+      return byAgent;
+    }
     for (const [nodeId, tasks] of taskListsByAgent(items, subagentIdOf)) {
       byAgent.set(nodeId ?? CHAT_AGENT_KEY, tasks);
     }
     return byAgent;
-  }, [items]);
+  }, [items, activeRun?.taskList]);
   /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
@@ -5476,13 +5493,65 @@ export function Chats({
     [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
   /**
+   * "Has the agent stopped" for a thread the user is NOT looking at — the same
+   * reading {@link agentRunStatus} takes for the focused one, and it leaves the
+   * SHELLS out for the same reason that one does.
+   *
+   * REPORTED as "agent finoshed work, so i should gett notification. im not
+   * sure its correctt status in case we have shells", over a thread whose agent
+   * had finished with two commands still running. `agentRunStatus` already
+   * omitted `shellsRunning`, so a focused thread answered this correctly — but
+   * the two consumers here fell back to {@link unfocusedRunStatus}, which is the
+   * BADGE reading and does count shells, so every unfocused thread answered
+   * `held`. Notifications and the unseen mark are about unfocused threads by
+   * definition, which is why the asymmetry was invisible until a command
+   * outlived its turn: a shell that ends releases the hold and the banner
+   * arrives late, while a `pnpm dev` or a tailed log holds it for good and the
+   * banner never arrives at all.
+   *
+   * The badge is deliberately NOT changed with it. A running command IS worth
+   * showing, which is the report that put `shellsRunning` into the badge in the
+   * first place; what was wrong is only that "something this thread started is
+   * still running" was being read as "the agent is still working". The two
+   * statements are compatible, and now each has its own reading.
+   */
+  const unfocusedAgentStoppedStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      displayRunStatus({
+        status: run.status,
+        streaming: false,
+        awaitingAnswer: run.awaiting !== null,
+        // The DELEGATE hold stays: a sub-agent still out means the agent's work
+        // is genuinely unfinished, and announcing it as done is the defect this
+        // whole vocabulary was built to prevent.
+        heldForBackgroundWork: holding.has(run.id),
+      }),
+    [holding],
+  );
+  /**
    * The same per-run reading for the two consumers that ask "has this thread
    * stopped" rather than "what is it doing" — see {@link agentRunStatus}.
    */
   const agentStoppedRunStatus = useCallback(
     (run: ChatRun): RunStatusKind =>
-      run.id === activeRunId ? agentRunStatus : unfocusedRunStatus(run),
-    [activeRunId, agentRunStatus, unfocusedRunStatus],
+      run.id === activeRunId
+        ? agentRunStatus
+        : unfocusedAgentStoppedStatus(run),
+    [activeRunId, agentRunStatus, unfocusedAgentStoppedStatus],
+  );
+
+  /**
+   * Whether this run still has a DETACHED command out — the reading that says
+   * an ending might yet be undone, for {@link useRunNotifications}.
+   *
+   * The same `shellsOut` the badge reads, deliberately: the badge and the
+   * banner are then disagreeing about nothing, they are answering two different
+   * questions off one fact — "something this thread started is running" and
+   * "so this ending may not be one".
+   */
+  const runHasShellsOut = useCallback(
+    (run: ChatRun): boolean => shellsOut.has(run.id),
+    [shellsOut],
   );
 
   const notificationLabel = useCallback(
@@ -5509,6 +5578,10 @@ export function Chats({
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
     quiet: quietSettles,
+    // A thread with a command still out may not be finished at all: the agent
+    // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
+    // The same reading the badge uses for its own shells word — see the hook.
+    deferEnding: runHasShellsOut,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on

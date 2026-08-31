@@ -1,10 +1,17 @@
-import { ChevronLeft, ChevronRight, Minus, Plus, Scan } from 'lucide-react';
+import {
+  ChevronLeft,
+  ChevronRight,
+  Minus,
+  Plus,
+  Scan,
+  Shrink,
+} from 'lucide-react';
 import * as React from 'react';
 import { createPortal } from 'react-dom';
 import {
+  type ReactZoomPanPinchContentRef,
   TransformComponent,
   TransformWrapper,
-  useControls,
   useTransformComponent,
 } from 'react-zoom-pan-pinch';
 
@@ -36,8 +43,9 @@ const isAtFit = (scale: number): boolean => scale <= MIN_SCALE + FIT_EPSILON;
  * actually arrives at is unobservable there, while the DECISION taken from a
  * scale is pure and worth pinning at more than its resting value.
  *
- * `label` is null at fit — the control shows a fit glyph rather than `100%`,
- * because a reading nobody can act on is chrome.
+ * `label` is null at fit, and its reader draws NO control there rather than a
+ * disabled one: a reading nobody can act on is chrome, and the disabled button
+ * it used to render wore a glyph that promised full screen.
  */
 export function zoomControlState(scale: number): {
   atFit: boolean;
@@ -70,14 +78,31 @@ export const ZOOMABLE_TRIGGER_CLASS =
 /**
  * The zoom controls, and the live magnification.
  *
- * Its own component because {@link useControls} only resolves inside
- * {@link TransformWrapper} — the handles are read off the context that wrapper
- * provides, so a caller outside it gets nothing to call.
+ * Its own component because the live magnification is read through
+ * {@link useTransformComponent}, which only resolves inside
+ * {@link TransformWrapper}.
+ *
+ * The ACTIONS come off the wrapper's own ref rather than `useControls()`, and
+ * that is a fix rather than a preference: the hook's handles were destructured
+ * once at mount, when the wrapper had not yet attached its instance, so every
+ * button on this bar called a no-op for the life of the viewer. Driven in the
+ * running app — a wheel gesture (which the library serves through its own native
+ * listener, bypassing the hook) zoomed to 800%, while `Zoom in`, `Zoom out` and
+ * the reset moved nothing at all. Reading `apiRef.current` at CALL time cannot
+ * capture a null instance.
  */
-function ZoomControls(): React.JSX.Element {
-  const { zoomIn, zoomOut, resetTransform } = useControls();
+function ZoomControls({
+  stageRef,
+  api,
+}: {
+  /** The box the fullscreen control hands to the browser — see the button. */
+  stageRef: React.RefObject<HTMLElement | null>;
+  /** The wrapper's own handle — see {@link ImageViewer} for why not `useControls`. */
+  api: ReactZoomPanPinchContentRef;
+}): React.JSX.Element {
   const scale = useTransformComponent(({ state }) => state.scale);
   const { atFit, atMax, label } = zoomControlState(scale);
+  const fullscreen = useFullscreen(stageRef);
 
   return (
     <div
@@ -96,22 +121,31 @@ function ZoomControls(): React.JSX.Element {
         className="size-7 text-muted-foreground"
         aria-label="Zoom out"
         disabled={atFit}
-        onClick={() => zoomOut()}>
+        onClick={() => api.zoomOut()}>
         <Minus className="size-4" />
       </Button>
       {/* The reading IS the reset control: a percentage the user can read and a
           button they can press are the same affordance here, and a separate
-          reset icon would need a label explaining which of the two it undoes. */}
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        className="h-7 min-w-14 px-1.5 text-xs tabular-nums text-muted-foreground"
-        aria-label="Reset zoom to fit"
-        disabled={atFit}
-        onClick={() => resetTransform()}>
-        {label ?? <Scan className="size-4" />}
-      </Button>
+          reset icon would need a label explaining which of the two it undoes.
+
+          Rendered ONLY while there is something to reset. It used to stand at
+          fit as a DISABLED button wearing a `Scan` glyph — a square with corner
+          brackets, which reads as "full screen" everywhere else — so the one
+          control on the bar that looked like it opened the picture up was the
+          one that could not be pressed. REPORTED as exactly that ("Бончок на
+          полный экран тоже снизу не работает"). The glyph now belongs to the
+          control that really does it, below. */}
+      {atFit ? null : (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 min-w-14 px-1.5 text-xs tabular-nums text-muted-foreground"
+          aria-label="Reset zoom to fit"
+          onClick={() => api.resetTransform()}>
+          {label}
+        </Button>
+      )}
       <Button
         type="button"
         variant="ghost"
@@ -119,39 +153,196 @@ function ZoomControls(): React.JSX.Element {
         className="size-7 text-muted-foreground"
         aria-label="Zoom in"
         disabled={atMax}
-        onClick={() => zoomIn()}>
+        onClick={() => api.zoomIn()}>
         <Plus className="size-4" />
+      </Button>
+      {/* FULL SCREEN, and a real one: the browser's own, over the stage that
+          holds the picture and this bar — so the controls come with it rather
+          than being left behind on a page nobody can see. Never disabled, which
+          is the point of it existing separately from the reset above. */}
+      <span aria-hidden="true" className="mx-0.5 h-4 w-px bg-border" />
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="size-7 text-muted-foreground"
+        aria-label={fullscreen.active ? 'Leave full screen' : 'Full screen'}
+        aria-pressed={fullscreen.active}
+        onClick={fullscreen.toggle}>
+        {fullscreen.active ? (
+          <Shrink className="size-4" />
+        ) : (
+          <Scan className="size-4" />
+        )}
       </Button>
     </div>
   );
 }
 
-/** The picture itself, plus the grab cursor that only means something zoomed in. */
+/**
+ * How far the pointer may travel between press and release and still count as a
+ * CLICK rather than the end of a pan.
+ *
+ * Without it every drag would zoom on release, which is the one way a
+ * click-to-zoom surface can make panning unusable — and the two gestures share a
+ * button, so nothing else can tell them apart.
+ */
+const CLICK_SLOP_PX = 5;
+
+/** What one click multiplies the scale by — the wheel's step is far finer. */
+const CLICK_ZOOM_STEP = 2;
+
+/**
+ * The picture itself: click to zoom AT THE POINTER, drag to pan.
+ *
+ * REPORTED as "сейчас у нас снизу есть плюсик и минусик, но я хочу, чтобы это
+ * было с курсором… когда ты нажимаешь, он приближает". The buttons stay — they
+ * are the keyboard's only way in, and `+`/`−` is what a reader looks for — but
+ * they stop being the only way, and the cursor now says so before the click.
+ *
+ * Zooming AT THE POINTER rather than at the centre is the whole point: the
+ * library's own `zoomIn` grows the picture about its middle, so clicking a
+ * detail in a corner pushes that detail further away. The arithmetic keeps the
+ * clicked content point exactly where it was — convert it to content space at
+ * the current scale, then place it back under the same pixel at the next one.
+ *
+ * A click at MAX resets to fit, so one gesture cycles rather than dead-ending at
+ * 8× with no way back that does not involve the bar.
+ */
 function ZoomableSurface({
   src,
   alt,
+  api,
 }: {
   src: string;
   alt?: string;
+  /** The wrapper's own handle — see {@link ImageViewer}. */
+  api: ReactZoomPanPinchContentRef;
 }): React.JSX.Element {
-  const zoomed = useTransformComponent(({ state }) => !isAtFit(state.scale));
+  const scale = useTransformComponent(({ state }) => state.scale);
+  const positionX = useTransformComponent(({ state }) => state.positionX);
+  const positionY = useTransformComponent(({ state }) => state.positionY);
+  const zoomed = !isAtFit(scale);
+  const atMax = scale >= MAX_SCALE;
+  const pressRef = React.useRef<{ x: number; y: number } | null>(null);
+
+  const onClick = (event: React.MouseEvent): void => {
+    const press = pressRef.current;
+    pressRef.current = null;
+    if (
+      press !== null &&
+      Math.hypot(event.clientX - press.x, event.clientY - press.y) >
+        CLICK_SLOP_PX
+    ) {
+      return;
+    }
+    if (atMax) {
+      api.resetTransform();
+      return;
+    }
+    // The library's OWN viewport element, never this component's wrapper: the
+    // wrapper is `display: contents` and therefore has no box at all, and it is
+    // that way on purpose — see the element below.
+    const box = api.instance.wrapperComponent?.getBoundingClientRect();
+    if (box === undefined) {
+      return;
+    }
+    const next = Math.min(MAX_SCALE, scale * CLICK_ZOOM_STEP);
+    // Where the click landed inside the viewport box, and the CONTENT point
+    // under it. `positionX/Y` is the content's offset within that box, so
+    // dividing by the scale converts a screen pixel into a point on the picture.
+    const pointerX = event.clientX - box.left;
+    const pointerY = event.clientY - box.top;
+    const contentX = (pointerX - positionX) / scale;
+    const contentY = (pointerY - positionY) / scale;
+    api.setTransform(
+      pointerX - contentX * next,
+      pointerY - contentY * next,
+      next,
+    );
+  };
 
   return (
-    <TransformComponent
-      wrapperClass={cn(
-        '!w-full !max-w-full overflow-hidden rounded-md',
-        zoomed && 'cursor-grab active:cursor-grabbing',
-      )}
-      contentClass="!w-full">
-      <img
-        data-slot="image-viewer-image"
-        src={src}
-        alt={alt ?? ''}
-        draggable={false}
-        className="mx-auto max-h-[min(78vh,100%)] w-auto max-w-full rounded-md object-contain"
-      />
-    </TransformComponent>
+    // `display: contents`, which is load-bearing rather than tidy. An ordinary
+    // wrapper here BREAKS the library: it re-resolves the percentage widths its
+    // content is sized by, and the picture then overflows its own viewport —
+    // measured in the running app at a 1519px image inside a 921px wrapper,
+    // after which the bounds math is nonsense and every control that clamps
+    // against it silently does nothing. `contents` puts the handlers in the tree
+    // while leaving the layout exactly as the library laid it out.
+    <div
+      data-slot="image-viewer-surface"
+      className="contents"
+      onPointerDown={(event) => {
+        pressRef.current = { x: event.clientX, y: event.clientY };
+      }}
+      onClick={onClick}>
+      <TransformComponent
+        wrapperClass={cn(
+          '!w-full !max-w-full overflow-hidden rounded-md',
+          // The cursors live HERE, on the element that still has a box.
+          // The MAGNIFIER is the half of this the report actually named;
+          // `zoom-out` at the ceiling because that is what the click does
+          // there, and a `zoom-in` cursor over a picture that cannot grow is a
+          // promise the gesture breaks.
+          atMax ? 'cursor-zoom-out' : 'cursor-zoom-in',
+          // Panning is still the other gesture, and the grabbing cursor says so
+          // DURING the drag — `cursor-grab` at rest would overwrite the
+          // magnifier and take the click's own affordance away.
+          zoomed && 'active:cursor-grabbing',
+        )}
+        contentClass="!w-full">
+        <img
+          data-slot="image-viewer-image"
+          src={src}
+          alt={alt ?? ''}
+          draggable={false}
+          className="mx-auto max-h-[min(78vh,100%)] w-auto max-w-full rounded-md object-contain"
+        />
+      </TransformComponent>
+    </div>
   );
+}
+
+/**
+ * Whether `element` is the one the browser is showing full-screen, and the
+ * toggle for it.
+ *
+ * Its own hook because the browser owns this state: nothing here can set it, and
+ * every way OUT of full screen — Escape, the system control, another element
+ * taking over — happens without this component being told. Reading the event is
+ * the only way the button's own label can stay true.
+ */
+function useFullscreen(ref: React.RefObject<HTMLElement | null>): {
+  active: boolean;
+  toggle: () => void;
+} {
+  const [active, setActive] = React.useState(false);
+  React.useEffect(() => {
+    const sync = (): void =>
+      setActive(
+        ref.current !== null && document.fullscreenElement === ref.current,
+      );
+    sync();
+    document.addEventListener('fullscreenchange', sync);
+    return () => document.removeEventListener('fullscreenchange', sync);
+  }, [ref]);
+  const toggle = React.useCallback(() => {
+    const element = ref.current;
+    if (element === null) {
+      return;
+    }
+    // Both directions can reject — a browser that refuses the request, an exit
+    // raced by something else taking the screen. Neither is worth an error on a
+    // picture viewer, and the `fullscreenchange` listener above is what keeps
+    // the label honest either way.
+    if (document.fullscreenElement === element) {
+      void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    void element.requestFullscreen().catch(() => undefined);
+  }, [ref]);
+  return { active, toggle };
 }
 
 /**
@@ -207,6 +398,8 @@ export function ImageViewer({
   position?: { index: number; count: number };
 }): React.JSX.Element | null {
   const browsing = onPrev !== undefined || onNext !== undefined;
+  /** The box the full-screen control hands to the browser — see `ZoomControls`. */
+  const stageRef = React.useRef<HTMLDivElement>(null);
 
   React.useEffect(() => {
     if (!open || !browsing) {
@@ -249,7 +442,7 @@ export function ImageViewer({
       // size is the picture's. A 100×50 image in a 64rem card is a postage
       // stamp adrift in an empty window.
       className="w-fit max-w-[min(92vw,64rem)]">
-      <div className="relative">
+      <div ref={stageRef} className="relative bg-card">
         <TransformWrapper
           // KEYED ON THE PICTURE. The wrapper holds the scale and the offset in
           // its own state, so without this a set stepped through at 4× would
@@ -266,8 +459,20 @@ export function ImageViewer({
           limitToBounds
           wheel={{ step: 0.12 }}
           doubleClick={{ mode: 'toggle', step: 1.5 }}>
-          <ZoomControls />
-          <ZoomableSurface src={src} alt={alt} />
+          {/* The RENDER-PROP child, which is the only route to the library's
+              API that actually binds here. `useControls()` hands back handles
+              captured before the wrapper attaches its instance, and both `ref`
+              and `onInit` left it null — verified in the running app, where the
+              wheel zoomed to 800% while every button and the click did nothing,
+              and the Full screen control in the same component worked, so React
+              itself was fine. The API arrives as an argument here, so there is
+              nothing to be null. */}
+          {(api) => (
+            <>
+              <ZoomControls stageRef={stageRef} api={api} />
+              <ZoomableSurface src={src} alt={alt} api={api} />
+            </>
+          )}
         </TransformWrapper>
         {browsing ? (
           <>

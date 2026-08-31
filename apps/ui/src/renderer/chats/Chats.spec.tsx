@@ -219,6 +219,7 @@ const run1: ChatRun = {
   archivedAt: null,
   lastMessage: null,
   pullRequests: [],
+  taskList: [],
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -1989,6 +1990,110 @@ describe('Chats — the system notifications a thread earns', () => {
     });
   });
 
+  it('reports a finished thread whose detached COMMAND is still running', async () => {
+    // REPORTED as "agent finoshed work, so i should gett notification", over a
+    // thread that had finished with commands still out. The badge reading counts
+    // shells and answers `held`, which is never settled — so a background thread
+    // whose command outlives its turn (`pnpm dev`, a tailed log) earned no
+    // banner at all. The "has the agent stopped" reading leaves shells out.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        emitRunStatus({
+          runId: 'r2',
+          status: 'completed',
+          activity: null,
+          shellsOpen: 2,
+        });
+      });
+
+      // NOT yet: an agent routinely ends its turn waiting on a command and
+      // resumes the moment it reports, so the claim is held while it might
+      // still be undone — the reported "our application thinks the agent
+      // finished, although a second later it continues".
+      expect(notify).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      // And it DOES arrive once the agent has stayed quiet — which is the
+      // other report, about a `pnpm dev` that never reports and so would
+      // otherwise suppress the banner for good.
+      expect(notify).toHaveBeenCalledWith({
+        kind: 'turn-end',
+        runId: 'r2',
+        title: 'Second chat',
+        body: 'The turn finished.',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('DROPS the held ending when the agent starts working again', async () => {
+    // The retraction, which is what makes holding the claim worth anything: a
+    // banner already posted cannot be taken back, so the only way to be right
+    // is not to have posted it. Claude Code's own UI gets this for free — its
+    // "done" is the prompt returning, and more output simply follows.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        emitRunStatus({
+          runId: 'r2',
+          status: 'completed',
+          activity: null,
+          shellsOpen: 2,
+        });
+      });
+      await act(async () => {
+        // The command reported and the agent carried straight on.
+        emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays SILENT while a delegate is still out, which is real work', async () => {
+    // The other half of the same rule, and what stops the fix above from
+    // becoming "announce every hold": a sub-agent still working means the
+    // agent's job is genuinely unfinished, so there is no ending to report.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        holdingFor: 1,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('reports a background thread that parked on a QUESTION', async () => {
     twoChats();
     const { client, emitRunStatus } = makeClient();
@@ -3134,6 +3239,7 @@ describe('Chats workflow runs', () => {
     archivedAt: null,
     lastMessage: null,
     pullRequests: [],
+    taskList: [],
   };
 
   function wfItem(
@@ -3692,6 +3798,7 @@ describe('Chats — handing a conversation to the user', () => {
       archivedAt: null,
       lastMessage: null,
       pullRequests: [],
+      taskList: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     workflowApi.getWorkflow.mockResolvedValue({

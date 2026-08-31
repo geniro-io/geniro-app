@@ -21,6 +21,32 @@ export function hostMcpServerName(runId: string): string {
 }
 
 /**
+ * Whether a server name is one {@link hostMcpServerName} minted — geniro's OWN
+ * endpoint, handed to the CLI for this turn.
+ *
+ * It exists because the CLI reports that endpoint back as an ordinary loaded
+ * server: `system/init`'s `mcp_servers` names every server the session holds,
+ * geniro's included, and the harvest that panel is drawn from is exactly that
+ * list. So the MCP panel listed a row called `geniro-a87569e3` among the user's
+ * own servers — REPORTED as "some wired geniro mcp", and confirmed in their
+ * harvest file, which held one per folder (`geniro-e78a9cb6`, `geniro-1011f42f`,
+ * `geniro-0350ba40`, `geniro-1ed44b97`). It is not the user's to see and not
+ * theirs to switch off: the name is a RUN id, so it is a different row every
+ * conversation, and turning it off would take the app's own question and render
+ * tools down.
+ *
+ * Matched on the SHAPE rather than on the `geniro-` prefix alone — eight
+ * lowercase hex characters, which is what a UUID's first segment is and what a
+ * user naming their own server would have to hit exactly. The residual risk is
+ * one hidden row for a user who names a server `geniro-` plus eight hex digits;
+ * the alternative, threading the run id down to every harvest writer, puts the
+ * same fact in two places and lets a third writer forget it.
+ */
+export function isHostMcpServerName(name: string): boolean {
+  return /^geniro-[0-9a-f]{8}$/.test(name);
+}
+
+/**
  * Whether a permission request names geniro's OWN question tool on geniro's
  * own server — the one call the daemon approves for the user.
  *

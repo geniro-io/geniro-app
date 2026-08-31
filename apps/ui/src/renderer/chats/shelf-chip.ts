@@ -40,6 +40,17 @@
  * It matters more INSIDE the group than beside it: two free-standing cards of
  * different heights are merely misaligned, while two segments of one card leave
  * a visible step in that card's own outline.
+ *
+ * It is worn by the two things the row LAYS OUT — a standalone chip, and the
+ * GROUP — and never by a segment, which fills the group with `h-full`. That
+ * split is the fix for the reported "Chips shoud have same height", and the
+ * cause was arithmetic rather than a missing rule: every box here is
+ * `border-box`, so a chip carrying this height AND the card's 1px border is 26px
+ * overall, while the group had no height of its own and took its segments' 26px
+ * PLUS its own two borders. Measured in the running app at **28px for the group
+ * against 26px for the chip beside it**. Giving the group the height and the
+ * segment `h-full` makes the outer boxes agree by construction, which is the
+ * only way two different structures can keep agreeing.
  */
 const SHELF_ITEM_HEIGHT = 'h-[26px]';
 
@@ -69,10 +80,10 @@ const SHELF_CARD = 'rounded-lg border border-border bg-card shadow-panel-sm';
  * the HEIGHT is held fixed: the first pass here changed the height and the
  * leading together and read the height's own 1px shift as the leading's.
  */
-const SHELF_BODY = `flex ${SHELF_ITEM_HEIGHT} min-w-0 items-center gap-1.5 text-xs transition-colors hover:bg-sidebar-accent`;
+const SHELF_BODY = `flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:bg-sidebar-accent`;
 
 /** A chip standing on its own — the default, and what most of the row is. */
-export const SHELF_CHIP_CLASS = `${SHELF_BODY} px-2 ${SHELF_CARD}`;
+export const SHELF_CHIP_CLASS = `${SHELF_BODY} ${SHELF_ITEM_HEIGHT} px-2 ${SHELF_CARD}`;
 
 /**
  * What a `HoverPopover` chip puts on its WRAPPER, and what it puts on the
@@ -132,7 +143,7 @@ export const SHELF_CHIP_TRIGGER_CLASS = `${SHELF_CHIP_CLASS} shrink-0`;
  * honest degradation — a cut-off number reads as "there is more here", where
  * overlapping glyphs read as a broken app.
  */
-export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} overflow-hidden rounded-none px-2.5 focus-visible:bg-sidebar-accent`;
+export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} h-full overflow-hidden rounded-none px-2.5 focus-visible:bg-sidebar-accent`;
 
 /**
  * A JOINED run of segments, wearing one card — used for the pull requests, and
@@ -150,4 +161,4 @@ export const SHELF_SEGMENT_CLASS = `${SHELF_BODY} overflow-hidden rounded-none p
  * holds. It does NOT clip the popovers: those are `anchor="viewport"`, so they
  * are `position: fixed`, and nothing here creates a containing block for them.
  */
-export const SHELF_GROUP_CLASS = `flex min-w-0 items-center divide-x divide-border overflow-hidden ${SHELF_CARD}`;
+export const SHELF_GROUP_CLASS = `flex ${SHELF_ITEM_HEIGHT} min-w-0 items-center divide-x divide-border overflow-hidden ${SHELF_CARD}`;

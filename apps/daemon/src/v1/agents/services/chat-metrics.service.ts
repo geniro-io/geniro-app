@@ -2,7 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
-import type { AgentKind } from '../../runs/runs.types';
+import { AgentKind } from '../../runs/runs.types';
 import type { UsageReadChannel } from '../adapters/adapter.types';
 import type {
   ChatMetricsWire,
@@ -15,10 +15,12 @@ import { SINGLE_AGENT_NODE, StoredMetricsReadingSchema } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
+import { applyCursorSpend } from '../utils/cursor-usage';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
 import { AgentSessionRegistry } from './agent-session.registry';
+import { CursorUsageService } from './cursor-usage.service';
 
 /**
  * What a chat's context window holds, and what the thread has cost.
@@ -58,6 +60,7 @@ export class ChatMetricsService implements OnModuleInit {
     private readonly sessions: AgentSessionRegistry,
     private readonly adapters: AgentAdapterRegistry,
     private readonly bus: AgentEventBus,
+    private readonly cursorUsage: CursorUsageService,
   ) {}
 
   /**
@@ -251,7 +254,18 @@ export class ChatMetricsService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    return sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em));
+    // The cadence hook, and the ONLY one: looking at a thread's figures is what
+    // eventually refreshes them, floored at `MIN_POLL_INTERVAL_MS` inside the
+    // service so a burst of opens costs one request at most. Not awaited — a
+    // header must not wait on a network read, and the next look serves the
+    // answer this one fetched.
+    if (run.agentKind === AgentKind.CursorAgent) {
+      void this.cursorUsage.refresh();
+    }
+    return applyCursorSpend(
+      sumUsagePayloads(await this.itemDao.turnCompletePayloads(runId, em)),
+      run,
+    );
   }
 
   /**

@@ -182,6 +182,26 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(previews.size).toBe(2);
     });
 
+    it('skips a DELEGATE’s message — the preview is the parent thread’s', async () => {
+      // REPORTED as "last message in thread card is incorrect - maybe it's
+      // from subagent?". A delegate's messages are ordinary `message` rows on
+      // the run, so the newest message of a fanned-out turn is routinely one
+      // of theirs — and the sidebar previewed a conversation its row cannot
+      // even open. The delegate's row is the HIGHEST seq here, so a dropped
+      // filter surfaces as its text winning rather than as a lucky pass.
+      await insert('run-a', 0, 'message', JSON.stringify({ text: 'parent' }));
+      await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({ text: 'delegate', parentToolUseId: 'toolu_01' }),
+      );
+
+      const previews = await dao.latestMessageTextPerRun(['run-a']);
+
+      expect(previews.get('run-a')).toBe('parent');
+    });
+
     it('reduces over MESSAGE items only — trailing non-message items do not hide the preview', async () => {
       await insert('run-a', 0, 'message', JSON.stringify({ text: 'hello' }));
       // Non-message payloads carry no `text`, so a dropped kind filter would

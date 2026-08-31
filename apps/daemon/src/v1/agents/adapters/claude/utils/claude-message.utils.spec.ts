@@ -143,16 +143,55 @@ describe('mapClaudeMessage', () => {
     });
   });
 
+  it('translates the CLI’s needs-auth into the app’s own needs_auth', () => {
+    // The two spell it differently — init says `needs-auth`, the app's
+    // `AgentMcpServerStatus` says `needs_auth` — and the reader compared the
+    // raw string against the four statuses that happen to match, so every
+    // server the user has to SIGN IN to was harvested as `unknown`. That is the
+    // one status carrying no affordance, which makes it the worst possible
+    // answer for exactly this state, and it is most of a real list rather than
+    // an edge: the reporter's own harvest held 27 such rows of 51 in one
+    // folder and 28 of 53 in another.
+    //
+    // MEASURED on 2.1.251 rather than read off the binary (the literal is in
+    // there, sitting among spellcheck and github strings, which says nothing
+    // about this field): one `claude -p --output-format stream-json --verbose`
+    // answered `{'pending': 3, 'connected': 8, 'needs-auth': 1}`, the odd row
+    // being `{name: 'claude.ai Wispr Flow', status: 'needs-auth'}`.
+    const [event] = mapClaudeMessage(
+      {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [{ name: 'claude.ai Wispr Flow', status: 'needs-auth' }],
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(event).toEqual({
+      type: 'mcp_servers',
+      servers: [
+        expect.objectContaining({
+          name: 'claude.ai Wispr Flow',
+          status: 'needs_auth',
+        }),
+      ],
+    });
+  });
+
   it('keeps a server whose status it cannot read, calling it unknown', () => {
     // The server is real either way. Dropping it would shrink the listing on a
     // CLI wording change; calling it `failed` would invent a problem. A row
     // with no usable name is the one thing genuinely not listable.
+    //
+    // The unreadable example used to be `needs-auth`, which the test above now
+    // shows was a status this CLI really sends — so this row is a status no CLI
+    // has been seen to send, which is what the case is actually about.
     const [event] = mapClaudeMessage(
       {
         type: 'system',
         subtype: 'init',
         mcp_servers: [
-          { name: 'reworded', status: 'needs-auth' },
+          { name: 'reworded', status: 'reticulating' },
           { name: 'no-status' },
           { status: 'connected' },
           'not-an-object',

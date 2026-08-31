@@ -163,6 +163,62 @@ describe('McpHarvestStore', () => {
     expect(store.get('claude', '/bad-row', null)).toBeNull();
   });
 
+  it('never lists geniro’s OWN endpoint among the user’s servers', () => {
+    // The CLI reports it like any other: `system/init` names every server the
+    // session loaded, and geniro's per-turn `--mcp-config` one is in that list
+    // — so the MCP panel showed a row called `geniro-a87569e3` beside the
+    // user's own. REPORTED as "some wired geniro mcp". It is not theirs to see
+    // and not theirs to switch off: the name carries a RUN id, so it is a
+    // different row every conversation, and turning it off would take the app's
+    // own question and render tools down with it.
+    const store = new McpHarvestStore({ file: cacheFile() });
+
+    store.record('claude', '/proj', null, [
+      server('codegraph'),
+      server('geniro-a87569e3'),
+    ]);
+
+    expect(store.get('claude', '/proj', null)).toEqual([server('codegraph')]);
+  });
+
+  it('drops it from a file already holding one, not just from new recordings', () => {
+    // Both halves, and the read side is the one that makes the fix visible: an
+    // entry is REPLACED per recording and never migrated, so filtering only on
+    // the way in leaves every folder showing the row until it next runs a turn
+    // — and the reporter's own file held four, one per folder, some of them for
+    // projects they were not working in that week.
+    const file = cacheFile();
+    writeFileSync(
+      file,
+      JSON.stringify({
+        [harvestKey('claude', '/proj', '')]: {
+          entries: [server('codegraph'), server('geniro-1011f42f')],
+          harvestedAt: 1,
+        },
+      }),
+      'utf8',
+    );
+
+    expect(
+      new McpHarvestStore({ file, now: () => 1 }).get('claude', '/proj', null),
+    ).toEqual([server('codegraph')]);
+  });
+
+  it('leaves a user’s own geniro-prefixed server alone', () => {
+    // The match is the minted SHAPE — `geniro-` plus eight lowercase hex — not
+    // the prefix, so a server the user happens to have called `geniro-mcp` is
+    // theirs and stays listed. Bounds the rule from ABOVE: widening it to the
+    // prefix passes every assertion in the two tests before this one.
+    const store = new McpHarvestStore({ file: cacheFile() });
+
+    store.record('claude', '/proj', null, [
+      server('geniro-mcp'),
+      server('geniro-a87569e3'),
+    ]);
+
+    expect(store.get('claude', '/proj', null)).toEqual([server('geniro-mcp')]);
+  });
+
   it('starts empty on a malformed cache file and can record over it', () => {
     const file = cacheFile();
     writeFileSync(file, 'not json{', 'utf8');

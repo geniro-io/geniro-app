@@ -51,4 +51,22 @@ describe('InitialsAvatar', () => {
       container.querySelector('[data-slot="avatar"]')?.className,
     ).toContain('bg-avatar-user');
   });
+
+  it('draws the USER as a glyph, never as a letter', () => {
+    // Initials tell one AGENT from another; the user is the only one of
+    // themselves in a transcript, so `U` was a letter carrying no information.
+    act(() => root.render(<InitialsAvatar name="User" solid />));
+    const avatar = container.querySelector('[data-slot="avatar"]')!;
+    expect(avatar.querySelector('svg')).not.toBeNull();
+    expect(avatar.textContent).toBe('');
+  });
+
+  it('still draws an AGENT as its initials', () => {
+    // The other half — the glyph is gated on `solid` and must not leak onto
+    // the avatars whose whole job is telling several agents apart.
+    act(() => root.render(<InitialsAvatar name="Flaky (cursor)" />));
+    const avatar = container.querySelector('[data-slot="avatar"]')!;
+    expect(avatar.textContent).toBe('FC');
+    expect(avatar.querySelector('svg')).toBeNull();
+  });
 });

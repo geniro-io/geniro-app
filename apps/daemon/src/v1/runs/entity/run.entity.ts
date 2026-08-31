@@ -291,4 +291,56 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'datetime', nullable: true })
   archivedAt: Date | null = null;
+
+  /**
+   * Each agent's own task list as it stands now, as a JSON array of
+   * `{nodeId, tasks}` — see `agents/utils/task-list-fold.ts`.
+   *
+   * On the RUN for the reason {@link contextTokens} is on it: the transcript
+   * carries the list only as the announcements that MOVED it, and neither
+   * shipped CLI re-states the whole thing. Measured 2026-08-31 on real turns —
+   * claude wrote fifteen patches naming one task each and no snapshot at all,
+   * cursor wrote one snapshot then patches naming one or two rows — so the
+   * complete list exists only in the earliest announcements. A client folds the
+   * window it loaded (`HISTORY_PAGE` items), and past that the opening
+   * announcement has fallen out: folding that cursor run's tail alone yields
+   * `3/3` where the truth is `2/6`, a total that SHRANK rather than an obviously
+   * missing one. Folding once here is what makes the answer independent of how
+   * much transcript any given window happens to hold.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively, no migration — the
+   * rule {@link pullRequests} and {@link pendingContext} follow.
+   */
+  @Property({ type: 'text', nullable: true })
+  taskList: string | null = null;
+
+  /**
+   * What this cursor conversation has cost, in CENTS, as Cursor's own ledger
+   * reports it — null for every run nothing has priced, which is every claude
+   * run and every cursor run before its first usage poll.
+   *
+   * On the run because it is the only place the answer can live: cursor-agent
+   * reports no cost on the wire and records none on disk (measured — see
+   * `agents/utils/cursor-usage.ts`), so the figure is fetched for the ACCOUNT in
+   * one batched poll and attributed here by conversation id. Cents rather than
+   * dollars because that is the unit the source reports, and converting at the
+   * edge keeps the stored value exactly what was read.
+   *
+   * INTEGER-free: `float` because a charge is fractional cents on this ledger
+   * (a real event read `11.058271999999999`), and rounding on the way in would
+   * make a thread's total drift from the bill it is checked against.
+   */
+  @Property({ type: 'float', nullable: true })
+  cursorCostCents: number | null = null;
+
+  /**
+   * How many billable events {@link cursorCostCents} was summed from.
+   *
+   * Kept beside the money for the reason `costedTurns` exists next to the
+   * transcript's own total: a price with no count cannot say what it covers, and
+   * a thread whose events have not been fetched yet has to stay
+   * distinguishable from one that genuinely cost nothing.
+   */
+  @Property({ type: 'integer', nullable: true })
+  cursorCostEvents: number | null = null;
 }

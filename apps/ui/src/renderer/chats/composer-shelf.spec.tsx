@@ -192,6 +192,15 @@ describe('RunningSubagentChips', () => {
     // and never come down.
     expect(chip.textContent).toContain('Sub-agents');
     expect(chip.textContent).toContain('1');
+    // A SPINNER on the trigger, asked for by name. Honest because the chip is
+    // not drawn at all below `running > 0` — so whenever it is on screen, a
+    // delegate is working. Asserted on the TRIGGER rather than the chip's
+    // subtree, since the panel's own rows spin for their own reasons.
+    expect(
+      chip
+        .querySelector('[data-menu-trigger], button')
+        ?.querySelector('svg.animate-spin'),
+    ).not.toBeNull();
     // Closed, the delegates are not in the DOM at all.
     expect(el.textContent).not.toContain('review the diff');
 

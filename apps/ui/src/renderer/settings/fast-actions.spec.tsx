@@ -142,6 +142,30 @@ describe('FastActionsPane — list', () => {
     render({ actions: [] });
     expect(container.textContent).toContain('No fast actions yet');
   });
+
+  it('says it ONCE — the toolbar counter is silent on an empty set', () => {
+    // The toolbar states how many actions there are against the ceiling the
+    // editor refuses a save at. Said on an EMPTY list it duplicated the empty
+    // state a few pixels above it, which is what the first screenshot of this
+    // pane showed. Counting is the assertion: `toContain` passes either way,
+    // which is exactly how the duplicate shipped.
+    //
+    // A FIXED substring, and that is not a detail. The first version of this
+    // matched `/No .*actions yet/g`, whose greedy `.*` swallowed BOTH messages
+    // as a single match — so it reported one occurrence with the duplicate
+    // restored and certified a bug that was on screen. Verified the other way
+    // round this time: with the counter's old text put back, this fails at 2.
+    render({ actions: [] });
+    expect(container.textContent?.match(/actions yet/g)).toHaveLength(1);
+  });
+
+  it('counts against the ceiling once there is something to count', () => {
+    // The other half, so the fix above cannot be "delete the counter": the
+    // ceiling is real, and a user filling the list up should meet it here
+    // rather than in a refusal after writing an action.
+    render({ actions: [action({ id: 'a' }), action({ id: 'b' })] });
+    expect(container.textContent).toContain(`2 of ${MAX_FAST_ACTIONS}`);
+  });
 });
 
 describe('FastActionsPane — editor', () => {

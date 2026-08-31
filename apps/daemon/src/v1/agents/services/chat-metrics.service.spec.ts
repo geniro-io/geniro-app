@@ -427,8 +427,8 @@ describe('ChatMetricsService', () => {
 
     it('asks again when the chat has CHANGED ACCOUNT since the reading', async () => {
       // REPORTED as a panel reading `TEAM · Current week 100%` on a chat whose
-      // profile chip said `.claude-manifest-lab-personal`. Both profiles were
-      // on disk — `.claude-manifest-lab` is `claude_team`, `-personal` is
+      // profile chip said `.claude-work-personal`. Both profiles were
+      // on disk — `.claude-work` is `claude_team`, `-personal` is
       // `claude_max` — and the transcript carried the app's own row saying the
       // chat had been switched to the personal one, which brings the
       // conversation across. So `atSeq` was untouched and every account-level
@@ -441,9 +441,9 @@ describe('ChatMetricsService', () => {
         liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
         lastMetricsReading: storedWithPlan(
           new Date().toISOString(),
-          '/Users/x/ManifestLab/.claude-manifest-lab',
+          '/Users/x/workspace/.claude-work',
         ),
-        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        configDir: '/Users/x/workspace/.claude-work-personal',
         maxSeq: 7,
       });
 
@@ -460,9 +460,9 @@ describe('ChatMetricsService', () => {
         liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
         lastMetricsReading: storedWithPlan(
           new Date().toISOString(),
-          '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+          '/Users/x/workspace/.claude-work-personal',
         ),
-        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        configDir: '/Users/x/workspace/.claude-work-personal',
         maxSeq: 7,
       });
 
@@ -478,7 +478,7 @@ describe('ChatMetricsService', () => {
         breakdownReading: { kind: 'reads', channel: 'live-process' },
         liveSession: { ask: () => Promise.resolve(BREAKDOWN) },
         lastMetricsReading: null,
-        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        configDir: '/Users/x/workspace/.claude-work-personal',
         maxSeq: 4,
       });
 
@@ -488,7 +488,7 @@ describe('ChatMetricsService', () => {
 
       const [, json] = remembered.mock.calls[0] ?? [];
       expect(JSON.parse(String(json))).toMatchObject({
-        configDir: '/Users/x/ManifestLab/.claude-manifest-lab-personal',
+        configDir: '/Users/x/workspace/.claude-work-personal',
       });
     });
 

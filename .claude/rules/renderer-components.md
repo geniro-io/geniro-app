@@ -154,7 +154,7 @@ paths:
      be sent out from under the editor by the drain, so the strip has to
      close the field itself.
 4. **Feature screen**, one directory per screen (`chats/`, `onboarding/`,
-   `settings/`, `graphs/`, `notifications/`, `debug/`, …) — browse
+   `settings/`, `workflows/`, `notifications/`, `debug/`, …) — browse
    `apps/ui/src/renderer/` for the current set. `chats/` also holds its row
    component, `message-bubble.tsx`. App shell (`App.tsx`, `main.tsx`) and
    daemon clients live at the renderer root — the REST clients and every
@@ -173,7 +173,7 @@ paths:
   exists — `WorkflowNode['kind']`, `Object.values(TriggerKind)`,
   `NonNullable<Workflow['layout']>` — so a daemon change surfaces as a type
   error rather than silent drift. Those derivations live in
-  `graphs/node-schema.ts` and `graphs/graph-doc.ts`.
+  `workflows/node-schema.ts` and `workflows/graph-doc.ts`.
 - After changing a daemon route or schema, run `pnpm generate:api` and commit
   the regenerated client with the change.
 
@@ -191,6 +191,49 @@ paths:
   (no `index.ts` re-export files).
 - Keep screens thin: layout + state wiring; visual building blocks come from
   the shared layers.
+
+## Component stories (the catalog)
+
+- **Every component in `components/` and `components/ui/` has a co-located
+  `*.stories.tsx`, in the same commit that adds the component.** This is
+  mechanized: `components/catalog-coverage.spec.ts` fails the suite when a
+  component has no story, when a story outlives its component, or when either
+  is filed outside its layer's namespace (`Primitives/` for `ui/`,
+  `Components/` for the root).
+- **It enforces DISCOVERABILITY, not de-duplication.** No spec can see that two
+  components do the same thing; what it can guarantee is that both are in the
+  catalog, where the next person finds them before writing a third. That is the
+  half of the Reuse rules below a machine can carry.
+- Run the catalog with `pnpm storybook`, or from **View → Component Catalog**
+  in a dev launch of the app. Storybook is dev-only and never packaged.
+- A story that needs open/close state drives it from a stateful wrapper inside
+  `render`, or opens by default — a story whose only state is "closed" shows an
+  empty canvas and documents nothing.
+- **A story that opens a MODAL gives its wrapper a height.** A dialog is
+  `fixed`, so it fills whatever containing block it is given; in the STORY view
+  that is the canvas, but a Docs page sizes each preview by its content, which
+  for a bare trigger is one row — and the dialog is then squeezed into that row
+  and shows its title bar alone. `decorators: [(story) => <div
+  className="h-[420px]">{story()}</div>]`, sized to what the dialog holds.
+  `parameters.docs.story.inline = false` is NOT the fix: the option is still in
+  addon-docs' types, and setting it changed nothing (measured on Storybook
+  10.5, before and after a dev-server restart).
+- **The catalog re-enables document scrolling, and must keep doing so.**
+  `global.css` sets `html, body, #root { overflow: clip }` so the Electron
+  shell can never be scrolled — deliberately `clip` rather than `hidden`, so
+  not even script can move it. `catalog.css` imports that file wholesale, so
+  without its own override every Docs page longer than the viewport is frozen:
+  measured at scrollHeight 5674 against a 537px viewport with `scrollTop = 600`
+  reading back 0. Anything else the app's base layer does to the DOCUMENT is
+  the same trap — the catalog is a scrolling web page, the app is not.
+- `window.geniro` is stubbed by `renderer/__fixtures__/preload-stub.ts`, which
+  answers plausible EMPTY state so a component shows its zero state rather than
+  fabricated data. Populated data comes through PROPS.
+- **That fixture is the ONE preload double** — the catalog installs it whole and
+  a spec passes `overrides` for the channels it asserts on. It is TYPED as
+  `GeniroApi` rather than cast, so a channel added to the interface stops it
+  compiling; a spec that reaches `window.geniro` through
+  `as unknown as Partial<GeniroApi>` defeats exactly that and must not.
 
 ## Component tests
 

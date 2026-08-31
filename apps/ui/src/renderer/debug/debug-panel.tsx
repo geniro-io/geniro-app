@@ -280,7 +280,10 @@ export function DebugPanel({
       </div>
       {banner ? (
         <ErrorBanner
-          className="px-3 pb-1"
+          // MARGIN, not padding: the strip owns its own inset now, and a
+          // `px-*` here would merge that away and put the text on the fill's
+          // edge.
+          className="mx-3 mb-1"
           message={banner}
           onDismiss={() => {
             setCopyError(null);

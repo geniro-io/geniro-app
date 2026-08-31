@@ -375,7 +375,7 @@ function main(): void {
 
     // Before the window, because the menu bar is drawn the moment the app
     // activates and replacing it afterwards shows the default one first.
-    installApplicationMenu();
+    installApplicationMenu({ isDev });
     registerIpc(supervisor, updates);
     // Armed here, but the first check is deliberately delayed inside the
     // service — launch is busy enough, and an update banner is worth nothing

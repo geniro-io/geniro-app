@@ -97,6 +97,41 @@ describe('ConfigProfileList', () => {
     ).toBe('Work');
   });
 
+  it('gives the colour cell a FIXED width, so the columns after it line up', () => {
+    // REPORTED as the list not being straight. The colour trigger was the one
+    // content-sized cell in the row and also the FIRST, so `Blue` and `Orange`
+    // started their neighbours at different x and every column after them was
+    // ragged — the delete buttons agreed only because they are pushed against
+    // the right edge. jsdom computes no layout, so the emitted class is the
+    // observable; it is also the whole mechanism, since the row's other three
+    // cells were already fixed (`w-40`), flexible (`flex-1`) or `shrink-0`.
+    const { el } = render([
+      profile({ color: 'blue' }),
+      profile({ id: 'p2', name: 'Personal', color: 'orange' }),
+    ]);
+    const triggers = [
+      ...el.querySelectorAll<HTMLElement>('[data-menu-trigger]'),
+    ];
+    expect(triggers).toHaveLength(2);
+    for (const trigger of triggers) {
+      expect(trigger.className).toContain('w-28');
+      expect(trigger.className).toContain('shrink-0');
+    }
+  });
+
+  it('elides a directory from the HEAD, keeping the end that identifies it', () => {
+    // Two segments rather than the default three: this cell is last in a row
+    // that has already spent its width on a colour, a name field and a delete
+    // button, and at three the path overran and was CSS-truncated — which eats
+    // the TAIL, the one end that says which directory it is. Measured in the
+    // running app after the change: both rows fit with nothing cut.
+    const { el } = render([
+      profile({ dir: '/Users/x/Desktop/Projects/workspace/.claude-work' }),
+    ]);
+    expect(el.textContent).toContain('…/workspace/.claude-work');
+    expect(el.textContent).not.toContain('Desktop');
+  });
+
   it('takes the colour from the PALETTE, never an inline value', () => {
     // `renderer-design-system.md` makes a raw colour an eslint error, and the
     // eight `--color-group-*` tokens are the app's one palette — the same ones

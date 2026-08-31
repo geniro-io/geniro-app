@@ -54,4 +54,33 @@ describe('ErrorBoundary', () => {
     expect(container.textContent).toContain('kaboom from a component');
     expect(container.querySelector('button')?.textContent).toBe('Reload');
   });
+
+  it('keeps a long message inside the box instead of past it', () => {
+    // The `overflow-auto` on that <pre> did nothing for as long as it shipped:
+    // a <pre> does not wrap, so its min-content width is the whole line, and a
+    // flex item's automatic `min-width: auto` refuses to shrink below that.
+    // The box grew past the padding and crossed the surrounding border rather
+    // than ever scrolling — reported against a 384px frame, and reachable in
+    // the app in any narrow window, this being the ROOT boundary.
+    //
+    // Pinned on the CLASSES because jsdom computes no layout: measured in the
+    // real catalog, the fix takes the box from overflowing to 31px inside the
+    // card on both sides, with scrollWidth 361 over clientWidth 296. These two
+    // utilities ARE the fix, not a proxy for it — `min-w-0` lifts the floor and
+    // `w-full` gives the box a width for `max-w-xl` to cap.
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      root.render(
+        <ErrorBoundary>
+          <Bomb />
+        </ErrorBoundary>,
+      );
+    });
+    spy.mockRestore();
+
+    const box = container.querySelector('pre')?.className;
+    expect(box).toContain('min-w-0');
+    expect(box).toContain('w-full');
+    expect(box).toContain('overflow-auto');
+  });
 });

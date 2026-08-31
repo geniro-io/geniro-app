@@ -94,6 +94,38 @@ describe('ErrorBanner', () => {
     expect(labels).toEqual(['Delete this run', 'Dismiss error']);
   });
 
+  it('carries its own surface, in the tone it is speaking in', () => {
+    // Reported as "a lot of margin between text and icon", and the margin was
+    // never the defect: with no fill the strip was bare text and a ✕ on the
+    // page's own ground, measured 224px apart in a 420px strip and a whole
+    // content column apart on Stats. The fill is what ties the two ends into
+    // one object, so the far-edge close reads as this strip's.
+    //
+    // Pinned on the CLASS because jsdom computes neither layout nor cascade —
+    // and the class IS the whole of the change, not a proxy for it.
+    render();
+    expect(container.querySelector('[data-tone="error"]')?.className).toContain(
+      'bg-destructive/10',
+    );
+
+    render({ tone: 'warning' });
+    const strip = container.querySelector('[data-tone="warning"]')?.className;
+    expect(strip).toContain('bg-warning/10');
+    expect(strip).not.toContain('bg-destructive/10');
+  });
+
+  it('lets a caller inset it without eating the padding it now owns', () => {
+    // The padding is the component's, so a caller positions with MARGIN. This
+    // pins the merge order rather than the callers: a `className` arriving
+    // last must not be able to strip the strip's own inset.
+    render({ className: 'mx-3 mb-1' });
+
+    const strip = container.querySelector('[data-tone="error"]')?.className;
+    expect(strip).toContain('px-3');
+    expect(strip).toContain('py-2');
+    expect(strip).toContain('mx-3');
+  });
+
   it('omits the action slot entirely when there is no way out to offer', () => {
     render();
 

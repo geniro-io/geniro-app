@@ -95,6 +95,41 @@ export function dayRangeTitle(fromIso: string, toIso: string): string {
 }
 
 /**
+ * A plain count, grouped: `4`, `1,882`.
+ *
+ * The turn count is the one figure on this page that was `String(n)`, so beside
+ * a grouped `$21,547.80` it read as an unformatted number rather than as a
+ * deliberate one. Grouped in the same notation as the money, for the reason
+ * `formatUsd` records: the digits are the app's, not the locale's.
+ */
+const COUNT = new Intl.NumberFormat('en-US');
+
+export function formatCount(value: number): string {
+  return COUNT.format(value);
+}
+
+/**
+ * A rate, as a percentage — and never rounded UP to a whole it did not reach.
+ *
+ * Measured on a real ledger, the cache hit rate is 16.6e9 / (16.6e9 + 155e3) =
+ * 99.999%, which `Math.round` printed as `100%`: a claim that every prompt
+ * token in the period came from cache and not one was ever a miss. It is the
+ * kind of figure a reader stops trusting the page over, because they know it
+ * cannot be true. So a rate short of the whole keeps a decimal until it says
+ * something short of the whole, and only a genuine 100 prints as `100%`.
+ */
+export function formatPercent(rate: number): string {
+  const rounded = Math.round(rate);
+  if (rounded === 100 && rate < 100) {
+    return '99.9%';
+  }
+  if (rounded === 0 && rate > 0) {
+    return '<1%';
+  }
+  return `${rounded}%`;
+}
+
+/**
  * A turn count with its noun agreeing: `1 turn`, `2 turns`, `0 turns`.
  *
  * Shared rather than restated at each site because the page renders the same

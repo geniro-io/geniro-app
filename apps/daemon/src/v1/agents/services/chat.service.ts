@@ -3574,7 +3574,7 @@ export class ChatService implements OnModuleInit {
               // the full cold dial, while the DEFAULT profile's panel was
               // painted with another account's servers. Measured on this
               // machine — a panel listing 15 servers belonging to
-              // `.claude-manifest-lab-personal` where the default profile's own
+              // `.claude-work-personal` where the default profile's own
               // dial found 10.
               this.mcpHarvest.record(
                 adapter.getConfig().kind,

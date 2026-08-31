@@ -83,10 +83,17 @@ export function NodeCard({
             ? 'border-primary'
             : 'border-border',
         selected
-          ? 'shadow-panel-md ring-2 ring-offset-2 ring-offset-background'
+          ? 'shadow-panel-md ring-2'
           : 'shadow-panel-sm hover:shadow-panel-md',
         // The ring keeps the card's own tone so a selected invalid node still
-        // reads as invalid — it is the offset gap + weight that says "selected".
+        // reads as invalid — it is the WEIGHT that says "selected".
+        //
+        // FLUSH, not offset. `ring-offset-2` drew the card's silhouette three
+        // times — a 1px border, a 2px gap of page background, then a 2px ring —
+        // and REPORTED as looking wrong for exactly that reason. Same-hue
+        // strokes with no gap between them read as one thick edge, which is
+        // what a selected card should look like; a gap turns them into two
+        // outlines with a stripe of canvas trapped between.
         selected && (invalid ? 'ring-destructive/70' : 'ring-primary/70'),
         // Unselected invalid keeps a soft halo so red reads at a glance, but
         // flush and thin — unmistakably weaker than the selected ring.

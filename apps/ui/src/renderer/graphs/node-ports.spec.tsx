@@ -173,6 +173,39 @@ describe('NodePorts', () => {
     expect(handles()).toEqual([{ id: 'source-data-agent', hidden: false }]);
   });
 
+  it('keeps the ports toggle INSIDE the card, never straddling its edge', () => {
+    // REPORTED alongside the triple selection border. The toggle was an 18px
+    // circle pinned half outside the ports block's bottom edge — `h-0` wrapper,
+    // `absolute -top-[9px]`, `z-10`, its own `bg-card` fill. Resting that reads
+    // as a tab on the card; SELECTED, the ring runs along that same edge and
+    // the circle's fill punched a visible hole through the outline.
+    //
+    // Nothing that straddles a card's silhouette survives a state that redraws
+    // that silhouette, so the fix is position, not layering. Pinned on the
+    // classes because jsdom computes no layout and those classes ARE the
+    // straddle — a negative offset out of a zero-height row is the whole of it.
+    render(
+      <NodePorts
+        nodeId="a1"
+        kind="agent"
+        missingInput={false}
+        missingOutput={false}
+      />,
+    );
+
+    const toggle = container.querySelector('[aria-label="Expand ports"]')!;
+    expect(toggle.className).not.toContain('absolute');
+    expect(toggle.className).not.toContain('-top-');
+    expect(toggle.className).not.toContain('rounded-full');
+    // It stays out of the node's drag handling wherever it sits.
+    expect(toggle.className).toContain('nodrag');
+    // And it is a SIBLING of the two caption columns, in the same row — not a
+    // wrapper of its own hung off the end of the block.
+    const row = toggle.parentElement!;
+    expect(row.children).toHaveLength(3);
+    expect(row.className).not.toContain('h-0');
+  });
+
   it('agrees with itself on a single wire', () => {
     // The caption is a count with a noun, and the one-wire case is where a
     // naive `${n} ${side}s` reads `1 inputs`.

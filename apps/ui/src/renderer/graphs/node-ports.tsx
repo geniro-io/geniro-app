@@ -260,7 +260,7 @@ export function NodePorts({
           a flat 53px under every collapsed card. */}
       <div
         className={cn(
-          'flex gap-4 px-3',
+          'flex gap-2 px-3',
           expanded ? 'pt-3 pb-2.5' : 'pt-1.5 pb-2',
         )}>
         <div className="flex min-w-0 flex-1 justify-start">
@@ -272,25 +272,21 @@ export function NodePorts({
             wired={wired.inputs}
           />
         </div>
-        <div className="flex min-w-0 flex-1 justify-end">
-          <PortsSide
-            side="output"
-            kind={kind}
-            expanded={expanded}
-            missing={missingOutput}
-            wired={wired.outputs}
-          />
-        </div>
-      </div>
-      {/* The toggle: an 18px circle straddling the ports block's BOTTOM edge
-          (the card's bottom border, or the error strip's divider), centered —
-          a zero-height row keeps it out of flow. */}
-      <div className="relative z-10 flex h-0 justify-center">
+        {/* The toggle lives BETWEEN the two captions, inside the card.
+            It used to be an 18px circle straddling the card's bottom border,
+            which was fine on a resting card and broke on a selected one: the
+            selection ring runs along that same edge, and a circle with its own
+            fill sitting on top of it punched a visible hole through the
+            outline — REPORTED together with the triple border above. Nothing
+            that straddles a card's silhouette can survive a state that redraws
+            that silhouette, so it moved inside rather than being re-layered.
+            The row already had a wide empty middle for it, and the `h-0`
+            wrapper, the negative offset and the `z-10` all went with it. */}
         <button
           type="button"
           aria-label={expanded ? 'Collapse ports' : 'Expand ports'}
           aria-expanded={expanded}
-          className="nodrag absolute -top-[9px] flex size-[18px] items-center justify-center rounded-full border border-border/60 bg-card text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+          className="nodrag flex size-4 shrink-0 self-center items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
           onPointerDown={(event) => {
             // Neither drag nor select the node from the toggle.
             event.preventDefault();
@@ -301,11 +297,20 @@ export function NodePorts({
             setExpanded((value) => !value);
           }}>
           {expanded ? (
-            <ChevronUp aria-hidden="true" className="size-2.5" />
+            <ChevronUp aria-hidden="true" className="size-3" />
           ) : (
-            <ChevronDown aria-hidden="true" className="size-2.5" />
+            <ChevronDown aria-hidden="true" className="size-3" />
           )}
         </button>
+        <div className="flex min-w-0 flex-1 justify-end">
+          <PortsSide
+            side="output"
+            kind={kind}
+            expanded={expanded}
+            missing={missingOutput}
+            wired={wired.outputs}
+          />
+        </div>
       </div>
     </>
   );

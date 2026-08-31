@@ -92,8 +92,8 @@ describe('NodeCard', () => {
 
   it('looks different selected vs unselected even while INVALID', () => {
     // Regression: `invalid` used to short-circuit the selection ring, so
-    // clicking a red card changed nothing on screen. Selection is now an
-    // offset ring layered over the (unchanged) destructive border.
+    // clicking a red card changed nothing on screen. Selection is now a ring
+    // layered over the (unchanged) destructive border.
     canvas(AGENT);
     render(AGENT, false);
     const unselected = card().className;
@@ -101,8 +101,8 @@ describe('NodeCard', () => {
     const isSelected = card().className;
 
     expect(isSelected).not.toEqual(unselected);
-    expect(isSelected).toContain('ring-offset-2');
-    expect(unselected).not.toContain('ring-offset-2');
+    expect(isSelected).toContain('ring-2');
+    expect(unselected).not.toContain('ring-2');
     // …while both keep saying "invalid".
     expect(unselected).toContain('border-destructive');
     expect(isSelected).toContain('border-destructive');
@@ -119,8 +119,26 @@ describe('NodeCard', () => {
 
     expect(isSelected).not.toEqual(unselected);
     expect(unselected).toContain('border-border');
-    expect(unselected).not.toContain('ring-offset-2');
+    expect(unselected).not.toContain('ring-2');
     expect(isSelected).toContain('ring-primary/70');
+  });
+
+  it('draws the selection ring FLUSH — never offset off the card', () => {
+    // REPORTED as the card looking wrong when selected. `ring-offset-2` drew
+    // the silhouette three times: a 1px border, a 2px stripe of page
+    // background, then the 2px ring. Same-hue strokes with no gap read as one
+    // thick edge, which is what "selected" should look like; a gap reads as two
+    // outlines with canvas trapped between them.
+    //
+    // jsdom computes no layout, so the offset utility IS the whole mechanism
+    // and the only observable — its absence is the fix, not a proxy for it.
+    canvas(TRIGGER, AGENT);
+    mocks.edges = [{ source: 't1', target: 'a1' }];
+    render(AGENT, true);
+
+    const selected = card().className;
+    expect(selected).toContain('ring-2');
+    expect(selected).not.toContain('ring-offset');
   });
 
   it('renders clean (and the selection ring) once the graph is valid', () => {

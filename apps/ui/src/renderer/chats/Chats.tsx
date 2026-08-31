@@ -314,6 +314,18 @@ const START_COLUMN_WIDTH = '42rem';
 /** The start screen's own padding, and so its smallest gap to the sidebar. */
 const START_COLUMN_PAD = '1.5rem';
 
+/**
+ * How often the archive sweep re-checks, once a window is set.
+ *
+ * Six hours rather than daily: the app is routinely left running for days, and
+ * a 24-hour timer means a retention window is enforced at whatever time of day
+ * the app last started — so a chat can sit a day past the window purely
+ * because of when somebody launched it. Rather than hourly, because nothing
+ * about this is urgent and each tick is a request plus, on the tick that
+ * matters, a real teardown per row.
+ */
+const ARCHIVE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
 /** Client-side only — this id never reaches the daemon. */
 const randomId = (): string => crypto.randomUUID();
 
@@ -1701,6 +1713,64 @@ export function Chats({
       setRunConfigs(s.runConfigs ?? []);
     });
   }, [active]);
+
+  /**
+   * Delete the chats that have outstayed the archive retention the user set.
+   *
+   * HERE rather than in the daemon's own boot, and the reason is where the
+   * policy lives: the window is a key in `settings.json`, which the daemon
+   * never opens — so a sweep it started for itself would need the setting
+   * mirrored into a second store, and the two would disagree the first time
+   * somebody changed it. The daemon owns the destructive half and nothing else;
+   * this decides whether it happens at all. A user who has not set a window is
+   * simply a client that never calls the route.
+   *
+   * The setting is re-read on every tick rather than captured: this screen
+   * stays mounted for the life of the app, so a window switched off at noon
+   * must not go on sweeping until the next launch.
+   *
+   * The list is refreshed only when something was ACTUALLY deleted, because a
+   * teardown announces nothing — the sidebar would otherwise keep offering rows
+   * whose runs are gone until the next listing for some other reason. In the
+   * steady state the answer is zero and this costs one request a day.
+   */
+  useEffect(() => {
+    if (!chatApi) {
+      return;
+    }
+    let cancelled = false;
+    const sweep = async (): Promise<void> => {
+      const settings = await window.geniro.getSettings();
+      const olderThanDays = settings.archiveRetentionDays;
+      // A NUMBER is what arms the delete, so anything else — the `null` a user
+      // who keeps their archive stores, and the `undefined` a settings.json
+      // written before this key existed reads back as — leaves it disarmed.
+      // Testing `!== null` alone would have handed the route an `undefined`
+      // window, which is the one mistake this whole feature cannot afford.
+      if (cancelled || typeof olderThanDays !== 'number') {
+        return;
+      }
+      const { deleted } = await chatApi.sweepArchivedChats({
+        sweepArchivedDto: { olderThanDays },
+      });
+      if (!cancelled && deleted > 0) {
+        refreshRuns();
+      }
+    };
+    // Swallowed rather than surfaced: this is housekeeping nobody asked for
+    // right now, and an error strip about it would interrupt whatever the user
+    // opened the app to do. A failed sweep costs nothing — the next tick
+    // retries, and the rows it did not take are still in the archive.
+    const run = (): void => {
+      void sweep().catch(() => undefined);
+    };
+    run();
+    const timer = setInterval(run, ARCHIVE_SWEEP_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [chatApi, refreshRuns]);
 
   useEffect(() => {
     void window.geniro.getSettings().then((s) => {

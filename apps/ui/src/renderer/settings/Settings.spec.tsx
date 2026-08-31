@@ -66,6 +66,7 @@ const capabilitiesApi = vi.hoisted(() => ({
 }));
 const chatsApi = vi.hoisted(() => ({
   forgetCustomInstructions: vi.fn(() => Promise.resolve({ cleared: 0 })),
+  sweepArchivedChats: vi.fn(() => Promise.resolve({ deleted: 0 })),
 }));
 // Listed by the graphs screen, not by this one — kept because
 // `createDaemonApis` is mocked whole and every key it returns must exist.
@@ -1212,5 +1213,89 @@ describe('Settings appearance section', () => {
     expect(container.querySelector('#settings-theme')?.textContent).toContain(
       'System',
     );
+  });
+
+  function openRetentionMenu(): void {
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '#settings-archive-retention',
+    );
+    if (!trigger) {
+      throw new Error('no archive retention picker');
+    }
+    act(() => trigger.click());
+  }
+
+  it('keeps the archive for ever until the user says otherwise', async () => {
+    // The DEFAULT, and the only one worth a test of its own: what this setting
+    // arms is the same irreversible delete the archive's own button performs,
+    // so shipping it on would destroy conversations for a user who was never
+    // asked. `null` in the settings shape, `Keep for ever` on screen.
+    await mount();
+
+    expect(
+      container.querySelector('#settings-archive-retention')?.textContent,
+    ).toContain('Keep for ever');
+  });
+
+  it('persists a chosen window as a NUMBER of days', async () => {
+    await mount();
+    openRetentionMenu();
+
+    await act(async () => {
+      optionNamed('Delete after 30 days').click();
+    });
+
+    // A number, not the row's own string: the daemon's schema takes an int, and
+    // a `'30'` reaching it fails the whole patch rather than degrading.
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      archiveRetentionDays: 30,
+    });
+  });
+
+  it('switches the sweep off again with null, never with a zero', async () => {
+    // The off state has to be expressible, and it must not be `0` — the daemon
+    // floors the window at one day precisely so a zero cannot be read as "sweep
+    // everything, now".
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      archiveRetentionDays: 30,
+    });
+    await mount();
+    openRetentionMenu();
+
+    await act(async () => {
+      optionNamed('Keep for ever').click();
+    });
+
+    expect(geniro.updateSettings).toHaveBeenCalledWith({
+      archiveRetentionDays: null,
+    });
+  });
+
+  it('opens on the stored window rather than on the default', async () => {
+    geniro.getSettings.mockResolvedValue({
+      ...settings,
+      archiveRetentionDays: 90,
+    });
+
+    await mount();
+
+    expect(
+      container.querySelector('#settings-archive-retention')?.textContent,
+    ).toContain('Delete after 90 days');
+  });
+
+  it('does NOT sweep on the spot when the window is set', async () => {
+    // Setting a standing policy is not pressing a delete. Destroying
+    // conversations inside the gesture that expressed a preference is the shape
+    // of an accident, and the chat screen's own tick lands within hours anyway.
+    await mount();
+    openRetentionMenu();
+
+    await act(async () => {
+      optionNamed('Delete after 30 days').click();
+    });
+
+    expect(chatsApi.sweepArchivedChats).not.toHaveBeenCalled();
   });
 });

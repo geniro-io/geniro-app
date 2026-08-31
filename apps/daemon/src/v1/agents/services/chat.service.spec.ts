@@ -237,6 +237,30 @@ class FakeRunDao {
     }
     return cleared;
   }
+
+  /** The cutoffs `archivedChatIdsBefore` was asked about, newest call last. */
+  readonly sweepCutoffs: Date[] = [];
+
+  /**
+   * Mirrors the real query's scoping — archived only, chats only, oldest first.
+   * The predicate itself is pinned against real SQL in `run.dao.spec.ts`; what
+   * this exists for is the CUTOFF, which is the service's own arithmetic.
+   */
+  async archivedChatIdsBefore(cutoff: Date): Promise<string[]> {
+    this.sweepCutoffs.push(cutoff);
+    return [...this.runs.values()]
+      .filter(
+        (run) =>
+          run.workflowId === null &&
+          run.archivedAt !== null &&
+          run.archivedAt.getTime() <= cutoff.getTime(),
+      )
+      .sort(
+        (a, b) =>
+          (a.archivedAt?.getTime() ?? 0) - (b.archivedAt?.getTime() ?? 0),
+      )
+      .map((run) => run.id);
+  }
 }
 
 class FakeItemDao {
@@ -4860,6 +4884,90 @@ describe('ChatService — delete is a one-way door', () => {
   it('404s on a run that does not exist', async () => {
     const { service } = setup();
     await expect(service.delete('nope')).rejects.toThrow();
+  });
+});
+
+describe('ChatService — sweeping the archive is the same one-way door', () => {
+  /** An archived chat shelved `daysAgo` days back, with one item to destroy. */
+  async function archivedChat(ctx: ReturnType<typeof setup>, daysAgo: number) {
+    const run = await ctx.service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await ctx.itemDao.create({
+      runId: run.id,
+      seq: 0,
+      kind: 'message',
+      payload: JSON.stringify({ text: 'hi' }),
+    });
+    const row = await ctx.runDao.getById(run.id);
+    if (row) {
+      row.archivedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+    }
+    return run;
+  }
+
+  it('measures the window from now, in whole days', async () => {
+    // The arithmetic is the service's own, and it is the half that decides
+    // which rows are eligible — the predicate around it is pinned against real
+    // SQL in run.dao.spec. A window read as hours, or applied to the wrong
+    // sign, is a sweep that takes the whole archive.
+    const ctx = setup();
+
+    await ctx.service.sweepArchived(30);
+
+    const [cutoff] = ctx.runDao.sweepCutoffs;
+    expect(cutoff).toBeDefined();
+    const daysBack = (Date.now() - cutoff!.getTime()) / (24 * 60 * 60 * 1000);
+    expect(daysBack).toBeCloseTo(30, 2);
+  });
+
+  it('destroys everything a pressed delete would, and leaves a fresher chat alone', async () => {
+    // The whole claim of the feature: swept is DELETED, not hidden — so the
+    // items go with the run, exactly as the delete-door block above pins for a
+    // single press. The fresh chat is what bounds it from the other side; a
+    // sweep that took the archive wholesale passes every assertion above.
+    const ctx = setup();
+    const old = await archivedChat(ctx, 40);
+    const fresh = await archivedChat(ctx, 3);
+
+    expect(await ctx.service.sweepArchived(30)).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(old.id)).toBeNull();
+    expect(await ctx.runDao.getById(fresh.id)).not.toBeNull();
+    expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([fresh.id]);
+  });
+
+  it('steps over a chat it cannot tear down and still reaches the rest', async () => {
+    // This runs unattended, so a throw is a sweep that stops at its first bad
+    // row and never reaches the others — and nobody is watching to retry it.
+    // The count is what was ACTUALLY destroyed, which is how a caller tells a
+    // partial sweep from a complete one.
+    const ctx = setup();
+    const doomed = await archivedChat(ctx, 40);
+    const rest = await archivedChat(ctx, 39);
+    ctx.itemDao.failNextKind = null;
+    const realDelete = ctx.service.delete.bind(ctx.service);
+    vi.spyOn(ctx.service, 'delete').mockImplementation(async (runId: string) =>
+      runId === doomed.id
+        ? Promise.reject(new Error('turn will not settle'))
+        : realDelete(runId),
+    );
+
+    expect(await ctx.service.sweepArchived(30)).toEqual({ deleted: 1 });
+
+    // The one it could not take is still there; the one behind it is gone.
+    expect(await ctx.runDao.getById(doomed.id)).not.toBeNull();
+    expect(await ctx.runDao.getById(rest.id)).toBeNull();
+  });
+
+  it('deletes nothing when the archive holds nothing old enough', async () => {
+    // The commonest real call by far — every launch of an app whose archive is
+    // younger than the window — and the one that must be silent and free.
+    const ctx = setup();
+    await archivedChat(ctx, 2);
+
+    expect(await ctx.service.sweepArchived(30)).toEqual({ deleted: 0 });
   });
 });
 

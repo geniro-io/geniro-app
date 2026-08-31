@@ -41,6 +41,8 @@ import {
   SendMessageDto,
   ShellOutputDto,
   ShellOutputQueryDto,
+  SweepArchivedDto,
+  SweptArchivedDto,
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
@@ -95,6 +97,22 @@ export class ChatController {
   @ZodResponse({ status: 200, type: ForgottenInstructionsDto })
   forgetCustomInstructions(): Promise<{ cleared: number }> {
     return this.chatService.forgetCustomInstructions();
+  }
+
+  /**
+   * Permanently delete every chat archived longer ago than the body says.
+   *
+   * Declared BEFORE the `:runId` routes for the reason its neighbour is, and a
+   * POST rather than a DELETE for a plainer one: it names no resource. The
+   * retention window is the CLIENT's because the setting lives in the Electron
+   * process's own `settings.json`, which this daemon never opens — so a user
+   * who has switched the sweep off is simply a client that never calls this.
+   */
+  @Post('sweep-archived')
+  @ApiOperation({ operationId: 'sweepArchivedChats' })
+  @ZodResponse({ status: 200, type: SweptArchivedDto })
+  sweepArchived(@Body() dto: SweepArchivedDto): Promise<{ deleted: number }> {
+    return this.chatService.sweepArchived(dto.olderThanDays);
   }
 
   @Patch(':runId')

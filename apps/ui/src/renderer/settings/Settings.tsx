@@ -63,6 +63,37 @@ const THEME_OPTIONS: SelectGroup[] = [
 ];
 
 /**
+ * The value the `Keep for ever` row carries.
+ *
+ * A `Select` commits STRINGS, and the setting's off state is `null` — so the
+ * absence needs a spelling of its own. A sentinel rather than the empty string,
+ * which a caller could plausibly produce by accident from a cleared field.
+ */
+const KEEP_ARCHIVE_FOR_EVER = 'never';
+
+/**
+ * How long an archived chat may be kept.
+ *
+ * Discrete rows rather than a number field, and that is a safety decision as
+ * much as a design one: what this setting arms is an irreversible delete on a
+ * clock nobody watches, so the values a user can reach are ones somebody chose,
+ * and a typo cannot produce `1` where `100` was meant. `Keep for ever` LEADS
+ * them because it is the default and the only row that destroys nothing.
+ */
+const ARCHIVE_RETENTION_OPTIONS: SelectGroup[] = [
+  {
+    items: [
+      { value: KEEP_ARCHIVE_FOR_EVER, label: 'Keep for ever' },
+      { value: '30', label: 'Delete after 30 days' },
+      { value: '60', label: 'Delete after 60 days' },
+      { value: '90', label: 'Delete after 90 days' },
+      { value: '180', label: 'Delete after 180 days' },
+      { value: '365', label: 'Delete after a year' },
+    ],
+  },
+];
+
+/**
  * One agent-specific switch, drawn inside that agent's card.
  *
  * A local shape rather than a shared component: it is a `Switch`, a `Label`
@@ -228,6 +259,9 @@ export function Settings({
   const [claudeBrowserTools, setClaudeBrowserTools] = useState(false);
   const [cursorMaxMode, setCursorMaxMode] = useState(true);
   const [customInstructions, setCustomInstructions] = useState('');
+  const [archiveRetentionDays, setArchiveRetentionDays] = useState<
+    number | null
+  >(null);
   const [theme, setTheme] = useState<ThemePreference>(DEFAULT_THEME_PREFERENCE);
   const [forgetting, setForgetting] = useState(false);
   /** What the last purge reached, in words — `null` until one has run. */
@@ -258,6 +292,7 @@ export function Settings({
   const checkForUpdatesDirtyRef = useRef(false);
   const themeDirtyRef = useRef(false);
   const notificationsDirtyRef = useRef(false);
+  const archiveRetentionDirtyRef = useRef(false);
   const daemonInspectDirtyRef = useRef(false);
   const persistGenerationRef = useRef({
     cliPaths: 0,
@@ -328,6 +363,9 @@ export function Settings({
         setCollapseToolSteps(s.collapseToolSteps ?? false);
         setClaudeBrowserTools(s.claudeBrowserTools);
         setCursorMaxMode(s.cursorMaxMode);
+      }
+      if (!archiveRetentionDirtyRef.current) {
+        setArchiveRetentionDays(s.archiveRetentionDays);
       }
       if (!daemonInspectDirtyRef.current) {
         setStoredInspect(s.daemonInspect);
@@ -797,6 +835,29 @@ export function Settings({
     [persist],
   );
 
+  /**
+   * Arm, re-aim, or switch off the archive sweep.
+   *
+   * The write is all this does. It deliberately does NOT run a sweep on the
+   * spot: the user has just told the app how long to keep things, which is a
+   * standing policy rather than a press, and destroying conversations inside
+   * the same gesture that set a preference is the shape of an accident. The
+   * chat screen performs the sweep on its own schedule, so the first one lands
+   * within the minute either way.
+   */
+  const onArchiveRetentionChange = useCallback(
+    (next: string): void => {
+      const days = next === KEEP_ARCHIVE_FOR_EVER ? null : Number(next);
+      if (days !== null && !Number.isInteger(days)) {
+        return;
+      }
+      archiveRetentionDirtyRef.current = true;
+      setArchiveRetentionDays(days);
+      void persist({ archiveRetentionDays: days });
+    },
+    [persist],
+  );
+
   const onThemeChange = useCallback(
     (next: string): void => {
       if (!isThemePreference(next)) {
@@ -1195,6 +1256,38 @@ export function Settings({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   System follows your macOS appearance and changes with it.
+                </p>
+              </section>
+
+              <section className="flex flex-col gap-3">
+                <h2 className="text-lg font-medium">Archive</h2>
+                <div className="flex items-center gap-3">
+                  <Label
+                    htmlFor="settings-archive-retention"
+                    className="shrink-0">
+                    Archived chats
+                  </Label>
+                  <Select
+                    id="settings-archive-retention"
+                    className="w-56"
+                    groups={ARCHIVE_RETENTION_OPTIONS}
+                    value={
+                      archiveRetentionDays === null
+                        ? KEEP_ARCHIVE_FOR_EVER
+                        : String(archiveRetentionDays)
+                    }
+                    onValueChange={onArchiveRetentionChange}
+                    aria-label="How long to keep archived chats"
+                  />
+                </div>
+                {/* The note says the ONE thing a reader cannot guess from the
+                    row: that this is the permanent delete rather than a
+                    tidier archive. Everything else about it is in the label. */}
+                <p className="text-xs text-muted-foreground">
+                  Deleting is permanent — the conversation, its files and its
+                  history go, exactly as Delete in the archive does. Counted
+                  from when you archived the chat, not from when you last used
+                  it.
                 </p>
               </section>
 

@@ -316,6 +316,28 @@ export interface Settings {
    */
   notificationsEnabled: boolean;
   /**
+   * Delete a chat this many days after it was ARCHIVED, or `null` to keep the
+   * archive for ever.
+   *
+   * The archive is where a thread goes to stop cluttering the desk, and until
+   * this existed nothing ever took anything out again — so it grew for the life
+   * of the install and the only way back was the one-way delete, per row.
+   *
+   * **`null` is the default, and it is the only defensible one.** What this
+   * switches on is the SAME irreversible delete the archive's own button
+   * performs — rows, attachments, call tokens and all, with no trash and none
+   * planned — so shipping it on would destroy conversations on the next launch
+   * for every user who had never been asked, including threads archived months
+   * ago that they may well still want. The window a user picks is theirs; the
+   * silence is ours.
+   *
+   * A NUMBER of days rather than a boolean beside a constant, because the two
+   * facts are one: "sweep the archive" and "how long is long enough" have no
+   * separate answers, and a boolean pointing at a fixed 30 could not express
+   * the ninety somebody else wants.
+   */
+  archiveRetentionDays: number | null;
+  /**
    * Ask cursor for **Max Mode** — the largest context window a model can run
    * at, for the models that carry no window choice of their own.
    *
@@ -481,6 +503,7 @@ export const DEFAULT_SETTINGS: Settings = {
   checkForUpdates: true,
   sidebarCollapsed: false,
   notificationsEnabled: true,
+  archiveRetentionDays: null,
   cursorMaxMode: true,
   collapseToolSteps: false,
   daemonInspect: null,

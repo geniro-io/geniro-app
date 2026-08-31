@@ -199,6 +199,12 @@ export const settingsPatchSchema = z.strictObject({
   checkForUpdates: z.boolean().optional(),
   sidebarCollapsed: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
+  // The retention window, or null for "keep the archive". Bounded to exactly
+  // what the daemon's own schema accepts, so a value this side lets through can
+  // never be one that route refuses — and NULLABLE rather than absent, because
+  // absent means "this patch does not mention it" while null is the user
+  // switching the sweep off, and those must not be the same write.
+  archiveRetentionDays: z.number().int().min(1).max(3650).nullable().optional(),
   cursorMaxMode: z.boolean().optional(),
   collapseToolSteps: z.boolean().optional(),
   claudeBrowserTools: z.boolean().optional(),

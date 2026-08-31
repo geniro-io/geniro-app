@@ -153,6 +153,17 @@ function parsePayload(raw: string): unknown {
 const DELEGATE_ROW_LEASE_MS = 5 * 60 * 1000;
 
 /**
+ * One day, for {@link ChatService.sweepArchived}'s retention window.
+ *
+ * Fixed 24h rather than calendar days, deliberately: the window is a DURATION
+ * somebody chose ("keep them a month"), not a date boundary, so a chat archived
+ * at 09:00 is swept at 09:00 thirty days later whatever daylight saving did in
+ * between. A calendar-day reading would make the same setting delete an hour
+ * early or late twice a year, on rows nobody can get back.
+ */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Orchestrates a single-agent chat: validates the run's cwd, drives the chosen
  * adapter, and applies **persist-then-emit** — every item is written (allocating
  * its monotonic seq) BEFORE it is published on the bus, so the durable
@@ -1216,6 +1227,67 @@ export class ChatService implements OnModuleInit {
     const em = this.em.fork();
     const cleared = await this.runDao.forgetCustomInstructions(em);
     return { cleared };
+  }
+
+  /**
+   * Permanently delete every chat shelved longer ago than `olderThanDays`.
+   *
+   * The archive is where a thread goes to stop cluttering the desk, and nothing
+   * ever took anything out of it — so it grows for the life of the install, and
+   * the one-way delete beside it is per-row. This is that delete, applied on a
+   * clock the user sets.
+   *
+   * **It is the SAME one-way door**, not a gentler one: `delete` per run, so a
+   * swept chat loses its rows, its attachments, its call tokens and its kept
+   * session exactly as a pressed delete does, and `usage_events` survives for
+   * the reason it survives there — a lifetime spend total must not shrink
+   * because a conversation was tidied away. There is no trash and none is
+   * planned, which is why the POLICY lives with the user (the retention window
+   * is a setting they choose, and its absence means never) and only the
+   * MECHANISM lives here.
+   *
+   * The window is measured from `archivedAt` — when the thread was shelved —
+   * and never from `updatedAt` or `createdAt`. Those answer "when was this
+   * conversation last touched", which is a different question: a chat from
+   * February archived yesterday has been on the shelf for one day, and sweeping
+   * it because the conversation is old would delete a thread the user filed
+   * away this week.
+   *
+   * Runs are deleted ONE AT A TIME and a failure does not stop the sweep: each
+   * teardown waits on that run's own in-flight work, and one run that cannot be
+   * torn down (a turn that will not settle) must not strand every older chat
+   * behind it. The count is what was actually destroyed, so a caller can tell a
+   * partial sweep from a complete one.
+   */
+  async sweepArchived(olderThanDays: number): Promise<{ deleted: number }> {
+    const em = this.em.fork();
+    const cutoff = new Date(Date.now() - olderThanDays * DAY_MS);
+    const ids = await this.runDao.archivedChatIdsBefore(cutoff, em);
+    let deleted = 0;
+    for (const runId of ids) {
+      try {
+        const result = await this.delete(runId);
+        if (result.deleted) {
+          deleted += 1;
+        }
+      } catch (error) {
+        // Logged and stepped over rather than thrown: this runs unattended, so
+        // a throw here is a sweep that silently stops at its first bad row and
+        // never reaches the rest — and the row it stopped on is the one nobody
+        // is watching.
+        this.logger.warn(
+          `could not sweep archived chat ${runId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    if (deleted > 0) {
+      this.logger.log(
+        `deleted ${deleted} chat(s) archived more than ${olderThanDays} day(s) ago`,
+      );
+    }
+    return { deleted };
   }
 
   async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {

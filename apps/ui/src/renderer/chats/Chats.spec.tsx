@@ -43,6 +43,7 @@ const api = vi.hoisted(() => ({
   setRunGroup: vi.fn(),
   readChatMetrics: vi.fn(),
   readChatTotals: vi.fn(),
+  sweepArchivedChats: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -613,6 +614,7 @@ beforeEach(() => {
       workedMs: null,
     },
   });
+  api.sweepArchivedChats.mockReset().mockResolvedValue({ deleted: 0 });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {
       turns: 0,
@@ -11715,5 +11717,81 @@ describe('Chats — the thread list is resizable', () => {
       );
     });
     expect(columns(container)).toContain('520px');
+  });
+});
+
+describe('Chats — sweeping the archive on the user’s own clock', () => {
+  /** A settings read answering with one retention window. */
+  function withRetention(days: number | null | undefined): void {
+    (
+      window as unknown as { geniro: { getSettings: ReturnType<typeof vi.fn> } }
+    ).geniro.getSettings.mockResolvedValue({
+      onboardingComplete: true,
+      projectFolder: '/proj',
+      recentFolders: [],
+      lastChatTarget: null,
+      cliPaths: {},
+      checkForUpdates: true,
+      archiveRetentionDays: days,
+    });
+  }
+
+  it('asks the daemon to sweep, with the window the user chose', async () => {
+    // The policy is HERE and the destruction is there: the daemon never opens
+    // settings.json, so a sweep it started for itself would need this value
+    // mirrored into a second store.
+    withRetention(30);
+    const { client } = makeClient();
+
+    await mount(client);
+
+    expect(api.sweepArchivedChats).toHaveBeenCalledWith({
+      sweepArchivedDto: { olderThanDays: 30 },
+    });
+  });
+
+  it('asks for NOTHING when the user keeps their archive', async () => {
+    // The default, and the whole safety property: a user who has never been
+    // asked is a client that never calls the route, so no code path on the
+    // daemon can delete anything for them.
+    withRetention(null);
+    const { client } = makeClient();
+
+    await mount(client);
+
+    expect(api.sweepArchivedChats).not.toHaveBeenCalled();
+  });
+
+  it('treats a settings file written before the key existed as OFF', async () => {
+    // `undefined`, not `null` — which is what the guard reading `!== null`
+    // would have armed, handing the route an undefined window. Bounds the guard
+    // from the side a `=== null` test cannot see.
+    withRetention(undefined);
+    const { client } = makeClient();
+
+    await mount(client);
+
+    expect(api.sweepArchivedChats).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the thread list only when something was actually deleted', async () => {
+    // A teardown announces nothing, so the sidebar would go on offering rows
+    // whose runs are gone. The guard is what keeps the common answer — zero,
+    // every tick of every day — from costing a listing.
+    withRetention(30);
+    api.sweepArchivedChats.mockResolvedValue({ deleted: 0 });
+    const { client } = makeClient();
+    await mount(client);
+    const listingsWhenNothingWent = api.listChats.mock.calls.length;
+
+    api.listChats.mockClear();
+    api.sweepArchivedChats.mockResolvedValue({ deleted: 2 });
+    const second = makeClient();
+    await mount(second.client);
+
+    expect(listingsWhenNothingWent).toBeGreaterThan(0);
+    expect(api.listChats.mock.calls.length).toBeGreaterThan(
+      listingsWhenNothingWent,
+    );
   });
 });

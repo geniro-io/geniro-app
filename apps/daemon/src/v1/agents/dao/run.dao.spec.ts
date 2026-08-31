@@ -107,6 +107,45 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
+  describe('archivedChatIdsBefore', () => {
+    it('answers the archived chats shelved at or before the cutoff, oldest first', async () => {
+      // Oldest FIRST here, unlike every listing above, and the order is what a
+      // sweep interrupted part-way depends on: it has removed the rows furthest
+      // past the window, so the next one resumes instead of re-walking them.
+      const old = await dao.create({ archivedAt: new Date(1_000) });
+      const older = await dao.create({ archivedAt: new Date(500) });
+      // Exactly ON the cutoff — `$lte`, because a window is "shelved at least
+      // this long ago" and the boundary instant satisfies it.
+      const onCutoff = await dao.create({ archivedAt: new Date(5_000) });
+      // Past it by a millisecond, and safe.
+      await dao.create({ archivedAt: new Date(5_001) });
+
+      expect(await dao.archivedChatIdsBefore(new Date(5_000))).toEqual([
+        older.id,
+        old.id,
+        onCutoff.id,
+      ]);
+    });
+
+    it('never answers a chat that is not archived at all', async () => {
+      // The one row whose deletion would be unforgivable: a live thread on the
+      // desk. `archivedAt` is NULL there, and SQL comparisons against NULL are
+      // neither true nor false — so the `$ne: null` is doing real work rather
+      // than restating the `$lte`.
+      await dao.create({ createdAt: new Date(1_000) });
+
+      expect(await dao.archivedChatIdsBefore(new Date(9_999))).toEqual([]);
+    });
+
+    it('never answers a workflow run, however long it has been archived', async () => {
+      // A workflow run has no archive and its own teardown; sweeping one
+      // through the chat path would skip the graph executor's.
+      await dao.create({ workflowId: 'wf-1', archivedAt: new Date(1_000) });
+
+      expect(await dao.archivedChatIdsBefore(new Date(9_999))).toEqual([]);
+    });
+  });
+
   describe('listRunningChats', () => {
     it('scopes to running chats — non-running chats and workflow runs are excluded', async () => {
       await dao.create({ status: 'pending' });

@@ -641,6 +641,33 @@ export function Chats({
     queuesRef.current = queues;
   }, [queues]);
   /**
+   * Runs whose queue is PAUSED — held until the user releases each message by
+   * hand, instead of the head going out on its own when a turn ends.
+   *
+   * ASKED FOR as "some toggle so queue of messages will not execute
+   * automatically, but only on user click". Automatic is still the default:
+   * queueing exists so a second thought does not redirect the turn in flight,
+   * and for most of them "send it when this turn ends" is the whole intent.
+   * Pause is for the other case — several follow-ups written up front, where
+   * what the agent says next decides which of them still applies, or whether
+   * it should be reworded first.
+   *
+   * PER RUN and ephemeral, keyed exactly like {@link queues} and living
+   * exactly as long: pausing is a decision about the messages in front of you,
+   * so it must not follow the user into an unrelated thread, and a flag that
+   * outlived the queue it was set on would silently hold a thread's next
+   * follow-up weeks later. Mirrored into a ref because {@link drainQueue}
+   * reads it from callers that hold a stale closure — the same reason
+   * `queuesRef` exists.
+   */
+  const [pausedQueues, setPausedQueues] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const pausedQueuesRef = useRef<ReadonlySet<string>>(pausedQueues);
+  useEffect(() => {
+    pausedQueuesRef.current = pausedQueues;
+  }, [pausedQueues]);
+  /**
    * What became of the Send-now the user last pressed — rendered on the row by
    * {@link QueuedStrip}. One outstanding at a time: the answer belongs to the
    * press, and a second press supersedes the first.
@@ -2452,22 +2479,28 @@ export function Chats({
     [chatApi, placeRun, newChat],
   );
 
+  /**
+   * Every archive ASKS — the running one because it cancels a turn on the way,
+   * the settled one because the row leaves the list and nothing afterwards
+   * offers it back.
+   *
+   * A settled chat used to be shelved in one press, on the reasoning that
+   * archiving destroys nothing and unarchive is right there. What that misses
+   * is where the press IS: the row's own menu, one entry from Delete, on a
+   * gesture whose whole visible effect is a conversation disappearing from the
+   * sidebar. The dialog still says which of the two it is asking about — only
+   * the running arm loses anything, and only it is drawn destructive.
+   */
   const handleArchiveRun = useCallback(
     (runId: string): void => {
       const run = runsRef.current.find((r) => r.id === runId);
       if (!run) {
         return;
       }
-      // The same gate the daemon cancels on, read off the row this window
-      // already holds, so the two cannot disagree about which chats ask.
-      if (run.status === 'running') {
-        setArchiveError(null);
-        setArchiving(run);
-        return;
-      }
-      void archiveRun(runId).catch((err: unknown) => setError(String(err)));
+      setArchiveError(null);
+      setArchiving(run);
     },
-    [archiveRun, runsRef, setError],
+    [runsRef],
   );
 
   const confirmArchive = useCallback(async (): Promise<void> => {
@@ -2816,6 +2849,16 @@ export function Chats({
       if (next === undefined) {
         return;
       }
+      // The pause, gated HERE rather than at the six places a drain is fired
+      // from — a terminal item, a replay, a reconnect, a hold, the composer's
+      // own kick, the RUN_BUSY fallback. Each of those is a separate answer to
+      // "the run is free now", and a gate per caller is one missed edit away
+      // from a paused queue that empties itself on reconnect. The user's own
+      // Send-now (`steerQueued`) deliberately does NOT come through here: that
+      // press IS the release.
+      if (pausedQueuesRef.current.has(runId)) {
+        return;
+      }
       drainingRef.current.add(runId);
       // The head STAYS in the queue until the send resolves. Popping first
       // de-rendered it for the whole in-flight window, so a queued message
@@ -3092,6 +3135,38 @@ export function Chats({
         message.id === id ? { ...message, text } : message,
       ),
     }));
+  }, []);
+
+  /**
+   * Hold this run's queue, or let it flow again.
+   *
+   * RESUMING kicks the drain, and that is not a convenience: the automatic
+   * drain fires on a turn ENDING, and the ordinary way to reach this control is
+   * with the queue already stacked up behind a turn that has since finished. So
+   * the event that would have released it is in the past, and without the kick
+   * the switch would appear to do nothing until the user sent something else.
+   * `drainQueue` is a no-op on a run that is genuinely busy — its RUN_BUSY
+   * backoff covers exactly that — so this needs no working check of its own.
+   *
+   * The ref is written beside the state for the reason `enqueueMessage` states:
+   * the kick happens in this same tick and reads the ref, which the mirroring
+   * effect has not caught up to yet.
+   */
+  const toggleQueuePause = useCallback((): void => {
+    const runId = activeRunIdRef.current;
+    if (!runId) {
+      return;
+    }
+    const next = new Set(pausedQueuesRef.current);
+    const resuming = next.delete(runId);
+    if (!resuming) {
+      next.add(runId);
+    }
+    pausedQueuesRef.current = next;
+    setPausedQueues(next);
+    if (resuming) {
+      drainQueueRef.current(runId);
+    }
   }, []);
 
   const removeQueued = useCallback((id: string): void => {
@@ -4142,11 +4217,28 @@ export function Chats({
     // `CHAT_AGENT_KEY`, and that mapping is this screen's own — the fold has no
     // business knowing it.
     const byAgent = new Map<string, AgentTaskRow[]>();
+    // The DAEMON's fold wins, and that is the whole of the fix: it folded every
+    // announcement the run has ever written, while the fold below can only see
+    // the transcript WINDOW this client loaded. Neither shipped CLI re-states
+    // the list — measured, claude sends one-row patches and no snapshot at all —
+    // so past `HISTORY_PAGE` items the opening announcement falls out and the
+    // local fold reports a total that has shrunk (`3/3` for a list of six).
+    //
+    // The local fold stays as the fallback rather than being deleted: a run row
+    // written before this column existed carries an empty list until its agent
+    // announces again, and the transcript can still answer for it meanwhile.
+    const folded = activeRun?.taskList ?? [];
+    if (folded.length > 0) {
+      for (const group of folded) {
+        byAgent.set(group.nodeId ?? CHAT_AGENT_KEY, group.tasks);
+      }
+      return byAgent;
+    }
     for (const [nodeId, tasks] of taskListsByAgent(items, subagentIdOf)) {
       byAgent.set(nodeId ?? CHAT_AGENT_KEY, tasks);
     }
     return byAgent;
-  }, [items]);
+  }, [items, activeRun?.taskList]);
   /**
    * The agents whose turn is in flight — the transcript draws each of them a
    * row even when they have nothing to say yet, so the flow never goes silent
@@ -5401,13 +5493,65 @@ export function Chats({
     [activeRunId, activeRunStatus, unfocusedRunStatus],
   );
   /**
+   * "Has the agent stopped" for a thread the user is NOT looking at — the same
+   * reading {@link agentRunStatus} takes for the focused one, and it leaves the
+   * SHELLS out for the same reason that one does.
+   *
+   * REPORTED as "agent finoshed work, so i should gett notification. im not
+   * sure its correctt status in case we have shells", over a thread whose agent
+   * had finished with two commands still running. `agentRunStatus` already
+   * omitted `shellsRunning`, so a focused thread answered this correctly — but
+   * the two consumers here fell back to {@link unfocusedRunStatus}, which is the
+   * BADGE reading and does count shells, so every unfocused thread answered
+   * `held`. Notifications and the unseen mark are about unfocused threads by
+   * definition, which is why the asymmetry was invisible until a command
+   * outlived its turn: a shell that ends releases the hold and the banner
+   * arrives late, while a `pnpm dev` or a tailed log holds it for good and the
+   * banner never arrives at all.
+   *
+   * The badge is deliberately NOT changed with it. A running command IS worth
+   * showing, which is the report that put `shellsRunning` into the badge in the
+   * first place; what was wrong is only that "something this thread started is
+   * still running" was being read as "the agent is still working". The two
+   * statements are compatible, and now each has its own reading.
+   */
+  const unfocusedAgentStoppedStatus = useCallback(
+    (run: ChatRun): RunStatusKind =>
+      displayRunStatus({
+        status: run.status,
+        streaming: false,
+        awaitingAnswer: run.awaiting !== null,
+        // The DELEGATE hold stays: a sub-agent still out means the agent's work
+        // is genuinely unfinished, and announcing it as done is the defect this
+        // whole vocabulary was built to prevent.
+        heldForBackgroundWork: holding.has(run.id),
+      }),
+    [holding],
+  );
+  /**
    * The same per-run reading for the two consumers that ask "has this thread
    * stopped" rather than "what is it doing" — see {@link agentRunStatus}.
    */
   const agentStoppedRunStatus = useCallback(
     (run: ChatRun): RunStatusKind =>
-      run.id === activeRunId ? agentRunStatus : unfocusedRunStatus(run),
-    [activeRunId, agentRunStatus, unfocusedRunStatus],
+      run.id === activeRunId
+        ? agentRunStatus
+        : unfocusedAgentStoppedStatus(run),
+    [activeRunId, agentRunStatus, unfocusedAgentStoppedStatus],
+  );
+
+  /**
+   * Whether this run still has a DETACHED command out — the reading that says
+   * an ending might yet be undone, for {@link useRunNotifications}.
+   *
+   * The same `shellsOut` the badge reads, deliberately: the badge and the
+   * banner are then disagreeing about nothing, they are answering two different
+   * questions off one fact — "something this thread started is running" and
+   * "so this ending may not be one".
+   */
+  const runHasShellsOut = useCallback(
+    (run: ChatRun): boolean => shellsOut.has(run.id),
+    [shellsOut],
   );
 
   const notificationLabel = useCallback(
@@ -5434,6 +5578,10 @@ export function Chats({
     awaitingOf: runAwaiting,
     summaryOf: settleSummaryOf,
     quiet: quietSettles,
+    // A thread with a command still out may not be finished at all: the agent
+    // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
+    // The same reading the badge uses for its own shells word — see the hook.
+    deferEnding: runHasShellsOut,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
@@ -6518,6 +6666,10 @@ export function Chats({
                     <div className="flex flex-col gap-2 p-3">
                       <QueuedStrip
                         messages={queued}
+                        paused={
+                          activeRun ? pausedQueues.has(activeRun.id) : false
+                        }
+                        turnInFlight={streaming}
                         steerUnavailableReason={steerUnavailableReason}
                         steerInterrupts={steerInterrupts}
                         steerStatus={steerStatus}
@@ -6525,6 +6677,7 @@ export function Chats({
                         onRemove={removeQueued}
                         onReorder={reorderQueued}
                         onSteer={(id) => void steerQueued(id)}
+                        onTogglePause={toggleQueuePause}
                       />
 
                       {/* Its own shelf beside the queued strip, NOT more chips
@@ -7154,29 +7307,53 @@ export function Chats({
                   load={loadShellOutput}
                 />
 
-                {/* Archiving asks NOTHING of a settled chat — it is one press
-                    and it is reversible. This fires only for a chat with a
-                    turn in flight, where the shelving cancels that turn on the
-                    way, and cancelled work does not come back with the
-                    thread. */}
+                {/* One dialog for both archives; the COPY is what separates
+                    them. A settled chat is only being filed away, so it is
+                    told what it costs (the row) and what it does not (the
+                    conversation). A chat with a turn in flight has that turn
+                    cancelled on the way, and cancelled work does not come
+                    back with the thread — the one part of archiving that
+                    destroys something, and the only one drawn destructive. */}
                 <ConfirmDialog
                   open={archiving !== null}
                   busy={archiveBusy}
                   error={archiveError}
-                  title="Archive a running chat"
-                  confirmLabel="Cancel turn & archive"
+                  title={
+                    archiving?.status === 'running'
+                      ? 'Archive a running chat'
+                      : 'Archive chat'
+                  }
+                  confirmLabel={
+                    archiving?.status === 'running'
+                      ? 'Cancel turn & archive'
+                      : 'Archive'
+                  }
+                  confirmVariant={
+                    archiving?.status === 'running' ? 'destructive' : 'default'
+                  }
                   busyLabel="Archiving…"
                   onCancel={() => setArchiving(null)}
                   onConfirm={() => void confirmArchive()}>
-                  <>
-                    <strong>
-                      {archiving ? runLabel(archiving, workflowNames) : ''}
-                    </strong>{' '}
-                    is still working. Archiving it stops the turn and closes its
-                    agent session first — whatever it is part-way through is
-                    lost. The conversation itself is kept, and you can unarchive
-                    it at any time.
-                  </>
+                  {archiving?.status === 'running' ? (
+                    <>
+                      <strong>
+                        {archiving ? runLabel(archiving, workflowNames) : ''}
+                      </strong>{' '}
+                      is still working. Archiving it stops the turn and closes
+                      its agent session first — whatever it is part-way through
+                      is lost. The conversation itself is kept, and you can
+                      unarchive it at any time.
+                    </>
+                  ) : (
+                    <>
+                      Archive{' '}
+                      <strong>
+                        {archiving ? runLabel(archiving, workflowNames) : ''}
+                      </strong>
+                      ? It leaves the chat list and nothing is deleted — the
+                      transcript is kept, and you can unarchive it at any time.
+                    </>
+                  )}
                 </ConfirmDialog>
 
                 <ConfirmDialog

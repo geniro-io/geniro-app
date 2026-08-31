@@ -2080,6 +2080,21 @@ export interface RunStatusEvent {
    */
   pullRequests?: RunPullRequest[];
   /**
+   * Each agent's task list as it stands now — absent when this announce says
+   * nothing about it.
+   *
+   * ABSENT asserts nothing, on the rule every optional field here follows: only
+   * the capture that folded a new announcement knows anything about the list,
+   * and every other announce must leave the client's reading alone. A run whose
+   * agent keeps no list never broadcasts this at all.
+   *
+   * It rides the broadcast rather than the run ROOM because the composer's chip
+   * is not the only reader — the sidebar's badge is live for every thread, and a
+   * list that only moved for the chat in focus is the class of staleness this
+   * whole field exists to end.
+   */
+  taskList?: RunTaskGroup[];
+  /**
    * Whether a NAME for this run is being worked out right now — absent when this
    * announce says nothing about it.
    *
@@ -2318,6 +2333,36 @@ export const RunPullRequestSchema = z
   .meta({ id: 'RunPullRequest' });
 export type RunPullRequest = z.infer<typeof RunPullRequestSchema>;
 
+export const TaskStatusSchema = z.enum(['pending', 'in_progress', 'completed']);
+export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+
+/** One task, as it stands after folding every announcement about it. */
+export const RunTaskRowSchema = z
+  .object({
+    id: z.string(),
+    /** Null only for a task first seen in a patch that carried no text. */
+    title: z.string().nullable(),
+    /** Null when the CLI named a status the daemon does not recognise. */
+    status: TaskStatusSchema.nullable(),
+    /** The present-continuous label, for a CLI that sends one. */
+    activeForm: z.string().nullable(),
+  })
+  .meta({ id: 'RunTaskRow' });
+export type RunTaskRow = z.infer<typeof RunTaskRowSchema>;
+
+/**
+ * One AGENT's own task list — keyed by node id, `null` for a 1:1 chat's one
+ * agent. A delegate's rows are excluded upstream: its list belongs to its own
+ * block, and both CLIs number tasks from 1.
+ */
+export const RunTaskGroupSchema = z
+  .object({
+    nodeId: z.string().nullable(),
+    tasks: z.array(RunTaskRowSchema),
+  })
+  .meta({ id: 'RunTaskGroup' });
+export type RunTaskGroup = z.infer<typeof RunTaskGroupSchema>;
+
 export const RunWireSchema = z.object({
   id: z.string(),
   status: RunStatusSchema,
@@ -2460,6 +2505,21 @@ export const RunWireSchema = z.object({
     .string()
     .nullable()
     .describe('When this run was archived, or null while it is not'),
+  /**
+   * Each agent's own task list as it stands NOW, folded by the daemon from every
+   * announcement this run has written.
+   *
+   * On the ROW rather than left to the client, for the reason
+   * {@link RunWireSchema.shape.contextTokens} is: the renderer can only fold the
+   * announcements its loaded WINDOW holds, and neither CLI re-states the whole
+   * list — so past `HISTORY_PAGE` items the opening announcement falls out and
+   * the fold reports a total that has SHRUNK. See `utils/task-list-fold.ts`.
+   */
+  taskList: z
+    .array(RunTaskGroupSchema)
+    .describe(
+      "Each agent's own task list as it stands now, folded from the whole transcript",
+    ),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

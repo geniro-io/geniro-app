@@ -220,6 +220,7 @@ const run1: ChatRun = {
   archivedAt: null,
   lastMessage: null,
   pullRequests: [],
+  taskList: [],
 };
 
 // A fake DaemonClient whose item/reconnect listeners the test can fire.
@@ -1990,6 +1991,110 @@ describe('Chats — the system notifications a thread earns', () => {
     });
   });
 
+  it('reports a finished thread whose detached COMMAND is still running', async () => {
+    // REPORTED as "agent finoshed work, so i should gett notification", over a
+    // thread that had finished with commands still out. The badge reading counts
+    // shells and answers `held`, which is never settled — so a background thread
+    // whose command outlives its turn (`pnpm dev`, a tailed log) earned no
+    // banner at all. The "has the agent stopped" reading leaves shells out.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        emitRunStatus({
+          runId: 'r2',
+          status: 'completed',
+          activity: null,
+          shellsOpen: 2,
+        });
+      });
+
+      // NOT yet: an agent routinely ends its turn waiting on a command and
+      // resumes the moment it reports, so the claim is held while it might
+      // still be undone — the reported "our application thinks the agent
+      // finished, although a second later it continues".
+      expect(notify).not.toHaveBeenCalled();
+
+      await act(async () => {
+        vi.advanceTimersByTime(10_000);
+      });
+
+      // And it DOES arrive once the agent has stayed quiet — which is the
+      // other report, about a `pnpm dev` that never reports and so would
+      // otherwise suppress the banner for good.
+      expect(notify).toHaveBeenCalledWith({
+        kind: 'turn-end',
+        runId: 'r2',
+        title: 'Second chat',
+        body: 'The turn finished.',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('DROPS the held ending when the agent starts working again', async () => {
+    // The retraction, which is what makes holding the claim worth anything: a
+    // banner already posted cannot be taken back, so the only way to be right
+    // is not to have posted it. Claude Code's own UI gets this for free — its
+    // "done" is the prompt returning, and more output simply follows.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        emitRunStatus({
+          runId: 'r2',
+          status: 'completed',
+          activity: null,
+          shellsOpen: 2,
+        });
+      });
+      await act(async () => {
+        // The command reported and the agent carried straight on.
+        emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays SILENT while a delegate is still out, which is real work', async () => {
+    // The other half of the same rule, and what stops the fix above from
+    // becoming "announce every hold": a sub-agent still working means the
+    // agent's job is genuinely unfinished, so there is no ending to report.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        holdingFor: 1,
+      });
+    });
+
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('reports a background thread that parked on a QUESTION', async () => {
     twoChats();
     const { client, emitRunStatus } = makeClient();
@@ -3135,6 +3240,7 @@ describe('Chats workflow runs', () => {
     archivedAt: null,
     lastMessage: null,
     pullRequests: [],
+    taskList: [],
   };
 
   function wfItem(
@@ -3693,6 +3799,7 @@ describe('Chats — handing a conversation to the user', () => {
       archivedAt: null,
       lastMessage: null,
       pullRequests: [],
+      taskList: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     workflowApi.getWorkflow.mockResolvedValue({
@@ -5745,6 +5852,95 @@ describe('Chats queued messages', () => {
     ).toContain('queued question');
   });
 
+  /** A queue-strip control named by its visible text (Pause / Resume). */
+  async function clickStripControl(
+    container: HTMLElement,
+    text: string,
+  ): Promise<void> {
+    await act(async () => {
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[aria-label="Queued messages"] button',
+        ),
+      ]
+        .find((button) => button.textContent?.trim() === text)!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('a PAUSED queue does not drain when the turn ends, and Resume releases it', async () => {
+    // ASKED FOR as "some toggle so queue of messages will not execute
+    // automatically, but only on user click". The terminal item is the drain's
+    // own trigger, so this is the exact event the pause has to survive.
+    api.sendChatMessage.mockResolvedValue(msg(10, 'user', 'held back'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'held back');
+    await clickButton(container, 'Queue');
+    await clickStripControl(container, 'Pause');
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+    // And it is still there, said to be held rather than about to go.
+    const strip = (): HTMLElement | null =>
+      container.querySelector('[aria-label="Queued messages"]');
+    expect(strip()!.textContent).toContain('Queue paused');
+    expect(strip()!.textContent).toContain('held back');
+
+    // Resuming must RELEASE it, not merely re-arm: the turn already ended, so
+    // the event that would have drained it is in the past.
+    await clickStripControl(container, 'Resume');
+    expect(api.sendChatMessage).toHaveBeenCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'held back' },
+    });
+    expect(strip()).toBeNull();
+  });
+
+  it('a paused queue still goes out one message at a time, on the user’s press', async () => {
+    // The other half of "only on user click": the release is per message, so a
+    // press does not empty a queue the user paused precisely to go through.
+    api.sendChatMessage
+      .mockResolvedValueOnce(msg(10, 'user', 'first'))
+      .mockResolvedValueOnce(msg(12, 'user', 'second'));
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    await type(container, 'first');
+    await clickButton(container, 'Queue');
+    await type(container, 'second');
+    await clickButton(container, 'Queue');
+    await clickStripControl(container, 'Pause');
+
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
+
+    // The head's own Send, which is where the release lives.
+    await clickButton(container, 'Send queued message 1 now');
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendChatMessage).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      sendMessageDto: { text: 'first' },
+    });
+
+    // The turn that press started now ends — and 'second' STAYS, which is what
+    // separates a paused queue from a merely delayed one.
+    await act(async () => {
+      emitItem(terminal(11));
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector('[aria-label="Queued messages"]')?.textContent,
+    ).toContain('second');
+  });
+
   it('drains ONE queued message per settled turn, in order', async () => {
     api.sendChatMessage
       // Both are held client-side, so the ONLY calls are the drain's.
@@ -6898,6 +7094,32 @@ describe('Chats sidebar list', () => {
     );
   }
 
+  /**
+   * Press the row's Archive and then confirm it. EVERY archive asks now, so a
+   * test about what archiving DOES has to get past the dialog first; the
+   * dialog itself is pinned by the two tests below.
+   */
+  async function archiveRow(
+    container: HTMLElement,
+    label = 'Archive My chat',
+    confirmLabel = 'Archive',
+  ): Promise<void> {
+    await act(async () => {
+      rowAction(container, label)!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+    await act(async () => {
+      [
+        ...container.querySelectorAll<HTMLButtonElement>(
+          '[role="dialog"] button',
+        ),
+      ]
+        .find((b) => b.textContent === confirmLabel)!
+        .click();
+    });
+  }
+
   it('switches the sidebar between the desk and the archive, and the two listings are disjoint', async () => {
     // The reported ask: "some filter to show archived threads as well".
     api.listChats.mockImplementation(
@@ -7009,8 +7231,6 @@ describe('Chats sidebar list', () => {
     // `Show all` hides nothing, so the row that was just shelved is still one
     // this listing holds. Route this through the drop path and the thread
     // disappears from a list whose whole promise is that it does not.
-    // Settled, so archiving is a single press — the running-chat confirm is a
-    // different path with its own test.
     const settled = { ...run1, status: 'completed' as const };
     api.listChats.mockImplementation(
       (params?: { scope?: string }): Promise<ChatRun[]> =>
@@ -7024,9 +7244,7 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
     await pickScope(container, 'Show all');
 
-    await act(async () => {
-      rowAction(container, 'Archive My chat')!.click();
-    });
+    await archiveRow(container);
 
     expect(api.archiveChat).toHaveBeenCalledWith({ runId: run1.id });
     expect(container.textContent).toContain('My chat');
@@ -7095,8 +7313,11 @@ describe('Chats sidebar list', () => {
     expect(rowAction(container, 'Archive Call Demo')).toBeNull();
   });
 
-  it('archives a SETTLED chat in one press, with no dialog', async () => {
-    // Archiving destroys nothing and is reversible, so it does not ask.
+  it('asks before archiving a SETTLED chat, without calling it destructive', async () => {
+    // Archiving one destroys nothing, and it still asks: the press sits one
+    // row from Delete and its whole visible effect is a conversation leaving
+    // the sidebar. What the settled arm must NOT do is borrow the running
+    // arm's words or its red button.
     api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
     const { client } = makeClient();
     const container = await mount(client);
@@ -7107,7 +7328,21 @@ describe('Chats sidebar list', () => {
       );
     });
 
-    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    const dialog = container.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain('My chat');
+    expect(dialog.textContent).toContain('nothing is deleted');
+    expect(dialog.textContent).not.toContain('stops the turn');
+    expect(api.archiveChat).not.toHaveBeenCalled();
+
+    const confirm = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Archive',
+    )!;
+    expect(confirm.className).not.toContain('bg-destructive');
+
+    await act(async () => {
+      confirm.click();
+    });
+
     expect(api.archiveChat).toHaveBeenCalledWith({ runId: 'r1' });
     expect(
       [
@@ -7136,10 +7371,14 @@ describe('Chats sidebar list', () => {
     expect(dialog.textContent).toContain('stops the turn');
     expect(api.archiveChat).not.toHaveBeenCalled();
 
+    const confirm = [...dialog.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Cancel turn & archive',
+    )!;
+    // The one arm that loses something is the one drawn destructive.
+    expect(confirm.className).toContain('bg-destructive');
+
     await act(async () => {
-      [...dialog.querySelectorAll('button')]
-        .find((b) => b.textContent === 'Cancel turn & archive')!
-        .click();
+      confirm.click();
     });
 
     expect(api.archiveChat).toHaveBeenCalledWith({ runId: 'r1' });
@@ -7155,11 +7394,7 @@ describe('Chats sidebar list', () => {
     await clickRun(container, 'My chat');
     expect(client.leaveRun).not.toHaveBeenCalledWith('r1');
 
-    await act(async () => {
-      rowAction(container, 'Archive My chat')!.dispatchEvent(
-        new MouseEvent('click', { bubbles: true }),
-      );
-    });
+    await archiveRow(container);
 
     expect(api.archiveChat).toHaveBeenCalledWith({ runId: 'r1' });
     expect(client.leaveRun).toHaveBeenCalledWith('r1');

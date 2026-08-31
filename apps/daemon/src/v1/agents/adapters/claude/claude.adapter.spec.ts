@@ -43,6 +43,7 @@ import {
   CLAUDE_RESUME_FLAG,
   CLAUDE_STRICT_MCP_CONFIG_FLAG,
   CLAUDE_TODO_TOOLS_ENV,
+  GENIRO_MCP_TOOL_TIMEOUT_MS,
 } from './claude.const';
 
 /**
@@ -1026,6 +1027,10 @@ describe('ClaudeAdapter MCP config delivery (caller turns)', () => {
           type: 'http',
           url: ENDPOINT.url,
           headers: { Authorization: 'Bearer call-token-1' },
+          // Overrides the env var above for THIS server alone: a host tool
+          // parks on a person, and half an hour is not long enough to step
+          // away from one. The user's own servers keep the 30-minute default.
+          timeout: GENIRO_MCP_TOOL_TIMEOUT_MS,
         },
       },
     });

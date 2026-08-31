@@ -63,12 +63,46 @@ describe('MessageBubble', () => {
     }
   });
 
-  it('keeps the width cap that min-w-0 exists to make reachable', () => {
-    // min-w-0 alone is not the fix — it only lets max-w-[76%] win. Pinned so a
-    // future "let bubbles be full width" change has to face this pairing
-    // rather than silently re-opening the overflow from the other side.
-    render(<MessageBubble variant="user">body</MessageBubble>);
+  it('lets a MESSAGE use the whole column, and still bounds it', () => {
+    // Both halves, because each without the other is a defect that shipped.
+    //
+    // The FRACTION is gone: capped at 76% and `self-start`, every agent row sat
+    // in the left three-quarters of the pane with the last quarter empty —
+    // REPORTED as the transcript's wrong content width, "previously it was
+    // capped, so all messages were on the left". `max-w-[…%]` rather than a
+    // looser fraction, because no fraction is right: the pane doubles in width
+    // when the side columns fold away, so the dead space grows with the window.
+    //
+    // A CAP remains, which is what the previous version of this test was
+    // guarding and the reason it is edited rather than deleted: min-w-0 only
+    // lets a max-width win, and with none at all an unbreakable token (a pasted
+    // URL) sizes the bubble past the column, where the scroller's
+    // `overflow-x-hidden` clips it — the same "text is outside block" report,
+    // reopened from the other side. 100% is the whole column and not a pixel
+    // more.
+    for (const variant of [
+      'user',
+      'assistant',
+      'reasoning',
+      'error',
+    ] as const) {
+      render(<MessageBubble variant={variant}>body</MessageBubble>);
+      expect(bubble()?.className, variant).toContain('max-w-full');
+      expect(bubble()?.className, variant).not.toMatch(/max-w-\[\d+%\]/);
+      act(() => root?.unmount());
+      container?.remove();
+    }
+  });
+
+  it('keeps the NOTE capped, which is what makes it read as centred', () => {
+    // The one variant that is not a message. `self-center` centres the box, so
+    // a note allowed the full width is a block touching both edges and the
+    // centring stops being visible at all — the "this message should be in
+    // center" report, which the cap above answers. Pinned separately so the
+    // change that freed the messages cannot quietly take this with it.
+    render(<MessageBubble variant="note">body</MessageBubble>);
     expect(bubble()?.className).toContain('max-w-[76%]');
+    expect(bubble()?.className).toContain('self-center');
   });
 
   it('renders the role caption only when one is given', () => {

@@ -77,6 +77,7 @@ import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
+import { asRecord } from '../utils/json-util';
 import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
@@ -4431,6 +4432,21 @@ export class ChatService implements OnModuleInit {
    */
   private announcePreview(item: ItemWire): void {
     if (item.kind !== 'message') {
+      return;
+    }
+    // A DELEGATE's message is not this thread's last word. It is an ordinary
+    // `message` row on the run — which is what lets the transcript nest it under
+    // its block — so a fanned-out turn streams several of them and the sidebar
+    // line ended up previewing a conversation the row cannot even open.
+    // REPORTED as "last message in thread card is incorrect - maybe it's from
+    // subagent? We sohuld only take last messages from parent thread".
+    //
+    // The same exclusion the listing's own query makes (`ItemDao`'s
+    // `NOT_A_DELEGATE`), and it has to be made twice because the two take turns
+    // writing this one line: the query on a refetch, this as messages stream. A
+    // rule held on one side only is a preview whose correctness depends on which
+    // source spoke last.
+    if (asRecord(item.payload)?.['parentToolUseId'] !== undefined) {
       return;
     }
     const text = messageTextOf(item.payload);

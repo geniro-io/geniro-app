@@ -194,20 +194,37 @@ describe('an image the user can open', () => {
 
     expect(control('Zoom in')).not.toBeNull();
     expect(control('Zoom out')).not.toBeNull();
-    expect(control('Reset zoom to fit')).not.toBeNull();
+    expect(control('Full screen')).not.toBeNull();
   });
 
-  it('opens at fit, with nothing to zoom out of or reset', () => {
+  it('opens at fit, with nothing to zoom out of and no reset to offer', () => {
     // The `atFit` branch, entered deliberately per `.claude/rules/testing.md`.
-    // MIN_SCALE IS fit-to-window, so at rest both of these would do nothing —
-    // and a live control that does nothing when pressed reads as broken.
+    // MIN_SCALE IS fit-to-window, so zooming out would do nothing — and a live
+    // control that does nothing when pressed reads as broken.
     render(<ZoomableImage src={SRC} alt="a shot" />);
     press(thumbnail()!);
 
     expect(control('Zoom out')!.disabled).toBe(true);
-    expect(control('Reset zoom to fit')!.disabled).toBe(true);
+    // ABSENT rather than disabled. It used to stand here wearing a `Scan`
+    // glyph — a square with corner brackets, which reads as "full screen"
+    // everywhere else — so the one control that looked like it opened the
+    // picture up was the one that could not be pressed, and it was reported
+    // as a broken full-screen button.
+    expect(control('Reset zoom to fit')).toBeNull();
     // Zooming IN is the one thing there is always room for.
     expect(control('Zoom in')!.disabled).toBe(false);
+  });
+
+  it('offers a FULL SCREEN control that is never dead', () => {
+    // The fix for the report above: the glyph now belongs to a control that
+    // really does something, and it is live at every magnification — including
+    // fit, which is exactly where the old one was disabled.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+    press(thumbnail()!);
+
+    const button = control('Full screen')!;
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-pressed')).toBe('false');
   });
 
   it('draws NO arrows for a lone picture, and ignores the arrow keys', () => {

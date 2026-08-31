@@ -327,6 +327,31 @@ describe('Menu', () => {
     expect(panel.className).toContain('max-w-96');
   });
 
+  it('takes focus on open and draws NO ring around itself for it', () => {
+    // REPORTED as a border to drop on the `+` menu, over a dark-theme
+    // screenshot where a caramel outline traced the whole panel — measured in
+    // the running app as `outline-color: --ring/50`, the base layer's
+    // `outline-ring/50` applied because this panel is FOCUSED on every open so
+    // the arrow keys have a listener. So it was a focus ring, drawn for a user
+    // who had opened the menu by hovering.
+    //
+    // Both halves are asserted because either one alone is a false pin: the
+    // focus is what SUMMONS the ring, so a spec that only read the class would
+    // go on passing if the focus moved elsewhere and the class became
+    // decoration. A CLASS assertion for the second half deliberately — jsdom
+    // computes no layout and resolves no cascade, so the drawn outline is
+    // unobservable here, and the declaration is the whole of the fix.
+    const el = open();
+    const panel = el.querySelector<HTMLElement>('[data-slot="menu-panel"]')!;
+
+    expect(document.activeElement).toBe(panel);
+    expect(panel.className).toContain('outline-none');
+    // And the keyboard is not left without an indicator, which is the only
+    // reason the ring could be dropped rather than retinted: the highlight sits
+    // on row 0 from the moment the panel opens.
+    expect(rows(el)[0]!.className).toContain('bg-accent');
+  });
+
   it('lets a caller in a narrow container pin the width instead', () => {
     // The chat sidebar's own override — measured at 260px, a menu sized by its
     // longest row came out 257px inside a 235px slot and was clipped by the

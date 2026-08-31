@@ -8,6 +8,7 @@ import type {
   AgentMcpServer,
   AgentMcpServerStatus,
 } from '../adapters/adapter.types';
+import { isHostMcpServerName } from '../utils/host-question';
 import { harvestKey, HarvestStore } from './harvest-store';
 
 /**
@@ -105,6 +106,12 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
    * Record one turn's reported servers for the folder it ran in. De-duped by
    * name, first occurrence winning; an empty report is a no-op rather than an
    * eraser (see {@link HarvestStore.recordAt}).
+   *
+   * geniro's OWN endpoint is dropped here rather than at the two call sites —
+   * see {@link isHostMcpServerName}. This is the one door every harvested row
+   * passes through, which is the same reasoning `utils/redact.ts` records for
+   * doing its work at one door: a third writer added later is covered without
+   * its author knowing it had to be.
    */
   record(
     agent: AgentKind,
@@ -116,7 +123,7 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
     const seen = new Set<string>();
     for (const server of servers) {
       const name = server.name.trim();
-      if (name === '' || seen.has(name)) {
+      if (name === '' || seen.has(name) || isHostMcpServerName(name)) {
         continue;
       }
       seen.add(name);
@@ -131,7 +138,9 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
     cwd: string,
     configDir: string | null,
   ): AgentMcpServer[] | null {
-    return this.getAt(harvestKey(agent, cwd, configDir ?? ''));
+    return withoutHostServer(
+      this.getAt(harvestKey(agent, cwd, configDir ?? '')),
+    );
   }
 
   /**
@@ -150,6 +159,25 @@ export class McpHarvestStore extends HarvestStore<AgentMcpServer> {
     cwd: string,
     configDir: string | null,
   ): AgentMcpServer[] | null {
-    return this.getAnyAt(harvestKey(agent, cwd, configDir ?? ''));
+    return withoutHostServer(
+      this.getAnyAt(harvestKey(agent, cwd, configDir ?? '')),
+    );
   }
+}
+
+/**
+ * Drop geniro's own endpoint from a set on the way OUT as well as on the way in.
+ *
+ * The write-side filter alone would leave every harvest already on disk showing
+ * the row until that folder happened to run another turn — the file is
+ * REPLACED per recording, never migrated, and a folder the user is not working
+ * in today may not be re-recorded for weeks. Their own file held four such
+ * rows, one per folder, so the fix would have looked like it had not landed.
+ */
+function withoutHostServer(
+  servers: AgentMcpServer[] | null,
+): AgentMcpServer[] | null {
+  return servers === null
+    ? null
+    : servers.filter((server) => !isHostMcpServerName(server.name));
 }

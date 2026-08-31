@@ -5,6 +5,32 @@ import { BaseDao } from '@packages/mikroorm';
 import { Item } from '../../runs/entity/item.entity';
 import { messageText } from '../utils/message-preview';
 
+/**
+ * The SIDEBAR PREVIEW's one exclusion: a message a DELEGATE wrote.
+ *
+ * REPORTED as "I see last message in thread card is incorrect - maybe it's from
+ * subagent? We sohuld only take last messages from parent thread". A delegate's
+ * messages are ordinary `message` rows ON the run — that is what lets the
+ * transcript nest them under their block — so the newest message of a fanned-out
+ * turn is routinely one of theirs, and the row then previewed a conversation the
+ * user cannot see from the sidebar at all.
+ *
+ * TWIN PARSER of `apps/ui/src/renderer/chats/subagent-payload.ts`
+ * `subagentIdOf`: `parentToolUseId` is the key the daemon writes and the
+ * renderer reads to place a row under its delegate, and a rename on either side
+ * must be a rename on both.
+ *
+ * Matched against the payload TEXT rather than through `json_extract`, because
+ * the column is TEXT holding JSON and every other reader here treats it that
+ * way. The cost of the crude match is a message whose own words contain the key
+ * name being skipped, which loses that run one preview line and falls back to
+ * the message before it — the safe direction, and far cheaper than the failure
+ * it prevents.
+ */
+const NOT_A_DELEGATE = {
+  $not: { payload: { $like: '%parentToolUseId%' } },
+} as const;
+
 @Injectable()
 export class ItemDao extends BaseDao<Item> {
   constructor(em: EntityManager) {
@@ -145,7 +171,7 @@ export class ItemDao extends BaseDao<Item> {
     }
     const repo = this.getRepo(txEm);
     const heads = await repo.find(
-      { runId: { $in: runIds }, kind: 'message' },
+      { runId: { $in: runIds }, kind: 'message', ...NOT_A_DELEGATE },
       { fields: ['runId', 'seq'], disableIdentityMap: true },
     );
     // ONE head per run now — the highest seq. The role no longer decides
@@ -170,6 +196,12 @@ export class ItemDao extends BaseDao<Item> {
         // the pair the database returned last decided whether the run had a
         // preview line at all.
         kind: 'message',
+        // Repeated with the head query above for the same reason the kind is:
+        // this second read fetches BY (runId, seq), and a delegate's row can
+        // share a seq with the head on a transcript written before
+        // `ItemSeqAllocator` — so without it the row excluded a moment ago
+        // comes back anyway.
+        ...NOT_A_DELEGATE,
         $or: [...headSeq].map(([runId, seq]) => ({ runId, seq })),
       },
       {
@@ -379,6 +411,35 @@ export class ItemDao extends BaseDao<Item> {
       {
         orderBy: { seq: 'asc' },
         fields: ['seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * Every `task_list` announcement a run has written, oldest first — the input
+   * to `utils/task-list-fold.ts`.
+   *
+   * The WHOLE set rather than an incremental slice, unlike
+   * {@link pullRequestCandidates} beside it, and the difference is what the two
+   * scans cost. A pull-request scan reads `tool_result` rows, which are most of
+   * a transcript (14,068 items on a real thread here), so it must be marked and
+   * resumed. These are the rows an agent wrote ABOUT its own checklist, and
+   * there are a few dozen at most — measured on real turns, fifteen for a
+   * five-task claude run and six for the same job on cursor — served straight
+   * off the `kind` index. Re-folding all of them is what makes the answer
+   * correct with no marker to keep in step: a daemon restarted mid-conversation,
+   * and every run that predates this column, fold identically to a live one.
+   */
+  async taskListRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'nodeId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'task_list' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['nodeId', 'payload'],
         disableIdentityMap: true,
       },
     );

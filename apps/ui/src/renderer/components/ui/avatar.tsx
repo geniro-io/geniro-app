@@ -1,3 +1,5 @@
+import { User } from 'lucide-react';
+
 import { cn } from './utils';
 
 /**
@@ -82,7 +84,19 @@ export function InitialsAvatar({
         solid ? 'bg-avatar-user' : avatarTone(colorKey ?? name),
         className,
       )}>
-      {initialsOf(name)}
+      {/* The USER's own avatar is a person glyph, not a letter — asked for as
+          "Let's change user icon". Initials earn their place on an AGENT, where
+          several are on screen at once and the letters are what tell one from
+          another; the user is the only one of themselves in any transcript, so
+          `U` was a letter carrying no information. `solid` is the right gate
+          because it already means "the user's own", so nothing has to be
+          threaded through the call sites. The circle, its size and its token
+          colour are untouched. */}
+      {solid ? (
+        <User aria-hidden="true" className="size-[55%]" strokeWidth={2.5} />
+      ) : (
+        initialsOf(name)
+      )}
     </span>
   );
 }

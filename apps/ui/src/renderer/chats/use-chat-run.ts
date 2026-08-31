@@ -1221,6 +1221,17 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
        * event carries nothing here and asserts nothing.
        */
       const opened = event.pullRequests;
+      /**
+       * The agent's own task list, folded by the DAEMON over the whole
+       * transcript.
+       *
+       * It rides this channel for a reason the pull requests do not have: the
+       * client's own fold can only see the announcements its loaded window
+       * holds, and neither CLI re-states the whole list — so on a long thread
+       * the opening announcement falls out and the count silently SHRINKS.
+       * Absent asserts nothing, like every other three-state field here.
+       */
+      const tasks = event.taskList;
       // Absent asserts nothing, exactly like every other three-state field on
       // this event: an ordinary activity announce must not lower a shimmer.
       if (event.titlePending !== undefined) {
@@ -1339,6 +1350,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   // merging again here would keep a ref a later pass had
                   // dropped.
                   ...(opened === undefined ? {} : { pullRequests: opened }),
+                  // Replaced wholesale for the reason above, and here it is the
+                  // whole point: the daemon folded every announcement the run
+                  // has ever written, so this IS the list. Merging it with what
+                  // the row held would put back exactly the window-bound
+                  // partial fold this field exists to replace.
+                  ...(tasks === undefined ? {} : { taskList: tasks }),
                 }
               : run,
           ),

@@ -564,6 +564,14 @@ export const CLAUDE_TITLE_DIR_PREFIX = 'geniro-title-';
  * Default `MCP_TOOL_TIMEOUT` for turns that carry the call tools: a sync
  * call_agent legitimately runs for minutes (a full callee turn), far past the
  * CLI's own default MCP client timeout.
+ *
+ * It is the floor for EVERY server that turn loads, the user's own included,
+ * which is both why it is generous and why it is not generous enough for one
+ * case: a tool that parks on a PERSON. That case has its own, per-server
+ * ceiling — {@link GENIRO_MCP_TOOL_TIMEOUT_MS} — which the CLI lets this app set
+ * on its own entry alone, so a genuinely hung server of the user's still gives
+ * up after half an hour. The two are not duplicates and must not be merged: one
+ * bounds a machine, the other waits for a human.
  */
 export const CLAUDE_MCP_TOOL_TIMEOUT_MS = 30 * 60_000;
 
@@ -579,6 +587,37 @@ export const CLAUDE_MCP_CONFIG_SUFFIX = '.json';
 
 /** The token rides IN the file, so the file is the user's alone. */
 export const CLAUDE_MCP_CONFIG_FILE_MODE = 0o600;
+
+/**
+ * How long ONE call to a geniro host tool may take, in milliseconds — the
+ * `timeout` field on this app's own entry in the per-turn `--mcp-config`.
+ *
+ * REPORTED as questions expiring: an agent's own reasoning read "Timed out
+ * again. The user seems to step away when the cards fire", over a card that was
+ * still on screen waiting to be answered. Nothing in geniro expires one — the
+ * turn's silence deadline is already exempt while it is blocked on a verdict —
+ * so the deadline was the CLI's, and it belongs to the TOOL CALL rather than to
+ * the turn: `ask_user_question`, `propose_patch` and `propose_plan` are all
+ * served by holding the HTTP POST open until a human answers, and the client
+ * gives up first.
+ *
+ * The field is read off that CLI's own bundle (2.1.251), whose http server
+ * schema is `{type, url, headers, tools, timeout, request_timeout_ms,
+ * alwaysLoad}` and describes this one as a "Per-server tool-call timeout in
+ * milliseconds… Hard wall-clock limit per call". Two things there decided the
+ * shape of this fix. It is PER SERVER, which is why it goes in this file rather
+ * than as the `MCP_TOOL_TIMEOUT` env var the same text names: the env var would
+ * lift the ceiling for every MCP server the user loads, so a genuinely hung one
+ * of theirs would hang forever too. And "progress notifications do not extend
+ * it" rules out the other obvious answer — teaching this app's stateless MCP
+ * route to stream progress would not have helped.
+ *
+ * A DAY rather than an attempt at "no timeout", which the schema cannot express
+ * (a positive integer is required). A question left overnight is a real thing a
+ * user does; a call still open a day later is a leak, and the ceiling is then
+ * the only thing that ends it.
+ */
+export const GENIRO_MCP_TOOL_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 
 // ── The MCP readiness gate (PROBE EVIDENCE — undocumented control subtype) ──
 //

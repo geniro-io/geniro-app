@@ -37,6 +37,7 @@ import { ComparisonBroker } from './services/comparison.broker';
 import { ConfigDirPinService } from './services/config-dir-pin.service';
 import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
+import { CursorUsageService } from './services/cursor-usage.service';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
 import { GalleryBroker } from './services/gallery.broker';
@@ -59,6 +60,7 @@ import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
 import { StrandedChildReaper } from './services/stranded-child-reaper.service';
+import { TaskListCaptureService } from './services/task-list-capture.service';
 import { UserQuestionBroker } from './services/user-question.broker';
 import { CHILD_JOURNAL_FILE_NAME } from './utils/child-journal';
 import { defaultSpawn } from './utils/spawn-cli';
@@ -87,6 +89,8 @@ import { defaultSpawn } from './utils/spawn-cli';
   providers: [
     ChatService,
     PullRequestCaptureService,
+    TaskListCaptureService,
+    CursorUsageService,
     UserQuestionBroker,
     FindingsReportBroker,
     ChartBroker,

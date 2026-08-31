@@ -13,6 +13,7 @@ import {
   CLAUDE_MCP_CONFIG_FILE_MODE,
   CLAUDE_MCP_CONFIG_PREFIX,
   CLAUDE_MCP_CONFIG_SUFFIX,
+  GENIRO_MCP_TOOL_TIMEOUT_MS,
 } from '../claude.const';
 
 /**
@@ -50,6 +51,7 @@ export function writeTurnMcpConfig(
           type: 'http',
           url: endpoint.url,
           headers: { Authorization: `Bearer ${endpoint.token}` },
+          timeout: GENIRO_MCP_TOOL_TIMEOUT_MS,
         },
       },
     }),

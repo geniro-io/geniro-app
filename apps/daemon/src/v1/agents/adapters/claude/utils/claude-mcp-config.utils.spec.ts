@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { GENIRO_MCP_TOOL_TIMEOUT_MS } from '../claude.const';
 import {
   sweepStaleTurnMcpConfigs,
   writeTurnMcpConfig,
@@ -49,9 +50,29 @@ describe('writeTurnMcpConfig', () => {
           type: 'http',
           url: ENDPOINT.url,
           headers: { Authorization: `Bearer ${ENDPOINT.token}` },
+          timeout: GENIRO_MCP_TOOL_TIMEOUT_MS,
         },
       },
     });
+  });
+
+  it('gives its own tools a timeout a HUMAN can outlast', () => {
+    // The reported "timed out again", on a question card still on screen
+    // waiting to be answered. Every host tool that parks on a person is served
+    // by holding the POST open, so the CLI's per-call limit is what expires
+    // them — and `timeout` is that limit, read off its own schema.
+    //
+    // Asserted as a FLOOR rather than the exact constant: the number is a
+    // judgement about how long somebody might be away, and a spec that pinned
+    // it would fail on every re-judgement while catching nothing. What must not
+    // regress is the ORDER OF MAGNITUDE — a value in minutes is the defect.
+    const config: unknown = JSON.parse(
+      readFileSync(writeTurnMcpConfig(tempDir(), ENDPOINT), 'utf8'),
+    );
+    const server = (
+      config as { mcpServers: Record<string, { timeout?: number }> }
+    ).mcpServers[ENDPOINT.serverName];
+    expect(server?.timeout).toBeGreaterThanOrEqual(60 * 60 * 1000);
   });
 
   it('writes the token-bearing file 0600 — argv would show it to every account', () => {

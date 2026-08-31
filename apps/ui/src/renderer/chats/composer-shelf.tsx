@@ -18,7 +18,7 @@ import {
 } from './shelf-chip';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
-import { SubagentIcon, SubagentRows } from './subagent-list';
+import { SubagentRows } from './subagent-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import type { WorkflowEntry } from './transcript-groups';
@@ -312,7 +312,15 @@ export function RunningSubagentChips({
       panelClassName="max-h-64 w-[20rem] overflow-y-auto"
       trigger={
         <>
-          <SubagentIcon className="text-muted-foreground" />
+          {/* A SPINNER, like the terminals chip beside it — asked for by name
+              ("i wanna have loader for subagents chip as well"), and honest
+              here for exactly the reason it is honest there: this chip is not
+              drawn at all unless `running > 0`, so every time it is on screen a
+              delegate IS working. The earlier objection — that this list holds
+              the finished delegates too — is true of the PANEL behind the chip
+              and never of the chip, whose figure has always been the live count
+              alone. */}
+          <Spinner className="size-3.5" />
           <span className="font-medium">Sub-agents</span>
           <span className="text-muted-foreground tabular-nums">{running}</span>
         </>

@@ -653,7 +653,22 @@ export function Menu({
         // so a genuinely long label truncates exactly as before — and a caller
         // that pins a width for a narrow container (`min-w-0 w-52`, the chat
         // sidebar) still wins, its class landing after this one.
-        'flex w-max min-w-56 max-w-96 flex-col overflow-hidden',
+        // No focus ring on the PANEL. It is focused on every open so the arrow
+        // keys have a listener (see the effect above), and the browser draws
+        // the base layer's `outline-ring/50` around the whole box for it —
+        // caramel, at full radius, on a menu the user opened by HOVERING.
+        // REPORTED as a border to drop, over a dark-theme screenshot where that
+        // ring was by some way the loudest thing on screen; on the light theme
+        // it is the same ring against a warmer ground.
+        //
+        // Dropping it costs no keyboard affordance, which is the only reason
+        // this is a deletion rather than a retint: the panel is a container
+        // that focus lands on to receive keys, and the keyboard indicator is
+        // the HIGHLIGHTED ROW (`bg-accent`, set to row 0 on open) — so a ring
+        // around the box was a second, louder indicator of the same thing.
+        // `Dialog`'s card carries `outline-none` for exactly this reason and
+        // this panel simply never got it.
+        'flex w-max min-w-56 max-w-96 flex-col overflow-hidden outline-none',
         // The placement utilities are `absolute` offsets and belong to the
         // ancestor mode alone; the floating box above carries its own.
         box === null &&

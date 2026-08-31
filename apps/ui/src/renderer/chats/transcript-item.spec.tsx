@@ -694,7 +694,7 @@ describe('turn_complete — how long the turn worked', () => {
       </TurnDurationContext.Provider>,
     );
     expect(container.textContent).toContain('7.6s');
-    expect(container.textContent).toContain('$0.2110');
+    expect(container.textContent).toContain('$0.21');
     // ONE line, not two. The note bubble is a `flex-col`, so a duration span
     // beside the cost text stacks instead of sitting next to it — which is
     // exactly what happened, and only showed up on screen.
@@ -703,7 +703,7 @@ describe('turn_complete — how long the turn worked', () => {
     // reads 1 either way, so that assertion passed with the fix reverted.
     const bubble = container.querySelector('[data-role="note"]');
     expect(bubble?.childNodes.length).toBe(1);
-    expect(bubble?.textContent).toBe('\u2713 done \u00b7 7.6s \u00b7 $0.2110');
+    expect(bubble?.textContent).toBe('\u2713 done \u00b7 7.6s \u00b7 $0.21');
   });
 
   it("names which clock it is, and splits the CLI's own figure on hover", () => {
@@ -764,7 +764,24 @@ describe('turn_complete — how long the turn worked', () => {
     // separator or an empty duration would be a regression on every historical
     // chat, whose rows predate the field entirely.
     render(<TranscriptItem item={done({ usage: { costUsd: 0.211 } })} />);
-    expect(container.textContent).toBe('✓ done · $0.2110');
+    expect(container.textContent).toBe('✓ done · $0.21');
+  });
+
+  it('prices a turn the way the HEADER prices the thread, to the cent', () => {
+    // This row used a `toFixed(4)` of its own, so a 42-cent turn read
+    // `$0.4200` — the same number the thread header two hundred pixels up was
+    // writing as `$0.42`. Both now come from `formatExactUsd`.
+    render(<TranscriptItem item={done({ usage: { costUsd: 0.42 } })} />);
+    expect(container.textContent).toBe('✓ done · $0.42');
+    expect(container.textContent).not.toContain('0.4200');
+  });
+
+  it('still refuses to round a sub-cent turn away to $0.00', () => {
+    // The other half, and the reason the bare 2-decimal format is not what
+    // this row wants either: cheap turns are most turns, and `$0.00` would be
+    // the app claiming a measurement it did not take.
+    render(<TranscriptItem item={done({ usage: { costUsd: 0.0003 } })} />);
+    expect(container.textContent).toBe('✓ done · $0.0003');
   });
 });
 

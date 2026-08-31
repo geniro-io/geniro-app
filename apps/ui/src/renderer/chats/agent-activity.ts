@@ -414,27 +414,63 @@ export function formatTokens(count: number): string {
 }
 
 /**
- * The one money format: "$0.24", "$21,547.80"; sub-cent spend as "<$0.01".
+ * Money — the app's TWO formats, and every dollar on screen comes from one of
+ * them. They agree everywhere above a cent (`$0.24`, `$21,547.80`) and differ
+ * only below it, where a bare 2-decimal rounding would print `$0.00` and claim
+ * a turn cost nothing. Neither is willing to say that; they refuse it
+ * differently, and which refusal is right depends on the surface.
  *
- * GROUPED, because this renders a lifetime total as well as a single turn's
- * cost. Ungrouped, that total was `$21547.80` — seven digits the reader has to
- * count in threes to know whether it is twenty-one thousand or two hundred and
- * fifteen.
+ * Both are GROUPED, because these render a lifetime total as well as a single
+ * turn's cost. Ungrouped, that total was `$21547.80` — seven digits the reader
+ * has to count in threes to know whether it is twenty-one thousand or two
+ * hundred and fifteen.
  *
- * Pinned to `en-US` rather than the machine's locale, unlike the day labels
- * beside it, and that is deliberate: the `$` is hardcoded because the daemon
- * records USD and nothing else, so a machine-locale number would pair a dollar
- * sign with `21.547,80` — a figure that reads as twenty-one dollars to half of
- * Europe. One currency, one notation.
+ * Both are pinned to `en-US` rather than the machine's locale, unlike the day
+ * labels beside them, and that is deliberate: the `$` is hardcoded because the
+ * daemon records USD and nothing else, so a machine-locale number would pair a
+ * dollar sign with `21.547,80` — a figure that reads as twenty-one dollars to
+ * half of Europe. One currency, one notation.
  */
 const USD_DIGITS = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
 
+const USD_SUBCENT = new Intl.NumberFormat('en-US', {
+  minimumFractionDigits: 4,
+  maximumFractionDigits: 4,
+});
+
+/**
+ * A BOUND: sub-cent spend reads `<$0.01`.
+ *
+ * For aggregates in a column — the Stats breakdowns, the context meter's
+ * run total — where every figure is the same width and the reader is comparing
+ * rows, not pricing one of them. `$0.0034` in a `tabular-nums` column of
+ * two-decimal figures is four characters nothing else has.
+ */
 export function formatUsd(amount: number): string {
   if (amount > 0 && amount < 0.01) {
     return '<$0.01';
+  }
+  return `$${USD_DIGITS.format(amount)}`;
+}
+
+/**
+ * A VALUE: sub-cent spend reads `$0.0034`.
+ *
+ * For a figure that stands alone and IS the point — the thread header's cost,
+ * the `✓ done · 21s · $0.42` note under a finished turn. Cheap turns are most
+ * of them, and `<$0.01` on every one of them tells the reader nothing they
+ * could compare.
+ *
+ * Note what it is NOT: four decimals ALWAYS. The transcript note used a bare
+ * `toFixed(4)`, so a 42-cent turn read `$0.4200` two hundred pixels under a
+ * header saying `$0.42` — the same number, in two notations, on one screen.
+ */
+export function formatExactUsd(amount: number): string {
+  if (amount > 0 && amount < 0.01) {
+    return `$${USD_SUBCENT.format(amount)}`;
   }
   return `$${USD_DIGITS.format(amount)}`;
 }

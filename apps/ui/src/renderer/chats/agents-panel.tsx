@@ -1077,7 +1077,14 @@ export function AgentsPanel({
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {agent.name}
                       </span>
-                      {agent.agent ? (
+                      {/* The badge says WHICH CLI drives this agent, which is
+                          news on a workflow card (`Reviewer` · `claude`) and
+                          nothing at all on a 1:1 chat, where the agent's name
+                          IS the CLI — that card read `claude … claude`, the
+                          same word twice on one row, on the most common chat
+                          in the app. An identical badge states no second
+                          fact. */}
+                      {agent.agent && agent.agent !== agent.name ? (
                         <Badge variant="muted">{agent.agent}</Badge>
                       ) : null}
                     </span>

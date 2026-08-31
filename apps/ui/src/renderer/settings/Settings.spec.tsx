@@ -1134,39 +1134,46 @@ describe('Settings appearance section', () => {
     delete document.documentElement.dataset.theme;
   });
 
-  function openThemeMenu(): void {
-    const trigger =
-      container.querySelector<HTMLButtonElement>('#settings-theme');
-    if (!trigger) {
-      throw new Error('no theme picker');
-    }
-    act(() => trigger.click());
+  /*
+   * The picker is a run of SWATCHES, not a dropdown — every option is on
+   * screen at rest, so there is no menu to open first. What the screen owes
+   * is unchanged: the manifest's themes, the stored one marked, the pick
+   * persisted AND painted, and the paint rolled back if the write is refused.
+   */
+  function swatches(): HTMLButtonElement[] {
+    return [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="theme-picker"] button',
+      ),
+    ];
   }
 
-  function optionNamed(label: string): HTMLElement {
-    const option = [
-      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
-    ].find((candidate) => (candidate.textContent ?? '').trim() === label);
-    if (!option) {
-      throw new Error(`no "${label}" option`);
+  function swatchNamed(label: string): HTMLButtonElement {
+    const found = swatches().find(
+      (candidate) => (candidate.textContent ?? '').trim() === label,
+    );
+    if (!found) {
+      throw new Error(`no "${label}" swatch`);
     }
-    return option;
+    return found;
+  }
+
+  function chosenSwatch(): string | undefined {
+    return swatches()
+      .find((candidate) => candidate.getAttribute('aria-pressed') === 'true')
+      ?.textContent?.trim();
   }
 
   it('offers System and every theme the app ships', async () => {
     await mount();
 
-    openThemeMenu();
-
     // Expected from the MANIFEST so a third theme needs no edit here. It does
     // not yet DISCRIMINATE — with two themes, a hardcoded picker produces the
-    // same three labels — so what this pins today is the rows and their order;
-    // the manifest-derived expectation is what carries the claim once a third
-    // theme exists.
+    // same three labels — so what this pins today is the options and their
+    // order; the manifest-derived expectation is what carries the claim once a
+    // third theme exists.
     expect(
-      [...container.querySelectorAll('[role="option"]')].map((option) =>
-        (option.textContent ?? '').trim(),
-      ),
+      swatches().map((swatch) => (swatch.textContent ?? '').trim()),
     ).toEqual(['System', ...THEMES.map((theme) => theme.label)]);
   });
 
@@ -1175,17 +1182,14 @@ describe('Settings appearance section', () => {
 
     await mount();
 
-    expect(container.querySelector('#settings-theme')?.textContent).toContain(
-      'Dark',
-    );
+    expect(chosenSwatch()).toBe('Dark');
   });
 
   it('persists the pick and repaints the document without waiting for a reload', async () => {
     await mount();
-    openThemeMenu();
 
     await act(async () => {
-      optionNamed('Dark').click();
+      swatchNamed('Dark').click();
     });
 
     expect(geniro.updateSettings).toHaveBeenCalledWith({ theme: 'dark' });
@@ -1201,15 +1205,12 @@ describe('Settings appearance section', () => {
     // exists to prevent.
     geniro.updateSettings.mockRejectedValueOnce(new Error('disk full'));
     await mount();
-    openThemeMenu();
 
     await act(async () => {
-      optionNamed('Dark').click();
+      swatchNamed('Dark').click();
     });
 
     expect(document.documentElement.dataset.theme).toBe('light');
-    expect(container.querySelector('#settings-theme')?.textContent).toContain(
-      'System',
-    );
+    expect(chosenSwatch()).toBe('System');
   });
 });

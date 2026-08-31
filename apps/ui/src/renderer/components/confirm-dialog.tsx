@@ -19,6 +19,7 @@ export function ConfirmDialog({
   error,
   title,
   confirmLabel,
+  confirmVariant = 'destructive',
   busyLabel,
   onCancel,
   onConfirm,
@@ -31,6 +32,12 @@ export function ConfirmDialog({
   title: string;
   /** Label of the destructive button (e.g. "Delete"). */
   confirmLabel: string;
+  /**
+   * `default` for a confirm that destroys NOTHING — archiving a settled chat
+   * asks because the row leaves the list, not because anything is lost, and a
+   * red button there says the opposite of the sentence above it.
+   */
+  confirmVariant?: 'destructive' | 'default';
   /** Replaces `confirmLabel` while busy (e.g. "Deleting…"). */
   busyLabel: string;
   onCancel: () => void;
@@ -56,7 +63,7 @@ export function ConfirmDialog({
           </Button>
           <Button
             type="button"
-            variant="destructive"
+            variant={confirmVariant}
             disabled={busy}
             onClick={onConfirm}>
             {busy ? busyLabel : confirmLabel}

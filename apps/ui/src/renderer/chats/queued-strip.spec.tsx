@@ -111,6 +111,14 @@ function typeAndCommit(field: HTMLTextAreaElement, text: string): void {
 
 const noop = (): void => {};
 
+/**
+ * Props every test needs and none of them is about. `turnInFlight: true` is
+ * the state this strip was written under — a queue exists because a turn is
+ * running — so it is what keeps the Send-now assertions below meaning what
+ * they meant before the pause was added.
+ */
+const base = { paused: false, turnInFlight: true, onTogglePause: noop };
+
 /** Type into the open editor WITHOUT committing, so a control can do it. */
 function type(field: HTMLTextAreaElement, text: string): void {
   act(() => {
@@ -133,6 +141,7 @@ describe('QueuedStrip', () => {
   it('renders nothing at all when the queue is empty', () => {
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -154,6 +163,7 @@ describe('QueuedStrip', () => {
     const onEdit = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'keep me', [{}])]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -185,12 +195,12 @@ describe('QueuedStrip', () => {
       onReorder: noop,
       onSteer: noop,
     };
-    render(<QueuedStrip messages={[first, second]} {...props} />);
+    render(<QueuedStrip {...base} messages={[first, second]} {...props} />);
 
     click(byLabel('Edit queued message 1'));
     expect(editor(1)).not.toBeNull();
 
-    rerender(<QueuedStrip messages={[second]} {...props} />);
+    rerender(<QueuedStrip {...base} messages={[second]} {...props} />);
     expect(editor(1)).toBeNull();
 
     // THIS is the assertion that discriminates. While the row is absent no row
@@ -198,7 +208,7 @@ describe('QueuedStrip', () => {
     // effect deleted — it was a false pin. Bringing the row back is what
     // exposes a stale `editingId`: without the effect it is still 'a', and the
     // restored row re-opens its editor over a draft the user abandoned.
-    rerender(<QueuedStrip messages={[first, second]} {...props} />);
+    rerender(<QueuedStrip {...base} messages={[first, second]} {...props} />);
     expect(editor(1)).toBeNull();
   });
 
@@ -217,12 +227,12 @@ describe('QueuedStrip', () => {
       onReorder: noop,
       onSteer: noop,
     };
-    render(<QueuedStrip messages={[first, second]} {...props} />);
+    render(<QueuedStrip {...base} messages={[first, second]} {...props} />);
 
     click(byLabel('Edit queued message 1'));
     expect(editor(1)).not.toBeNull();
 
-    rerender(<QueuedStrip messages={[first]} {...props} />);
+    rerender(<QueuedStrip {...base} messages={[first]} {...props} />);
     expect(editor(1)).not.toBeNull();
   });
 
@@ -231,6 +241,7 @@ describe('QueuedStrip', () => {
     // was true of exactly one of them.
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[
           message('a', 'first'),
           message('b', 'second'),
@@ -255,6 +266,7 @@ describe('QueuedStrip', () => {
     const onReorder = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[
           message('id-a', 'first'),
           message('id-b', 'second'),
@@ -268,7 +280,9 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    const rows = [
+      ...container!.querySelectorAll('[data-slot="queued-message"]'),
+    ];
     expect(rows).toHaveLength(3);
 
     dragOver(rows[2]!, rows[0]!);
@@ -285,6 +299,7 @@ describe('QueuedStrip', () => {
     const onReorder = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -294,7 +309,9 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    const rows = [
+      ...container!.querySelectorAll('[data-slot="queued-message"]'),
+    ];
     dragOver(rows[0]!, rows[0]!);
     expect(onReorder).not.toHaveBeenCalled();
   });
@@ -316,6 +333,7 @@ describe('QueuedStrip', () => {
     // this flag the browser branches on.
     render(
       <QueuedStrip
+        {...base}
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -325,7 +343,9 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    const rows = [
+      ...container!.querySelectorAll('[data-slot="queued-message"]'),
+    ];
     expect(dragOver(rows[0]!, rows[0]!).defaultPrevented).toBe(true);
     // And over a DIFFERENT row too, which is the half that always worked.
     expect(dragOver(rows[0]!, rows[1]!).defaultPrevented).toBe(true);
@@ -337,6 +357,7 @@ describe('QueuedStrip', () => {
     // gesture it started itself.
     render(
       <QueuedStrip
+        {...base}
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -346,7 +367,9 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    const rows = [...container!.querySelectorAll('[role="group"] > div')];
+    const rows = [
+      ...container!.querySelectorAll('[data-slot="queued-message"]'),
+    ];
     const event = new Event('dragover', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'dataTransfer', {
       value: { setData: () => {}, effectAllowed: '', dropEffect: '' },
@@ -363,6 +386,7 @@ describe('QueuedStrip', () => {
     const onReorder = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[
           message('id-a', 'first'),
           message('id-b', 'second'),
@@ -396,6 +420,7 @@ describe('QueuedStrip', () => {
     // instead of the selection.
     render(
       <QueuedStrip
+        {...base}
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -406,7 +431,7 @@ describe('QueuedStrip', () => {
       />,
     );
     const rows = (): Element[] => [
-      ...container!.querySelectorAll('[role="group"] > div'),
+      ...container!.querySelectorAll('[data-slot="queued-message"]'),
     ];
     expect(rows()[0]!.getAttribute('draggable')).toBe('true');
 
@@ -427,6 +452,7 @@ describe('QueuedStrip', () => {
     const onEdit = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('id-a', 'first'), message('id-b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -457,6 +483,7 @@ describe('QueuedStrip', () => {
     const onEdit = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'one line')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -485,6 +512,7 @@ describe('QueuedStrip', () => {
     const onEdit = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'one line')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -509,6 +537,7 @@ describe('QueuedStrip', () => {
     const onSteer = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'urgent')]}
         steerUnavailableReason="cursor-agent takes one prompt per turn"
         steerStatus={null}
@@ -533,6 +562,7 @@ describe('QueuedStrip', () => {
     // is how the control came to be reported as doing nothing.
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'urgent')]}
         steerUnavailableReason={null}
         steerStatus={{ id: 'a', state: 'sending' }}
@@ -550,6 +580,7 @@ describe('QueuedStrip', () => {
     // when the turn ends. It is still an outcome, and the row is where it goes.
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'urgent')]}
         steerUnavailableReason={null}
         steerStatus={{ id: 'a', state: 'held' }}
@@ -568,6 +599,7 @@ describe('QueuedStrip', () => {
   it('reports the outcome on the steered row alone', () => {
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'first'), message('b', 'second')]}
         steerUnavailableReason={null}
         steerStatus={{ id: 'b', state: 'held' }}
@@ -577,7 +609,7 @@ describe('QueuedStrip', () => {
         onSteer={noop}
       />,
     );
-    const rows = el.querySelectorAll('[role="group"] > div');
+    const rows = el.querySelectorAll('[data-slot="queued-message"]');
     expect(rows[0]!.textContent).toContain('sends next');
     expect(rows[0]!.textContent).not.toContain('still queued');
     expect(rows[1]!.textContent).toContain('still queued');
@@ -589,6 +621,7 @@ describe('QueuedStrip', () => {
     const onSteer = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'urgent')]}
         steerUnavailableReason={null}
         steerStatus={{ id: 'a', state: 'sending' }}
@@ -611,6 +644,7 @@ describe('QueuedStrip', () => {
     const onSteer = vi.fn();
     render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'urgent')]}
         steerUnavailableReason={null}
         steerStatus={{ id: 'a', state: 'held' }}
@@ -630,6 +664,7 @@ describe('QueuedStrip', () => {
     // strip already set was reaching nobody.
     const el = render(
       <QueuedStrip
+        {...base}
         messages={[message('a', 'waiting')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -648,6 +683,7 @@ describe('QueuedStrip — the editor is a block, with its own controls', () => {
   const open = (onEdit: (id: string, text: string) => void): void => {
     render(
       <QueuedStrip
+        {...base}
         messages={[message('q1', 'first')]}
         steerUnavailableReason={null}
         steerStatus={null}
@@ -718,6 +754,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
     // since there is nothing to undo after it.
     const container = render(
       <QueuedStrip
+        {...base}
         messages={[message]}
         steerUnavailableReason={null}
         steerInterrupts
@@ -739,6 +776,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
   it('promises nothing of the sort where the message merely JOINS the turn', () => {
     const container = render(
       <QueuedStrip
+        {...base}
         messages={[message]}
         steerUnavailableReason={null}
         steerInterrupts={false}
@@ -762,6 +800,7 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
     // control cannot be pressed, so describing what a press would do is wrong.
     const container = render(
       <QueuedStrip
+        {...base}
         messages={[message]}
         steerUnavailableReason="this CLI takes one prompt per turn"
         steerInterrupts
@@ -778,5 +817,125 @@ describe('QueuedStrip — what "send now" costs, per CLI', () => {
         .querySelector('[aria-label="Send queued message 1 now"]')
         ?.getAttribute('title'),
     ).toBe('this CLI takes one prompt per turn');
+  });
+});
+
+describe('QueuedStrip — the queue can be PAUSED', () => {
+  it('offers Send-now with NO turn running, whatever the CLI says about mid-turn', () => {
+    // The refusal above is about the MID-TURN channel. With no turn in flight
+    // there is no turn to interrupt — sending simply starts the next one, which
+    // every CLI can do. Left blocked here, a paused queue on such an agent has
+    // no way out of the pause at all.
+    const onSteer = vi.fn();
+    const container = render(
+      <QueuedStrip
+        {...base}
+        turnInFlight={false}
+        messages={[message('a', 'first')]}
+        steerUnavailableReason="this CLI takes one prompt per turn"
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={onSteer}
+      />,
+    );
+
+    const send = container.querySelector(
+      '[aria-label="Send queued message 1 now"]',
+    )!;
+    expect(send.getAttribute('aria-disabled')).toBe('false');
+    expect(send.getAttribute('title')).toBe(
+      'Send now — it starts the next turn',
+    );
+
+    click(send);
+    expect(onSteer).toHaveBeenCalledWith('a');
+  });
+
+  it('says the queue is PAUSED, and stops promising the head will send itself', () => {
+    // `waiting` and `held` are the same row, so the mode has to be said in
+    // words — and `sends next` is a promise a paused queue does not make.
+    const container = render(
+      <QueuedStrip
+        {...base}
+        paused
+        messages={[message('a', 'first'), message('b', 'second')]}
+        steerUnavailableReason={null}
+        steerStatus={null}
+        onEdit={noop}
+        onRemove={noop}
+        onReorder={noop}
+        onSteer={noop}
+      />,
+    );
+
+    expect(container.textContent).toContain('Queue paused — 2 messages held');
+    const rows = container.querySelectorAll('[data-slot="queued-message"]');
+    expect(rows[0]!.textContent).not.toContain('sends next');
+  });
+
+  it('promotes the HEAD’s Send to a labelled action, and only the head’s', () => {
+    // The mode's release. It is the row's own Send control, weighted up rather
+    // than a second control elsewhere — so it stays one press, one handler, and
+    // the rows below keep the plain glyph, whose job (an out-of-order release)
+    // is not what the mode is about.
+    const onSteer = vi.fn();
+    const messages = [message('a', 'first'), message('b', 'second')];
+    const props = {
+      ...base,
+      messages,
+      steerUnavailableReason: null,
+      steerStatus: null,
+      onEdit: noop,
+      onRemove: noop,
+      onReorder: noop,
+      onSteer,
+    };
+    render(<QueuedStrip {...props} paused />);
+
+    const head = byLabel('Send queued message 1 now')!;
+    expect(head.textContent).toContain('Send');
+    // Filled, like the composer's own Send — not a third ghost glyph beside
+    // Edit and Remove. This fails the moment it goes back to `variant="ghost"`.
+    expect(head.className).toContain('bg-primary');
+    expect(byLabel('Send queued message 2 now')!.textContent).toBe('');
+
+    click(head);
+    expect(onSteer).toHaveBeenCalledWith('a');
+
+    // Running normally the queue releases itself, so the head is a glyph again.
+    rerender(<QueuedStrip {...props} paused={false} />);
+    const auto = byLabel('Send queued message 1 now')!;
+    expect(auto.textContent).toBe('');
+    expect(auto.className).not.toContain('bg-primary');
+    expect(container!.textContent).toContain('2 messages queued');
+  });
+
+  it('reports the toggle’s state to a screen reader, not just to the eye', () => {
+    // The label names what a PRESS does, so `aria-pressed` is the only thing
+    // carrying which mode the queue is actually in.
+    const onTogglePause = vi.fn();
+    const props = {
+      ...base,
+      messages: [message('a', 'first')],
+      steerUnavailableReason: null,
+      steerStatus: null,
+      onEdit: noop,
+      onRemove: noop,
+      onReorder: noop,
+      onSteer: noop,
+      onTogglePause,
+    };
+    render(<QueuedStrip {...props} />);
+
+    const pause = control('Pause')!;
+    expect(pause.getAttribute('aria-pressed')).toBe('false');
+    click(pause);
+    expect(onTogglePause).toHaveBeenCalledTimes(1);
+
+    rerender(<QueuedStrip {...props} paused />);
+    expect(control('Pause')).toBeNull();
+    expect(control('Resume')!.getAttribute('aria-pressed')).toBe('true');
   });
 });

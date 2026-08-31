@@ -122,31 +122,24 @@ export function alignClass(
 }
 
 /**
- * The reading MEASURE, and it is on the text elements rather than on the
- * transcript around them.
+ * PROSE TAKES THE WHOLE TRANSCRIPT WIDTH — there is no reading measure here,
+ * and its removal is the point rather than an oversight.
  *
- * Measured in the running app at a 1440px window: an assistant paragraph ran
- * 896px — about 118 characters a line — with `max-width: none` at every level
- * from the `<p>` up to the transcript container, so nothing capped it and a
- * wider monitor or a folded side panel made it worse. Long lines are the one
- * typographic fault that compounds with length, and length is what an agent
- * produces; the eye loses its place returning to a line start that far left.
+ * A `max-w-[72ch]` cap used to sit on every text element, on the typographic
+ * argument that long lines are tiring to return from. Measured against the
+ * running app, what it actually produced was a paragraph column ending around
+ * 530px inside an 1150px pane — REPORTED as "still have current thread with
+ * big gap from right side. Content should take all space", with the composer
+ * directly beneath it spanning the full width and the bubble around it doing
+ * the same. In a chat transcript the cap has no ground to stand on: the pane
+ * is already narrowed by the chat list on one side and the agents panel on the
+ * other, the bubble's own padding insets it further, and the user resizes
+ * those columns to decide how wide the reading column should be. A second,
+ * invisible cap inside them only ever contradicts that choice.
  *
- * NOT on the transcript, and that is the whole reason this is a per-element
- * constant: a cap up there would take the code blocks, tables and diffs with
- * it, and those are the content that genuinely wants every pixel — a wrapped
- * 100-column diff is unreadable in a way a wide paragraph merely is tiring.
- * So prose is capped and `pre`/`table` are deliberately left out.
+ * So the elements below carry spacing and type alone. `pre`/`table` were never
+ * capped and still are not; they scroll inside their own containers.
  *
- * `ch` is the zero-glyph advance, wider than the average lowercase letter, so
- * 72ch lands around 80 characters of real prose — inside the comfortable band
- * rather than at its floor. Blocks stay LEFT-aligned (no `mx-auto`): the
- * transcript's rows are keyed to its left edge, and centring the prose alone
- * would leave every heading and list starting somewhere else.
- */
-const MEASURE = 'max-w-[72ch]';
-
-/**
  * Token-styled markdown renderers — the compact mirror of geniro web's
  * MarkdownContent (react-markdown + remark-gfm), trimmed to what the
  * transcript needs: paragraphs, emphasis, lists, code, links, tables,
@@ -154,40 +147,26 @@ const MEASURE = 'max-w-[72ch]';
  */
 const COMPONENTS: Components = {
   p: ({ children }) => (
-    <p className={cn(MEASURE, 'm-0 whitespace-pre-wrap not-first:mt-2')}>
-      {children}
-    </p>
+    <p className="m-0 whitespace-pre-wrap not-first:mt-2">{children}</p>
   ),
   ul: ({ children }) => (
-    <ul className={cn(MEASURE, 'm-0 list-disc pl-5 not-first:mt-2')}>
-      {children}
-    </ul>
+    <ul className="m-0 list-disc pl-5 not-first:mt-2">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className={cn(MEASURE, 'm-0 list-decimal pl-5 not-first:mt-2')}>
-      {children}
-    </ol>
+    <ol className="m-0 list-decimal pl-5 not-first:mt-2">{children}</ol>
   ),
   li: ({ children }) => <li className="mt-0.5">{children}</li>,
   h1: ({ children }) => (
-    <p className={cn(MEASURE, 'm-0 text-sm font-bold not-first:mt-2.5')}>
-      {children}
-    </p>
+    <p className="m-0 text-sm font-bold not-first:mt-2.5">{children}</p>
   ),
   h2: ({ children }) => (
-    <p className={cn(MEASURE, 'm-0 text-sm font-bold not-first:mt-2.5')}>
-      {children}
-    </p>
+    <p className="m-0 text-sm font-bold not-first:mt-2.5">{children}</p>
   ),
   h3: ({ children }) => (
-    <p className={cn(MEASURE, 'm-0 text-sm font-semibold not-first:mt-2')}>
-      {children}
-    </p>
+    <p className="m-0 text-sm font-semibold not-first:mt-2">{children}</p>
   ),
   h4: ({ children }) => (
-    <p className={cn(MEASURE, 'm-0 text-sm font-semibold not-first:mt-2')}>
-      {children}
-    </p>
+    <p className="m-0 text-sm font-semibold not-first:mt-2">{children}</p>
   ),
   // Only INLINE code reaches here: a fenced block is intercepted by `pre`
   // below, which renders CodeBlock instead of these children.
@@ -238,11 +217,7 @@ const COMPONENTS: Components = {
     </a>
   ),
   blockquote: ({ children }) => (
-    <blockquote
-      className={cn(
-        MEASURE,
-        'm-0 border-l-2 border-border pl-3 text-muted-foreground not-first:mt-2',
-      )}>
+    <blockquote className="m-0 border-l-2 border-border pl-3 text-muted-foreground not-first:mt-2">
       {children}
     </blockquote>
   ),

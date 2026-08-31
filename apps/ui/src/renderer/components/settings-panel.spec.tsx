@@ -3,7 +3,11 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SettingsPanel, SettingsPanelRow } from './settings-panel';
+import {
+  SettingsList,
+  SettingsPanel,
+  SettingsPanelRow,
+} from './settings-panel';
 import { Switch } from './ui/switch';
 
 (
@@ -96,5 +100,70 @@ describe('SettingsPanelRow', () => {
     // right-align a run of swatches into a cell that cannot hold them.
     expect(row?.className).not.toContain('@[26rem]:flex-row');
     expect(row?.className).toContain('flex-col');
+  });
+});
+
+describe('SettingsList', () => {
+  it('is a real list, so its rows can be counted by something that cannot see them', () => {
+    act(() => {
+      root.render(
+        <SettingsList aria-label="Fast actions">
+          <li>Review my diff</li>
+          <li>Write the tests</li>
+        </SettingsList>,
+      );
+    });
+
+    // The whole reason this exists beside `SettingsPanel` rather than being a
+    // variant of it: the two render the same surface, and a `<div>` here would
+    // look identical while telling a screen reader nothing about how many
+    // configurations the user has saved. `SettingsPanel` is a group of controls
+    // and correctly is NOT a list.
+    const list = container.querySelector('ul');
+    expect(list).not.toBeNull();
+    expect(list?.getAttribute('aria-label')).toBe('Fast actions');
+    expect(list?.querySelectorAll('li')).toHaveLength(2);
+  });
+
+  it('wears the same enclosure as the panel, so two settings surfaces cannot drift', () => {
+    act(() => {
+      root.render(
+        <>
+          <SettingsPanel>
+            <SettingsPanelRow label="A">
+              <span>x</span>
+            </SettingsPanelRow>
+          </SettingsPanel>
+          <SettingsList>
+            <li>row</li>
+          </SettingsList>
+        </>,
+      );
+    });
+
+    const panel = container.querySelector<HTMLElement>(
+      '[data-slot="settings-panel"]',
+    );
+    const list = container.querySelector<HTMLElement>(
+      '[data-slot="settings-list"]',
+    );
+    // Asserted as the classes they SHARE rather than as a literal string, so
+    // the pin survives either one gaining something of its own — which the list
+    // already has (`list-none`, `m-0`, `p-0`). What it catches is the enclosure
+    // itself being respelled in one place and not the other: jsdom computes no
+    // styles, so the emitted class is the observable, and here it is the whole
+    // mechanism — one shared constant is the only thing keeping a radius or a
+    // divider from diverging between the two surfaces.
+    for (const shared of [
+      'rounded-lg',
+      'border',
+      'border-border',
+      'bg-card',
+      'divide-y',
+      'divide-border',
+    ]) {
+      expect(panel?.className).toContain(shared);
+      expect(list?.className).toContain(shared);
+    }
   });
 });

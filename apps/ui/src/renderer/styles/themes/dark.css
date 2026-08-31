@@ -45,12 +45,12 @@
 
   /* TWIN PARSER: `shared/themes.ts`'s `windowBackground` for this theme is
      this same value — see the twin note in `light.css`. */
-  --background: #171615;
-  --foreground: #ece8e1;
-  --card: #222120;
-  --card-foreground: #ece8e1;
-  --popover: #292725;
-  --popover-foreground: #ece8e1;
+  --background: #141312;
+  --foreground: #eeece6;
+  --card: #1f1e1c;
+  --card-foreground: #eeece6;
+  --popover: #262422;
+  --popover-foreground: #eeece6;
   /* The light theme darkens its caramel until white text clears AA on it; a
      dark theme has to go the other way — the fill is lightened until DARK text
      clears AA, which is why every `*-foreground` on a saturated fill below is
@@ -64,12 +64,12 @@
      sits within a few percent of --primary and the two stop reading as
      different things. It is also the top of the elevation ladder, so it has to
      clear --accent by a visible step rather than a measurable one. */
-  --secondary: #3d3a37;
-  --secondary-foreground: #ece8e1;
-  --muted: #2a2827;
-  --muted-foreground: #ada396;
-  --accent: #333130;
-  --accent-foreground: #ece8e1;
+  --secondary: #3a3835;
+  --secondary-foreground: #eeece6;
+  --muted: #272523;
+  --muted-foreground: #a49f95;
+  --accent: #302e2c;
+  --accent-foreground: #eeece6;
   /* Status colours, contrast-checked as TEXT on --card (the surface they are
      read on) and with their own foreground on them for the button/badge fills.
      Olive-sage and terracotta rather than a spring green and a salmon, per
@@ -86,7 +86,7 @@
      the eye skips, never content. Note the direction flips with the theme —
      on cream, "recedes" means LIGHTER than the comment tone; here it means
      darker. */
-  --code-comment: #9a9186;
+  --code-comment: #9d9489;
   --code-keyword: #dd8f72;
   --code-string: #aec288;
   --code-number: #dcb47c;
@@ -163,18 +163,31 @@
   --group-indigo: var(--avatar-6);
   --group-teal: var(--avatar-7);
   --group-red: var(--avatar-8);
-  --border: #423f3c;
+  /* Two border levels — see the long note in `light.css`. The split is the
+     same on this ground and so is the failure it fixes: `--border` was 1.73:1
+     against the page, correct for a divider and far under the 3:1 WCAG 1.4.11
+     asks of a control's edge. `--border-strong` reads 3.36 on --background and
+     3.02 on --card. The RING needed no such rescue here — the caramel is
+     already 8.65:1 on this ground — which is worth knowing: the ring failure
+     was the light theme's alone. */
+  --border: #3b3835;
+  --border-strong: #6d6862;
   --input: transparent;
-  --input-background: #222120;
-  --switch-background: #524d47;
+  --input-background: #1f1e1c;
+  --switch-background: #4c4842;
   --font-weight-medium: 500;
   --font-weight-normal: 400;
   --ring: #dda765;
-  --chart-1: #dda765;
-  --chart-2: #e9c194;
-  --chart-3: #b98a5f;
-  --chart-4: #9c8a6d;
-  --chart-5: #c9a781;
+  /* The light theme's five hues lifted for this ground — same 72° spacing and
+     the same reason: the old set was one caramel at five lightnesses, so two
+     series of any chart were the same colour twice. Each clears 3:1 on --card
+     (6.4–7.9) and the lightness spread (55–70) keeps them apart in greyscale
+     as well as in hue. */
+  --chart-1: #d69a66;
+  --chart-2: #8dbc76;
+  --chart-3: #61b8ac;
+  --chart-4: #9b97ce;
+  --chart-5: #c48db5;
   --radius: 0.5rem;
 
   /* Elevation. The light theme tints its shadows with the foreground brown at
@@ -186,8 +199,8 @@
   --shadow-lg:
     0 2px 6px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.55);
 
-  --sidebar: #1c1b19;
-  --sidebar-foreground: #ece8e1;
+  --sidebar: #191817;
+  --sidebar-foreground: #eeece6;
   --sidebar-primary: #dda765;
   /* The ACTIVE nav label/icon, read on --sidebar-accent. Unlike the light
      theme — where --sidebar-primary reads 2.43:1 there and this token exists to
@@ -195,8 +208,8 @@
      kept for the stronger active state the light theme intends. */
   --sidebar-primary-strong: #e8ba84;
   --sidebar-primary-foreground: #201c17;
-  --sidebar-accent: #2b2927;
-  --sidebar-accent-foreground: #ece8e1;
-  --sidebar-border: #423f3c;
+  --sidebar-accent: #282624;
+  --sidebar-accent-foreground: #eeece6;
+  --sidebar-border: #3b3835;
   --sidebar-ring: #dda765;
 }

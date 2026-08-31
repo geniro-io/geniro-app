@@ -1,7 +1,12 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
+import { Pencil, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 
-import { SettingsPanel, SettingsPanelRow } from './settings-panel';
+import {
+  SettingsList,
+  SettingsPanel,
+  SettingsPanelRow,
+} from './settings-panel';
 import { Button } from './ui/button';
 import { Switch } from './ui/switch';
 import { Textarea } from './ui/textarea';
@@ -98,6 +103,68 @@ export const Block: Story = {
         </Button>
       </SettingsPanelRow>
     </SettingsPanel>
+  ),
+};
+
+/**
+ * `SettingsList` — the same enclosure over a real `<ul>`, for rows that are
+ * ITEMS rather than settings. Both Settings subpages use it: the saved run
+ * configurations and the fast actions.
+ *
+ * The enclosure is what ties a row's trailing actions to the row. Without it
+ * these lists were loose two-line blocks on the page ground with a pencil
+ * floating 700px to the right of the name it edits, belonging to nothing.
+ *
+ * `overflow-hidden` at the call site rather than in the component: it is what
+ * clips a row's hover fill to the card radius, and it would cut off a `Select`
+ * panel in a `SettingsPanel` row.
+ */
+export const List: Story = {
+  render: () => (
+    <SettingsList className="overflow-hidden">
+      {[
+        [
+          'Review my diff',
+          'Review what changed on this branch and report findings.',
+        ],
+        ['Write the tests', 'Write unit tests for the code I just changed.'],
+        [
+          'Explain this file',
+          'Walk me through this file — what it does and who calls it.',
+        ],
+      ].map(([name, text]) => (
+        <li
+          key={name}
+          className="flex items-center gap-1 pr-2 hover:bg-sidebar-accent">
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 flex-col items-start gap-0.5 px-4 py-3 text-left outline-none focus-visible:bg-sidebar-accent">
+            <span className="w-full truncate text-sm text-foreground">
+              {name}
+            </span>
+            <span className="w-full truncate text-xs text-muted-foreground">
+              {text}
+            </span>
+          </button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Edit ${name}`}
+            className="size-7 shrink-0 text-muted-foreground">
+            <Pencil className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={`Delete ${name}`}
+            className="size-7 shrink-0 text-muted-foreground">
+            <Trash2 className="size-4" />
+          </Button>
+        </li>
+      ))}
+    </SettingsList>
   ),
 };
 

@@ -1,10 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { themeWindowBackground } from '../shared/themes';
 import {
   applyTheme,
   resolvedTheme,
   watchSystemAppearance,
 } from './native-appearance';
+
+/*
+ * Read from the MANIFEST rather than written as literals. What these tests pin
+ * is that the window is repainted with the ground of the theme being applied —
+ * not what that ground happens to be, which is a palette decision and moved
+ * with the redesign. Spelling the hex here made a colour change fail four
+ * tests that were not about colour, and the copy could equally have gone stale
+ * the other way: an assertion still passing against a value the app no longer
+ * paints.
+ */
+const DARK_GROUND = themeWindowBackground('dark');
+const LIGHT_GROUND = themeWindowBackground('light');
 
 /**
  * The stub emits `updated` on every `themeSource` ASSIGNMENT, because the real
@@ -84,13 +97,13 @@ describe('applyTheme', () => {
     // other palette.
     applyTheme('dark');
 
-    expect(mocks.setBackgroundColor).toHaveBeenCalledWith('#171615');
+    expect(mocks.setBackgroundColor).toHaveBeenCalledWith(DARK_GROUND);
   });
 
   it('paints the light ground when the pick goes the other way', () => {
     applyTheme('light');
 
-    expect(mocks.setBackgroundColor).toHaveBeenCalledWith('#f5f1eb');
+    expect(mocks.setBackgroundColor).toHaveBeenCalledWith(LIGHT_GROUND);
   });
 });
 
@@ -117,7 +130,7 @@ describe('watchSystemAppearance', () => {
     mocks.nativeTheme.shouldUseDarkColors = true;
     mocks.emitUpdated();
 
-    expect(mocks.setBackgroundColor).toHaveBeenCalledWith('#171615');
+    expect(mocks.setBackgroundColor).toHaveBeenCalledWith(DARK_GROUND);
   });
 
   it('does not re-enter itself when the app writes themeSource', () => {
@@ -161,6 +174,6 @@ describe('watchSystemAppearance', () => {
     mocks.setBackgroundColor.mockClear();
     mocks.emitUpdated();
 
-    expect(mocks.setBackgroundColor).toHaveBeenCalledWith('#171615');
+    expect(mocks.setBackgroundColor).toHaveBeenCalledWith(DARK_GROUND);
   });
 });

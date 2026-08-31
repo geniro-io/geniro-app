@@ -4,6 +4,25 @@ import type React from 'react';
 import { Label } from './ui/label';
 import { cn } from './ui/utils';
 
+/*
+ * The enclosure itself, spelled once. `SettingsPanel` and `SettingsList` are
+ * the same surface with different SEMANTICS — a run of settings is a group of
+ * controls, a run of saved configurations is a list — and a second copy of
+ * these classes is how the two would come to disagree about a radius.
+ *
+ * `@container`: the rows fold at a CONTAINER width, not a viewport one. The
+ * reading column this sits in is capped at 42rem and shares the window with a
+ * nav column, so the viewport says nothing useful about how much room a row
+ * actually has.
+ *
+ * No `overflow-hidden` here, deliberately: a `SettingsPanel` row may hold a
+ * `Select`, whose panel is absolutely placed, and clipping it to the rounded
+ * corners would cut the menu off at the row below. A list whose rows carry a
+ * hover fill passes it at the call site instead.
+ */
+const ENCLOSURE =
+  '@container divide-y divide-border rounded-lg border border-border bg-card';
+
 /**
  * A settings SECTION's rows, enclosed and separated.
  *
@@ -22,10 +41,6 @@ import { cn } from './ui/utils';
  * which is what a page of switches and swatches needs. The two are inverses of
  * each other and neither can be expressed as a variant of the other without a
  * prop that flips which side grows.
- *
- * No `overflow-hidden`, deliberately: a row may hold a `Select`, whose panel is
- * absolutely placed, and clipping it to the panel's rounded corners would cut
- * the menu off at the row below.
  */
 export function SettingsPanel({
   children,
@@ -35,18 +50,37 @@ export function SettingsPanel({
   className?: string;
 }): React.JSX.Element {
   return (
-    <div
-      data-slot="settings-panel"
-      // `@container`: the rows below fold at a CONTAINER width, not a viewport
-      // one — the reading column this sits in is capped at 42rem and shares the
-      // window with a nav column, so the viewport says nothing useful about how
-      // much room a row actually has.
-      className={cn(
-        '@container divide-y divide-border rounded-lg border border-border bg-card',
-        className,
-      )}>
+    <div data-slot="settings-panel" className={cn(ENCLOSURE, className)}>
       {children}
     </div>
+  );
+}
+
+/**
+ * The same enclosure over a real `<ul>`, for a panel whose rows are ITEMS
+ * rather than settings — the saved run configurations, the fast actions.
+ *
+ * A `<div>` would render identically and say the wrong thing: those rows are a
+ * list the user adds to and deletes from, and a screen reader is entitled to be
+ * told how many there are. It carries no list markers or padding of its own
+ * (`list-none`, `m-0 p-0`), so a row lays itself out exactly as a panel row
+ * does.
+ */
+export function SettingsList({
+  children,
+  className,
+  ...rest
+}: {
+  children: React.ReactNode;
+  className?: string;
+} & React.HTMLAttributes<HTMLUListElement>): React.JSX.Element {
+  return (
+    <ul
+      data-slot="settings-list"
+      className={cn(ENCLOSURE, 'm-0 list-none p-0', className)}
+      {...rest}>
+      {children}
+    </ul>
   );
 }
 

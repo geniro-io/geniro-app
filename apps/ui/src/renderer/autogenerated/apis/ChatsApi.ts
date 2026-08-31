@@ -30,6 +30,8 @@ import type {
   SendMessageDto,
   SetRunGroupDto,
   ShellOutputDto,
+  SweepArchivedDto,
+  SweptArchivedDto,
   UpdateChatSettingsDto,
 } from '../models/index';
 
@@ -100,6 +102,10 @@ export interface ChatsApiSendChatMessageRequest {
 export interface ChatsApiSetRunGroupRequest {
     runId: string;
     setRunGroupDto: SetRunGroupDto;
+}
+
+export interface ChatsApiSweepArchivedChatsRequest {
+    sweepArchivedDto: SweepArchivedDto;
 }
 
 export interface ChatsApiUnarchiveChatRequest {
@@ -895,6 +901,53 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async setRunGroup(requestParameters: ChatsApiSetRunGroupRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.setRunGroupRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async sweepArchivedChatsRaw(requestParameters: ChatsApiSweepArchivedChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<SweptArchivedDto>> {
+        if (requestParameters['sweepArchivedDto'] == null) {
+            throw new runtime.RequiredError(
+                'sweepArchivedDto',
+                'Required parameter "sweepArchivedDto" was null or undefined when calling sweepArchivedChats().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/sweep-archived`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['sweepArchivedDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async sweepArchivedChats(requestParameters: ChatsApiSweepArchivedChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<SweptArchivedDto> {
+        const response = await this.sweepArchivedChatsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

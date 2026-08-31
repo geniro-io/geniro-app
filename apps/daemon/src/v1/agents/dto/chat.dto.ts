@@ -340,6 +340,49 @@ export class ForgottenInstructionsDto extends createZodDto(
 ) {}
 
 /**
+ * How long a chat may sit in the archive before the sweep destroys it.
+ *
+ * The POLICY is the user's and lives in `settings.json`, which this process
+ * never opens — so the window rides the request, exactly as `customInstructions`
+ * and `cursorMaxMode` ride chat create. Absence is not expressible here on
+ * purpose: "never" is the client not calling the route at all, so a malformed
+ * or empty body can never be read as a licence to delete everything.
+ *
+ * Bounded at BOTH ends, and both bounds are about the same irreversible act. A
+ * floor of one day, because below that the window stops describing an archive
+ * and starts describing the moment of archiving — and a zero would sweep a
+ * thread the user shelved seconds ago, which is indistinguishable from the
+ * archive button destroying it. A ceiling of ten years, because a window nobody
+ * will live to see reached is a switch that reads as ON and does nothing.
+ */
+export const sweepArchivedSchema = z.object({
+  olderThanDays: z
+    .number()
+    .int()
+    .min(1)
+    .max(3650)
+    .describe('Delete chats archived at least this many days ago'),
+});
+export class SweepArchivedDto extends createZodDto(sweepArchivedSchema) {}
+
+/**
+ * How many archived chats the sweep destroyed.
+ *
+ * A COUNT for {@link ForgottenInstructionsDto}'s reason and one of its own: the
+ * sweep steps over a run it cannot tear down, so this is what was ACTUALLY
+ * destroyed rather than what was eligible, and a caller comparing the two can
+ * tell a partial sweep from a complete one.
+ */
+export class SweptArchivedDto extends createZodDto(
+  z.object({
+    deleted: z
+      .number()
+      .int()
+      .describe('Archived chats permanently deleted by this sweep'),
+  }),
+) {}
+
+/**
  * Acknowledgement of a delete. Mirrors the workflow route's own
  * `WorkflowDeletedDto` rather than sharing it: they belong to different
  * modules' contracts, and the generated client names one class per tag.

@@ -35,6 +35,37 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * The ids of ARCHIVED chat runs shelved before `cutoff`, oldest first.
+   *
+   * Ids rather than rows: every one of them is about to be destroyed, so
+   * hydrating entities buys nothing and a long archive would load its whole
+   * history into the forked EM to read one column off each.
+   *
+   * Oldest FIRST, which is the reverse of every other listing here and is the
+   * one ordering that degrades well: a sweep interrupted part-way — the daemon
+   * quits, the disk fills — has removed the runs furthest past the retention
+   * window, so the next sweep resumes rather than starting over on rows it has
+   * already reached.
+   *
+   * `workflowId: null` for the reason `listChats` has it: a workflow run has no
+   * archive, so it can never be shelved and must never be swept.
+   */
+  async archivedChatIdsBefore(
+    cutoff: Date,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { workflowId: null, archivedAt: { $ne: null, $lte: cutoff } },
+      {
+        fields: ['id'],
+        orderBy: { archivedAt: 'asc' },
+        disableIdentityMap: true,
+      },
+    );
+    return rows.map((run) => run.id);
+  }
+
+  /**
    * Forget the snapshotted custom instructions on every run still holding any,
    * and report how many were cleared.
    *

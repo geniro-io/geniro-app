@@ -2906,6 +2906,32 @@ export interface ShellOutputDto {
      */
     unavailableReason: string | null;
 }
+/**
+ * 
+ * @export
+ * @interface SweepArchivedDto
+ */
+export interface SweepArchivedDto {
+    /**
+     * Delete chats archived at least this many days ago
+     * @type {number}
+     * @memberof SweepArchivedDto
+     */
+    olderThanDays: number;
+}
+/**
+ * 
+ * @export
+ * @interface SweptArchivedDto
+ */
+export interface SweptArchivedDto {
+    /**
+     * Archived chats permanently deleted by this sweep
+     * @type {number}
+     * @memberof SweptArchivedDto
+     */
+    deleted: number;
+}
 
 /**
  * 

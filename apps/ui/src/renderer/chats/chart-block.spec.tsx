@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import { ChartCard } from './chart-block';
 import type { ChartSpec } from './chart-payload';
 
@@ -22,13 +23,7 @@ import type { ChartSpec } from './chart-payload';
  * measures 0×0 in jsdom, so the SVG is empty whatever the data says, and a test
  * over it would pin the measurement rather than the chart.
  */
-class NoopResizeObserver {
-  observe(): void {}
-  unobserve(): void {}
-  disconnect(): void {}
-}
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver =
-  NoopResizeObserver;
+stubResizeObserver();
 
 let container: HTMLDivElement;
 let root: Root;

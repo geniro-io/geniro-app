@@ -16,6 +16,7 @@ import {
   HOST_CHART_TOOL,
   HOST_COMPARISON_TOOL,
   HOST_FINDINGS_TOOL,
+  HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -26,6 +27,7 @@ import {
   MAX_COMPARISON_CRITERIA,
   MAX_COMPARISON_OPTIONS,
   MAX_FINDING_SHORT_SUMMARY_LENGTH,
+  MAX_GALLERY_IMAGES,
   MAX_HOST_FINDINGS,
   MAX_HOST_METRICS,
   MAX_HOST_QUESTION_OPTIONS,
@@ -36,6 +38,7 @@ import {
 import { ChartBroker } from '../../agents/services/chart.broker';
 import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
+import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
@@ -52,6 +55,10 @@ import {
   hostFindingsResultText,
   readHostFindingsReport,
 } from '../../agents/utils/host-findings';
+import {
+  hostGalleryResultText,
+  readHostGallery,
+} from '../../agents/utils/host-gallery';
 import {
   hostMetricsResultText,
   readHostMetrics,
@@ -77,8 +84,8 @@ import { CallBroker } from './call-broker.service';
  * (call_agent / await_agent / answer_agent) to a node with callees,
  * `ask_user_question` to a turn whose CLI cannot ask its user anything on its
  * own, and the RENDER family — `report_findings`, `show_chart`, `show_metrics`,
- * `show_comparison`, `propose_patch` and `propose_plan` — to a turn whose
- * transcript can draw them.
+ * `show_comparison`, `show_gallery`, `propose_patch` and `propose_plan` — to a
+ * turn whose transcript can draw them.
  * The listing is composed per request rather than fixed, so a chat is
  * never offered agents to call and a graph node is never offered a card
  * nobody is watching. Stateless by design: every POST builds a fresh
@@ -109,6 +116,7 @@ export class McpServerService {
     private readonly plans: PlanBroker,
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
+    private readonly galleries: GalleryBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
 
@@ -668,6 +676,58 @@ export class McpServerService {
           },
         });
       }
+      if (this.galleries.canDraw(runId, nodeId)) {
+        tools.push({
+          name: HOST_GALLERY_TOOL,
+          description:
+            'Show SEVERAL images together as a gallery this app draws for the user — a grid of thumbnails that ' +
+            'opens full-screen, where they can zoom and step between the pictures. ' +
+            'Use it when you have produced or found more than one picture that belongs together: screenshots ' +
+            'before and after a change, the frames of a flow, several charts some other tool wrote to disk. ' +
+            'Do NOT use it for ONE picture — a single markdown image (`![caption](/path/to.png)`) already renders ' +
+            'in this transcript and reads better inline; this tool is for a SET, and its value is that the user ' +
+            'can step between them. ' +
+            'It is also not for numbers you have measured: use show_chart or show_metrics for those, which draw ' +
+            'the data itself rather than a picture of it. ' +
+            'Name each image by its path on disk — absolute, or relative to the working directory. Do not paste ' +
+            'image data; this app reads the files. ' +
+            'Call it ONCE per set, and do not also list the paths as text: the user sees the pictures, so writing ' +
+            'the filenames out again shows the same thing twice. Say what the images SHOW in your reply. ' +
+            'The result is a short receipt counting what was shown, never the paths themselves.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              title: {
+                type: 'string',
+                description:
+                  'What the set is, as the card\'s heading — e.g. "Composer, before and after". Optional.',
+              },
+              images: {
+                type: 'array',
+                description: `The pictures, in the order they should be shown — at most ${MAX_GALLERY_IMAGES}.`,
+                items: {
+                  type: 'object',
+                  properties: {
+                    path: {
+                      type: 'string',
+                      description:
+                        'Where the file is: an absolute path, or one relative to the working directory.',
+                    },
+                    caption: {
+                      type: 'string',
+                      description:
+                        'What THIS picture shows. Optional — leave it out when the pictures speak for ' +
+                        'themselves, rather than captioning every tile to fill the field.',
+                    },
+                  },
+                  required: ['path'],
+                },
+              },
+            },
+            required: ['images'],
+          },
+        });
+      }
       if (this.patches.canPropose(runId, nodeId)) {
         tools.push({
           name: HOST_PATCH_TOOL,
@@ -913,6 +973,30 @@ export class McpServerService {
           content: [{ type: 'text', text: hostComparisonResultText(outcome) }],
           // Same reading as its drawing siblings: an unavailable channel is an
           // answer, not a failure — the agent still holds the comparison.
+          isError: false,
+        };
+      }
+      if (name === HOST_GALLERY_TOOL) {
+        const gallery = readHostGallery(args);
+        // Null is the reader saying no entry named a file. Answered as a
+        // malformed call on the chart's rule: a gallery of no pictures is only
+        // ever a mistake.
+        if (gallery === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: no image to show — 'images' must hold at least one entry with a 'path'.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.galleries.draw(runId, nodeId, gallery);
+        return {
+          content: [{ type: 'text', text: hostGalleryResultText(outcome) }],
+          // Same reading as its drawing siblings: an unavailable channel is an
+          // answer, not a failure — the agent still knows where the files are.
           isError: false,
         };
       }

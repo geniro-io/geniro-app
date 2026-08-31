@@ -116,7 +116,7 @@ import { type GroupCommand, GroupHeader } from './group-header';
 import { JumpToLatest } from './jump-to-latest';
 import { RunActivityContext, RunSettledContext } from './live-row';
 import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
-import { MarkdownImageLoaderContext } from './markdown-image';
+import { LocalImageLoaderContext } from './local-image-loader';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
 import { withModelParameter } from './model-parameter-select';
@@ -5535,7 +5535,7 @@ export function Chats({
       <CliLoginContext.Provider value={signInToActiveCli}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
-            <MarkdownImageLoaderContext.Provider value={loadMarkdownImage}>
+            <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
               <div
                 className="grid h-full"
                 // The list's width is shared with the shell: the title bar's
@@ -7260,7 +7260,7 @@ export function Chats({
                   onResume={(row) => void resumeSession(row)}
                 />
               </div>
-            </MarkdownImageLoaderContext.Provider>
+            </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
       </CliLoginContext.Provider>

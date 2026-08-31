@@ -39,6 +39,7 @@ import { ContextWindowStore } from './services/context-window.store';
 import { ContextWindowsService } from './services/context-windows.service';
 import { EffortsService } from './services/efforts.service';
 import { FindingsReportBroker } from './services/findings-report.broker';
+import { GalleryBroker } from './services/gallery.broker';
 import { ItemSeqAllocator } from './services/item-seq.allocator';
 import { LocalImageService } from './services/local-image.service';
 import { McpHarvestStore } from './services/mcp-harvest.store';
@@ -92,6 +93,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     PatchBroker,
     ComparisonBroker,
     MetricsBroker,
+    GalleryBroker,
     PlanBroker,
     CacheResetService,
     AgentAdapterRegistry,
@@ -313,6 +315,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     PatchBroker,
     ComparisonBroker,
     MetricsBroker,
+    GalleryBroker,
     PlanBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed

@@ -571,6 +571,101 @@ export type HostComparisonOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * TWIN PARSER: apps/ui/src/renderer/chats/gallery-payload.ts — the reader over
+ * the `show_gallery` item payload this tool produces.
+ *
+ * The render family's PICTURES: several images the agent wants looked at, drawn
+ * as a thumbnail grid that opens into the full-screen viewer. What it is for is
+ * a class of answer the other five cannot carry at all — screenshots of a UI
+ * before and after a change, the frames of a flow, the charts some other tool
+ * wrote to disk. Without it an agent's only move is a markdown image per
+ * picture, which renders them as a column of full-width images with no way to
+ * step between them and no statement that they are ONE set.
+ *
+ * It is unlike its five siblings in one way that matters more than the drawing,
+ * and it is stated here because a reader will ask: **this payload names FILES,
+ * where every other one carries its own content.** The images are not embedded;
+ * each entry is a path the renderer resolves through the SAME
+ * `GET /v1/chats/:runId/image?path=` route a markdown image already goes
+ * through, under that route's own guards (extension allowlist, real regular
+ * file, canonicalized before the stat, size ceiling). So this adds no reach an
+ * agent did not already have — it could write `![](x.png)` in a message today
+ * and the renderer would fetch it the same way. What it adds is N at once,
+ * which is why {@link MAX_GALLERY_IMAGES} is a cap on how many file reads one
+ * call can trigger rather than a cap on how much a card can readably hold.
+ *
+ * Everything else is the family's ordinary bargain: the payload is the card,
+ * the call answers with a receipt, the row is the only copy, every chat is
+ * handed it, and it auto-approves — drawing in this app's own transcript is not
+ * something a permission card can meaningfully guard.
+ */
+export const HOST_GALLERY_TOOL = 'show_gallery';
+
+/**
+ * Caps on one gallery. They TRUNCATE, on the family's usual rule — an agent
+ * that produced thirty screenshots has still done the work, and twenty-four of
+ * them plus a receipt saying so is a better answer than a refusal.
+ *
+ * `MAX_GALLERY_IMAGES` is the one cap here that is not about readability: every
+ * entry becomes a file read over the image route, so this bounds the work ONE
+ * tool call can ask of the disk. Twenty-four is two full rows of a six-column
+ * grid at the widest the transcript gets, which is about where a set stops
+ * being something a reader takes in and starts being a directory listing.
+ */
+export const MAX_GALLERY_IMAGES = 24;
+export const MAX_GALLERY_TITLE_LENGTH = 120;
+export const MAX_GALLERY_CAPTION_LENGTH = 200;
+/**
+ * Long enough for any real absolute path without being unbounded — the value
+ * reaches a query string and a filesystem call, and neither wants a megabyte.
+ */
+export const MAX_GALLERY_PATH_LENGTH = 1024;
+
+/** One picture in the gallery. */
+export interface HostGalleryImage {
+  /**
+   * Where the file is. Absolute, or relative to the run's cwd — the same two
+   * forms the image route already resolves for a markdown reference, so an
+   * agent needs to learn no new rule about paths.
+   */
+  path: string;
+  /**
+   * What this one shows. Optional, and genuinely so: a set of screenshots named
+   * `01-before.png` / `02-after.png` explains itself, and a caption per tile
+   * invented to fill the field is noise under every picture.
+   */
+  caption?: string;
+}
+
+/** One `show_gallery` call, as the card will draw it. */
+export interface HostGallery {
+  /**
+   * What the set IS. Optional on {@link HostChart.title}'s reasoning — real
+   * pictures are worth showing under a generic heading, and dropping them over
+   * a missing caption would throw away the thing the agent went and produced.
+   */
+  title?: string;
+  images: HostGalleryImage[];
+}
+
+/**
+ * What a gallery resolves to.
+ *
+ * Two arms, like the other drawings — nothing is put to the user to decide, so
+ * there is no `declined`. The count is in the receipt because the cap truncates
+ * silently otherwise: an agent that sent thirty images reads back
+ * twenty-four and knows, without being handed its own list.
+ *
+ * A gallery with no readable path is a MALFORMED call rather than an empty
+ * result, answered as INVALID_ARGS on {@link HostChartOutcome}'s rule: an empty
+ * findings report is a real review outcome, a gallery of no pictures is only
+ * ever a mistake.
+ */
+export type HostGalleryOutcome =
+  | { status: 'drawn'; images: number }
+  | { status: 'unavailable'; reason: string };
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff

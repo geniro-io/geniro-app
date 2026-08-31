@@ -38,6 +38,8 @@ import {
   type HostComparisonOutcome,
   type HostFindingsOutcome,
   type HostFindingsReport,
+  type HostGallery,
+  type HostGalleryOutcome,
   type HostMetrics,
   type HostMetricsOutcome,
   type HostPatch,
@@ -70,6 +72,7 @@ import {
 import { isHostChartCall } from '../utils/host-chart';
 import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
+import { isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
@@ -97,6 +100,7 @@ import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
+import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
@@ -414,6 +418,7 @@ export class ChatService implements OnModuleInit {
     private readonly plans: PlanBroker,
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
+    private readonly galleries: GalleryBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -2435,6 +2440,7 @@ export class ChatService implements OnModuleInit {
         isHostQuestionCall(hostQuestionServer(), toolName) ||
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
+        isHostGalleryCall(hostServerName, toolName) ||
         // The patch tool auto-approves TOO, and the reason is worth stating
         // because the opposite looks right: this tool writes to disk, so surely
         // it should be gated? It IS — by its own card. Two different gates were
@@ -3052,6 +3058,43 @@ export class ChatService implements OnModuleInit {
         };
       };
       /**
+       * geniro's own gallery channel — the fourth drawing twin, and its
+       * structural copy for the reason spelled out at {@link drawChart}.
+       *
+       * What is NOT copied is any reading of the files: this stores the paths
+       * the agent named and nothing else. The renderer fetches each one over
+       * the image route, which owns the guards, so a picture that has since
+       * moved or was never there costs one broken tile rather than a failed
+       * call — and the agent is told the row landed, which is the only thing
+       * this step actually did.
+       */
+      const drawGallery = async (
+        gallery: HostGallery,
+      ): Promise<HostGalleryOutcome> => {
+        try {
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            'show_gallery',
+            null,
+            gallery,
+          );
+        } catch (err) {
+          // Logged here and kept here, like its siblings: a persist failure
+          // names an absolute database path, and the string this returns is
+          // handed to a model whose provider is off this machine.
+          this.logger.error(
+            `run ${runId} could not persist a gallery: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          return {
+            status: 'unavailable',
+            reason: 'the transcript row could not be written',
+          };
+        }
+        return { status: 'drawn', images: gallery.images.length };
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -3322,6 +3365,9 @@ export class ChatService implements OnModuleInit {
       const disposeComparer = mcpEndpoint
         ? this.comparisons.register(runId, SINGLE_AGENT_NODE, drawComparison)
         : null;
+      const disposeGallerist = mcpEndpoint
+        ? this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -3334,6 +3380,7 @@ export class ChatService implements OnModuleInit {
         disposePlanner?.();
         disposeScorer?.();
         disposeComparer?.();
+        disposeGallerist?.();
       };
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same

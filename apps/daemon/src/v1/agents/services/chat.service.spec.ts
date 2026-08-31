@@ -49,6 +49,7 @@ import type {
 } from '../chat.types';
 import {
   HOST_COMPARISON_TOOL,
+  HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
@@ -73,6 +74,7 @@ import { ComparisonBroker } from './comparison.broker';
 import { ConfigDirPinService } from './config-dir-pin.service';
 import { EffortsService } from './efforts.service';
 import { FindingsReportBroker } from './findings-report.broker';
+import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
@@ -672,6 +674,7 @@ function setup(
   const plans = new PlanBroker();
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
+  const galleries = new GalleryBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -787,6 +790,7 @@ function setup(
     plans,
     metrics,
     comparisons,
+    galleries,
     callTokens,
     {
       token: 'launch',
@@ -813,6 +817,7 @@ function setup(
     plans,
     metrics,
     comparisons,
+    galleries,
     statuses,
     deletedRuns,
     removedAttachmentRuns,
@@ -1391,6 +1396,82 @@ describe('ChatService', () => {
       });
       expect(itemDao.items).toHaveLength(before);
       await settle(claude);
+    });
+
+    it('persists a gallery as its own row, every field surviving', async () => {
+      // The worked example both twin parsers are checked against, like the
+      // findings, chart, scorecard and comparison literals around it. This one
+      // is the only payload in the family that names FILES rather than
+      // carrying its own content, so what must survive is the paths.
+      const { service, claude, galleries, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+
+      const outcome = await galleries.draw(run.id, SINGLE_AGENT_NODE, {
+        title: 'Before and after',
+        images: [
+          { path: '/tmp/shots/before.png', caption: 'the old header' },
+          { path: 'after.png' },
+        ],
+      });
+      await drain();
+
+      expect(outcome).toEqual({ status: 'drawn', images: 2 });
+      const rows = itemDao.items.filter((item) => item.kind === 'show_gallery');
+      expect(rows).toHaveLength(1);
+      expect(itemDao.items).toHaveLength(before + 1);
+      expect(JSON.parse(String(rows[0]?.payload))).toEqual({
+        title: 'Before and after',
+        images: [
+          { path: '/tmp/shots/before.png', caption: 'the old header' },
+          { path: 'after.png' },
+        ],
+      });
+      await settle(claude);
+    });
+
+    it('answers a gallery it could not write without naming the database', async () => {
+      // Same rule as its siblings: a persist failure names an absolute database
+      // path, and this string is handed to a model whose provider is off this
+      // machine.
+      const { service, claude, galleries, itemDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      const before = itemDao.items.length;
+      itemDao.failNextKind = 'show_gallery';
+
+      const outcome = await galleries.draw(run.id, SINGLE_AGENT_NODE, {
+        images: [{ path: 'a.png' }],
+      });
+
+      expect(outcome).toEqual({
+        status: 'unavailable',
+        reason: 'the transcript row could not be written',
+      });
+      expect(itemDao.items).toHaveLength(before);
+      await settle(claude);
+    });
+
+    it('stops accepting galleries once the turn that could show them is over', async () => {
+      // The disposer. Without it a settled turn goes on drawing into a
+      // transcript nobody is producing any more.
+      const { service, claude, galleries } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      expect(galleries.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      await settle(claude);
+
+      expect(galleries.canDraw(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await expect(
+        galleries.draw(run.id, SINGLE_AGENT_NODE, {
+          images: [{ path: 'late.png' }],
+        }),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reason: 'no turn is running that could show it',
+      });
     });
 
     it('stops accepting charts once the turn that could draw them is over', async () => {
@@ -4389,6 +4470,38 @@ describe('ChatService — approval modes (parity M1)', () => {
 
     expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
       'p-metrics',
+      true,
+      input,
+    );
+    expect(itemDao.items.some((i) => i.kind === 'approval_request')).toBe(
+      false,
+    );
+    expect(approvals.listByRun(run.id)).toEqual([]);
+  });
+
+  it('auto-approves the show_gallery CALL, like every drawing tool', async () => {
+    // Drawing in this app's own transcript is not something a permission card
+    // can meaningfully guard — the CALL reads no file, the renderer fetches the
+    // pictures afterwards through the image route's own guards. Without this
+    // arm the user gets an "allow show_gallery?" card on every gallery.
+    const { service, claude, approvals, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      approval: 'ask',
+    });
+    await service.sendMessage(run.id, 'hi');
+    const input = { images: [{ path: '/tmp/a.png' }] };
+    claude.emit({
+      type: 'approval_request',
+      id: 'p-gallery',
+      toolName: `mcp__${hostMcpServerName(run.id)}__${HOST_GALLERY_TOOL}`,
+      input,
+    });
+    await drain();
+
+    expect(claude.handles[0]!.respondApproval).toHaveBeenCalledWith(
+      'p-gallery',
       true,
       input,
     );

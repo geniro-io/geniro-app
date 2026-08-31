@@ -3,15 +3,19 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { MarkdownContent } from './markdown-content';
+import { stubResizeObserver } from '../__tests__/stub-resize-observer';
 import {
-  type MarkdownImageLoader,
-  MarkdownImageLoaderContext,
-} from './markdown-image';
+  type LocalImageLoader,
+  LocalImageLoaderContext,
+} from './local-image-loader';
+import { MarkdownContent } from './markdown-content';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
+
+// A markdown image renders through the image viewer, whose zoom layer needs one.
+stubResizeObserver();
 
 let container: HTMLElement;
 let root: Root;
@@ -30,13 +34,13 @@ afterEach(() => {
 /** Render markdown with a loader in context and let its promise settle. */
 async function render(
   content: string,
-  load: MarkdownImageLoader | null,
+  load: LocalImageLoader | null,
 ): Promise<void> {
   await act(async () => {
     root.render(
-      <MarkdownImageLoaderContext.Provider value={load}>
+      <LocalImageLoaderContext.Provider value={load}>
         <MarkdownContent content={content} />
-      </MarkdownImageLoaderContext.Provider>,
+      </LocalImageLoaderContext.Provider>,
     );
   });
 }

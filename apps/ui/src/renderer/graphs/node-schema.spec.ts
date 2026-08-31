@@ -103,16 +103,26 @@ describe('connectionEdgeKind', () => {
 });
 
 describe('flowEdgeKind / flowEdgeType', () => {
-  it('round-trips the canvas discriminator: type "call" ⇄ kind call, no type ⇄ data', () => {
+  it('round-trips the canvas discriminator — EVERY kind names its type now', () => {
     expect(flowEdgeKind({ type: 'call' })).toBe('call');
-    expect(flowEdgeKind({})).toBe('data');
     // Any third RF edge type is by definition a data edge (documented design).
     expect(flowEdgeKind({ type: 'smoothstep' })).toBe('data');
     expect(flowEdgeType('call')).toEqual({ type: 'call' });
-    expect(flowEdgeType('data')).toEqual({});
+    // `data` used to emit `{}` and take React Flow's default component, which
+    // is how the wire that orders the run became the only thing on the canvas
+    // nobody had designed. It names itself like the other two.
+    expect(flowEdgeType('data')).toEqual({ type: 'data' });
     // The pair inverts: building an edge then reading it back keeps the kind.
     expect(flowEdgeKind(flowEdgeType('call'))).toBe('call');
     expect(flowEdgeKind(flowEdgeType('data'))).toBe('data');
+  });
+
+  it('still reads an edge with NO type as data', () => {
+    // Not redundant with the round-trip above, and it is the half that cannot
+    // be dropped: every edge persisted or dragged before `data` started naming
+    // itself carries no type at all, and a drag in flight has none either.
+    expect(flowEdgeKind({})).toBe('data');
+    expect(flowEdgeKind({ type: undefined })).toBe('data');
   });
 });
 

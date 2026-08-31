@@ -1,6 +1,5 @@
 import {
   Bot,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   ScrollText,
@@ -165,14 +164,10 @@ function partnersOf(kind: NodeKind): string[] {
 // on every nav change so component state alone would reset the width + fold).
 const LS_WIDTH = 'geniro.builder.paletteWidth';
 const LS_COLLAPSED = 'geniro.builder.paletteCollapsed';
-// The three category folds are stored under NEW keys. The old ones
-// (`…paletteAgentsOpen` and friends) hold a `'1'` that was never a choice:
-// `usePersistedFlag` used to write its fallback on mount, so every install that
-// has ever opened the builder recorded "expanded" under those names and would
-// go on reading it forever, whatever this file's default says.
-const LS_AGENTS_OPEN = 'geniro.builder.agentsOpen';
-const LS_TRIGGERS_OPEN = 'geniro.builder.triggersOpen';
-const LS_INSTRUCTIONS_OPEN = 'geniro.builder.instructionsOpen';
+// There were three more keys here, one per category fold. The folds are gone
+// (see `Category`), so the keys are too — including the pair of generations of
+// them this file had already accumulated. Nothing migrates: a remembered fold
+// is not the user's data, and the categories no longer have a state to restore.
 
 /**
  * One connection rule row in the info dialog: the port dot (input/output
@@ -258,7 +253,12 @@ function PaletteTile({
       </span>
       <span className="min-w-0">
         <span className="block text-sm font-medium">{meta.label}</span>
-        <span className="mt-0.5 line-clamp-2 block text-xs leading-relaxed text-muted-foreground">
+        {/* No `block` beside the clamp. `line-clamp-2` works by setting
+            `display: -webkit-box`, so a `display: block` utility on the same
+            element silently cancels it — measured here as three-line blurbs in
+            a 240px column under a class that promised two. The clamp is
+            block-level by construction, so nothing is lost by dropping it. */}
+        <span className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
           {meta.blurb}
         </span>
       </span>
@@ -267,57 +267,46 @@ function PaletteTile({
 }
 
 /**
- * One collapsible category block (Triggers / Agents).
+ * One category of the drawer — a caption and its tiles. It does NOT fold.
  *
- * It carried a bare numeral beside the title — `TRIGGER_KINDS.length`, i.e. how
- * many TYPES the drawer offers — and that numeral sat a few centimetres from a
- * canvas holding a different number of the same thing: `Agents 2` beside four
- * agent nodes. A count with no noun next to a graph is read as a count OF the
- * graph, which is the mistake the node ports made in the other direction. It
- * also bought nothing, since opening the block shows one or two tiles.
+ * It used to, and that was three accordions guarding FOUR tiles in total: one
+ * trigger, two agents, one instruction block. Collapsed by default, so the
+ * whole drawer opened as three closed rows in a 330px column with some 900px of
+ * dead space under them, and reaching any single item cost a click that could
+ * only ever reveal one or two. A fold earns its keep on a list that outgrows the
+ * column; this one is bounded by how many CLIs the app supports.
+ *
+ * Going with it: three persisted localStorage flags, three pieces of state, and
+ * a bare numeral beside each title — `TRIGGER_KINDS.length`, how many TYPES the
+ * drawer offers, sitting a few centimetres from a canvas holding a different
+ * number of the same noun (`Agents 2` beside four agent nodes). A count with no
+ * noun next to a graph is read as a count OF the graph.
  */
-function CategoryBlock({
+function Category({
   title,
-  open,
-  onToggle,
   children,
 }: {
   title: string;
-  open: boolean;
-  onToggle: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
   return (
-    <>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="flex w-full items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-accent/40">
-        <span className="text-sm font-medium">{title}</span>
-        <ChevronDown
-          aria-hidden="true"
-          className={cn(
-            'ml-auto size-3.5 shrink-0 text-muted-foreground transition-transform',
-            !open && '-rotate-90',
-          )}
-        />
-      </button>
-      {open ? (
-        <div className="mt-1 mb-1 flex flex-col gap-1">{children}</div>
-      ) : null}
-    </>
+    <section className="flex flex-col gap-1.5">
+      <h3 className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {title}
+      </h3>
+      <div className="flex flex-col gap-1">{children}</div>
+    </section>
   );
 }
 
 /**
- * The builder's left palette — mirrors geniro's `TemplateSidebar`: collapsible
- * category blocks (Triggers + Agents), a fold control that shrinks the whole
- * panel to a slim rail, and a drag-to-resize right edge. Panel width, fold
- * state, and each block's open state persist in localStorage — the blocks
- * start collapsed until the user opens one. Nodes are added
- * by dragging a tile onto the canvas OR from the tile's info dialog ("Add to
- * canvas" — the keyboard path); clicking a tile opens that dialog.
+ * The builder's left palette: every node type the app can drop, under a caption
+ * per category, plus a fold control that shrinks the whole panel to a slim rail
+ * and a drag-to-resize right edge. Panel width and the rail fold persist in
+ * localStorage; the categories themselves no longer fold — see {@link Category}.
+ * Nodes are added by dragging a tile onto the canvas OR from the tile's info
+ * dialog ("Add to canvas" — the keyboard path); clicking a tile opens that
+ * dialog.
  */
 export function NodePalette({
   onAdd,
@@ -333,19 +322,6 @@ export function NodePalette({
     maxWidth: 400,
     handleEdge: 'right',
   });
-  // Every category starts CLOSED: the palette's job on open is to show what
-  // kinds of node exist, and three expanded blocks push the last one under the
-  // fold on a short window. The open state is still the user's once they touch
-  // it — `usePersistedFlag` only falls back to this with nothing stored.
-  const [agentsOpen, setAgentsOpen] = usePersistedFlag(LS_AGENTS_OPEN, false);
-  const [triggersOpen, setTriggersOpen] = usePersistedFlag(
-    LS_TRIGGERS_OPEN,
-    false,
-  );
-  const [instructionsOpen, setInstructionsOpen] = usePersistedFlag(
-    LS_INSTRUCTIONS_OPEN,
-    false,
-  );
   const [infoItem, setInfoItem] = useState<PaletteItem | null>(null);
 
   const closeInfo = useCallback(() => setInfoItem(null), []);
@@ -533,11 +509,8 @@ export function NodePalette({
         </p>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-        <CategoryBlock
-          title="Triggers"
-          open={triggersOpen}
-          onToggle={() => setTriggersOpen((v) => !v)}>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2">
+        <Category title="Triggers">
           {TRIGGER_KINDS.map((trigger) => (
             <PaletteTile
               key={trigger}
@@ -545,12 +518,9 @@ export function NodePalette({
               onInfo={setInfoItem}
             />
           ))}
-        </CategoryBlock>
+        </Category>
 
-        <CategoryBlock
-          title="Agents"
-          open={agentsOpen}
-          onToggle={() => setAgentsOpen((v) => !v)}>
+        <Category title="Agents">
           {CLI_KINDS.map((agent) => (
             <PaletteTile
               key={agent}
@@ -558,14 +528,11 @@ export function NodePalette({
               onInfo={setInfoItem}
             />
           ))}
-        </CategoryBlock>
+        </Category>
 
-        <CategoryBlock
-          title="Instructions"
-          open={instructionsOpen}
-          onToggle={() => setInstructionsOpen((v) => !v)}>
+        <Category title="Instructions">
           <PaletteTile item={{ kind: 'instruction' }} onInfo={setInfoItem} />
-        </CategoryBlock>
+        </Category>
       </div>
 
       <PanelResizeHandle

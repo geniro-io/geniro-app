@@ -40,6 +40,12 @@ describe('toFlow / fromFlow', () => {
         source: 'coder',
         target: 'reviewer',
         label: undefined,
+        // A data edge NAMES its type like the annotation kinds, so it is drawn
+        // by `graph-edge.tsx` rather than by React Flow's own default — which
+        // is what left the graph's ordering wire the one thing on the canvas
+        // nobody had designed. Not persisted: `fromFlow` reads it back to a
+        // kind and drops it, along with the handles below.
+        type: 'data',
         // Handles derive from the edge kind + endpoint kinds (both agents
         // here) and are never persisted — fromFlow drops them below.
         sourceHandle: 'source-data-agent',
@@ -93,13 +99,15 @@ describe('toFlow / fromFlow', () => {
         { from: 'coder', to: 'reviewer', kind: 'call' },
       ],
     });
-    // Per-kind ids keep both edges alive on the canvas; the call edge renders
-    // through the `call` edge component and lands on the call handles.
+    // Per-kind ids keep both edges alive on the canvas; each renders through
+    // its OWN component in `graph-edge.tsx` and lands on its own handles. The
+    // data edge names its type too — it used to be left blank for React Flow to
+    // fill with the library default, which is the state that change ended.
     expect(flow.edges.map((e) => e.id)).toEqual([
       '["coder","reviewer","data"]',
       '["coder","reviewer","call"]',
     ]);
-    expect(flow.edges[0]!.type).toBeUndefined();
+    expect(flow.edges[0]!.type).toBe('data');
     expect(flow.edges[1]).toMatchObject({
       type: 'call',
       sourceHandle: 'source-call-agent',

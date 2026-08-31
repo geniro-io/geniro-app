@@ -31,22 +31,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/**
- * Open every category block. The palette ships them CLOSED, so a test about
- * tiles has to open them the way a user does — clicking the headers, rather
- * than seeding the storage keys the component owns.
- */
-function expandAll(): void {
-  Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-    .filter((b) => b.getAttribute('aria-expanded') === 'false')
-    .forEach(click);
-}
-
 function render(): void {
   act(() => {
     root.render(<NodePalette />);
   });
-  expandAll();
 }
 
 /** The draggable tiles (the fold/category buttons are not draggable). */
@@ -77,36 +65,25 @@ function dialog(): Element | null {
 }
 
 describe('NodePalette', () => {
-  it('opens with every category collapsed', () => {
-    // Reported: "by default all groups should be collapsed" — three expanded
-    // blocks fill the panel before the user has asked for any of them.
-    act(() => {
-      root.render(<NodePalette />);
-    });
+  it('shows every node type at once — the categories do not fold', () => {
+    // This REVERSES an earlier report ("by default all groups should be
+    // collapsed"), and the reversal is deliberate rather than an oversight.
+    // That report was about the panel being FULL: three expanded accordion
+    // blocks, each a bordered box of bordered tiles, filled the column before
+    // the user had asked for anything. The drawer holds FOUR tiles in total —
+    // one trigger, two agents, one instruction block — so what it costs
+    // unfolded is four rows under three captions, and what folding cost was a
+    // click per category to reveal one or two items apiece.
+    //
+    // The fold is gone rather than merely defaulted open, so there is no
+    // `aria-expanded` left in the panel body at all.
+    render();
 
-    const headers = Array.from(
+    expect(tiles()).toHaveLength(4);
+    const folds = Array.from(
       container.querySelectorAll<HTMLButtonElement>('button'),
     ).filter((b) => b.hasAttribute('aria-expanded'));
-    expect(headers).toHaveLength(3); // Triggers + Agents + Instructions
-    expect(headers.map((b) => b.getAttribute('aria-expanded'))).toEqual([
-      'false',
-      'false',
-      'false',
-    ]);
-    expect(tiles()).toHaveLength(0); // nothing under them until one is opened
-  });
-
-  it('remembers a category the user opened', () => {
-    // The default is a fallback, not a policy: an opened block survives the
-    // remount the builder performs on every nav change.
-    render(); // opens all three
-    act(() => root.unmount());
-
-    root = createRoot(container);
-    act(() => {
-      root.render(<NodePalette />);
-    });
-    expect(tiles()).toHaveLength(4);
+    expect(folds).toHaveLength(0);
   });
 
   it('renders one draggable tile per trigger, agent and instruction block', () => {
@@ -140,7 +117,6 @@ describe('NodePalette', () => {
     act(() => {
       root.render(<NodePalette onAdd={onAdd} />);
     });
-    expandAll();
     click(tileByLabel('Claude'));
 
     const add = Array.from(
@@ -275,18 +251,24 @@ describe('NodePalette', () => {
     expect(tiles()).toHaveLength(4);
   });
 
-  it('collapses one category block without touching the others', () => {
+  it('keeps every category caption as a heading, not a control', () => {
+    // The captions used to be the fold buttons. With the fold gone they must
+    // become plain headings rather than buttons that do nothing — a dead
+    // control is worse than no control, and it would still take a tab stop.
     render();
-    const headers = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('button'),
-    ).filter((b) => b.getAttribute('aria-expanded') === 'true');
-    expect(headers).toHaveLength(3); // Triggers + Agents + Instructions
 
-    const agentsHeader = headers.find((b) => b.textContent?.includes('Agents'));
-    click(agentsHeader);
-    expect(agentsHeader?.getAttribute('aria-expanded')).toBe('false');
-    // Manual and the instruction block stay; Claude/Cursor hidden.
-    expect(tiles()).toHaveLength(2);
+    const captions = Array.from(container.querySelectorAll('h3')).map(
+      (h) => h.textContent,
+    );
+    expect(captions).toEqual(['Triggers', 'Agents', 'Instructions']);
+    // Nothing in the panel body is pressable except the four tiles and the
+    // rail's own collapse control.
+    const pressable = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('button'),
+    ).filter((b) => !b.draggable);
+    expect(pressable.map((b) => b.getAttribute('aria-label'))).toEqual([
+      'Collapse palette',
+    ]);
   });
 
   it('resizes on drag and persists the new width', () => {

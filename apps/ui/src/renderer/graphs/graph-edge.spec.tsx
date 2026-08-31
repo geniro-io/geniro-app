@@ -29,7 +29,7 @@ vi.mock('@xyflow/react', () => ({
   getBezierPath: () => ['M0 0 L100 0', 50, 0],
 }));
 
-import { CallEdge, InstructionEdge } from './annotation-edge';
+import { CallEdge, InstructionEdge } from './graph-edge';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }

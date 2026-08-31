@@ -285,11 +285,20 @@ export function flowEdgeKind(edge: { type?: string }): EdgeKind {
   return isAnnotationEdgeKind(edge.type) ? edge.type : 'data';
 }
 
-/** Spreadable inverse of {@link flowEdgeKind} for building canvas edges. */
-export function flowEdgeType(edgeKind: EdgeKind): {
-  type?: AnnotationEdgeKind;
-} {
-  return edgeKind === 'data' ? {} : { type: edgeKind };
+/**
+ * Spreadable inverse of {@link flowEdgeKind} for building canvas edges.
+ *
+ * `data` names its type like the other two now, rather than being left blank
+ * for React Flow to fill with its own default component. That default was the
+ * whole reason the graph's own ordering wire was the one thing on the canvas
+ * nobody had designed — an unstyled hairline with no arrowhead, under two
+ * annotation kinds that had custom tones and markers.
+ *
+ * `flowEdgeKind` still reads an absent type as `data`, and must: every edge
+ * persisted or dragged before this change carries no type at all.
+ */
+export function flowEdgeType(edgeKind: EdgeKind): { type: EdgeKind } {
+  return { type: edgeKind };
 }
 
 /**

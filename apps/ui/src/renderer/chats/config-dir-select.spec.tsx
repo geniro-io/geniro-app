@@ -66,6 +66,103 @@ describe('ConfigDirSelect', () => {
     expect(trigger(el)!.textContent).toContain('work');
   });
 
+  it('lists a NAMED profile even when it has never been picked', () => {
+    // The reported bug, in one assertion. Rows came from `recentConfigDirs`
+    // alone — an MRU that only grows when a directory is chosen THROUGH this
+    // menu — so a profile named in Settings had no row here at all, and the
+    // colour the palette was wiring up hung off a row that could not exist.
+    // "I've added a configuration but don't see it in the list", about the one
+    // place it should have appeared first. Empty recents is the whole point of
+    // the case: it is the state a user is in immediately after naming one.
+    const el = render(
+      <ConfigDirSelect
+        configDir={null}
+        recentConfigDirs={[]}
+        configProfiles={[
+          {
+            id: 'p1',
+            name: 'claude-manifest-lab',
+            dir: '/Users/me/lab/.claude',
+            color: 'blue',
+          },
+        ]}
+        unavailableReason={null}
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    expect(options(el).map((o) => o.textContent)).toEqual([
+      // `Default profile` LEADS them: with named profiles on screen it is one
+      // of the same kind of choice — the CLI's own account — rather than a
+      // neighbour of the browse row it used to sit beside.
+      'Default profile',
+      'claude-manifest-lab',
+      'Choose config directory…',
+    ]);
+  });
+
+  it('marks the default row when nothing is picked', () => {
+    // Its value is a SENTINEL, so the menu's own value comparison can never
+    // match the `null` it stands for — as an `action` row it additionally
+    // rendered no checkmark column at all. Between them, a picker sitting on
+    // its default marked NONE of its rows, which is the state most users are
+    // in most of the time.
+    const el = render(
+      <ConfigDirSelect
+        configDir={null}
+        recentConfigDirs={[]}
+        configProfiles={[
+          {
+            id: 'p1',
+            name: 'claude-manifest-lab',
+            dir: '/Users/me/lab/.claude',
+            color: 'blue',
+          },
+        ]}
+        unavailableReason={null}
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    const checked = options(el).filter(
+      (o) => o.getAttribute('aria-selected') === 'true',
+    );
+    expect(checked.map((o) => o.textContent)).toEqual(['Default profile']);
+  });
+
+  it('names a profile once, not twice, when it is also a recent', () => {
+    // A profile the user HAS picked is in both lists. Listing it from each
+    // would offer one account as two rows — its name and its path — which
+    // reads as two accounts.
+    const el = render(
+      <ConfigDirSelect
+        configDir="/Users/me/lab/.claude"
+        recentConfigDirs={['/Users/me/lab/.claude', ...RECENTS]}
+        configProfiles={[
+          {
+            id: 'p1',
+            name: 'claude-manifest-lab',
+            dir: '/Users/me/lab/.claude',
+            color: 'blue',
+          },
+        ]}
+        unavailableReason={null}
+        onChange={() => {}}
+        onBrowse={() => {}}
+      />,
+    );
+    expect(options(el).map((o) => o.textContent)).toEqual([
+      'Default profile',
+      'claude-manifest-lab',
+      '…/me/profiles/work',
+      '…/me/profiles/personal',
+      'Choose config directory…',
+    ]);
+    // And the CHIP says the name too — the leaf is what naming it was meant to
+    // stop you reading, and two accounts routinely both live in `.claude`.
+    expect(trigger(el)!.textContent).toContain('claude-manifest-lab');
+  });
+
   it('renders NOTHING for a CLI that cannot load one — never a disabled chip', () => {
     // The daemon's own sentence, straight off the adapter's config. A disabled
     // chip would state a choice the user does not have (same rule as the

@@ -154,7 +154,8 @@ export function FastActionsPane({
         <SettingsPanel>
           <EmptyState className="flex-col gap-1 py-10">
             <span className="text-foreground">No fast actions yet</span>
-            <span className="max-w-sm">
+            {/* `text-xs` — see the twin note in `chats/run-config-picker.tsx`. */}
+            <span className="max-w-sm text-xs">
               Name one and write what it should say — its button appears under
               the composer, and a press drops that text into the message box.
             </span>

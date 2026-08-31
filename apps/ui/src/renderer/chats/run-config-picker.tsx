@@ -282,7 +282,11 @@ export function RunConfigPicker({
             <SettingsPanel>
               <EmptyState className="flex-col gap-1 py-10">
                 <span className="text-foreground">No configurations yet</span>
-                <span className="max-w-sm">
+                {/* `text-xs`, the same step down a settings row puts between
+                    its label and its description: the line under the title is
+                    a note about it, and at the title's own size the two read
+                    as one paragraph in two colours. */}
+                <span className="max-w-sm text-xs">
                   A new one starts from the setup you have now — change
                   whichever chips you like, and give it a name.
                 </span>

@@ -205,7 +205,7 @@ describe('WorkingRow', () => {
     // what a single truncated label could not express.
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const command =
-      'running `cd /Users/me/Desktop/Projects/ManifestLab/ManifestOS && git checkout --ours packages/document-pdf/src/limits/render-limits.ts packages/document-pdf/src/images/pdf-safe-image-format.ts`';
+      'running `cd /Users/me/Desktop/Projects/workspace/example-app && git checkout --ours packages/document-pdf/src/limits/render-limits.ts packages/document-pdf/src/images/pdf-safe-image-format.ts`';
     const container = render(
       <RunActivityContext.Provider value={command}>
         <WorkingRow since={Date.parse('2026-08-04T00:00:00Z') - 11_000} />

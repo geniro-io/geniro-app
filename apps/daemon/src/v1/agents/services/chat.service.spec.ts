@@ -2487,7 +2487,7 @@ describe('ChatService', () => {
     // found no harvest and paid the full cold dial (~30s on a 47-server
     // account), while the DEFAULT profile's panel was painted with the other
     // subscription's servers. Measured on this machine — 15 rows belonging to
-    // `.claude-manifest-lab-personal` shown where the default profile's own
+    // `.claude-work-personal` shown where the default profile's own
     // dial found 10.
     const { service, claude, mcpHarvest } = setup();
     const run = await service.createChat({

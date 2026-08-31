@@ -219,7 +219,7 @@ const UNPRICED = '—';
  * the profile — behind ONE chip.
  *
  * They were three chips in a row, and on the reported header they read
- * `claude  ManifestOS  .claude-manifest-lab` before the status word had even
+ * `claude  example-app  .claude-work` before the status word had even
  * been reached. Each is true and each is the same KIND of fact, which is what
  * makes one chip the right shape: the folder is the one a reader checks at a
  * glance ("which repo is this thread in"), and the other two are qualifiers on
@@ -397,7 +397,7 @@ function formatUsd(costUsd: number): string {
  *
  * That split is the answer to "we have soo much information here. I wanna
  * redesign it, minimize", reported against a line carrying nine things:
- * `Смотри, у меня… claude  ManifestOS  .claude-manifest-lab  running · worked
+ * `Смотри, у меня… claude  example-app  .claude-work  running · worked
  * 4m 13s / 5 turns · $1.11` plus two counters. Nothing was DELETED — every
  * figure is still on the header or one hover into it — and nothing new was
  * invented; three chips became one and two prose readouts became one pair of

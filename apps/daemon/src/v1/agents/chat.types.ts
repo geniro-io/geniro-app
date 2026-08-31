@@ -1024,8 +1024,8 @@ export const StoredMetricsReadingSchema = z.object({
    * belongs to somebody else.
    *
    * REPORTED as a panel reading `TEAM · Current week 100%` on a chat whose
-   * chip said `.claude-manifest-lab-personal`. Both profiles were on disk:
-   * `.claude-manifest-lab` is `claude_team`, `-personal` is `claude_max`, and
+   * chip said `.claude-work-personal`. Both profiles were on disk:
+   * `.claude-work` is `claude_team`, `-personal` is `claude_max`, and
    * the run row's own `config_dir` was the personal one — so the figures were
    * the team account's, kept across the switch.
    *

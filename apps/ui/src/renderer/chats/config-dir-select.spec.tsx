@@ -81,7 +81,7 @@ describe('ConfigDirSelect', () => {
         configProfiles={[
           {
             id: 'p1',
-            name: 'claude-manifest-lab',
+            name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
           },
@@ -96,7 +96,7 @@ describe('ConfigDirSelect', () => {
       // of the same kind of choice — the CLI's own account — rather than a
       // neighbour of the browse row it used to sit beside.
       'Default profile',
-      'claude-manifest-lab',
+      'claude-work',
       'Choose config directory…',
     ]);
   });
@@ -114,7 +114,7 @@ describe('ConfigDirSelect', () => {
         configProfiles={[
           {
             id: 'p1',
-            name: 'claude-manifest-lab',
+            name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
           },
@@ -141,7 +141,7 @@ describe('ConfigDirSelect', () => {
         configProfiles={[
           {
             id: 'p1',
-            name: 'claude-manifest-lab',
+            name: 'claude-work',
             dir: '/Users/me/lab/.claude',
             color: 'blue',
           },
@@ -153,14 +153,14 @@ describe('ConfigDirSelect', () => {
     );
     expect(options(el).map((o) => o.textContent)).toEqual([
       'Default profile',
-      'claude-manifest-lab',
+      'claude-work',
       '…/me/profiles/work',
       '…/me/profiles/personal',
       'Choose config directory…',
     ]);
     // And the CHIP says the name too — the leaf is what naming it was meant to
     // stop you reading, and two accounts routinely both live in `.claude`.
-    expect(trigger(el)!.textContent).toContain('claude-manifest-lab');
+    expect(trigger(el)!.textContent).toContain('claude-work');
   });
 
   it('renders NOTHING for a CLI that cannot load one — never a disabled chip', () => {

@@ -47,6 +47,52 @@ export class UiFixturesSeeder extends Seeder {
       items: [say('open a few reviews'), reply('Done.'), turnComplete()],
     });
 
+    // The gallery card, with EVERY tile state on screen at once — two that
+    // load, one uncaptioned, one whose file has moved, and one naming a remote
+    // source. The last two are the point: a dead tile and a refused scheme each
+    // say what is wrong in their own words rather than showing a broken box,
+    // and neither takes the rest of the set down with it. The markdown image in
+    // the reply above it is the same picture reached the other way, which is
+    // what makes the shared zoom viewer comparable between the two.
+    this.chat(em, {
+      id: 'gallery-card',
+      title: 'Gallery — a set of pictures, and the ways a tile can fail',
+      minutesAgo: 2,
+      // This fixture's own cwd, NOT the shared one: its tiles name real files
+      // in this repository, and the renderer resolves a relative gallery path
+      // against the RUN's cwd. The shared `cwd` is `process.cwd()`, which is
+      // `apps/daemon` under the documented `pnpm --filter @geniro/daemon seed`
+      // — so every tile, including the two this fixture exists to show
+      // loading, would render "could not be read".
+      cwd: REPO_ROOT,
+      items: [
+        say('show me the app imagery'),
+        reply(
+          'Here is the icon on its own:\n\n![the app icon](apps/ui/resources/icon.png)\n\nand the whole set below.',
+        ),
+        gallery('App imagery', [
+          {
+            path: 'apps/ui/resources/icon.png',
+            caption: 'icon.png — relative to the run cwd',
+          },
+          {
+            path: 'apps/ui/src/renderer/assets/logo.png',
+            caption: 'logo.png',
+          },
+          { path: 'apps/ui/resources/icon.png' },
+          {
+            path: 'apps/ui/resources/moved-away.png',
+            caption: 'a file that is not there',
+          },
+          {
+            path: 'https://example.com/remote.png',
+            caption: 'a remote source',
+          },
+        ]),
+        turnComplete(),
+      ],
+    });
+
     // ONE wide chip and `All 4` — what a thread on a single branch has always
     // shown, kept here so the change is visibly scoped to the several case.
     this.chat(em, {
@@ -274,6 +320,19 @@ const MERGED: PullRequestRef[] = [
   ref('geniro-io', 'geniro-app', 76),
 ];
 
+/**
+ * This repository's root, derived from THIS FILE rather than from the process.
+ *
+ * The gallery fixture names real images in the repo, and the renderer resolves
+ * a relative gallery path against the run's own cwd — so the fixture must know
+ * where the repo is regardless of where the seeder was invoked from. Deriving
+ * it from `__dirname` is what makes the fixture work under the documented
+ * `pnpm --filter @geniro/daemon seed` (cwd `apps/daemon`) as well as from the
+ * repo root. Dev-only code, run through `@swc-node/register` on the source, so
+ * `__dirname` is this directory.
+ */
+const REPO_ROOT = join(__dirname, '..', '..', '..', '..', '..');
+
 const say = (text: string): SeedItem => ({
   kind: 'message',
   role: 'user',
@@ -287,6 +346,28 @@ const reply = (text: string): SeedItem => ({
 const turnComplete = (): SeedItem => ({
   kind: 'turn_complete',
   payload: { usage: { costUsd: 0.42, durationMs: 21_000 } },
+});
+
+/**
+ * A set of pictures an agent handed over (`show_gallery`).
+ *
+ * The one render-family card that cannot be looked at without a fixture, and
+ * for a sharper reason than the rest of this file: the others are merely SLOW
+ * to reach, while this one is unreachable by construction — the row is written
+ * only by `GalleryBroker.draw`, registered per live turn, so short of prompting
+ * a real CLI into calling the tool there is no way to get one on screen.
+ *
+ * The paths are the repo's OWN images, referenced relative to the run's cwd,
+ * because that is the form the tool documents and the one the renderer resolves
+ * through the image route. Two of the entries are deliberately broken — see the
+ * fixture that uses this.
+ */
+const gallery = (
+  title: string,
+  images: { path: string; caption?: string }[],
+): SeedItem => ({
+  kind: 'show_gallery',
+  payload: { title, images },
 });
 
 /**

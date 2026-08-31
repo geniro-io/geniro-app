@@ -44,14 +44,21 @@ paths:
      behind an icon now (`chats/chat-scope-filter.tsx`). So put a set here when
      the choice IS the screen's subject; put it behind a trigger when it only
      narrows what is already on screen.
-   - **Every image the user can look at goes through `image-viewer`'s
-     `ZoomableImage`** — the transcript's attachments, the composer's staged
-     strip, an agent's markdown image. Three surfaces draw the same picture at
-     three sizes, two of them `object-cover` crops, so "can I see the whole
-     thing" has to be answered once. It is built ON `dialog` (Escape, backdrop,
-     focus trap) and PORTALLED, since it opens from inside a transcript where
-     `position: fixed` may be resolved against a transformed ancestor. A bare
-     `<img>` is for chrome the user never inspects (`logo`).
+   - **Every image the user can look at goes through `image-viewer`** — the
+     transcript's attachments, the composer's staged strip, an agent's markdown
+     image, and a gallery card's tiles. Four surfaces draw the same picture at
+     four sizes, three of them `object-cover` crops, so "can I see the whole
+     thing" has to be answered once — and the viewer ZOOMS, so it is also where
+     "can I read the small text in it" is answered. It is built ON `dialog`
+     (Escape, backdrop, focus trap) and PORTALLED, since it opens from inside a
+     transcript where `position: fixed` may be resolved against a transformed
+     ancestor. A bare `<img>` is for chrome the user never inspects (`logo`).
+     `ZoomableImage` is the usual entry point and owns its own open state; a
+     caller that must CONTROL which picture is showing (the gallery, stepping
+     through a set with `onPrev`/`onNext`) renders `ImageViewer` directly and
+     uses `ZOOMABLE_TRIGGER_CLASS` for its own opener, so the trigger's look
+     still has one source. Adding a second lightbox is the duplication this
+     bullet exists to prevent.
    - **`ansi-text` is the ONE way command output is drawn**, over the pure
      `ansi.ts` parser beside it. A shell's escape sequences are not plain text:
      rendered verbatim the escape byte is invisible and its tail is not, so a
@@ -188,6 +195,15 @@ paths:
 ## Component tests
 
 - Co-located `*.spec.tsx` next to the component.
+- **A helper that exists only for SPECS lives in `renderer/__tests__/`**, never
+  in a production kind-directory — `components/ui/` IS the browsable list of
+  primitives, so a test-only module parked there is one a reader has to open to
+  learn it is not one. Same rule and same reason as the daemon's, which states
+  it in full (`daemon-module-structure.md` §`__tests__/`). Current example:
+  `__tests__/stub-resize-observer.ts`, which five specs call because jsdom ships
+  no `ResizeObserver` and both the zoom layer and recharts need one. It is a
+  CALL rather than a setup file on purpose — other specs run against the absent
+  global, and defining one suite-wide would move the ground under them.
 - Line 1 must be `// @vitest-environment jsdom` (the project default is `node`).
 - When a `vi.mock(...)` factory closes over module-scope spies, wrap them in
   `vi.hoisted(() => ({ … }))`.

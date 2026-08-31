@@ -372,6 +372,53 @@ describe('groupTranscript', () => {
     expect(card.comparison.recommendedIndex).toBe(0);
   });
 
+  it('folds a show_gallery row into its own card, hiding the tool’s row', () => {
+    const entries = groupTranscript([
+      call('mcp__geniro-run-1__show_gallery', 't1', { images: ['a.png'] }),
+      result('t1', 'Gallery shown to the user: 2 images.'),
+      item('show_gallery', {
+        title: 'Before and after',
+        images: [
+          { path: '/tmp/a.png', caption: 'old' },
+          { path: '/tmp/b.png' },
+        ],
+      }),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['gallery']);
+    const card = entries[0] as {
+      gallery: { title: string | null; images: { path: string }[] };
+    };
+    expect(card.gallery.title).toBe('Before and after');
+    expect(card.gallery.images.map((i) => i.path)).toEqual([
+      '/tmp/a.png',
+      '/tmp/b.png',
+    ]);
+  });
+
+  it('drops a show_gallery row that names no picture', () => {
+    expect(
+      groupTranscript([item('show_gallery', { images: [{ caption: 'x' }] })]),
+    ).toEqual([]);
+  });
+
+  it('counts a gallery as a CARD everywhere the other five are', () => {
+    // The `isCardEntry` contract again, for the sixth kind. The union half is
+    // compiler-enforced; THIS drives the two halves that fail at runtime and
+    // silently — the tool count (a card holds no invocations to open, and
+    // `countTools` throws on an unhandled arm) and the surrounding group break.
+    const entries = groupTranscript([
+      call('Read', 'tc-1', { file_path: 'a.ts' }),
+      result('tc-1', 'ok'),
+      item('show_gallery', { images: ['/tmp/a.png'] }),
+      call('Read', 'tc-2', { file_path: 'b.ts' }),
+      result('tc-2', 'ok'),
+    ]);
+
+    expect(entries.map((e) => e.type)).toEqual(['tools', 'gallery', 'tools']);
+    expect(countTools(entries)).toBe(2);
+  });
+
   it('drops a show_comparison row that compares fewer than two options', () => {
     expect(
       groupTranscript([

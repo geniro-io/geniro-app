@@ -2064,7 +2064,8 @@ export const ItemKind = {
     ReportFindings: 'report_findings',
     ShowChart: 'show_chart',
     ShowMetrics: 'show_metrics',
-    ShowComparison: 'show_comparison'
+    ShowComparison: 'show_comparison',
+    ShowGallery: 'show_gallery'
 } as const;
 export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 

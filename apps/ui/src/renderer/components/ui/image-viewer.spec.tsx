@@ -3,7 +3,17 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ZoomableImage } from './image-viewer';
+import { stubResizeObserver } from '../../__tests__/stub-resize-observer';
+import { ZoomableImage, zoomControlState } from './image-viewer';
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+// The zoom layer observes its container to know the bounds it clamps panning
+// to. Every box still measures 0×0 here, so no test below asserts a SCALE —
+// they pin the controls and the invariants around them.
+stubResizeObserver();
 
 const SRC = 'data:image/png;base64,AAA';
 
@@ -32,11 +42,60 @@ const thumbnail = (): HTMLButtonElement | null =>
 const viewer = (): HTMLImageElement | null =>
   document.body.querySelector('[data-slot="image-viewer-image"]');
 
+/** A zoom control by its accessible name — portalled with the viewer. */
+const control = (label: string): HTMLButtonElement | null =>
+  document.body.querySelector(
+    `[data-slot="image-viewer-controls"] [aria-label="${label}"]`,
+  );
+
 function press(el: HTMLElement): void {
   act(() => {
     el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
+
+describe('what the zoom controls offer at a given magnification', () => {
+  // The component test below can only ever observe the RESTING state: jsdom
+  // measures every box 0×0, so the library never leaves scale 1 there. These
+  // drive the decision itself, which is where "zoom out comes back to life
+  // once you have zoomed in" actually lives — replacing the predicate with a
+  // constant passes every rendering assertion and fails these.
+  it('offers nothing to undo at fit, and shows the fit glyph rather than 100%', () => {
+    expect(zoomControlState(1)).toEqual({
+      atFit: true,
+      atMax: false,
+      label: null,
+    });
+  });
+
+  it('treats a hair above fit as fit — an animated zoom lands on 1.0000003', () => {
+    expect(zoomControlState(1.0000003).atFit).toBe(true);
+  });
+
+  it('brings zoom-out and reset back once genuinely zoomed, and reads the scale', () => {
+    expect(zoomControlState(2.5)).toEqual({
+      atFit: false,
+      atMax: false,
+      label: '250%',
+    });
+  });
+
+  it('rounds the reading rather than printing a float at the user', () => {
+    expect(zoomControlState(1.337).label).toBe('134%');
+  });
+
+  it('stops offering zoom-in at the ceiling', () => {
+    expect(zoomControlState(8).atMax).toBe(true);
+    expect(zoomControlState(7.9).atMax).toBe(false);
+  });
+
+  it('keeps the fit epsilon tight enough to be float slop, not a range', () => {
+    // Bounds it from ABOVE. The rows above jump from a hair over 1 straight to
+    // 2.5, so widening the epsilon to, say, 0.5 — which would disable zoom-out
+    // on a genuinely zoomed 1.4× picture — passes every one of them.
+    expect(zoomControlState(1.05).atFit).toBe(false);
+  });
+});
 
 describe('an image the user can open', () => {
   it('shows only the thumbnail until it is pressed', () => {
@@ -119,6 +178,59 @@ describe('an image the user can open', () => {
 
     expect(viewer()).not.toBeNull();
     expect(container.contains(viewer())).toBe(false);
+  });
+
+  it('offers zoom controls once the picture is open', () => {
+    // The point of opening a screenshot is reading something small in it, so a
+    // viewer that can only show the whole picture at once answers half the
+    // question. Pinned by the accessible names, which are also the only handle
+    // a keyboard user has on them.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+
+    // Nothing until it is opened — the thumbnail is a button, not a toolbar.
+    expect(control('Zoom in')).toBeNull();
+
+    press(thumbnail()!);
+
+    expect(control('Zoom in')).not.toBeNull();
+    expect(control('Zoom out')).not.toBeNull();
+    expect(control('Reset zoom to fit')).not.toBeNull();
+  });
+
+  it('opens at fit, with nothing to zoom out of or reset', () => {
+    // The `atFit` branch, entered deliberately per `.claude/rules/testing.md`.
+    // MIN_SCALE IS fit-to-window, so at rest both of these would do nothing —
+    // and a live control that does nothing when pressed reads as broken.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+    press(thumbnail()!);
+
+    expect(control('Zoom out')!.disabled).toBe(true);
+    expect(control('Reset zoom to fit')!.disabled).toBe(true);
+    // Zooming IN is the one thing there is always room for.
+    expect(control('Zoom in')!.disabled).toBe(false);
+  });
+
+  it('draws NO arrows for a lone picture, and ignores the arrow keys', () => {
+    // Three of the four surfaces open exactly one image — a markdown image, a
+    // pasted attachment, the composer's staged strip. `browsing` defaulting
+    // true would put two dead arrows over every one of them, and nothing else
+    // in the suite opens the viewer WITHOUT navigation.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+    press(thumbnail()!);
+
+    expect(document.body.querySelector('[aria-label="Next image"]')).toBeNull();
+    expect(
+      document.body.querySelector('[aria-label="Previous image"]'),
+    ).toBeNull();
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }),
+      );
+    });
+
+    // Still the same picture, and still open — the key reached no handler.
+    expect(viewer()?.getAttribute('src')).toBe(SRC);
   });
 
   it('heads the viewer with the caller’s own name for the picture', () => {

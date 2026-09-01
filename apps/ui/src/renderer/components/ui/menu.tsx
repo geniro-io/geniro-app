@@ -858,6 +858,22 @@ export function Menu({
       {submenuItem ? (
         <Menu
           open
+          // ONE PANEL PER ROW. Without the key React reconciles the same
+          // element at the same position, so moving the pointer from one
+          // submenu row to the next KEEPS the previous panel's state while
+          // swapping its content — and every part of that state is a fact
+          // about the panel that is gone. The placement is measured in effects
+          // keyed on `open`/`side`/`box` and on a trigger held in a mutable
+          // REF, none of which changes when only `groups` does, so nothing
+          // re-measures: REPORTED as "popover is cut", and measured in the
+          // running app on the composer's model-settings menu — Model's
+          // five-row submenu placed at `top: 714` in a 920px window, then
+          // Effort's seven-row panel drawn at that same top, ending 30px past
+          // the window's edge. The search field is the same defect wearing a
+          // different face: `zzz` typed into Model's submenu filtered EFFORT's
+          // rows on the next hover, so the panel read `No matches` about a list
+          // with no search field to clear.
+          key={submenuItem.value}
           id={submenuPanelId}
           groups={submenuItem.submenu ?? []}
           searchPlaceholder={submenuItem.submenuSearchPlaceholder}

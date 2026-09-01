@@ -839,6 +839,16 @@ describe('Menu — escaping a clipping container', () => {
     return { ref: { current: el }, el };
   }
 
+  /** The panel a row's `submenu` opened — the one carrying an id. */
+  const secondLevel = (el: HTMLElement): HTMLElement =>
+    el.querySelector<HTMLElement>('[data-slot="menu-panel"][id]')!;
+
+  const ONE_ROW = { value: 'only', label: 'only' };
+  const EIGHT_ROWS = Array.from({ length: 8 }, (_, i) => ({
+    value: `row-${i}`,
+    label: `row ${i}`,
+  }));
+
   it('positions from the VIEWPORT when asked, not from its ancestor', () => {
     // The whole point of the mode: an absolute panel is cut by any ancestor
     // that scrolls, and `overflow-x: visible` cannot be restored on a box that
@@ -1079,6 +1089,143 @@ describe('Menu — escaping a clipping container', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('RE-PLACES the second level when the pointer moves to another row', () => {
+    // REPORTED as "popover is cut", a second time and from the other end: the
+    // shift above is only ever computed when the placement effects RUN, and
+    // moving from one submenu row to the next runs none of them. React
+    // reconciles the same element at the same position, so the panel keeps its
+    // `box` while its content is swapped — and the effects are keyed on
+    // `open`/`side`/`box` and on a trigger held in a mutable REF, none of which
+    // changes when only `groups` does.
+    //
+    // Measured in the running app at 1440×920 on the composer's model-settings
+    // menu: Model's submenu placed at `top: 714`, then Effort's taller panel
+    // drawn at that same 714 and ending 30px past the window's edge — where
+    // opening Effort FIRST places it correctly at 684.
+    //
+    // The stub sizes the second-level panel from its OWN rows, so the two
+    // submenus genuinely differ in height; a fixed height could not tell a
+    // re-measurement from a stale one.
+    const TWO_LEVELS: MenuGroup[] = [
+      {
+        items: [
+          { value: 'short', label: 'short', submenu: [{ items: [ONE_ROW] }] },
+          { value: 'tall', label: 'tall', submenu: [{ items: EIGHT_ROWS }] },
+        ],
+      },
+    ];
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element): DOMRect {
+        const zero = { top: 0, bottom: 0, left: 0, right: 0 } as DOMRect;
+        // The two rows that open a level, low in the window and 30px apart.
+        if (this.getAttribute('role') === 'option') {
+          const top =
+            this.textContent === 'short'
+              ? 600
+              : this.textContent === 'tall'
+                ? 630
+                : null;
+          return top === null
+            ? zero
+            : ({ top, bottom: top + 30, left: 120, right: 260 } as DOMRect);
+        }
+        if (this.getAttribute('data-slot') !== 'menu-panel') {
+          return zero;
+        }
+        // The FIRST level is not floating here, so its own measurement only has
+        // to stay clear of the flip and the clamp.
+        if (this.id === '') {
+          return {
+            top: 500,
+            bottom: 640,
+            height: 140,
+            left: 0,
+            right: 200,
+            width: 200,
+            toJSON: () => ({}),
+          } as DOMRect;
+        }
+        const height = this.querySelectorAll('[role="option"]').length * 40 + 8;
+        const top = Number.parseFloat((this as HTMLElement).style.top || '0');
+        return {
+          top,
+          bottom: top + height,
+          height,
+          left: 0,
+          right: 200,
+          width: 200,
+          toJSON: () => ({}),
+        } as DOMRect;
+      });
+    try {
+      const el = render(
+        <Menu
+          open
+          groups={TWO_LEVELS}
+          onSelect={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      // One row, 48px tall, hung off a row at 600: it fits where it is put.
+      hover(el, 'short');
+      expect(secondLevel(el).style.top).toBe('595px');
+
+      // Eight rows are 328px, which from 625 would end at 953 — 193px past a
+      // 768px window's safe edge. It comes back by exactly that, as it does
+      // when it is the first level opened.
+      hover(el, 'tall');
+      expect(secondLevel(el).style.top).toBe('432px');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not filter the next submenu by the previous one’s search', () => {
+    // The same staleness wearing a different face, and the half that is visible
+    // without measuring anything: the query survived the swap, so a search that
+    // matched nothing in the list it was typed into went on hiding every row of
+    // the list that replaced it. Measured in the running app — `zzz` typed into
+    // Model's submenu left Effort's reading `No matches`, with no search field
+    // on screen to explain it or clear it.
+    const el = render(
+      <Menu
+        open
+        groups={[
+          {
+            items: [
+              {
+                value: 'short',
+                label: 'short',
+                submenuSearchPlaceholder: 'Search…',
+                submenu: [{ items: [ONE_ROW] }],
+              },
+              {
+                value: 'tall',
+                label: 'tall',
+                submenu: [{ items: EIGHT_ROWS }],
+              },
+            ],
+          },
+        ]}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+
+    hover(el, 'short');
+    type(el, 'zzz');
+    expect(secondLevel(el).textContent).toContain('No matches');
+
+    hover(el, 'tall');
+    expect(
+      [...secondLevel(el).querySelectorAll('[role="option"]')].map(
+        (r) => r.textContent,
+      ),
+    ).toEqual(EIGHT_ROWS.map((item) => item.label));
   });
 
   it('opens UPWARD from the trigger when the side says so', () => {

@@ -1679,7 +1679,61 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('completed');
   });
 
-  it('stops a background delegate that never reported once the RUN itself settles', () => {
+  it('says UNKNOWN, and goes on saying it, once a declared-open delegate has gone quiet', () => {
+    // The oscillation, and the whole of it: `endedByRun` used to be the only
+    // thing that could end a declared-open delegate, and it reads the RUN row —
+    // which goes back to unsettled the instant the next turn opens. So one
+    // unchanged cursor delegate read `cancelled` after its turn, `running`
+    // again the moment the user typed anything, and `cancelled` again when that
+    // turn ended. Reported with a screenshot of each of the three.
+    //
+    // The word is `unknown` rather than either of them because both are claims
+    // nothing supports: the CLI said the work outlives its launching call and
+    // then never said how it ended, and the process it runs on is kept between
+    // turns, so it may well still be going.
+    const entries = fold([
+      call('Task', 'task-bg', { description: 'Review dimension: bugs' }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      item('turn_complete', {}),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(block.closed).toBe(true);
+    // Settled run…
+    expect(subagentBlockStatus(block, Date.parse('2026-09-01T11:00:00Z'))).toBe(
+      'unknown',
+    );
+    // …and a LATER turn running (no settle) must give the SAME answer. This is
+    // the assertion that fails on a reading driven by the run row alone.
+    expect(subagentBlockStatus(block)).toBe('unknown');
+  });
+
+  it('goes back to running when that delegate produces a row after the turn ended', () => {
+    // `unknown` is a statement about the evidence, so evidence resolves it: a
+    // delegate that speaks again has demonstrably not finished, and `closed` is
+    // a seq comparison rather than a latch — the turn-end item is no longer
+    // after this block's last row, so the block reopens on its own. That is
+    // what keeps claude's case right, where a backgrounded delegate really does
+    // go on working past the turn that started it and reports into a later one.
+    const entries = fold([
+      call('Task', 'task-bg', { description: 'Stress-test the approaches' }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      item('turn_complete', {}),
+      delegated(
+        'message',
+        { text: 'reading the benchmark harness' },
+        'task-bg',
+      ),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(block.closed).toBe(false);
+    expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('takes the spinner off a background delegate that never reported, once the RUN settles', () => {
     // The latch: an open `background_work` unit used to outrank everything, so
     // a delegate whose CLI died before reporting kept the block — and with it
     // the run badge, and with THAT the turn-end notification — running for
@@ -1696,15 +1750,17 @@ describe('buildSubagentBlocks', () => {
 
     const block = onlyBlock(entries);
     expect(subagentBlockStatus(block)).toBe('running');
-    // STOPPED, which is what this test has been called since it was written and
-    // is now what it checks. It asserted `completed` — the fall-through to
-    // `returned`, the launching call coming back — and that is an outcome
-    // nobody reported: the CLI said the work outlives that call and then never
-    // said how it ended. Reading the return as the ending is precisely the
-    // defect `backgroundOpen` exists to prevent, so it must not be what a
-    // background block lands on once the run settles underneath it.
+    // UNKNOWN, and it has been two other things before it. It asserted
+    // `completed` first — the fall-through to `returned`, the launching call
+    // coming back — which is an outcome nobody reported: the CLI said the work
+    // outlives that call and then never said how it ended. It then asserted
+    // `stopped`, which was true while geniro terminated the CLI's group at the
+    // turn's exit grace and is not any more, the process being kept between
+    // turns. What survives both corrections is the thing this pins: whatever
+    // the answer is, it is NOT `running`, because nothing here is producing
+    // rows and a spinner over it latches the run badge on for good.
     expect(subagentBlockStatus(block, Date.parse('2026-08-18T10:00:00Z'))).toBe(
-      'stopped',
+      'unknown',
     );
   });
 

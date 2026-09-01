@@ -2564,6 +2564,24 @@ export type TurnStdin = (payload: string) => boolean;
 export interface TurnIo {
   write: TurnStdin;
   emit: (event: AgentEvent) => void;
+  /**
+   * Why a {@link write} cannot land right now — null while stdin is writable.
+   *
+   * A driver that logs a dropped write must ASK rather than assert. `write`
+   * answers a bare boolean, and four genuinely different things produce that
+   * false: the process group was terminated, the child exited by itself, geniro
+   * closed stdin at the turn's end, or the CHILD closed its read end while
+   * still running. Only the writer knows which, so a driver naming a cause of
+   * its own is guessing — and one did, printing `stdin is closed` for all four.
+   * That cost a live investigation: `acp: dropped a reply to request 183 —
+   * stdin is closed` was read as geniro having closed the pipe, and telling it
+   * from the truth (cursor-agent closed its own read end, still running) meant
+   * reading `sessionWrite` to see that `endStdin` had not been called yet.
+   *
+   * Optional so a caller that builds a `TurnIo` for a test need not model the
+   * process at all; a driver with no obstacle to quote says only what it knows.
+   */
+  writeObstacle?: () => string | null;
 }
 
 /**
@@ -2608,8 +2626,36 @@ export interface TurnDriver {
    * driver's chance to open a conversation the CLI expects the client to start.
    * Runs AFTER the turn's prompt, and so after {@link awaitPromptReady} when a
    * driver defines both.
+   *
+   * FIRST turn only. A handshake belongs to the PROCESS; {@link openTurn} is
+   * how every turn after it opens.
    */
   onStdinReady?(io: TurnIo): void;
+  /**
+   * Open a SECOND (or later) turn on a process that is already running, for a
+   * CLI whose "here is the next prompt" is a protocol FRAME rather than a stdin
+   * payload.
+   *
+   * `AgentAdapter.buildNextTurnPayload` covers the stdin-line case and answers
+   * undefined for a stateful protocol — the frame names a session id and a
+   * request id that only the driver holds, and building one without recording
+   * it would leave the turn waiting on a reply nothing can match. Without this
+   * hook `startTurn` refuses such a turn outright, which is what confined ACP
+   * to one turn per process.
+   *
+   * **A driver that defines this owns the turn's SETTINGS as well as its
+   * prompt** — the approval mode, the model and anything else that is protocol
+   * rather than argv — because `startTurn` skips its own mode delivery for it.
+   * That is not a shortcut: on ACP the mode is a `session/set_mode` frame, so
+   * the adapter has no stdin line to hand over and the turn would otherwise be
+   * refused for wanting a mode the CLI can in fact be told about.
+   *
+   * It must be TOTAL. It is called from inside `startTurn`, after the turn is
+   * registered as the session's current one, so a throw would unwind past a
+   * turn nothing can now settle — an unreadable attachment must become an
+   * `error` event, not an exception.
+   */
+  openTurn?(io: TurnIo, input: AgentTurnInput): void;
   /** Map one parsed stdout line to zero or more normalized events. */
   onMessage(obj: unknown): AgentEvent[];
   /**
@@ -2644,6 +2690,19 @@ export interface TurnDriver {
    * always safe.
    */
   sendFollowUp?(message: FollowUpMessage): boolean;
+  /**
+   * Encode an in-protocol "stop what you are doing", for a CLI whose stop is a
+   * frame only the driver can build — the same reason {@link sendFollowUp}
+   * exists beside `AgentAdapter.buildFollowUpPayload`, and here it is the
+   * session id that makes the frame unbuildable from outside.
+   *
+   * Takes precedence over `AgentAdapter.buildInterruptPayload`. Undefined, or a
+   * driver answering undefined, falls back to that — and past both, to killing
+   * the process group, which on a kept session destroys the conversation and
+   * every delegate still out. That is why a CLI whose process now outlives its
+   * turn needs one of the two.
+   */
+  buildInterruptPayload?(): string | undefined;
 }
 
 /** Handle to an in-flight turn. */

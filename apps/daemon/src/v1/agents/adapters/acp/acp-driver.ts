@@ -6,15 +6,12 @@ import type {
   AgentTurnInput,
   AgentUsage,
   FollowUpMessage,
-  TurnDriver,
-  TurnIo,
 } from '../adapter.types';
 import {
   ACP_AGENT_METHODS,
   ACP_CLIENT_METHODS,
   ACP_PROTOCOL_VERSION,
   ACP_STOP_REASONS,
-  type AcpAgentCapabilities,
   type AcpContentBlock,
   type AcpImageBlock,
   type AcpMcpServerHttp,
@@ -26,10 +23,9 @@ import {
 } from './acp.types';
 import { buildAcpImageBlocks } from './acp-content';
 import {
-  classifyMessage,
   decodeRequestId,
   encodeError,
-  encodeRequest,
+  encodeNotification,
   encodeRequestId,
   encodeResult,
   JSONRPC_METHOD_NOT_FOUND,
@@ -42,9 +38,10 @@ import {
   readAcpModelConfigId,
   readAcpModels,
 } from './acp-models';
+import type { AcpSession } from './acp-session';
 
 /** What we sent, so the reply can be routed without a callback map. */
-type PendingKind =
+export type PendingKind =
   | 'initialize'
   | 'session'
   /**
@@ -287,20 +284,33 @@ export interface AcpContextReading {
   model: string | null;
 }
 
-export interface AcpDriverOptions {
-  /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
-  input: AgentTurnInput;
+/**
+ * What is true of the AGENT for the whole process — the half of the old flat
+ * `AcpDriverOptions` that does NOT change between turns.
+ *
+ * The split is the point. A kept process serves turn after turn, and everything
+ * per-turn is rebuilt from that turn's own input ({@link AcpTurnOptions}), so
+ * "per-turn" is the DEFAULT and session scope is the explicit exception. The
+ * alternative — one long-lived object with a reset for each field that must not
+ * survive — makes "remember to reset" the invariant, and the next field added
+ * breaks it silently. Two of them were already sharp: `input` and the image
+ * blocks read from it were fixed at construction, so a second turn would have
+ * re-sent the first turn's attachments.
+ */
+export interface AcpSessionOptions {
   /** Advertised to the agent as `clientInfo`. */
   clientName: string;
   clientVersion: string;
   /**
-   * Resolve a permission request without the user. `null` surfaces an
-   * `approval_request` event and parks the agent until a verdict arrives —
-   * which is a capability the legacy `cursor-agent -p --force` path never had.
+   * Build the options for ONE turn from that turn's own input.
+   *
+   * A factory rather than a value, and REQUIRED rather than defaulted: every
+   * per-turn field derives from the argument, so an adapter physically cannot
+   * leave one closed over the first turn's input. A default that reused the
+   * previous turn's object would reintroduce exactly the leak this shape exists
+   * to make impossible.
    */
-  autoDecide: (toolCall: AcpToolCall) => AutoDecision;
-  /** Session mode to request after the session exists, when the agent offers it. */
-  preferredModeId?: string | null;
+  turnOptions: (input: AgentTurnInput) => AcpTurnOptions;
   /** How this agent asks the user a question, or absent when it cannot. */
   question?: AcpQuestionProtocol;
   /**
@@ -355,16 +365,6 @@ export interface AcpDriverOptions {
    * unlisted method keeps the notice, which is the safe default.
    */
   declinedWithoutNotice?: readonly string[];
-  /**
-   * The turn's instruction text, given whether the call tools were registered
-   * and whether the host preamble still needs saying. Supplied by the adapter
-   * so the include-the-callee-block rule stays owned by
-   * `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
-   *
-   * The driver decides only the two BOOLEANS — what the text is remains the
-   * adapter's answer.
-   */
-  composeSystemPrompt: (granted: boolean, includePreamble: boolean) => string;
   logger?: { warn(message: string): void; debug?(message: string): void };
   /**
    * Extra `clientCapabilities._meta` this client declares — a VENDOR extension
@@ -375,6 +375,40 @@ export interface AcpDriverOptions {
    * An agent that does not know the key ignores it, so sending it is free.
    */
   clientMeta?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * What is true of ONE turn, rebuilt for each of them from that turn's own input.
+ *
+ * Every field here is derived from {@link input} by the adapter's
+ * `AcpSessionOptions.turnOptions` factory, which is what makes a second turn on
+ * a kept process carry its OWN prompt, attachments, model settings and approval
+ * posture rather than the first turn's.
+ */
+export interface AcpTurnOptions {
+  /** The turn being driven — prompt, cwd, resume id, MCP endpoint. */
+  input: AgentTurnInput;
+  /**
+   * Resolve a permission request without the user. `null` surfaces an
+   * `approval_request` event and parks the agent until a verdict arrives —
+   * which is a capability the legacy `cursor-agent -p --force` path never had.
+   *
+   * Per TURN because the approval posture is: a chat switched from `acceptEdits`
+   * back to `ask` between two messages must be gated on the second one.
+   */
+  autoDecide: (toolCall: AcpToolCall) => AutoDecision;
+  /** Session mode to request after the session exists, when the agent offers it. */
+  preferredModeId?: string | null;
+  /**
+   * The turn's instruction text, given whether the call tools were registered
+   * and whether the host preamble still needs saying. Supplied by the adapter
+   * so the include-the-callee-block rule stays owned by
+   * `AgentAdapter.composeSystemPrompt` rather than re-derived per protocol.
+   *
+   * The driver decides only the two BOOLEANS — what the text is remains the
+   * adapter's answer.
+   */
+  composeSystemPrompt: (granted: boolean, includePreamble: boolean) => string;
   /**
    * What this turn should put the agent on: a model, then the parameters to set
    * after it — the shape a CLI needs when its model and its reasoning effort are
@@ -612,24 +646,26 @@ function sameContextReading(
 }
 
 /**
- * Drives ONE ACP turn over the child's stdin/stdout: the client-initiated
- * handshake (`initialize` → `session/new` | `session/load` → optional
- * `session/set_mode` → `session/prompt`), then the agent's `session/update`
- * stream, its `session/request_permission` round-trips, and finally the
- * `session/prompt` reply carrying the stop reason that ends the turn.
+ * Drives ONE ACP turn: the mode/model/parameter frames it opens with, its
+ * `session/prompt`, the agent's `session/update` stream, its
+ * `session/request_permission` round-trips, and finally the `session/prompt`
+ * reply carrying the stop reason that ends the turn.
  *
- * One instance per turn — it holds the request ids, the session id, the
- * accumulated usage, and the parked permission requests, none of which may be
- * shared across the N concurrent turns one adapter instance serves.
+ * **Genuinely one instance per turn.** It holds the accumulated usage, the
+ * parked permission requests, the open text block, the delegate bookkeeping and
+ * this turn's own input — none of which may leak into the next turn on a kept
+ * process, and none of which may be shared across the N concurrent turns one
+ * adapter instance serves. What OUTLIVES a turn — the transport, the request-id
+ * counter, the negotiated capabilities, the session id — lives on the
+ * {@link AcpSession} this is constructed against, which is the whole of the
+ * split: a field added here is per-turn by default, and making one survive is a
+ * deliberate move to the other class.
  *
  * Everything inbound is read through the defensive `json-util` accessors: an
  * unrecognized notification, an unparseable update, or a field that moved
  * between CLI versions degrades to "no event", never to a thrown turn.
  */
-export class AcpTurnDriver implements TurnDriver {
-  private io: TurnIo | null = null;
-  private nextRequestId = 1;
-  private readonly pending = new Map<JsonRpcId, PendingKind>();
+export class AcpTurnDriver {
   /**
    * Request ids of the parameter frames the PROMPT is waiting on, and the
    * prompt held behind them.
@@ -660,18 +696,14 @@ export class AcpTurnDriver implements TurnDriver {
    * which is the superseded one whenever the agent's cancel is the slower half.
    */
   private latestPromptId: JsonRpcId | null = null;
-  private capabilities: AcpAgentCapabilities = {
-    loadSession: false,
-    mcpHttp: false,
-    promptImage: false,
-  };
   /**
-   * The turn's attachments, read off disk at construction — inside
-   * `AgentAdapter.start`'s synchronous try, so an unreadable file fails the
-   * turn there instead of throwing out of the message pump mid-handshake.
+   * THIS turn's attachments, read off disk when the turn opens.
+   *
+   * The sharpest of the fields the session/turn split exists for: it was read
+   * once at construction from an `input` that never changed, so on a kept
+   * process every later turn would have re-sent the first turn's screenshots.
    */
   private readonly imageBlocks: AcpImageBlock[];
-  private sessionId: string | null = null;
   /**
    * `session/load` makes the agent REPLAY the whole prior conversation as
    * `session/update` notifications before it replies. Those are history we
@@ -748,136 +780,50 @@ export class AcpTurnDriver implements TurnDriver {
     kind: 'text' | 'reasoning';
     parts: string[];
   } | null = null;
-  /** Tool name by ACP toolCallId, so a later update can name its result. */
-  private readonly toolNames = new Map<string, string>();
-  /**
-   * Tool kind by ACP toolCallId. `session/request_permission` may carry a
-   * toolCall stub without one, and kind is what `acceptEdits` decides on — so
-   * the kind announced on the original `tool_call` update has to survive.
-   */
-  private readonly toolKinds = new Map<string, string>();
-  /**
-   * Tool arguments by ACP toolCallId. Same stub problem: a permission request
-   * that omits the name and kind usually omits these too, and an approval card
-   * showing no arguments asks the user to approve something they cannot see.
-   */
-  private readonly toolInputs = new Map<string, unknown>();
-  /** Options offered per parked permission request, keyed by encoded id. */
-  private readonly parkedPermissions = new Map<string, AcpPermissionOption[]>();
-  /**
-   * Params of each parked QUESTION, keyed by encoded id. A separate map from
-   * the permissions above, and not merely for the payload: which map an id is
-   * in is what picks the reply encoder, so a question can never be answered
-   * with a permission outcome the agent would reject.
-   */
-  private readonly parkedQuestions = new Map<string, unknown>();
   /** One notice per turn for unimplemented agent→client requests. */
   private warnedUnsupportedRequest = false;
-  /**
-   * Tool calls THIS turn recognised as sub-agent launches, so their result can
-   * be treated as the CLI's accounting rather than the delegate's answer (see
-   * {@link AcpDelegateProtocol.resultIsBookkeeping}).
-   */
-  private readonly delegateToolCalls = new Set<string>();
-  /**
-   * Of those, the ones the CLI said keep running past their launching call.
-   *
-   * Per-TURN on the driver like its neighbour, and for the same reason: one
-   * adapter instance serves N concurrent turns under graph fan-out.
-   */
-  private readonly backgroundDelegates = new Set<string>();
-  /**
-   * The MCP servers this turn actually registered. `composePrompt` derives the
-   * call-surface grant from this rather than from a separate flag, so the
-   * "May call" block and the tools it names cannot disagree.
-   */
-  private grantedMcpServers: AcpMcpServerHttp[] = [];
-  /** This turn resumed via `session/load` — and its load actually succeeded. */
-  private resumed = false;
   /** The model asked for, so a refusal can name it. */
   private requestedModelId: string | null = null;
-  /**
-   * The model this turn is RUNNING as, as the AGENT stated it.
-   *
-   * Read from the session reply's `models.currentModelId` — the agent's own
-   * answer, never what geniro asked for, so a model this agent declined or
-   * never offered cannot be announced as the one in use. When the turn does
-   * switch, the requested id replaces it: the switch is what the frame asks
-   * for, and the reply describing the result arrives after the prompt has gone
-   * out. A refusal is not silent (`onErrorReply` posts a notice), so the window
-   * announced in that case is knowably approximate rather than invented.
-   *
-   * It exists because ACP carries NO model announcement of its own. Only
-   * claude emitted `turn_model`, so a cursor chat had nothing to scale its
-   * meter against until its first turn COMPLETED, and the cross-run window
-   * cache — which files a measurement under the model that reported it — could
-   * never be written from this transport at all. Which is the same gap the
-   * Max Mode mapping needed closed: a window measured under a setting is only
-   * useful if it is filed under the model it was measured on.
-   */
-  private currentModelId: string | null = null;
   /** The last `<id>=<value>` parameter asked for, so a refusal can name it. */
   private requestedParameter: string | null = null;
 
-  constructor(private readonly options: AcpDriverOptions) {
+  /**
+   * @param session the process this turn runs on, and the owner of everything
+   *   that outlives it.
+   * @param options THIS turn's own options, built by
+   *   `AcpSessionOptions.turnOptions` from this turn's input.
+   */
+  constructor(
+    private readonly session: AcpSession,
+    private readonly options: AcpTurnOptions,
+  ) {
+    // Read here rather than lazily, so an unreadable attachment fails the turn
+    // at its own opening — where `AgentAdapter.start`'s synchronous try and
+    // `AcpSession.openTurn`'s catch each turn it into one honest `error` event
+    // — instead of throwing out of the message pump mid-handshake.
     this.imageBlocks = buildAcpImageBlocks(options.input.images);
   }
 
-  onStdinReady(io: TurnIo): void {
-    this.io = io;
+  /**
+   * Open this turn on a session that is ALREADY established — every message of
+   * a chat after the first.
+   *
+   * The counterpart of the `session/new` reply's own tail, and literally the
+   * same code ({@link beginTurn}): a later turn re-applies the mode, the model
+   * and the model parameters before sending its prompt, because none of those
+   * are argv on this transport and only `model` and `effort` are part of
+   * `AgentAdapter.sessionKey` — a context window or a `fast` toggle changed
+   * between two messages would otherwise silently keep the first turn's value
+   * for the life of the conversation.
+   *
+   * The stored session reply is what it reads them against. Modes, models and
+   * config options are properties of the SESSION, restated by no later frame,
+   * so turn 1's reply is still the agent's own answer about what it offers.
+   */
+  openOnLiveSession(): AgentEvent[] {
     const events: AgentEvent[] = [];
-    this.request(
-      ACP_AGENT_METHODS.initialize,
-      {
-        protocolVersion: ACP_PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-          // Spread rather than assigned, so an adapter that declares nothing
-          // sends no `_meta` key at all — an empty object is a claim too.
-          ...(this.options.clientMeta
-            ? { _meta: this.options.clientMeta }
-            : {}),
-        },
-        clientInfo: {
-          name: this.options.clientName,
-          version: this.options.clientVersion,
-        },
-      },
-      'initialize',
-      events,
-    );
-    for (const event of events) {
-      io.emit(event);
-    }
-  }
-
-  onMessage(obj: unknown): AgentEvent[] {
-    const message = classifyMessage(obj);
-    switch (message.kind) {
-      case 'response': {
-        const kind = this.pending.get(message.id);
-        if (kind === undefined) {
-          return [];
-        }
-        this.pending.delete(message.id);
-        return this.onReply(kind, message.result, message.id);
-      }
-      case 'error': {
-        const kind = this.pending.get(message.id);
-        if (kind === undefined) {
-          return [];
-        }
-        this.pending.delete(message.id);
-        return this.onErrorReply(kind, message.message, message.id);
-      }
-      case 'request':
-        return this.onAgentRequest(message.id, message.method, message.params);
-      case 'notification':
-        return this.onNotification(message.method, message.params);
-      case 'unknown':
-        return [];
-    }
+    this.beginTurn(this.session.lastSessionReply, events);
+    return events;
   }
 
   /**
@@ -895,10 +841,10 @@ export class AcpTurnDriver implements TurnDriver {
     updatedInput?: unknown,
   ): string | undefined {
     const requestId = decodeRequestId(id);
-    if (this.parkedQuestions.has(id)) {
-      const params = this.parkedQuestions.get(id);
-      this.parkedQuestions.delete(id);
-      const question = this.options.question;
+    if (this.session.parkedQuestions.has(id)) {
+      const params = this.session.parkedQuestions.get(id);
+      this.session.parkedQuestions.delete(id);
+      const question = this.session.options.question;
       if (requestId === null || question === undefined) {
         return undefined;
       }
@@ -907,11 +853,11 @@ export class AcpTurnDriver implements TurnDriver {
         question.encodeReply(params, allow, updatedInput),
       );
     }
-    const options = this.parkedPermissions.get(id);
+    const options = this.session.parkedPermissions.get(id);
     if (requestId === null || options === undefined) {
       return undefined;
     }
-    this.parkedPermissions.delete(id);
+    this.session.parkedPermissions.delete(id);
     const optionId = selectPermissionOption(options, allow);
     return encodeResult(requestId, {
       outcome:
@@ -924,61 +870,9 @@ export class AcpTurnDriver implements TurnDriver {
     });
   }
 
-  // --- outbound -----------------------------------------------------------
-
-  /** Send one request, answering whether it actually went out. */
-  private request(
-    method: string,
-    params: unknown,
-    kind: PendingKind,
-    events: AgentEvent[],
-  ): boolean {
-    return this.sendRequest(method, params, kind, events) !== null;
-  }
-
-  /**
-   * {@link request}, answering with the id the frame went out under, or null
-   * when it did not go out at all.
-   *
-   * The id is what correlates a reply with the frame that earned it, which only
-   * the two frames whose reply changes the turn's own state need: a parameter
-   * the prompt is held behind ({@link promptBlockers}) and the prompt itself
-   * ({@link latestPromptId}).
-   */
-  private sendRequest(
-    method: string,
-    params: unknown,
-    kind: PendingKind,
-    events: AgentEvent[],
-  ): JsonRpcId | null {
-    const id = this.nextRequestId++;
-    this.pending.set(id, kind);
-    if (this.io?.write(encodeRequest(id, method, params)) !== true) {
-      this.pending.delete(id);
-      events.push({
-        type: 'error',
-        message: `acp: failed to send ${method} (the agent's stdin is closed)`,
-      });
-      return null;
-    }
-    return id;
-  }
-
-  private reply(id: JsonRpcId, result: unknown): void {
-    if (this.io?.write(encodeResult(id, result)) !== true) {
-      this.options.logger?.warn(
-        `acp: dropped a reply to request ${String(id)} — stdin is closed`,
-      );
-    }
-  }
-
   // --- inbound ------------------------------------------------------------
 
-  private onReply(
-    kind: PendingKind,
-    result: unknown,
-    id: JsonRpcId,
-  ): AgentEvent[] {
+  onReply(kind: PendingKind, result: unknown, id: JsonRpcId): AgentEvent[] {
     switch (kind) {
       case 'initialize':
         return this.onInitialized(result);
@@ -990,7 +884,12 @@ export class AcpTurnDriver implements TurnDriver {
         return this.onSessionReady(result);
       case 'set_mode':
         // A mode the agent accepted needs no announcement; a mode it rejected
-        // arrives as an error reply instead (see onErrorReply).
+        // arrives as an error reply instead (see onErrorReply). What it DOES
+        // need is recording: the mode outlives this turn, so the next one has
+        // to know where the session actually is before deciding whether to move
+        // it — see {@link pickMode}. Only on acceptance, so a refused frame
+        // cannot make the client believe a mode it never got.
+        this.session.currentModeId = this.requestedModeId;
         return [];
       case 'set_model':
         // Same contract as `set_mode` above: silence on acceptance, and a
@@ -1004,7 +903,7 @@ export class AcpTurnDriver implements TurnDriver {
     }
   }
 
-  private onErrorReply(
+  onErrorReply(
     kind: PendingKind,
     message: string,
     id: JsonRpcId,
@@ -1034,14 +933,14 @@ export class AcpTurnDriver implements TurnDriver {
       // now, and leaving `replaying` set would drop every transcript update of
       // the turn we are about to run.
       this.replaying = false;
-      this.resumed = false;
+      this.session.resumed = false;
       this.replayStartedAt = null;
       this.replayedUpdates = 0;
-      this.request(
+      this.session.request(
         ACP_AGENT_METHODS.sessionNew,
         {
           cwd: this.options.input.cwd,
-          mcpServers: this.grantedMcpServers,
+          mcpServers: this.session.grantedMcpServers,
         },
         'session',
         events,
@@ -1120,7 +1019,7 @@ export class AcpTurnDriver implements TurnDriver {
     const promptCapabilities = agentCapabilities
       ? asRecord(agentCapabilities.promptCapabilities)
       : null;
-    this.capabilities = {
+    this.session.capabilities = {
       loadSession: agentCapabilities?.loadSession === true,
       mcpHttp: mcpCapabilities?.http === true,
       promptImage: promptCapabilities?.image === true,
@@ -1138,17 +1037,17 @@ export class AcpTurnDriver implements TurnDriver {
     }
 
     const { mcpServers, notice } = this.buildMcpServers();
-    this.grantedMcpServers = mcpServers;
+    this.session.grantedMcpServers = mcpServers;
     if (notice) {
       events.push({ type: 'notice', message: notice });
     }
 
     const resumeId = this.options.input.resumeSessionId?.trim();
-    if (resumeId && this.capabilities.loadSession) {
+    if (resumeId && this.session.capabilities.loadSession) {
       this.replaying = true;
-      this.resumed = true;
+      this.session.resumed = true;
       this.replayStartedAt = Date.now();
-      this.request(
+      this.session.request(
         ACP_AGENT_METHODS.sessionLoad,
         { sessionId: resumeId, cwd: this.options.input.cwd, mcpServers },
         'session_load',
@@ -1166,7 +1065,7 @@ export class AcpTurnDriver implements TurnDriver {
           'this agent cannot resume a conversation — the turn starts fresh, without the earlier messages',
       });
     }
-    this.request(
+    this.session.request(
       ACP_AGENT_METHODS.sessionNew,
       { cwd: this.options.input.cwd, mcpServers },
       'session',
@@ -1188,7 +1087,7 @@ export class AcpTurnDriver implements TurnDriver {
     if (!endpoint) {
       return { mcpServers: [], notice: null };
     }
-    if (!this.capabilities.mcpHttp) {
+    if (!this.session.capabilities.mcpHttp) {
       // The awareness block goes with the tools. Leaving it in would instruct
       // the agent to route work through `call_agent` with nothing registered
       // under that name — its callees never run and the turn still reports
@@ -1219,14 +1118,14 @@ export class AcpTurnDriver implements TurnDriver {
     const root = asRecord(result);
     // `session/new` mints an id; `session/load` returns none, because the id is
     // the one we just sent.
-    this.sessionId =
+    this.session.sessionId =
       (root ? asString(root.sessionId) : null) ??
       this.options.input.resumeSessionId?.trim() ??
       null;
     this.replaying = false;
     this.reportReplayCost();
 
-    if (this.sessionId === null) {
+    if (this.session.sessionId === null) {
       return [
         {
           type: 'error',
@@ -1234,7 +1133,34 @@ export class AcpTurnDriver implements TurnDriver {
         },
       ];
     }
-    events.push({ type: 'session', sessionId: this.sessionId });
+    events.push({ type: 'session', sessionId: this.session.sessionId });
+    // The mode the agent OPENED in, and therefore the one a later turn that
+    // wants no particular mode has to ask to be put back into.
+    const openedIn = asString(asRecord(root?.modes)?.currentModeId);
+    this.session.defaultModeId = openedIn;
+    this.session.currentModeId = openedIn;
+    // KEPT for the turns after this one. Modes, models and config options are
+    // properties of the session and are restated by no later frame, so this
+    // reply stays the agent's own answer about what it offers for as long as
+    // the process lives — see {@link openOnLiveSession}.
+    this.session.lastSessionReply = root;
+    this.beginTurn(root, events);
+    return events;
+  }
+
+  /**
+   * Put the agent on THIS turn's settings and send its prompt — the mode, the
+   * model, the model's own parameters, then `session/prompt`.
+   *
+   * Shared by the two ways a turn opens (the `session/new`|`session/load` reply
+   * for the first, {@link openOnLiveSession} for every later one) precisely so
+   * they cannot drift: a later turn that skipped any of these would run under
+   * the settings of the turn that happened to spawn the process.
+   */
+  private beginTurn(
+    root: Record<string, unknown> | null,
+    events: AgentEvent[],
+  ): void {
     // Before the prompt goes out, so a RESUMED conversation shows what it
     // already holds for the whole of this turn instead of only once the turn
     // ends. A fresh session has written nothing yet and reads as no figure,
@@ -1244,9 +1170,9 @@ export class AcpTurnDriver implements TurnDriver {
     const modeId = this.pickMode(root);
     if (modeId !== null) {
       this.requestedModeId = modeId;
-      this.request(
+      this.session.request(
         ACP_AGENT_METHODS.sessionSetMode,
-        { sessionId: this.sessionId, modeId },
+        { sessionId: this.session.sessionId, modeId },
         'set_mode',
         events,
       );
@@ -1269,7 +1195,7 @@ export class AcpTurnDriver implements TurnDriver {
       // settle, so every resume failed before its reply existed.
       events.push({
         type: 'notice',
-        message: this.resumed
+        message: this.session.resumed
           ? `the '${this.options.preferredModeId}' mode could not be set on a resumed session — this turn runs under the agent's current mode`
           : `agent does not offer the '${this.options.preferredModeId}' mode — this turn runs under the agent's current mode instead`,
       });
@@ -1283,21 +1209,20 @@ export class AcpTurnDriver implements TurnDriver {
     // back-to-back send it has always been.
     if (this.promptBlockers.size > 0) {
       this.promptHeld = true;
-      return events;
+      return;
     }
     this.sendPrompt(events);
-    return events;
   }
 
   /** The turn's prompt — composed once, whether it goes now or after a reply. */
   private sendPrompt(events: AgentEvent[]): void {
-    if (this.sessionId === null) {
+    if (this.session.sessionId === null) {
       return;
     }
-    const id = this.sendRequest(
+    const id = this.session.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
       {
-        sessionId: this.sessionId,
+        sessionId: this.session.sessionId,
         prompt: this.composePromptBlocks(events),
       },
       'prompt',
@@ -1305,6 +1230,10 @@ export class AcpTurnDriver implements TurnDriver {
     );
     if (id !== null) {
       this.latestPromptId = id;
+      // Recorded on the WRITE, not on composing it: a prompt that never left is
+      // a prompt the agent has not been told the preamble by, and marking it
+      // sent there would withhold it from the retry.
+      this.session.preambleSent = true;
     }
   }
 
@@ -1329,7 +1258,7 @@ export class AcpTurnDriver implements TurnDriver {
     // the turn's OWN prompt has not gone out, so there is nothing to interrupt
     // and a follow-up would race it. False leaves the message queued, which is
     // the safe answer.
-    if (this.sessionId === null || this.promptHeld) {
+    if (this.session.sessionId === null || this.promptHeld) {
       return false;
     }
     const events: AgentEvent[] = [];
@@ -1337,7 +1266,8 @@ export class AcpTurnDriver implements TurnDriver {
     // Gated on the agent's OWN advertised capability, the same check the turn's
     // opening prompt passes through: an unadvertised image block earns an error
     // reply, which here would lose the message rather than merely the picture.
-    const withImages = images.length > 0 && this.capabilities.promptImage;
+    const withImages =
+      images.length > 0 && this.session.capabilities.promptImage;
     if (images.length > 0 && !withImages) {
       events.push({
         type: 'notice',
@@ -1348,9 +1278,9 @@ export class AcpTurnDriver implements TurnDriver {
       ...(withImages ? images : []),
       { type: 'text', text: message.text },
     ];
-    const id = this.sendRequest(
+    const id = this.session.sendRequest(
       ACP_AGENT_METHODS.sessionPrompt,
-      { sessionId: this.sessionId, prompt: blocks },
+      { sessionId: this.session.sessionId, prompt: blocks },
       'prompt',
       events,
     );
@@ -1372,9 +1302,37 @@ export class AcpTurnDriver implements TurnDriver {
       events.push(...this.flushPending());
     }
     for (const event of events) {
-      this.io?.emit(event);
+      this.session.emit(event);
     }
     return sent;
+  }
+
+  /**
+   * The in-protocol "stop what you are doing" — `TurnDriver.buildInterruptPayload`.
+   *
+   * ACP's own answer, and the ONLY correct one now that the process outlives its
+   * turn: `session/cancel` is a NOTIFICATION (no id, no reply), and the spec
+   * requires the agent to answer the pending `session/prompt` with stop reason
+   * `cancelled`, which is what actually settles the turn. `spawn-cli` arms a
+   * short deadline behind the write and kills the group only if that reply never
+   * comes, so an agent that ignores the frame still stops.
+   *
+   * Killing instead is what it used to do and is no longer acceptable: the group
+   * holds the whole conversation and every delegate still out, so Stop on one
+   * turn would destroy the chat. It is also why this is a DRIVER hook rather
+   * than an adapter one — the frame names the session id, which only the driver
+   * holds.
+   *
+   * Undefined before the session exists: there is nothing to cancel, and
+   * `spawn-cli` falls back to the group kill, which is the right answer for a
+   * process that has not yet opened a conversation to lose.
+   */
+  buildInterruptPayload(): string | undefined {
+    return this.session.sessionId === null
+      ? undefined
+      : encodeNotification(ACP_AGENT_METHODS.sessionCancel, {
+          sessionId: this.session.sessionId,
+        });
   }
 
   /**
@@ -1415,7 +1373,7 @@ export class AcpTurnDriver implements TurnDriver {
     sessionResult: Record<string, unknown> | null,
     events: AgentEvent[],
   ): void {
-    if (this.sessionId === null) {
+    if (this.session.sessionId === null) {
       return;
     }
     // The adapter's split when it supplied one, else the stored id verbatim.
@@ -1428,13 +1386,13 @@ export class AcpTurnDriver implements TurnDriver {
     // whose model is refused below — still announces what it is running as.
     const announced = readAcpCurrentModelId(sessionResult);
     if (announced !== null && announced !== '') {
-      this.currentModelId = announced;
+      this.session.currentModelId = announced;
     }
     if (wanted) {
-      this.currentModelId = wanted;
+      this.session.currentModelId = wanted;
     }
-    if (this.currentModelId !== null) {
-      events.push({ type: 'turn_model', model: this.currentModelId });
+    if (this.session.currentModelId !== null) {
+      events.push({ type: 'turn_model', model: this.session.currentModelId });
     }
     // Parameters are applied EVEN WHEN the model needs no change — they are a
     // separate axis, and a run that keeps the agent's current model while
@@ -1498,9 +1456,9 @@ export class AcpTurnDriver implements TurnDriver {
     // degrade notice owes them that sentence whichever frame carried it.
     const configId = readAcpModelConfigId(sessionResult);
     if (configId !== null) {
-      this.request(
+      this.session.request(
         ACP_AGENT_METHODS.sessionSetConfigOption,
-        { sessionId: this.sessionId, configId, value: wanted },
+        { sessionId: this.session.sessionId, configId, value: wanted },
         'set_model',
         events,
       );
@@ -1516,9 +1474,9 @@ export class AcpTurnDriver implements TurnDriver {
       );
       return;
     }
-    this.request(
+    this.session.request(
       ACP_AGENT_METHODS.sessionSetModel,
-      { sessionId: this.sessionId, modelId: wanted },
+      { sessionId: this.session.sessionId, modelId: wanted },
       'set_model',
       events,
     );
@@ -1571,7 +1529,7 @@ export class AcpTurnDriver implements TurnDriver {
     sessionResult: unknown,
     describesTurnModel: boolean,
   ): void {
-    if (this.sessionId === null) {
+    if (this.session.sessionId === null) {
       return;
     }
     for (const parameter of parameters) {
@@ -1589,10 +1547,10 @@ export class AcpTurnDriver implements TurnDriver {
         continue;
       }
       this.requestedParameter = `${configId}=${parameter.value}`;
-      const id = this.sendRequest(
+      const id = this.session.sendRequest(
         ACP_AGENT_METHODS.sessionSetConfigOption,
         {
-          sessionId: this.sessionId,
+          sessionId: this.session.sessionId,
           configId,
           value: parameter.value,
         },
@@ -1716,7 +1674,7 @@ export class AcpTurnDriver implements TurnDriver {
     if (this.imageBlocks.length === 0) {
       return [text];
     }
-    if (!this.capabilities.promptImage) {
+    if (!this.session.capabilities.promptImage) {
       const count = this.imageBlocks.length;
       events.push({
         type: 'notice',
@@ -1739,7 +1697,7 @@ export class AcpTurnDriver implements TurnDriver {
     }
     const elapsedMs = Date.now() - this.replayStartedAt;
     this.replayStartedAt = null;
-    this.options.logger?.debug?.(
+    this.session.options.logger?.debug?.(
       `acp session/load replayed ${this.replayedUpdates} update(s) in ${elapsedMs}ms before this turn's prompt could be sent`,
     );
   }
@@ -1786,9 +1744,15 @@ export class AcpTurnDriver implements TurnDriver {
    * call out as silent by construction.
    */
   private composePrompt(): string {
+    // The preamble goes out ONCE per session, and both halves of that condition
+    // are the same fact seen from either side: a `session/load` has already
+    // replayed it, and a turn on a KEPT process is adding to a conversation
+    // this client has already put it in. Missing the second half is a
+    // regression the session/turn split would otherwise introduce — with one
+    // process per turn, `resumed` covered every case there was.
     const instructions = this.options.composeSystemPrompt(
-      this.grantedMcpServers.length > 0,
-      !this.resumed,
+      this.session.grantedMcpServers.length > 0,
+      !this.session.resumed && !this.session.preambleSent,
     );
     if (instructions.length === 0) {
       return this.options.input.prompt;
@@ -1812,7 +1776,14 @@ export class AcpTurnDriver implements TurnDriver {
   private pickMode(
     sessionResult: Record<string, unknown> | null,
   ): string | null {
-    const wanted = this.options.preferredModeId;
+    // A turn that wants no particular mode wants the agent's OWN default, and
+    // on a kept process that is something it has to ASK for. The mode is
+    // session state the client sets and nothing resets, so `plan` set by turn 1
+    // is still in force on turn 2 — which sent nothing at all here, there being
+    // no mode to request, and left a chat the user had switched back to `auto`
+    // running read-only under a composer chip and a run row that both said
+    // `auto`. Unreachable while each turn was a fresh `session/new`.
+    const wanted = this.options.preferredModeId ?? this.session.defaultModeId;
     if (!wanted) {
       return null;
     }
@@ -1820,7 +1791,10 @@ export class AcpTurnDriver implements TurnDriver {
     if (!modes) {
       return null;
     }
-    if (asString(modes.currentModeId) === wanted) {
+    // Against what the session is in NOW, not against the reply — the reply is
+    // the one the session OPENED with, so on turn 2 it describes a mode a
+    // previous turn may have moved away from.
+    if (this.session.currentModeId === wanted) {
       return null;
     }
     return this.offersMode(sessionResult, wanted) ? wanted : null;
@@ -1928,8 +1902,8 @@ export class AcpTurnDriver implements TurnDriver {
    * an unmoved figure is not re-published. See {@link CONTEXT_REREAD_MS}.
    */
   private emitContextReading(events: AgentEvent[], everyMs = 0): void {
-    const read = this.options.readContext;
-    if (read === undefined || this.sessionId === null) {
+    const read = this.session.options.readContext;
+    if (read === undefined || this.session.sessionId === null) {
       return;
     }
     const now = Date.now();
@@ -1939,9 +1913,9 @@ export class AcpTurnDriver implements TurnDriver {
     this.lastContextReadAt = now;
     let reading: AcpContextReading | null;
     try {
-      reading = read(this.sessionId);
+      reading = read(this.session.sessionId);
     } catch (err) {
-      this.options.logger?.warn(
+      this.session.options.logger?.warn(
         `acp context reading failed (the turn is unaffected): ${
           err instanceof Error ? err.message : String(err)
         }`,
@@ -2057,7 +2031,7 @@ export class AcpTurnDriver implements TurnDriver {
             // reuse. The `windowTokens == null` guard above is untouched: a
             // model id here is still a label ON a denominator, never a name
             // offered with nothing being measured.
-            (this.contextReading.model ?? this.currentModelId),
+            (this.contextReading.model ?? this.session.currentModelId),
       // The field is `costUsd`: report an amount only when the agent priced the
       // turn in USD, rather than silently relabelling another currency.
       costUsd:
@@ -2076,15 +2050,11 @@ export class AcpTurnDriver implements TurnDriver {
     };
   }
 
-  private onAgentRequest(
-    id: JsonRpcId,
-    method: string,
-    params: unknown,
-  ): AgentEvent[] {
+  onAgentRequest(id: JsonRpcId, method: string, params: unknown): AgentEvent[] {
     if (method === ACP_CLIENT_METHODS.sessionRequestPermission) {
       return this.onPermissionRequest(id, params);
     }
-    const question = this.options.question;
+    const question = this.session.options.question;
     if (question !== undefined && method === question.method) {
       // The agent is asking the USER something. Declining this one is not a
       // neutral refusal like the others below: an agent that has a fallback
@@ -2099,11 +2069,11 @@ export class AcpTurnDriver implements TurnDriver {
       // Params that do not read as a question fall through to the decline.
       // The shape is documented rather than probe-observed, and a card built
       // from a payload we could not parse is worse than the refusal.
-      this.options.logger?.warn(
+      this.session.options.logger?.warn(
         `acp: ${method} arrived in an unrecognized shape — declined rather than shown as a question`,
       );
     }
-    const delegate = this.options.delegate;
+    const delegate = this.session.options.delegate;
     if (delegate !== undefined && method === delegate.method) {
       const facts = delegate.read(params);
       if (facts !== null) {
@@ -2111,14 +2081,14 @@ export class AcpTurnDriver implements TurnDriver {
         // this changes nothing about the turn — what it changes is that the
         // delegate's brief, type, model and duration reach the transcript
         // instead of being refused and dropped.
-        this.reply(id, {});
+        this.session.reply(id, {});
         return [this.delegateEvent(facts)];
       }
-      this.options.logger?.warn(
+      this.session.options.logger?.warn(
         `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a sub-agent`,
       );
     }
-    const todos = this.options.todos;
+    const todos = this.session.options.todos;
     if (todos !== undefined && method === todos.method) {
       const update = todos.read(params);
       if (update !== null) {
@@ -2126,10 +2096,10 @@ export class AcpTurnDriver implements TurnDriver {
         // outcome either way, so this changes nothing about the turn — what it
         // changes is that the task list reaches the transcript instead of being
         // refused and dropped, which is what the user could not see.
-        this.reply(id, {});
+        this.session.reply(id, {});
         return [{ type: 'task_list', ...update }];
       }
-      this.options.logger?.warn(
+      this.session.options.logger?.warn(
         `acp: ${method} arrived in an unrecognized shape — declined rather than recorded as a task list`,
       );
     }
@@ -2139,26 +2109,26 @@ export class AcpTurnDriver implements TurnDriver {
     // it in-protocol — and say so once, since a refused extension can change
     // what the agent is able to do this turn.
     if (
-      this.io?.write(
+      !this.session.write(
         encodeError(
           id,
           JSONRPC_METHOD_NOT_FOUND,
           `${method} is not implemented by this client`,
         ),
-      ) !== true
+      )
     ) {
-      this.options.logger?.warn(
-        `acp: dropped the error reply to ${method} — stdin is closed`,
+      this.session.options.logger?.warn(
+        `acp: dropped the error reply to ${method}${this.session.writeFailure()}`,
       );
     }
-    if (this.options.declinedWithoutNotice?.includes(method) === true) {
+    if (this.session.options.declinedWithoutNotice?.includes(method) === true) {
       // A refusal its own agent absorbs. The notice above is a per-TURN
       // budget of one, so narrating a harmless refusal does not merely add
       // noise — it spends the slot, and a consequential refusal later in the
       // same turn then goes unmentioned. Measured: an ordinary planning turn
       // on cursor-agent 2026.08.04 sends `cursor/update_todos`, which would
       // have burnt it. Still recorded, on the debug channel.
-      this.options.logger?.debug?.(
+      this.session.options.logger?.debug?.(
         `acp: declined ${method}; the agent handles that refusal itself`,
       );
       return [];
@@ -2190,7 +2160,7 @@ export class AcpTurnDriver implements TurnDriver {
     question: AcpQuestionProtocol,
   ): AgentEvent[] {
     const encodedId = encodeRequestId(id);
-    this.parkedQuestions.set(encodedId, params);
+    this.session.parkedQuestions.set(encodedId, params);
     return [
       {
         type: 'approval_request',
@@ -2211,7 +2181,7 @@ export class AcpTurnDriver implements TurnDriver {
    * throwing on a property read.
    */
   private delegateLaunchEvents(toolCall: AcpToolCall): AgentEvent[] {
-    const delegate = this.options.delegate;
+    const delegate = this.session.options.delegate;
     if (delegate === undefined) {
       return [];
     }
@@ -2224,7 +2194,7 @@ export class AcpTurnDriver implements TurnDriver {
     }
     // Per-TURN state on the driver, never on the adapter: one adapter instance
     // serves N concurrent turns under graph fan-out.
-    this.delegateToolCalls.add(toolCall.toolCallId);
+    this.session.delegateToolCalls.add(toolCall.toolCallId);
     return [
       this.delegateEvent({
         id: toolCall.toolCallId,
@@ -2244,8 +2214,8 @@ export class AcpTurnDriver implements TurnDriver {
   /** This tool call launched a delegate whose result is the CLI's own accounting. */
   private isBookkeepingResult(toolCallId: string): boolean {
     return (
-      this.options.delegate?.resultIsBookkeeping === true &&
-      this.delegateToolCalls.has(toolCallId)
+      this.session.options.delegate?.resultIsBookkeeping === true &&
+      this.session.delegateToolCalls.has(toolCallId)
     );
   }
 
@@ -2260,17 +2230,17 @@ export class AcpTurnDriver implements TurnDriver {
    * how long it took to ask for it.
    */
   private delegateBackgroundEvents(toolCall: AcpToolCall): AgentEvent[] {
-    const reads = this.options.delegate?.readsBackgroundLaunch;
+    const reads = this.session.options.delegate?.readsBackgroundLaunch;
     if (
       reads === undefined ||
-      !this.delegateToolCalls.has(toolCall.toolCallId)
+      !this.session.delegateToolCalls.has(toolCall.toolCallId)
     ) {
       return [];
     }
     if (reads(toolCall.rawOutput) !== true) {
       return [];
     }
-    this.backgroundDelegates.add(toolCall.toolCallId);
+    this.session.backgroundDelegates.add(toolCall.toolCallId);
     return [
       this.delegateEvent({
         id: toolCall.toolCallId,
@@ -2289,7 +2259,7 @@ export class AcpTurnDriver implements TurnDriver {
     // duration measured the LAUNCH, so it is dropped rather than published as
     // the delegate's own. Null cannot overwrite a figure under the merge rule,
     // so a later announcement carrying a real one still wins.
-    const background = this.backgroundDelegates.has(facts.id);
+    const background = this.session.backgroundDelegates.has(facts.id);
     return {
       type: 'subagent_info',
       ...facts,
@@ -2316,7 +2286,7 @@ export class AcpTurnDriver implements TurnDriver {
       // delegate nobody reported the fate of.
       backgroundOutcome: null,
       stepsUnavailableReason:
-        this.options.delegate?.stepsUnavailableReason ?? null,
+        this.session.options.delegate?.stepsUnavailableReason ?? null,
       // Null unless the launching call's own return said the work outlives it,
       // which is the ONE thing this protocol reports about a delegate's
       // lifecycle. Null leaves the transcript's own reading (the launching call
@@ -2346,7 +2316,7 @@ export class AcpTurnDriver implements TurnDriver {
     const decision = this.options.autoDecide(toolCall);
     if (decision !== null) {
       const optionId = selectPermissionOption(options, decision === 'allow');
-      this.reply(id, {
+      this.session.reply(id, {
         outcome:
           optionId === null
             ? { outcome: 'cancelled' }
@@ -2356,7 +2326,7 @@ export class AcpTurnDriver implements TurnDriver {
     }
 
     const encodedId = encodeRequestId(id);
-    this.parkedPermissions.set(encodedId, options);
+    this.session.parkedPermissions.set(encodedId, options);
     return [
       {
         type: 'approval_request',
@@ -2376,13 +2346,15 @@ export class AcpTurnDriver implements TurnDriver {
     return {
       ...toolCall,
       name:
-        toolCall.name === '' ? (this.toolNames.get(id) ?? '') : toolCall.name,
-      kind: toolCall.kind ?? this.toolKinds.get(id) ?? null,
-      rawInput: toolCall.rawInput ?? this.toolInputs.get(id) ?? null,
+        toolCall.name === ''
+          ? (this.session.toolNames.get(id) ?? '')
+          : toolCall.name,
+      kind: toolCall.kind ?? this.session.toolKinds.get(id) ?? null,
+      rawInput: toolCall.rawInput ?? this.session.toolInputs.get(id) ?? null,
     };
   }
 
-  private onNotification(method: string, params: unknown): AgentEvent[] {
+  onNotification(method: string, params: unknown): AgentEvent[] {
     if (method !== ACP_CLIENT_METHODS.sessionUpdate) {
       // A vendor NOTIFICATION is fire-and-forget by definition — ignoring one
       // is a no-op, not a stall. Note that cursor's `cursor/*` extensions are
@@ -2435,7 +2407,7 @@ export class AcpTurnDriver implements TurnDriver {
         // arrived yet. Deliberately NOT pushed onto `textChunks` either, so it
         // cannot become the turn's `finalText` — a downstream graph node
         // consuming "the answer" must not be handed the transport error as one.
-        const failure = this.options.agentFailure?.read(text) ?? null;
+        const failure = this.session.options.agentFailure?.read(text) ?? null;
         if (failure !== null) {
           this.agentFailure = failure;
           return [];
@@ -2474,12 +2446,12 @@ export class AcpTurnDriver implements TurnDriver {
           return [];
         }
         const toolCall = readToolCall(update);
-        this.toolNames.set(toolCall.toolCallId, toolCall.name);
+        this.session.toolNames.set(toolCall.toolCallId, toolCall.name);
         if (toolCall.kind !== null) {
-          this.toolKinds.set(toolCall.toolCallId, toolCall.kind);
+          this.session.toolKinds.set(toolCall.toolCallId, toolCall.kind);
         }
         if (toolCall.rawInput !== null) {
-          this.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
+          this.session.toolInputs.set(toolCall.toolCallId, toolCall.rawInput);
         }
         return [
           // A tool call is a transcript row, so whatever text preceded it is a
@@ -2526,7 +2498,7 @@ export class AcpTurnDriver implements TurnDriver {
             type: 'tool_result',
             id: toolCall.toolCallId,
             name:
-              this.toolNames.get(toolCall.toolCallId) ??
+              this.session.toolNames.get(toolCall.toolCallId) ??
               (toolCall.name.length > 0 ? toolCall.name : null),
             result: this.isBookkeepingResult(toolCall.toolCallId)
               ? // The pair still CLOSES — the block reads `completed` off the

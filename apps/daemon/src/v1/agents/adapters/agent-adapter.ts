@@ -2073,7 +2073,17 @@ export abstract class AgentAdapter {
               images: turnInput.images,
             })
           : this.buildStdinPayload(turnInput);
-        if (firstTurnTaken && stdinPayload === undefined) {
+        // A stateful protocol has no stdin payload at all — its "here is the
+        // next prompt" is a frame only the driver can build and record — so it
+        // opens the turn itself through `TurnDriver.openTurn`. Without that
+        // hook this refusal is what confines such a CLI to one turn per
+        // process, which is exactly what killed a cursor turn's backgrounded
+        // sub-agents at the exit grace.
+        const driverOpensTurn =
+          firstTurnTaken &&
+          stdinPayload === undefined &&
+          driver.openTurn !== undefined;
+        if (firstTurnTaken && stdinPayload === undefined && !driverOpensTurn) {
           return null;
         }
         // The approval mode is argv, and argv belongs to the spawn — so a turn
@@ -2088,7 +2098,17 @@ export abstract class AgentAdapter {
         // and the one the registry already handles — it closes the session and
         // respawns, which puts the mode back in argv where it started.
         let modeLine = '';
-        if (firstTurnTaken && turnInput.approvalMode !== spawnedMode) {
+        // Skipped entirely for a driver that opens its own turn: on such a
+        // protocol the mode is a FRAME rather than argv, so the driver applies
+        // it from this turn's own input (`AcpTurnDriver.beginTurn`) and there is
+        // no stdin line for the adapter to hand over. Asking for one anyway
+        // would refuse the turn — and close and respawn the session — over a
+        // change the CLI can be told about without either.
+        if (
+          !driverOpensTurn &&
+          firstTurnTaken &&
+          turnInput.approvalMode !== spawnedMode
+        ) {
           if (turnInput.approvalMode === undefined) {
             // "No mode at all" is the CLI's own default, which no message can
             // ask a running process to return to.
@@ -2137,7 +2157,15 @@ export abstract class AgentAdapter {
             }
             return line;
           },
-          buildInterruptPayload: () => this.buildInterruptPayload(turnInput),
+          // The driver's own frame wins over the adapter's line, on
+          // `sendFollowUp`'s reasoning: a stop that names a session id cannot be
+          // built outside the driver. A driver without one, or one that answers
+          // undefined, falls back to the adapter exactly as before.
+          buildInterruptPayload: driver.buildInterruptPayload
+            ? () =>
+                driver.buildInterruptPayload!() ??
+                this.buildInterruptPayload(turnInput)
+            : () => this.buildInterruptPayload(turnInput),
           // Both are FIRST-turn only, and for the same reason: a handshake and
           // a readiness wait belong to the PROCESS, not to each prompt. By the
           // second turn the CLI has been up for a whole turn's worth of time,
@@ -2145,9 +2173,14 @@ export abstract class AgentAdapter {
           holdPrompt: firstTurnTaken
             ? undefined
             : driver.awaitPromptReady?.bind(driver),
-          onStdinReady: firstTurnTaken
-            ? undefined
-            : (io) => driver.onStdinReady?.(io),
+          // Which is also why a LATER turn's opening runs through a different
+          // hook: the handshake is done, and what this turn needs is its own
+          // settings and its own prompt on the session that handshake made.
+          onStdinReady: driverOpensTurn
+            ? (io) => driver.openTurn!(io, turnInput)
+            : firstTurnTaken
+              ? undefined
+              : (io) => driver.onStdinReady?.(io),
           // The mappers are pure module-scope functions, so a control message
           // an adapter does not model comes back as data and is logged HERE —
           // the one caller of `mapMessage`, rather than once per consumer. It

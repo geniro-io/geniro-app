@@ -56,7 +56,7 @@ to do with several answers, never HOW to ask. Reference pair: `ModelsService` /
   (`session/request_permission`), client-supplied MCP servers in-protocol
   (`mcpServers` in `session/new`), and a published event schema
   (`session/update`) instead of a version-volatile NDJSON mapper.
-- What ACP does NOT change: one turn is still one process, so `ProcessRegistry`,
+- What ACP does NOT change: `ProcessRegistry`,
   cancel, and the executor's fan-out are untouched either way. Nor does it
   exempt an adapter from the rule above — an ACP adapter still answers every
   per-CLI question through its own `AdapterConfig`.
@@ -115,10 +115,12 @@ answer. Three deserve naming here:
   turn that is ALREADY running, which is what makes a queued follow-up go in
   seconds rather than after the process exits. Claude's stream-json stdin is a
   conversation, so a second `{"type":"user"}` line on a still-open stdin is
-  acted on at the next tool boundary (probe-verified on 2.1.222). ACP has no
-  equivalent — `session/prompt` is one request per turn — so `CursorAcpAdapter`
-  leaves the default and `AgentTurnHandle.sendUserMessage` answers false, which
-  the chat service turns into the same RUN_BUSY the renderer already queues on.
+  acted on at the next tool boundary (probe-verified on 2.1.222). ACP's answer
+  is a second `session/prompt`, which the DRIVER sends for itself
+  (`TurnDriver.sendFollowUp`) because the frame names a session id and a request
+  id only it holds — so `CursorAcpAdapter` leaves this default and overrides
+  nothing here. A CLI with neither channel answers false, which the chat service
+  turns into the same RUN_BUSY the renderer already queues on.
   **The answer must be honest in both directions**: a true for a write that
   never reached the agent has the caller drop the message from its queue. An
   adapter overriding this must also keep stdin open for the turn
@@ -166,8 +168,12 @@ deleted on schedule.
 **A protocol several CLIs could speak lives in its own `adapters/<protocol>/`
 directory**, agent-agnostic: `adapters/acp/` holds the Agent Client Protocol
 client (`acp.types.ts` wire shapes, `acp-jsonrpc.ts` framing, `acp-content.ts`
-attachment blocks, `acp-driver.ts` the per-turn state machine) and knows
-nothing about cursor.
+attachment blocks, `acp-session.ts` the PROCESS — the transport, the request-id
+counter, the negotiated capabilities and the session id — and `acp-driver.ts`
+the per-TURN state machine it builds one of per turn) and knows nothing about
+cursor. That split is what a kept process needs: a field lives on the driver by
+default, so it dies with its turn, and surviving one is a deliberate move to
+the session.
 
 Adapter-agnostic contract types and constants live in
 `adapters/adapter.types.ts`; a helper the base uses for every adapter lives in

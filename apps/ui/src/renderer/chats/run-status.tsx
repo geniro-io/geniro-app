@@ -1,6 +1,7 @@
 import {
   Ban,
   CircleCheck,
+  CircleDashed,
   CircleX,
   Clock,
   Hourglass,
@@ -14,8 +15,9 @@ import { cn } from '../components/ui/utils';
 
 /**
  * Everything a run or a node can be, display-wise: the run statuses, the
- * node-only `skipped`, and the two no daemon row ever carries — `needs-input`
- * and `held`. See {@link displayRunStatus}.
+ * node-only `skipped`, and the three no daemon row ever carries —
+ * `needs-input`, `held` and the sub-agent-only `unknown`. See
+ * {@link displayRunStatus}.
  *
  * There is no `idle`. It was a NINTH member meaning "has not started yet",
  * which is what `pending` already means and what the daemon's own `node_state`
@@ -38,7 +40,8 @@ export type RunStatusKind =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'skipped';
+  | 'skipped'
+  | 'unknown';
 
 /**
  * The one status → icon/tone/label mapping, so a run's or agent's state reads
@@ -101,6 +104,29 @@ export const RUN_STATUS_META: Record<
     icon: MinusCircle,
     className: 'text-muted-foreground',
     label: 'skipped',
+  },
+  // The one state that is a statement about THIS APP rather than about the
+  // work: the CLI said a delegate was still out and then never said anything
+  // else about it, so nothing here knows how it ended — or whether it has.
+  //
+  // It exists because the two answers available without it are each wrong half
+  // the time, and the app was giving both in turn. A cursor delegate is
+  // declared open and never closed (that CLI announces a background ending
+  // nowhere), so the only other input was whether the RUN row happened to be
+  // settled — which flips with every new turn. REPORTED with a screenshot of
+  // each of the three readings of one unchanged delegate: `cancelled` after
+  // its turn, a spinner the moment the user typed again, `cancelled` again
+  // when that turn ended. Saying so is the honest third answer; it is not
+  // `running` (nothing is producing rows) and not `cancelled` (nobody stopped
+  // it, and the process it was launched from is still alive).
+  //
+  // Muted and NOT a spinner, on the same reasoning as `cancelled` beside it:
+  // this is a settled-looking readout for work nobody is waiting on, and the
+  // dashed circle is what separates "we do not know" from "it was stopped".
+  unknown: {
+    icon: CircleDashed,
+    className: 'text-muted-foreground',
+    label: 'unknown',
   },
 };
 

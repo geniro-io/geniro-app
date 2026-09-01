@@ -106,6 +106,18 @@ export function encodeRequest(
   return frame({ id, method, params });
 }
 
+/**
+ * A notification — a method call with NO id, so the peer must not answer it.
+ *
+ * The id is what makes a JSON-RPC frame a request, so this is not a cosmetic
+ * difference: `session/cancel` sent with one would leave the agent owing a
+ * reply the protocol never defined, and this client's own pending map holding
+ * an entry nothing can ever settle.
+ */
+export function encodeNotification(method: string, params: unknown): string {
+  return frame({ method, params });
+}
+
 export function encodeResult(id: JsonRpcId, result: unknown): string {
   return frame({ id, result });
 }

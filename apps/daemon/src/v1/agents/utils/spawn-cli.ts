@@ -436,6 +436,20 @@ const EXIT_SETTLE_GRACE_MS = 2000;
  * intending to exit always wins the race, short enough to stay inside the
  * renderer's own RUN_BUSY retry budget (300+600+1200+2400ms), so a message
  * queued in this window still goes out on its own.
+ *
+ * **It arms for a `turn` lifetime ONLY, and that restriction is now load-bearing
+ * rather than incidental.** On a `session` lifetime the process is the whole
+ * conversation, so terminating it 2s after a turn's terminal event kills every
+ * sub-agent that turn left running in the background — which is exactly what it
+ * did to cursor while that CLI was one process per turn: a turn launched eleven
+ * background reviewers, said "I'll be notified as they complete", and the group
+ * went down 2.5s later. Measured both ways on a delegate given a 20-second
+ * shell command — permission asked at 28.5s and its file written at 49.0s with
+ * the process kept, never written at all under a control run that killed the
+ * group here. A `session` process is ended by `close()` instead (the registry's
+ * idle window, eviction, staleness replacement or shutdown), and a turn on one
+ * is stopped in protocol rather than by killing anything —
+ * `CliTurnOptions.buildInterruptPayload`.
  */
 const TURN_END_EXIT_GRACE_MS = 2000;
 
@@ -1125,9 +1139,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           ownedApprovals.delete(event.id);
           const answer = approvalEncoder?.(event.id, allow, input);
           const written = answer !== undefined && sessionWrite(answer);
+          // The failure half NAMES its cause rather than blaming stdin for all
+          // of them — `writeObstacle`'s reason, and "no encoder" kept distinct
+          // from it, since that one is geniro having nothing to send rather
+          // than nowhere to send it.
+          const failure =
+            answer === undefined
+              ? 'this CLI has no encoder for the verdict'
+              : (writeObstacle() ?? 'the write was refused');
           opts.logger?.warn(
             `${opts.command}: between-turn ${isQuestion ? 'question' : 'approval_request'} for '${event.toolName}' ` +
-              `(id ${event.id}) ${written ? `${allow ? 'allowed' : 'refused'} by the user` : 'could NOT be answered — stdin is gone'}`,
+              `(id ${event.id}) ${written ? `${allow ? 'allowed' : 'refused'} by the user` : `could NOT be answered — ${failure}`}`,
           );
           return written;
         };
@@ -1192,7 +1214,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       `${opts.command}: approval_request for '${event.toolName}' (id ${event.id}) arrived between turns — ` +
         (answered
           ? `${verdict ? 'allowed' : 'refused'} by the run's standing approval posture`
-          : 'and could NOT be answered (no approval encoder or stdin is gone) — the CLI is parked'),
+          : `and could NOT be answered (${line === undefined ? 'this CLI has no encoder for the verdict' : (writeObstacle() ?? 'the write was refused')}) — the CLI is parked`),
     );
   }
 
@@ -1971,6 +1993,40 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * session is a legitimate write with no turn in flight. The three
    * turn-scoped writers below add their own guard on top.
    */
+  /**
+   * Why {@link sessionWrite} would refuse right now — null while it would land.
+   *
+   * The four obstacles are FOUR DIAGNOSES, not one, and the boolean `write`
+   * answers collapses them. Naming them here is what keeps a caller from
+   * inventing a cause: see `TurnIo.writeObstacle`, which exists because the ACP
+   * driver printed `stdin is closed` for every one of them and sent an
+   * investigation after the wrong process.
+   *
+   * Ordered as the guards below are, so the sentence names the FIRST thing that
+   * stops the write rather than the most recently observed — `endProcess` sets
+   * `stdinEnded` alongside `processGone`, so reading them the other way round
+   * would report every terminated group as geniro closing the pipe.
+   */
+  const writeObstacle = (): string | null => {
+    if (processGone) {
+      return 'its process group has been terminated';
+    }
+    if (processExited) {
+      return 'the CLI has exited';
+    }
+    if (stdinEnded) {
+      return "geniro closed the CLI's stdin at the end of the turn";
+    }
+    const stream = child.stdin;
+    if (!stream || !stream.writable) {
+      // The remaining case, and the one worth spelling out: the pipe is intact
+      // on our side and the CLI stopped reading it. Measured on cursor-agent,
+      // which does this ~2s before its own turn-end frame while still running.
+      return 'the CLI closed its end of stdin while still running';
+    }
+    return null;
+  };
+
   const sessionWrite = (payload: string): boolean => {
     if (processGone || processExited || stdinEnded) {
       return false;
@@ -2167,13 +2223,17 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         }
         endProcess();
       }
-      turnOptions.onStdinReady?.({ write: sessionWrite, emit });
+      turnOptions.onStdinReady?.({ write: sessionWrite, emit, writeObstacle });
     };
 
     if (turnOptions.holdPrompt) {
       void (async () => {
         try {
-          await turnOptions.holdPrompt?.({ write: sessionWrite, emit });
+          await turnOptions.holdPrompt?.({
+            write: sessionWrite,
+            emit,
+            writeObstacle,
+          });
         } catch (err) {
           // A gate that cannot decide must never cost the message it was
           // holding — the un-gated write is precisely the behaviour that

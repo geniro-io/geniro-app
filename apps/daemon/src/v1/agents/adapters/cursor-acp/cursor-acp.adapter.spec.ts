@@ -470,28 +470,52 @@ describe('CursorAcpAdapter self-reported commands', () => {
   });
 });
 
-describe('CursorAcpAdapter serves one turn per process', () => {
-  it('refuses a second turn even when the caller asks for a run-scoped session', () => {
-    // The observable is that the caller's `runScoped` opt-in does not make the
-    // session reusable — so the registry respawns, as it does today, instead of
-    // holding a process that would answer the next prompt with the previous
-    // turn's context.
+describe('CursorAcpAdapter keeps ONE process for the whole conversation', () => {
+  it('serves a second turn on the same process once the first has settled', () => {
+    // The flip this adapter's `canHostSession` note asked for, and what it
+    // actually buys: with one process per turn, `TURN_END_EXIT_GRACE_MS`
+    // terminated the group ~2s after the turn's terminal event, taking every
+    // sub-agent the turn had backgrounded with it.
     //
-    // This is forward regression coverage, not a pin on the `canHostSession`
-    // override: the base already answers false, so the override is a
-    // readability choice (declaring the fact where a reader of this adapter
-    // will look for it) and deleting it changes nothing observable here.
-    const { spawn } = fakeSpawn();
+    // A real pin, not a readability one — deleting the override sends
+    // `startSession` down the `turn` lifetime, where the second `startTurn`
+    // answers null. And it is asserted after the first turn SETTLES, which is
+    // the only state where "can this process serve another turn" has an
+    // answer: a turn still in flight is refused by either arm.
+    const { spawn, child } = fakeSpawn();
+    const events: AgentEvent[] = [];
     const session = new CursorAcpAdapter({
       vocabularyStore: freshVocabularyStore(),
       spawn,
-    }).startSession(BASE, {
-      runScoped: true,
-    });
+    }).startSession(BASE, { runScoped: true });
 
-    expect(session.startTurn(BASE, () => {})).not.toBeNull();
-    expect(session.idle).toBe(false);
-    expect(session.startTurn(BASE, () => {})).toBeNull();
+    expect(
+      session.startTurn(BASE, (event) => events.push(event)),
+    ).not.toBeNull();
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 1, result: { protocolVersion: 1 } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 2, result: { sessionId: 'sess-1' } })}\n`,
+    );
+    child.stdout.emitData(
+      `${JSON.stringify({ id: 3, result: { stopReason: 'end_turn' } })}\n`,
+    );
+    expect(events.some((event) => event.type === 'turn_complete')).toBe(true);
+    expect(session.idle).toBe(true);
+
+    expect(
+      session.startTurn({ ...BASE, prompt: 'and the next thing' }, () => {}),
+    ).not.toBeNull();
+    // The SECOND prompt went into the conversation the first opened — one
+    // handshake, one session, two prompts.
+    const frames = framesOn(child);
+    expect(
+      frames.filter((frame) => frame.method === 'session/new'),
+    ).toHaveLength(1);
+    const prompts = frames.filter((frame) => frame.method === 'session/prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
   });
 });
 

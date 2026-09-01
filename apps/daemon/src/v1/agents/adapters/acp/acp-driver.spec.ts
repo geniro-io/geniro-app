@@ -5,13 +5,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { tempDir } from '../../__tests__/temp-dir';
 import type { AgentEvent, AgentTurnInput } from '../adapter.types';
-import type { AcpDriverOptions } from './acp-driver';
+import type { AcpSessionOptions, AcpTurnOptions } from './acp-driver';
 import {
-  AcpTurnDriver,
   HOST_CONTEXT_NOTE,
   HOST_CONTEXT_TAG,
   selectPermissionOption,
 } from './acp-driver';
+import { AcpSession } from './acp-session';
+
+/**
+ * The flat options these specs are written against — the two halves the driver
+ * now takes separately, spelled as one bag so a case can override a session
+ * fact and a turn fact side by side.
+ *
+ * `harness` splits it, and the SPLIT is the point rather than a convenience:
+ * `turnOptions` re-derives the per-turn half from whatever input the session is
+ * opening a turn with, which is exactly what an adapter must do.
+ */
+type AcpDriverOptions = Omit<AcpSessionOptions, 'turnOptions'> & AcpTurnOptions;
 
 /** The turn's instructions as the prompt actually carries them. */
 function hostBlock(instructions: string): string {
@@ -19,7 +30,7 @@ function hostBlock(instructions: string): string {
 }
 
 interface Harness {
-  driver: AcpTurnDriver;
+  driver: AcpSession;
   /** Every frame the driver wrote to stdin, parsed. */
   sent: Record<string, unknown>[];
   /** Events the driver emitted through `io.emit` (the onStdinReady channel). */
@@ -28,6 +39,17 @@ interface Harness {
   feed: (message: unknown) => AgentEvent[];
   /** The frame for the Nth request the driver sent, by method name. */
   sentMethod: (method: string) => Record<string, unknown> | undefined;
+  /** Every frame for one method, oldest first. */
+  sentAll: (method: string) => Record<string, unknown>[];
+  /**
+   * Open a LATER turn on the same live session, as `startTurn` does — with its
+   * OWN per-turn options, since that is exactly what a real adapter's factory
+   * re-derives and what a spec about a second turn needs to vary.
+   */
+  openTurn: (
+    input: AgentTurnInput,
+    turnOverrides?: Partial<AcpTurnOptions>,
+  ) => void;
 }
 
 const BASE_INPUT: AgentTurnInput = { prompt: 'do the thing', cwd: '/work' };
@@ -38,11 +60,17 @@ function harness(
   // close the pipe under one later frame — which is the only way to reach the
   // "this write did not land" branch of a driver that writes for itself.
   writeResult: boolean | (() => boolean) = true,
+  // What the WRITER says is in the way, which is the only honest source for it
+  // — see `TurnIo.writeObstacle`. Undefined models a caller that supplies none,
+  // which is what a driver must be able to log against without inventing one.
+  writeObstacle?: () => string | null,
 ): Harness {
   const sent: Record<string, unknown>[] = [];
   const emitted: AgentEvent[] = [];
+  /** Per-turn overrides for the NEXT turn the harness opens; see `openTurn`. */
+  let nextTurn: Partial<AcpTurnOptions> = {};
   const input = overrides.input ?? BASE_INPUT;
-  const driver = new AcpTurnDriver({
+  const merged: AcpDriverOptions = {
     input: BASE_INPUT,
     clientName: 'geniro',
     clientVersion: '1.2.3',
@@ -59,7 +87,22 @@ function harness(
         .filter((part): part is string => Boolean(part))
         .join('\n\n'),
     ...overrides,
-  });
+  };
+  const driver = new AcpSession(
+    {
+      ...merged,
+      // Every per-turn value re-derived from the input the session hands over,
+      // which is what an adapter's own factory does — so a spec that opens a
+      // second turn gets that turn's prompt and attachments rather than the
+      // first turn's.
+      turnOptions: (turnInput) => ({
+        ...merged,
+        ...nextTurn,
+        input: turnInput,
+      }),
+    },
+    merged.input,
+  );
   driver.onStdinReady({
     write: (payload) => {
       if (!(typeof writeResult === 'function' ? writeResult() : writeResult)) {
@@ -69,13 +112,30 @@ function harness(
       return true;
     },
     emit: (event) => emitted.push(event),
+    writeObstacle,
   });
+  const io = {
+    write: (payload: string) => {
+      if (!(typeof writeResult === 'function' ? writeResult() : writeResult)) {
+        return false;
+      }
+      sent.push(JSON.parse(payload) as Record<string, unknown>);
+      return true;
+    },
+    emit: (event: AgentEvent) => emitted.push(event),
+    writeObstacle,
+  };
   return {
     driver,
     sent,
     emitted,
     feed: (message) => driver.onMessage(message),
     sentMethod: (method) => sent.find((frame) => frame.method === method),
+    sentAll: (method) => sent.filter((frame) => frame.method === method),
+    openTurn: (turnInput, turnOverrides) => {
+      nextTurn = turnOverrides ?? {};
+      driver.openTurn(io, turnInput);
+    },
   };
 }
 
@@ -97,7 +157,7 @@ function initializeReply(
   };
 }
 
-describe('AcpTurnDriver handshake', () => {
+describe('AcpSession handshake', () => {
   it('opens with initialize, declining the fs and terminal capabilities', () => {
     const h = harness();
     const init = h.sentMethod('initialize');
@@ -148,9 +208,19 @@ describe('AcpTurnDriver handshake', () => {
   it('emits an error when the opening frame cannot be written', () => {
     const h = harness({}, false);
     expect(h.emitted).toEqual([
+      // No invented cause: the parenthetical this used to carry ("the agent's
+      // stdin is closed") was one of four possibilities stated as fact.
+      { type: 'error', message: 'acp: failed to send initialize' },
+    ]);
+  });
+
+  it('names the WRITER’s reason on an opening frame that could not go out', () => {
+    const h = harness({}, false, () => 'its process group has been terminated');
+    expect(h.emitted).toEqual([
       {
         type: 'error',
-        message: "acp: failed to send initialize (the agent's stdin is closed)",
+        message:
+          'acp: failed to send initialize — its process group has been terminated',
       },
     ]);
   });
@@ -171,7 +241,7 @@ describe('AcpTurnDriver handshake', () => {
   });
 });
 
-describe('AcpTurnDriver MCP delivery', () => {
+describe('AcpSession MCP delivery', () => {
   const endpoint = {
     input: {
       ...BASE_INPUT,
@@ -321,7 +391,7 @@ describe('AcpTurnDriver MCP delivery', () => {
   });
 });
 
-describe('AcpTurnDriver session resume', () => {
+describe('AcpSession session resume', () => {
   const resuming = { input: { ...BASE_INPUT, resumeSessionId: 'prior-7' } };
 
   it('loads the prior session when the agent supports it', () => {
@@ -693,7 +763,7 @@ describe('AcpTurnDriver session resume', () => {
   });
 });
 
-describe('AcpTurnDriver model selection', () => {
+describe('AcpSession model selection', () => {
   const WANTED = 'claude-opus-5[thinking=true]';
   const wanting = { input: { ...BASE_INPUT, model: WANTED } };
 
@@ -1257,7 +1327,7 @@ describe('AcpTurnDriver model selection', () => {
   });
 });
 
-describe('AcpTurnDriver session modes', () => {
+describe('AcpSession session modes', () => {
   function sessionWithModes(current: string, available: string[]): unknown {
     return {
       id: 2,
@@ -1323,7 +1393,7 @@ function chunk(kind: string, text: string): unknown {
   return update({ sessionUpdate: kind, content: { type: 'text', text } });
 }
 
-describe('AcpTurnDriver session updates', () => {
+describe('AcpSession session updates', () => {
   it('streams a message chunk as an ephemeral delta, not a transcript row', () => {
     const h = harness();
     // `text_delta` is EPHEMERAL by contract; `text` is the durable row. A
@@ -1674,7 +1744,7 @@ describe('AcpTurnDriver session updates', () => {
   });
 });
 
-describe('AcpTurnDriver turn completion', () => {
+describe('AcpSession turn completion', () => {
   /** Drive the handshake so the turn is ready for its prompt reply (id 3). */
   function primed(overrides: Partial<AcpDriverOptions> = {}): Harness {
     const h = harness(overrides);
@@ -1861,7 +1931,7 @@ describe('AcpTurnDriver turn completion', () => {
   });
 });
 
-describe('AcpTurnDriver off-protocol context reading', () => {
+describe('AcpSession off-protocol context reading', () => {
   const READING = {
     usedTokens: 101_100,
     windowTokens: 200_000,
@@ -2077,7 +2147,7 @@ describe('AcpTurnDriver off-protocol context reading', () => {
   });
 });
 
-describe('AcpTurnDriver — a parameter the turn must not start without', () => {
+describe('AcpSession — a parameter the turn must not start without', () => {
   /** A session already on the turn's model, offering a `context` axis. */
   function sessionOfferingContext(): Record<string, unknown> {
     return {
@@ -2237,7 +2307,7 @@ describe('AcpTurnDriver — a parameter the turn must not start without', () => 
   });
 });
 
-describe('AcpTurnDriver permissions', () => {
+describe('AcpSession permissions', () => {
   function permissionRequest(
     id: number | string,
     overrides: Record<string, unknown> = {},
@@ -2407,7 +2477,7 @@ describe('selectPermissionOption', () => {
   });
 });
 
-describe('AcpTurnDriver unsupported requests', () => {
+describe('AcpSession unsupported requests', () => {
   it('declines an unimplemented client method in-protocol, once, with a notice', () => {
     const h = harness();
     // A blocking request left unanswered parks the agent for the whole turn.
@@ -2448,13 +2518,33 @@ describe('AcpTurnDriver unsupported requests', () => {
     const warn = vi.fn();
     const h = harness({ logger: { warn } }, false);
     h.feed({ id: 9, method: 'fs/read_text_file', params: {} });
+    // NO invented cause when the writer names none. It used to append `— stdin
+    // is closed` unconditionally, which this driver cannot know.
     expect(warn).toHaveBeenCalledWith(
-      'acp: dropped the error reply to fs/read_text_file — stdin is closed',
+      'acp: dropped the error reply to fs/read_text_file',
+    );
+  });
+
+  it('quotes the WRITER’s reason for a dropped reply instead of guessing one', () => {
+    // The whole point: `write` answers a bare boolean and four different things
+    // produce that false. The one this used to print named geniro as the
+    // closer, and the case that mattered was the opposite — cursor-agent
+    // closing its own read end while still running. Logged as `dropped a reply
+    // to request 183 — stdin is closed`, it cost a live investigation.
+    const warn = vi.fn();
+    const h = harness(
+      { logger: { warn } },
+      false,
+      () => 'the CLI closed its end of stdin while still running',
+    );
+    h.feed({ id: 9, method: 'fs/read_text_file', params: {} });
+    expect(warn).toHaveBeenCalledWith(
+      'acp: dropped the error reply to fs/read_text_file — the CLI closed its end of stdin while still running',
     );
   });
 });
 
-describe('AcpTurnDriver vendor question channel', () => {
+describe('AcpSession vendor question channel', () => {
   const ASK = 'vendor/ask_question';
   /** A stand-in protocol: the driver must know NO agent's question shape. */
   const question = {
@@ -2542,7 +2632,7 @@ describe('AcpTurnDriver vendor question channel', () => {
   });
 });
 
-describe('AcpTurnDriver refusals the agent absorbs', () => {
+describe('AcpSession refusals the agent absorbs', () => {
   const HARMLESS = 'vendor/update_todos';
   const options = { declinedWithoutNotice: [HARMLESS] };
 
@@ -2599,7 +2689,7 @@ describe('AcpTurnDriver refusals the agent absorbs', () => {
   });
 });
 
-describe('AcpTurnDriver image attachments', () => {
+describe('AcpSession image attachments', () => {
   const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 
   /** A real file on disk — the driver reads bytes, not a fixture string. */
@@ -2673,23 +2763,29 @@ describe('AcpTurnDriver image attachments', () => {
   it('fails the turn on an unreadable attachment instead of prompting without it', () => {
     // Constructed inside AgentAdapter.start's synchronous try, so this is the
     // seam where a broken attachment stops the turn.
+    const input = {
+      ...BASE_INPUT,
+      images: [{ path: '/nope/missing.png', mediaType: 'image/png' }],
+    };
     expect(
       () =>
-        new AcpTurnDriver({
-          input: {
-            ...BASE_INPUT,
-            images: [{ path: '/nope/missing.png', mediaType: 'image/png' }],
+        new AcpSession(
+          {
+            clientName: 'geniro',
+            clientVersion: '1.2.3',
+            turnOptions: (turnInput) => ({
+              input: turnInput,
+              autoDecide: () => null,
+              composeSystemPrompt: () => '',
+            }),
           },
-          clientName: 'geniro',
-          clientVersion: '1.2.3',
-          autoDecide: () => null,
-          composeSystemPrompt: () => '',
-        }),
+          input,
+        ),
     ).toThrow();
   });
 });
 
-describe('AcpTurnDriver task list', () => {
+describe('AcpSession task list', () => {
   const TODOS = 'vendor/update_todos';
   /** A reader in the shape an adapter supplies one — the params are its facts. */
   const todos = {
@@ -2765,7 +2861,7 @@ describe('AcpTurnDriver task list', () => {
   });
 });
 
-describe('AcpTurnDriver — a message delivered into the running turn', () => {
+describe('AcpSession — a message delivered into the running turn', () => {
   /** Drive the driver to a live session with its own prompt already out. */
   function running(): Harness {
     const h = harness();
@@ -2954,5 +3050,275 @@ describe('AcpTurnDriver — a message delivered into the running turn', () => {
     expect(
       h.feed({ id: 3, result: { stopReason: 'end_turn' } }).map((e) => e.type),
     ).toContain('turn_complete');
+  });
+});
+
+describe('AcpSession — a SECOND turn on the same process', () => {
+  /** A session that has handshaken and answered its first prompt. */
+  function afterFirstTurn(overrides: Partial<AcpDriverOptions> = {}): Harness {
+    const h = harness(overrides);
+    h.feed(initializeReply(1, { image: true }));
+    h.feed({
+      id: 2,
+      result: {
+        sessionId: 'sess-1',
+        modes: {
+          currentModeId: 'agent',
+          availableModes: [{ id: 'agent' }, { id: 'plan' }],
+        },
+        configOptions: [
+          {
+            id: 'context',
+            category: 'model_config',
+            currentValue: '300k',
+            options: [{ value: '300k' }, { value: '1m' }],
+          },
+        ],
+      },
+    });
+    // The first prompt's own reply, so the turn is genuinely over.
+    h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+    return h;
+  }
+
+  it('prompts the LIVE session instead of handshaking again', () => {
+    // The behaviour the whole split exists for: `initialize` and `session/new`
+    // belong to the process, so a later turn sends neither — it sends its own
+    // prompt into the conversation the first turn opened.
+    const h = afterFirstTurn();
+    h.openTurn({ prompt: 'and now the second thing', cwd: '/work' });
+
+    expect(h.sentAll('initialize')).toHaveLength(1);
+    expect(h.sentAll('session/new')).toHaveLength(1);
+    const prompts = h.sentAll('session/prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]?.params).toMatchObject({ sessionId: 'sess-1' });
+  });
+
+  it('sends the SECOND turn’s prompt, never the first’s', () => {
+    // `input` was fixed at construction, so before the split this frame would
+    // have carried `do the thing` — the first turn's words — a second time.
+    const h = afterFirstTurn();
+    h.openTurn({ prompt: 'and now the second thing', cwd: '/work' });
+
+    const params = h.sentAll('session/prompt')[1]?.params as {
+      prompt: { type: string; text?: string }[];
+    };
+    expect(params.prompt.some((block) => block.text === 'do the thing')).toBe(
+      false,
+    );
+    expect(
+      params.prompt.some((block) => block.text?.startsWith('and now')),
+    ).toBe(true);
+  });
+
+  it('does not re-send the FIRST turn’s attachments', () => {
+    // The sharpest leak of the lot, and silent: the image blocks were read off
+    // disk once, into a field that outlived the turn that owned them. A second
+    // message with no attachment would have arrived carrying the first turn's
+    // screenshot, and the agent would have answered about it.
+    const dir = tempDir('acp-second-turn');
+    const png = join(dir, 'shot.png');
+    writeFileSync(png, Buffer.from([1, 2, 3]));
+    const h = afterFirstTurn({
+      input: {
+        ...BASE_INPUT,
+        images: [{ path: png, mediaType: 'image/png' }],
+      },
+    });
+    expect(
+      (h.sentAll('session/prompt')[0]?.params as { prompt: unknown[] }).prompt,
+    ).toHaveLength(2);
+
+    h.openTurn({ prompt: 'no picture this time', cwd: '/work' });
+    expect(
+      (h.sentAll('session/prompt')[1]?.params as { prompt: unknown[] }).prompt,
+    ).toHaveLength(1);
+  });
+
+  it('says the host preamble ONCE per session, not once per turn', () => {
+    // Prompt text is part of the conversation here, so a block one turn
+    // prepends is replayed to every turn after it. This was answered by
+    // `resumed` alone, which covered every case only while each turn was a
+    // fresh process that `session/load`ed — a kept process's second turn is
+    // neither resumed nor first.
+    const h = afterFirstTurn({
+      composeSystemPrompt: (_granted, includePreamble) =>
+        includePreamble ? 'THE PREAMBLE' : '',
+    });
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+
+    const texts = h
+      .sentAll('session/prompt')
+      .map(
+        (frame) =>
+          ((frame.params as { prompt: { text?: string }[] }).prompt[0]?.text ??
+            '') as string,
+      );
+    expect(texts[0]).toContain('THE PREAMBLE');
+    expect(texts[1]).not.toContain('THE PREAMBLE');
+  });
+
+  it('re-applies the model parameters the second turn asked for', () => {
+    // `AgentAdapter.sessionKey` covers `model` and `effort`, so a change to
+    // either respawns the process — and covers NOTHING else this transport can
+    // set. A context window (or any other config option) changed between two
+    // messages therefore reaches the agent only if the turn re-applies it,
+    // which is what `beginTurn` is shared for.
+    const h = afterFirstTurn();
+    h.openTurn({
+      prompt: 'second',
+      cwd: '/work',
+      // Supplied through the harness's own `turnOptions`, which re-derives the
+      // per-turn half from whatever input the session hands it.
+    });
+    expect(h.sentAll('session/set_config_option')).toHaveLength(0);
+
+    const wide = harness({
+      modelSelection: {
+        model: null,
+        parameters: [{ id: 'context', value: '1m' }],
+      },
+    });
+    wide.feed(initializeReply(1));
+    wide.feed({
+      id: 2,
+      result: {
+        sessionId: 'sess-2',
+        configOptions: [
+          {
+            id: 'context',
+            category: 'model_config',
+            currentValue: '300k',
+            options: [{ value: '300k' }, { value: '1m' }],
+          },
+        ],
+      },
+    });
+    wide.feed({ id: 4, result: { stopReason: 'end_turn' } });
+    expect(wide.sentAll('session/set_config_option')).toHaveLength(1);
+
+    wide.openTurn({ prompt: 'second', cwd: '/work' });
+    // TWICE: the second turn set it again rather than trusting a frame sent
+    // before a turn the user may have changed the setting across.
+    expect(wide.sentAll('session/set_config_option')).toHaveLength(2);
+  });
+
+  it('spends no frame on a mode the session is already in', () => {
+    // The mode is a frame here rather than argv, which is why
+    // `AgentAdapter.startTurn` hands the whole turn to the driver instead of
+    // asking for a stdin line it cannot produce and refusing the turn. It is
+    // also SESSION state, so a second turn wanting what turn 1 already set has
+    // nothing to say — which is only knowable because an accepted `set_mode` is
+    // recorded.
+    const h = afterFirstTurn({ preferredModeId: 'plan' });
+    expect(h.sentAll('session/set_mode')).toHaveLength(1);
+    h.feed({ id: 3, result: {} }); // the mode frame's own acceptance
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+    expect(h.sentAll('session/set_mode')).toHaveLength(1);
+  });
+
+  it('puts the session BACK when a later turn wants no special mode', () => {
+    // The regression the session/turn split introduced, and it is a permission
+    // one: a mode outlives the turn that set it, so a chat run under `plan` and
+    // then switched back to `auto` sent nothing at all here — there being no
+    // mode to ask for — and went on running read-only under a composer chip and
+    // a run row that both read `auto`. Unreachable while every turn was a fresh
+    // `session/new`, which is why one process per turn hid it completely.
+    const h = afterFirstTurn({ preferredModeId: 'plan' });
+    h.feed({ id: 3, result: {} });
+    expect(h.sentAll('session/set_mode')[0]?.params).toMatchObject({
+      modeId: 'plan',
+    });
+
+    // Turn 2 names no mode — so it wants the one the agent opened in.
+    h.openTurn({ prompt: 'second', cwd: '/work' }, { preferredModeId: null });
+    const frames = h.sentAll('session/set_mode');
+    expect(frames).toHaveLength(2);
+    expect(frames[1]?.params).toEqual({
+      sessionId: 'sess-1',
+      modeId: 'agent',
+    });
+  });
+
+  it('answers a card raised in the PREVIOUS turn', () => {
+    // `spawn-cli` re-holds an approval its turn settled without an answer and
+    // re-offers it to the next turn, so a verdict routinely arrives while a
+    // DIFFERENT turn is current. The parked payload is keyed by the JSON-RPC
+    // request id — the session's namespace, not a turn's — and holding it on
+    // the turn meant `buildApprovalResponse` found nothing and answered
+    // undefined: the card read as answered and the agent stayed parked for
+    // good. Unreachable while one process served one turn, because the session
+    // died with the turn that raised it.
+    const h = afterFirstTurn();
+    const raised = h.feed({
+      id: 'p-1',
+      method: 'session/request_permission',
+      params: {
+        sessionId: 'sess-1',
+        toolCall: { toolCallId: 't-9', name: 'write_file', kind: 'edit' },
+        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    });
+    const card = raised.find((event) => event.type === 'approval_request');
+    expect(card).toBeDefined();
+
+    // A whole turn later — the card was never answered while its own turn ran.
+    h.openTurn({ prompt: 'second', cwd: '/work' });
+
+    const reply = h.driver.buildApprovalResponse(card!.id, true);
+    expect(reply).toBeDefined();
+    expect(JSON.parse(reply!)).toMatchObject({
+      id: 'p-1',
+      result: { outcome: { outcome: 'selected', optionId: 'o-allow' } },
+    });
+  });
+
+  it('fails only the turn whose attachment cannot be read', () => {
+    // `openTurn` runs inside `spawn-cli`'s `startTurn`, after the turn is
+    // registered as the session's current one — so a throw would leave a turn
+    // nothing can settle and a session nobody can use again.
+    const h = afterFirstTurn();
+    expect(() =>
+      h.openTurn({
+        prompt: 'second',
+        cwd: '/work',
+        images: [{ path: '/nope/missing.png', mediaType: 'image/png' }],
+      }),
+    ).not.toThrow();
+    expect(
+      h.emitted.filter(
+        (event) =>
+          event.type === 'error' && event.message.includes('could not open'),
+      ),
+    ).toHaveLength(1);
+    expect(h.sentAll('session/prompt')).toHaveLength(1);
+  });
+});
+
+describe('AcpSession stop', () => {
+  it('asks the agent to cancel in protocol rather than being killed', () => {
+    // The turn's process now outlives it, so killing the group would destroy
+    // the whole conversation and every delegate still out. `session/cancel` is
+    // a NOTIFICATION — no id — and what actually ends the turn is the pending
+    // `session/prompt` answering `cancelled`.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+
+    const frame = h.driver.buildInterruptPayload();
+    expect(frame).toBeDefined();
+    expect(JSON.parse(frame!)).toEqual({
+      jsonrpc: '2.0',
+      method: 'session/cancel',
+      params: { sessionId: 'sess-1' },
+    });
+  });
+
+  it('has nothing to cancel before a session exists, and says so', () => {
+    // `spawn-cli` reads undefined as "this turn can only be stopped by killing
+    // it", which is the right answer for a process with no conversation to lose
+    // — and the wrong one the moment there is, hence the arm above.
+    expect(harness().driver.buildInterruptPayload()).toBeUndefined();
   });
 });

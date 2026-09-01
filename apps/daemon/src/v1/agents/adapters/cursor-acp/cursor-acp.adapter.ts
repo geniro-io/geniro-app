@@ -14,7 +14,7 @@ import {
   SESSION_ID_INVALID_MESSAGE,
 } from '../../utils/session-id';
 import type { AcpToolCall } from '../acp/acp.types';
-import { AcpTurnDriver, type AutoDecision } from '../acp/acp-driver';
+import type { AcpTurnOptions, AutoDecision } from '../acp/acp-driver';
 import {
   ACP_MODEL_CONFIG_CATEGORY,
   acpModelProbeFrames,
@@ -24,6 +24,7 @@ import {
   readAcpConfigOptionsProbe,
   readAcpModelProbe,
 } from '../acp/acp-models';
+import { AcpSession } from '../acp/acp-session';
 import {
   acpSessionListFrames,
   acpSessionListSettled,
@@ -1846,30 +1847,36 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   /**
-   * One process per turn, stated rather than inherited.
+   * ONE process for the whole conversation, like claude's.
    *
-   * The base already answers false, so this override changes no behaviour —
-   * it exists because "this CLI cannot keep its process between turns" and
-   * "nobody has got round to it" are the same silence otherwise, and only one
-   * of them is a fact a reader can act on. Same standard as `loginArgs` above,
-   * which is declared with its reason even though no row can use it yet.
+   * It answered false for two milestones, on the honest ground that no
+   * multi-turn ACP session had been OBSERVED here — the machine this was built
+   * on was not signed in — and that a second prompt on a session the agent
+   * considers finished would be answered with the previous turn's context,
+   * which is a wrong turn rather than a slow one. Both conditions that note
+   * named have since been met, and this is the measurement that met them
+   * (cursor-agent, 2026-09-01): turn 1 told the agent to remember `BANANA-7731`
+   * and ended `end_turn` at 12676ms; turn 2 on the SAME process answered
+   * `BANANA-7731` in 7122ms, with no sign of the feared re-run of turn 1. The
+   * second condition — "the turn driver has been checked for state that assumes
+   * it dies with its turn" — is what the `AcpSession` / `AcpTurnDriver` split
+   * answers: per-turn state now lives on an object built fresh for each turn.
    *
-   * ACP has the shape for it: `session/prompt` can be sent again on a session
-   * that is already loaded, so the protocol does not forbid a kept process.
-   * What is missing is EVIDENCE. cursor-agent is not signed in on the machine
-   * this was built on, so no multi-turn ACP session has ever been observed
-   * here — and the cost of guessing is not a failed turn but a wrong one: a
-   * second prompt on a session the agent considers finished is answered with
-   * the previous turn's context, which reads as an agent ignoring what it was
-   * just asked. Keeping a process is an optimization; keeping a WRONG one is a
-   * correctness bug.
+   * What the flip actually FIXES is not latency. `TURN_END_EXIT_GRACE_MS` only
+   * arms for a `turn` lifetime, so a one-turn process was terminated ~2s after
+   * its terminal event — taking with it every sub-agent the turn had left
+   * running in the background. REPORTED against a turn that launched eleven
+   * reviewers and said "I'll be notified as they complete"; measured both ways
+   * on a delegate given a 20-second shell command, which asked for permission
+   * at 28.5s and wrote its file at 49.0s with the process kept, and never wrote
+   * it at all under a control run that killed the group 2s after the turn.
    *
-   * Flip this to `keepStdinOpen`'s answer once a signed-in cursor-agent has
-   * been observed serving two `session/prompt` calls on one process, and the
-   * turn driver has been checked for state that assumes it dies with its turn.
+   * The cost is the one every kept session pays and claude already pays: a slot
+   * in `AgentSessionRegistry`, subject to its ceiling, its LRU eviction and its
+   * staleness marking.
    */
   protected override canHostSession(_input: AgentTurnInput): boolean {
-    return false;
+    return true;
   }
 
   /**
@@ -2369,14 +2376,93 @@ export class CursorAcpAdapter extends AgentAdapter {
   }
 
   protected override createTurnDriver(input: AgentTurnInput): TurnDriver {
-    return new AcpTurnDriver({
+    return new AcpSession(
+      {
+        clientName: CURSOR_ACP_CLIENT_NAME,
+        clientVersion: this.clientVersion,
+        // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.
+        clientMeta: CURSOR_ACP_CLIENT_META,
+        turnOptions: (turnInput) => this.acpTurnOptions(turnInput),
+        declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
+        question: {
+          method: CURSOR_ASK_QUESTION_METHOD,
+          toolName: this.getConfig().questionToolName ?? '',
+          accepts: (params) => readCursorQuestions(params).length > 0,
+          encodeReply: encodeCursorQuestionReply,
+        },
+        delegate: {
+          method: CURSOR_TASK_METHOD,
+          launchMarker: CURSOR_TASK_LAUNCH_MARKER,
+          read: readCursorTask,
+          // The `task` call returns `{durationMs, isBackground}` and nothing the
+          // delegate said — see the field's own doc block for what that looked
+          // like framed as its answer.
+          resultIsBookkeeping: true,
+          // The other half of that same `rawOutput`, and the half that says
+          // whether the call waited for anything at all.
+          readsBackgroundLaunch: readCursorLaunchIsBackground,
+          stepsUnavailableReason:
+            this.getConfig().subagents.stepsUnavailableReason,
+        },
+        todos: {
+          method: CURSOR_TODOS_METHOD,
+          read: parseCursorTodos,
+        },
+        // This CLI catches its own failure, writes the sentence out as an
+        // assistant message and answers `end_turn` regardless — so without this
+        // a turn that died on `RetriableError: [unavailable] PING timed out`
+        // rendered that line as the agent's own prose under a `✓ done · 1m 14s`
+        // footer. REPORTED with exactly that screenshot. The reader's doc block
+        // carries the catch block it was read out of and why matching it is
+        // sound.
+        agentFailure: { read: readCursorAgentFailure },
+        // The SAME store the readout reads, put on the turn's event stream — and,
+        // through it, onto the turn's own `turn_complete` — so the meter's ring is
+        // drawn from it too. ACP carries no context accounting at all, so before
+        // this the ring had no reading and rendered hollow while the panel behind
+        // it showed a full breakdown off this very file — the reported "the number
+        // says 51% and the circle is not filled at all". Two readings of one
+        // source cannot disagree; a reading and a blank can.
+        //
+        // Reported AGAIN after the first pass, and the second half is why: a
+        // reading rides the ephemeral live plane, which the client drops when the
+        // run settles, so the ring was fed for the length of a turn and blank
+        // between turns — which is when anybody is looking at it. The durable
+        // half is `AcpTurnDriver.buildUsage`, which now reads the same reading.
+        // Measured end to end on a real turn: `{contextTokens: 42970,
+        // contextWindowTokens: 200000}` in the row, against `inputTokens: null`
+        // beside it — the row could only have got those from here.
+        readContext: (sessionId) => {
+          const usage = this.readSessionContext(sessionId);
+          return usage === null
+            ? null
+            : {
+                usedTokens: usage.totalTokens,
+                windowTokens: usage.maxTokens,
+                model: usage.model,
+              };
+        },
+        logger: this.cursorOptions.logger,
+      },
+      input,
+    );
+  }
+
+  /**
+   * Everything about ONE turn, derived from THAT turn's input.
+   *
+   * Called once per turn by `AcpSession`, never captured — which is the whole
+   * contract: every value here reads the `input` ARGUMENT, so a second message
+   * on a kept process cannot inherit the first's approval posture, model
+   * settings or instruction block. Closing over the enclosing
+   * `createTurnDriver` parameter instead would compile and be wrong in exactly
+   * the way the session/turn split exists to prevent.
+   */
+  private acpTurnOptions(input: AgentTurnInput): AcpTurnOptions {
+    return {
       input,
       composeSystemPrompt: (granted, includePreamble) =>
         this.composeSystemPrompt(input, granted, includePreamble),
-      clientName: CURSOR_ACP_CLIENT_NAME,
-      clientVersion: this.clientVersion,
-      // What unlocks the separate effort control; see CURSOR_ACP_CLIENT_META.
-      clientMeta: CURSOR_ACP_CLIENT_META,
       // The stored id split into a bare model plus its parameters, with this
       // turn's own effort applied over whatever the id carried. Composed here
       // because the bracket syntax is this CLI's, and the driver must not learn
@@ -2391,67 +2477,7 @@ export class CursorAcpAdapter extends AgentAdapter {
         cursorAutoDecision(input.approvalMode, toolCall),
       preferredModeId:
         input.approvalMode === 'plan' ? CURSOR_PLAN_MODE_ID : null,
-      declinedWithoutNotice: CURSOR_SILENTLY_DECLINED_METHODS,
-      question: {
-        method: CURSOR_ASK_QUESTION_METHOD,
-        toolName: this.getConfig().questionToolName ?? '',
-        accepts: (params) => readCursorQuestions(params).length > 0,
-        encodeReply: encodeCursorQuestionReply,
-      },
-      delegate: {
-        method: CURSOR_TASK_METHOD,
-        launchMarker: CURSOR_TASK_LAUNCH_MARKER,
-        read: readCursorTask,
-        // The `task` call returns `{durationMs, isBackground}` and nothing the
-        // delegate said — see the field's own doc block for what that looked
-        // like framed as its answer.
-        resultIsBookkeeping: true,
-        // The other half of that same `rawOutput`, and the half that says
-        // whether the call waited for anything at all.
-        readsBackgroundLaunch: readCursorLaunchIsBackground,
-        stepsUnavailableReason:
-          this.getConfig().subagents.stepsUnavailableReason,
-      },
-      todos: {
-        method: CURSOR_TODOS_METHOD,
-        read: parseCursorTodos,
-      },
-      // This CLI catches its own failure, writes the sentence out as an
-      // assistant message and answers `end_turn` regardless — so without this
-      // a turn that died on `RetriableError: [unavailable] PING timed out`
-      // rendered that line as the agent's own prose under a `✓ done · 1m 14s`
-      // footer. REPORTED with exactly that screenshot. The reader's doc block
-      // carries the catch block it was read out of and why matching it is
-      // sound.
-      agentFailure: { read: readCursorAgentFailure },
-      // The SAME store the readout reads, put on the turn's event stream — and,
-      // through it, onto the turn's own `turn_complete` — so the meter's ring is
-      // drawn from it too. ACP carries no context accounting at all, so before
-      // this the ring had no reading and rendered hollow while the panel behind
-      // it showed a full breakdown off this very file — the reported "the number
-      // says 51% and the circle is not filled at all". Two readings of one
-      // source cannot disagree; a reading and a blank can.
-      //
-      // Reported AGAIN after the first pass, and the second half is why: a
-      // reading rides the ephemeral live plane, which the client drops when the
-      // run settles, so the ring was fed for the length of a turn and blank
-      // between turns — which is when anybody is looking at it. The durable
-      // half is `AcpTurnDriver.buildUsage`, which now reads the same reading.
-      // Measured end to end on a real turn: `{contextTokens: 42970,
-      // contextWindowTokens: 200000}` in the row, against `inputTokens: null`
-      // beside it — the row could only have got those from here.
-      readContext: (sessionId) => {
-        const usage = this.readSessionContext(sessionId);
-        return usage === null
-          ? null
-          : {
-              usedTokens: usage.totalTokens,
-              windowTokens: usage.maxTokens,
-              model: usage.model,
-            };
-      },
-      logger: this.cursorOptions.logger,
-    });
+    };
   }
 
   /**

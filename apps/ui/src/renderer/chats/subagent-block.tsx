@@ -39,7 +39,12 @@ function shellStatusOf(
       return 'error';
     case 'stopped':
       return 'stopped';
-    default:
+    // Carried through rather than folded into `running`: this delegate is not
+    // producing anything, and drawing a spinner over it is the half of the
+    // reported oscillation that the derivation itself no longer emits.
+    case 'unknown':
+      return 'unknown';
+    case 'running':
       return 'running';
   }
 }

@@ -282,6 +282,10 @@ describe('isSettledRunStatus', () => {
     'running',
     'held',
     'needs-input',
+    // Not settled, and deliberately not `running` either — see
+    // `RUN_STATUS_META.unknown`. Reading it as settled would let a delegate
+    // nobody can account for close a fold captioned `finished`.
+    'unknown',
   ];
 
   it('reports the four end states as settled', () => {

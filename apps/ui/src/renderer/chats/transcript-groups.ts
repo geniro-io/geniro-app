@@ -920,7 +920,7 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
 export function subagentBlockStatus(
   block: SubagentBlockEntry,
   runSettledAt: RunSettleAt = null,
-): 'running' | BackgroundOutcome {
+): 'running' | 'unknown' | BackgroundOutcome {
   if (block.failed) {
     return 'failed';
   }
@@ -962,7 +962,20 @@ export function subagentBlockStatus(
   // `running` — with the process gone, forever. That latch is also what
   // swallowed the turn-end notification, since the run never crossed into a
   // settled state for the rules to see.
-  if (block.backgroundOpen === true && !endedByRun) {
+  // `closed` joins `endedByRun` here, and it is the PERMANENT half of the pair:
+  // this delegate's own turn has ended, which no later turn can undo. Reading
+  // the run row alone is the reported oscillation — it goes back to unsettled
+  // the moment the NEXT turn opens, so one unchanged cursor delegate read
+  // `cancelled` after its turn, `running` again the second the user typed
+  // anything, and `cancelled` again when that turn ended. Three states of one
+  // badge, none of them about the delegate; REPORTED with a screenshot of each.
+  //
+  // What the app knows past that point is nothing, which is what the `unknown`
+  // arm below says. It is deliberately NOT a claim that the delegate died: with
+  // the CLI's process now kept between a run's turns for both agents, a
+  // delegate left out really can go on working — it simply never says so again
+  // on this wire.
+  if (block.backgroundOpen === true && !endedByRun && !block.closed) {
     return 'running';
   }
   // The CLOSING half of that same channel, and reading only the opening half is
@@ -993,19 +1006,27 @@ export function subagentBlockStatus(
   if (block.backgroundOpen === false) {
     return 'completed';
   }
-  // NOT for a delegate the CLI declared still out. `returned` is the launching
-  // call coming back, and once a CLI has said the work outlives that call, its
-  // return can never again mean the delegate finished — so a block that was
-  // declared open and never closed falls to the reading below instead, which is
-  // `stopped` once the run has settled.
+  // Declared still out, never closed, and its own turn is over — so this is the
+  // end of what can be said about it, and saying that is the answer.
   //
-  // That is the honest answer rather than a defensive one: cursor-agent
-  // announces a background delegate's ENDING nowhere (measured across 70s of
-  // listening past the turn's own end), and geniro terminates the CLI's process
-  // group shortly after the turn settles — so whatever was still out was cut
-  // off, and a green check over it is the app inventing an outcome. REPORTED as
-  // "We still ahve problems with subagents for cursor", against ten reviewers
-  // each reading `took 0s · completed` while every one of them was working.
+  // The two alternatives are each a claim nothing supports. `completed` is what
+  // `returned` would give it below, and it is wrong by construction: a
+  // backgrounded delegate's launching call is answered within the second, so
+  // its return says the delegation was accepted (REPORTED as ten reviewers each
+  // reading `took 0s · completed` while every one of them was working).
+  // `stopped` is what the tail gave it, and it USED to be true — geniro
+  // terminated the CLI's group shortly after the turn settled, so whatever was
+  // out really had been cut off. That is no longer so: the process is kept
+  // between turns, and a delegate on it may well still be running. What has not
+  // changed is that cursor-agent announces a background delegate's ending
+  // nowhere (measured across 70s of listening past the turn's own end), so
+  // there is no third signal to wait for.
+  if (block.backgroundOpen === true) {
+    return 'unknown';
+  }
+  // `returned` is the launching call coming back, which for a delegate the CLI
+  // declared still out means nothing — hence the arm above, which takes those
+  // before this one is reached.
   if (block.returned && block.backgroundOpen !== true) {
     return 'completed';
   }

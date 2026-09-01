@@ -27,6 +27,15 @@ export const ACP_AGENT_METHODS = {
   sessionSetConfigOption: 'session/set_config_option',
   sessionPrompt: 'session/prompt',
   /**
+   * Ask the agent to stop the prompt turn in flight.
+   *
+   * A NOTIFICATION, not a request — it carries no id and earns no reply. What
+   * answers it is the pending `session/prompt`, which the spec requires the
+   * agent to complete with stop reason `cancelled`; a client that waited for a
+   * reply to this frame itself would wait forever.
+   */
+  sessionCancel: 'session/cancel',
+  /**
    * Enumerate the conversations the agent holds under the profile it is running
    * as. Advertised by `agentCapabilities.sessionCapabilities.list`; an agent
    * without it answers `-32601`, which {@link acpSessionListSettled} treats as a

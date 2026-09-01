@@ -226,6 +226,49 @@ function rpc(method: string, params: unknown, id = 1): Record<string, unknown> {
   return { jsonrpc: '2.0', id, method, params };
 }
 
+/**
+ * {@link post}'s sibling for the one case that needs TWO requests against the
+ * same service while the first is still in flight: a cancellation arrives on
+ * its own POST, so `post` — which closes its server before returning — cannot
+ * express it.
+ */
+async function serving(target: McpServerService): Promise<{
+  send: (payload: unknown) => Promise<Response>;
+  close: () => void;
+}> {
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => {
+      const body: unknown = chunks.length
+        ? JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        : undefined;
+      void target.handlePost(
+        'run-1',
+        'agent',
+        { raw: req, body } as unknown as FastifyRequest,
+        { raw: res, hijack: () => {} } as unknown as FastifyReply,
+      );
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const port = (server.address() as AddressInfo).port;
+  return {
+    send: (payload: unknown) =>
+      fetch(`http://127.0.0.1:${port}/v1/mcp/run-1/agent`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify(payload),
+      }),
+    close: () => server.close(),
+  };
+}
+
 describe('McpServerService', () => {
   it('answers initialize with the daemon server info (stateless, plain JSON)', async () => {
     const { status, json } = await post(
@@ -336,6 +379,110 @@ describe('McpServerService', () => {
     // A question the user ANSWERED is not a tool failure, and neither are the
     // other two outcomes — see the dispatch's own note.
     expect(result.isError).toBe(false);
+  });
+
+  it('routes notifications/cancelled to the parked call it names', async () => {
+    // The whole reason this needs a map on the SERVICE: the notification comes
+    // in as its own POST, so the SDK's built-in handler runs on a fresh
+    // `Server` whose in-flight map is empty and aborts nothing. Measured on
+    // cursor-agent — a `tools/call` parked for 60s is followed by exactly this
+    // second POST, and the card it belonged to stayed on screen.
+    const questions = new UserQuestionBroker();
+    let parked!: (outcome: { status: 'unavailable'; reason: string }) => void;
+    const asking = new Promise<AbortSignal | undefined>((ready) => {
+      questions.register('run-1', 'agent', async (_qs, _title, signal) => {
+        ready(signal);
+        return await new Promise((resolve) => {
+          parked = resolve;
+          signal?.addEventListener('abort', () => {
+            resolve({ status: 'unavailable', reason: 'the agent gave up' });
+          });
+        });
+      });
+    });
+    const http = await serving(service(new CallBroker(), questions));
+    try {
+      const call = http.send(
+        rpc(
+          'tools/call',
+          {
+            name: HOST_QUESTION_TOOL,
+            arguments: {
+              questions: [
+                { question: 'How deep?', options: [{ label: 'Standard' }] },
+              ],
+            },
+          },
+          7,
+        ),
+      );
+      const signal = await asking;
+      expect(signal?.aborted).toBe(false);
+
+      const ack = await http.send({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 7, reason: 'timed out' },
+      });
+      // A notification-only POST is acknowledged and answers no body.
+      expect(ack.status).toBe(202);
+      expect(signal?.aborted).toBe(true);
+
+      const result = (
+        (await (await call).json()) as {
+          result: { content: { text: string }[] };
+        }
+      ).result;
+      expect(result.content[0]!.text).toContain('the agent gave up');
+    } finally {
+      parked({ status: 'unavailable', reason: 'test over' });
+      http.close();
+    }
+  });
+
+  it('leaves a parked call alone when the cancellation names another request', async () => {
+    // The id is what makes a cancellation actionable: one endpoint routinely
+    // holds several parked cards, so cancelling on anything looser would close
+    // cards the agent is still waiting on.
+    const questions = new UserQuestionBroker();
+    let parked!: (outcome: { status: 'unavailable'; reason: string }) => void;
+    const asking = new Promise<AbortSignal | undefined>((ready) => {
+      questions.register('run-1', 'agent', async (_qs, _title, signal) => {
+        ready(signal);
+        return await new Promise((resolve) => {
+          parked = resolve;
+        });
+      });
+    });
+    const http = await serving(service(new CallBroker(), questions));
+    try {
+      void http.send(
+        rpc(
+          'tools/call',
+          {
+            name: HOST_QUESTION_TOOL,
+            arguments: {
+              questions: [
+                { question: 'How deep?', options: [{ label: 'Standard' }] },
+              ],
+            },
+          },
+          7,
+        ),
+      );
+      const signal = await asking;
+
+      await http.send({
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 8, reason: 'a different call' },
+      });
+
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      parked({ status: 'unavailable', reason: 'test over' });
+      http.close();
+    }
   });
 
   it('refuses a call whose questions cannot be read, without asking anybody', async () => {

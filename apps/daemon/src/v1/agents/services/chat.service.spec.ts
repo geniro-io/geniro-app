@@ -1821,6 +1821,107 @@ describe('ChatService', () => {
       // rather than parked on a card nothing will close.
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
+
+    it('closes the card when the AGENT gives up on its own call, mid-turn', async () => {
+      // The turn is still running and the user has answered nothing — what
+      // ended is the CALLER's patience: an MCP client puts its own deadline on
+      // a `tools/call` (cursor-agent's is 60s, measured) and cancels. Before
+      // this the card stayed on screen with live buttons, so an agent that
+      // re-asked left the user two identical questions and only one of them
+      // connected to anything.
+      const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const cancel = new AbortController();
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'How deep?', options: [{ label: 'Standard' }] }],
+        null,
+        cancel.signal,
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]?.requestId;
+      expect(requestId).toBeDefined();
+
+      cancel.abort();
+
+      expect(await asked).toEqual({
+        status: 'unavailable',
+        reason: 'the agent stopped waiting for an answer',
+      });
+      await drain();
+      // The card is CLOSED in the transcript — the same `unanswerable` row the
+      // settle-time sweep writes, which is what the renderer already reads.
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'unanswerable' && item.payload.includes(requestId!),
+        ),
+      ).toBe(true);
+      // …and no `approval_verdict`: the user never answered, so recording one
+      // would put words in their mouth.
+      expect(itemDao.items.some((i) => i.kind === 'approval_verdict')).toBe(
+        false,
+      );
+      // The registry entry is gone with it, so the badge stops saying the run
+      // is parked on a question and a late verdict is refused rather than
+      // delivered into nothing.
+      expect(approvals.awaitingFor(run.id)).toBeNull();
+      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
+        false,
+      );
+      // The turn itself is untouched — only that one call was abandoned.
+      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(true);
+      await settle(cursor);
+    });
+
+    it('lets a verdict racing the cancellation win', async () => {
+      // Both paths go through the same one-shot `settle`, so the card answered
+      // in the same tick keeps its verdict and the cancellation finds nothing
+      // left to close — never a verdict AND an unanswerable for one id.
+      const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+
+      const cancel = new AbortController();
+      const asked = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        [{ question: 'How deep?', options: [{ label: 'Standard' }] }],
+        null,
+        cancel.signal,
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]!.requestId;
+
+      expect(approvals.resolve(run.id, requestId, true, 'Standard')).toBe(true);
+      cancel.abort();
+
+      expect(await asked).toEqual({ status: 'answered', answer: 'Standard' });
+      await drain();
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'unanswerable' && item.payload.includes(requestId),
+        ),
+      ).toBe(false);
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'approval_verdict' &&
+            item.payload.includes('Standard'),
+        ),
+      ).toBe(true);
+      await settle(cursor);
+    });
   });
 
   describe('geniro commands', () => {

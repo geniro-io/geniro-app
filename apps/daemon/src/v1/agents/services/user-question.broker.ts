@@ -16,6 +16,7 @@ import { HostSinkBroker } from './host-sink.broker';
 export type HostQuestionAsker = (
   questions: HostQuestion[],
   title: string | null,
+  signal?: AbortSignal,
 ) => Promise<HostQuestionOutcome>;
 
 @Injectable()
@@ -25,19 +26,27 @@ export class UserQuestionBroker extends HostSinkBroker<HostQuestionAsker> {
     return this.has(runId, nodeId);
   }
 
-  /** Put the question and resolve with what came back. Never throws. */
+  /**
+   * Put the question and resolve with what came back. Never throws.
+   *
+   * `signal` is the CALLER abandoning its own call — an agent whose MCP client
+   * put a deadline on the `tools/call` and gave up on it. Optional so a caller
+   * with no such signal is unchanged; a card raised without one can only ever
+   * be closed by a verdict or by the turn settling.
+   */
   async ask(
     runId: string,
     nodeId: string,
     questions: HostQuestion[],
     title: string | null,
+    signal?: AbortSignal,
   ): Promise<HostQuestionOutcome> {
     return this.deliver(
       runId,
       nodeId,
       'no turn is running that could put this question on screen',
       'ask the user',
-      (asker) => asker(questions, title),
+      (asker) => asker(questions, title, signal),
     );
   }
 }

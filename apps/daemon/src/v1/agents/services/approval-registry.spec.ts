@@ -75,4 +75,40 @@ describe('ApprovalRegistry.awaitingFor', () => {
 
     expect(registry.awaitingFor('r1')).toBeNull();
   });
+
+  it('abandon drops ONE entry without delivering a verdict', () => {
+    // The caller gave up on its own call, so there is nothing to respond WITH —
+    // calling `respond` here would settle the parked promise with an answer the
+    // user never gave. It returns the entry precisely so the caller can write
+    // the `unanswerable` row that closes the card.
+    let responses = 0;
+    const registry = new ApprovalRegistry();
+    registry.track(
+      pending({
+        requestId: 'gone',
+        respond: () => {
+          responses += 1;
+          return true;
+        },
+      }),
+    );
+    registry.track(pending({ requestId: 'stays', question: true }));
+
+    const abandoned = registry.abandon('r1', 'gone');
+
+    expect(abandoned?.requestId).toBe('gone');
+    expect(responses).toBe(0);
+    // Only the one named — the sibling card is still answerable.
+    expect(registry.listByRun('r1').map((p) => p.requestId)).toEqual(['stays']);
+    // And a verdict arriving for it afterwards is refused rather than lost.
+    expect(registry.resolve('r1', 'gone', true)).toBe(false);
+  });
+
+  it('abandon answers null for a request already resolved', () => {
+    const registry = new ApprovalRegistry();
+    registry.track(pending({ requestId: 'answered' }));
+    registry.resolve('r1', 'answered', true);
+
+    expect(registry.abandon('r1', 'answered')).toBeNull();
+  });
 });

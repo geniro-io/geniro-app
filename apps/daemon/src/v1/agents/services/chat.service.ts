@@ -2888,6 +2888,64 @@ export class ChatService implements OnModuleInit {
       /** The same again for {@link HOST_PLAN_TOOL}, on the reason just above. */
       const outstandingPlans = new Set<(outcome: HostPlanOutcome) => boolean>();
       /**
+       * Close a parked host-tool card whose CALLER has given up on it.
+       *
+       * Every parking tool here waits on a person, and the agent that called it
+       * does NOT: an MCP client puts its own deadline on a `tools/call` —
+       * cursor-agent's is 60s, measured to the millisecond on run `4829d8ed`
+       * (call at 10:35:29.069, `MCP error -32001: Request timed out` at
+       * 10:36:29.272) — and when it lapses the model is told the call failed
+       * while nothing here learns anything. The card stayed on screen with live
+       * buttons, the registry entry stayed parked, and the badge went on saying
+       * the run was waiting on a question. REPORTED after the agent re-asked
+       * the same question, the user answered the SECOND card, and the first was
+       * still sitting above it offering to be answered too.
+       *
+       * The signal is the cancellation the client sends alongside its own
+       * timeout, routed here by `McpServerService`. What is written is the same
+       * `unanswerable` row the settle-time sweep writes, so the renderer closes
+       * the card through the one path it already has rather than a second one.
+       *
+       * Ordered so a verdict racing the cancellation WINS: `settle` is the
+       * one-shot guard both paths go through, and a card answered in the same
+       * tick has already left the registry with its verdict written.
+       */
+      const abandonOnCancel = <TOutcome>(
+        signal: AbortSignal | undefined,
+        requestId: string,
+        settle: (outcome: TOutcome) => boolean,
+        outcome: TOutcome,
+      ): void => {
+        if (signal === undefined) {
+          return;
+        }
+        const close = (): void => {
+          if (!settle(outcome)) {
+            return;
+          }
+          const approval = this.approvals.abandon(runId, requestId);
+          if (approval === null) {
+            return;
+          }
+          this.announceAwaiting(runId, runningToolActivity() ?? idleActivity());
+          enqueue(async () => {
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'unanswerable',
+              null,
+              unanswerablePayload(approval),
+            );
+          });
+        };
+        if (signal.aborted) {
+          close();
+          return;
+        }
+        signal.addEventListener('abort', close, { once: true });
+      };
+      /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
        *
@@ -2902,6 +2960,7 @@ export class ChatService implements OnModuleInit {
       const askUser = async (
         questions: HostQuestion[],
         title: string | null,
+        signal?: AbortSignal,
       ): Promise<HostQuestionOutcome> => {
         const requestId = randomUUID();
         const input = {
@@ -2982,6 +3041,10 @@ export class ChatService implements OnModuleInit {
               }
               return delivered;
             },
+          });
+          abandonOnCancel(signal, requestId, settle, {
+            status: 'unavailable',
+            reason: 'the agent stopped waiting for an answer',
           });
           this.announceAwaiting(runId);
         });
@@ -3192,6 +3255,7 @@ export class ChatService implements OnModuleInit {
        */
       const proposePatch = async (
         patch: HostPatch,
+        signal?: AbortSignal,
       ): Promise<HostPatchOutcome> => {
         const requestId = randomUUID();
         const input = {
@@ -3282,6 +3346,14 @@ export class ChatService implements OnModuleInit {
               return true;
             },
           });
+          // The patch is NOT applied on the way out, exactly as the settle-time
+          // sweep does not apply one: the agent that proposed it has stopped
+          // listening, so an Apply here would edit the user's working tree for
+          // a call nothing will ever be told the result of.
+          abandonOnCancel(signal, requestId, settle, {
+            status: 'unavailable',
+            reason: 'the agent stopped waiting for an answer',
+          });
         });
       };
       /**
@@ -3301,7 +3373,10 @@ export class ChatService implements OnModuleInit {
        * than at the card: an empty string travelling as a note would have the
        * agent quoting silence back at the user.
        */
-      const proposePlan = async (plan: HostPlan): Promise<HostPlanOutcome> => {
+      const proposePlan = async (
+        plan: HostPlan,
+        signal?: AbortSignal,
+      ): Promise<HostPlanOutcome> => {
         const requestId = randomUUID();
         const input = { title: plan.title, steps: plan.steps };
         try {
@@ -3376,6 +3451,10 @@ export class ChatService implements OnModuleInit {
               }
               return delivered;
             },
+          });
+          abandonOnCancel(signal, requestId, settle, {
+            status: 'unavailable',
+            reason: 'the agent stopped waiting for an answer',
           });
           this.announceAwaiting(runId);
         });

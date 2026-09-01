@@ -11,7 +11,10 @@ import { HostSinkBroker } from './host-sink.broker';
  * the returned promise is held open by a live turn until the user answers the
  * card, which is why an entry outliving its turn would be answered into nothing.
  */
-export type PlanProposer = (plan: HostPlan) => Promise<HostPlanOutcome>;
+export type PlanProposer = (
+  plan: HostPlan,
+  signal?: AbortSignal,
+) => Promise<HostPlanOutcome>;
 
 @Injectable()
 export class PlanBroker extends HostSinkBroker<PlanProposer> {
@@ -20,18 +23,25 @@ export class PlanBroker extends HostSinkBroker<PlanProposer> {
     return this.has(runId, nodeId);
   }
 
-  /** Put the plan to the user and resolve with the verdict. Never throws. */
+  /**
+   * Put the plan to the user and resolve with the verdict. Never throws.
+   *
+   * `signal` is the CALLER abandoning its own call — `UserQuestionBroker.ask`
+   * carries the same argument for the same reason: every parking host tool
+   * leaves a live card behind when the agent stops waiting for it.
+   */
   async propose(
     runId: string,
     nodeId: string,
     plan: HostPlan,
+    signal?: AbortSignal,
   ): Promise<HostPlanOutcome> {
     return this.deliver(
       runId,
       nodeId,
       'no turn is running that could put it on screen',
       'propose a plan',
-      (proposer) => proposer(plan),
+      (proposer) => proposer(plan, signal),
     );
   }
 }

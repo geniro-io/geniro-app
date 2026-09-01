@@ -2,7 +2,9 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
+  CancelledNotificationSchema,
   ListToolsRequestSchema,
+  type RequestId,
 } from '@modelcontextprotocol/sdk/types.js';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -107,6 +109,24 @@ import { CallBroker } from './call-broker.service';
 export class McpServerService {
   private readonly logger = new Logger(McpServerService.name);
 
+  /**
+   * The PARKING tool calls currently in flight, keyed by (run, node, JSON-RPC
+   * request id), so a cancellation can reach the one it names.
+   *
+   * The SDK's own `notifications/cancelled` handling cannot reach it, and that
+   * is a consequence of this server being STATELESS: the notification arrives
+   * as its OWN POST, on a fresh transport and a fresh `Server` whose in-flight
+   * map is empty, so the built-in handler looks the request up, finds nothing
+   * and aborts nothing. Hence one map on the SERVICE, which outlives both.
+   *
+   * Measured on cursor-agent (run `4829d8ed`, 2026-09-01): an
+   * `ask_user_question` call parked at 10:35:29.069 was followed at
+   * 10:36:29.070 — 60.001s, that client's request deadline — by exactly this
+   * second POST, while the card went on sitting on screen. What the abort
+   * finally does is `ChatService`'s `abandonOnCancel`.
+   */
+  private readonly inFlightCalls = new Map<string, AbortController>();
+
   constructor(
     private readonly broker: CallBroker,
     private readonly questions: UserQuestionBroker,
@@ -177,11 +197,84 @@ export class McpServerService {
       });
   }
 
+  /** The key one in-flight parking call is tracked and cancelled under. */
+  private callKey(runId: string, nodeId: string, requestId: RequestId): string {
+    return `${runId}::${nodeId}::${String(requestId)}`;
+  }
+
+  /**
+   * Run one PARKING tool call under a signal a later cancellation can trip.
+   *
+   * Only the three tools that WAIT on a person need this. The drawing tools
+   * resolve the moment their row is durable, so there is never a window in
+   * which a cancellation could arrive for one.
+   */
+  private async whileCancellable<TOutcome>(
+    runId: string,
+    nodeId: string,
+    requestId: RequestId,
+    call: (signal: AbortSignal) => Promise<TOutcome>,
+  ): Promise<TOutcome> {
+    const key = this.callKey(runId, nodeId, requestId);
+    const controller = new AbortController();
+    this.inFlightCalls.set(key, controller);
+    try {
+      return await call(controller.signal);
+    } finally {
+      // Identity-checked for `HostSinkBroker.register`'s reason: an id is the
+      // CLIENT's to choose and both shipped CLIs restart their numbering per
+      // process, so a settling call must never evict a live entry a later call
+      // filed under the same key.
+      if (this.inFlightCalls.get(key) === controller) {
+        this.inFlightCalls.delete(key);
+      }
+    }
+  }
+
+  /** Trip the signal of one in-flight parking call, if it is still running. */
+  private cancelCall(
+    runId: string,
+    nodeId: string,
+    requestId: RequestId,
+  ): void {
+    const key = this.callKey(runId, nodeId, requestId);
+    const controller = this.inFlightCalls.get(key);
+    if (controller === undefined) {
+      return;
+    }
+    this.inFlightCalls.delete(key);
+    this.logger.log(
+      `run ${runId}/${nodeId}: the agent cancelled request ${String(requestId)} — closing the card it was parked on`,
+    );
+    controller.abort();
+  }
+
   /** One fresh, stateless SDK server scoped to (run, caller node). */
   private buildServer(runId: string, nodeId: string): Server {
     const server = new Server(
       { name: 'geniro-daemon', version: this.runtime.version },
       { capabilities: { tools: {} } },
+    );
+
+    // REPLACES the `Protocol` base class's own handler, deliberately. Its
+    // version aborts the matching entry of THIS instance's in-flight map, which
+    // in a stateless server is always empty (see `inFlightCalls`) — so nothing
+    // is lost by taking the notification over, and leaving the default in place
+    // is what let a parked card outlive the call it belonged to.
+    server.setNotificationHandler(
+      CancelledNotificationSchema,
+      (notification) => {
+        const requestId = notification.params.requestId;
+        // The id is what names WHICH call was given up on, and this endpoint
+        // routinely has more than one parked at a time (a chat can hold a
+        // question and a plan card at once). A notification that carries none
+        // is therefore unactionable — cancelling all of them on a guess would
+        // close cards the agent is still waiting on.
+        if (requestId === undefined) {
+          return;
+        }
+        this.cancelCall(runId, nodeId, requestId);
+      },
     );
 
     server.setRequestHandler(ListToolsRequestSchema, () => {
@@ -826,7 +919,7 @@ export class McpServerService {
       return { tools };
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const name = request.params.name;
       const args = (request.params.arguments ?? {}) as Record<string, unknown>;
       if (name === HOST_QUESTION_TOOL) {
@@ -847,11 +940,12 @@ export class McpServerService {
           };
         }
         const title = typeof args.title === 'string' ? args.title : null;
-        const outcome = await this.questions.ask(
+        const outcome = await this.whileCancellable(
           runId,
           nodeId,
-          questions,
-          title,
+          extra.requestId,
+          (signal) =>
+            this.questions.ask(runId, nodeId, questions, title, signal),
         );
         return {
           content: [{ type: 'text', text: hostQuestionResultText(outcome) }],
@@ -1012,7 +1106,12 @@ export class McpServerService {
         }
         // This one BLOCKS until the user answers the card — the only tool on
         // this endpoint besides `ask_user_question` that does.
-        const outcome = await this.patches.propose(runId, nodeId, read.patch);
+        const outcome = await this.whileCancellable(
+          runId,
+          nodeId,
+          extra.requestId,
+          (signal) => this.patches.propose(runId, nodeId, read.patch, signal),
+        );
         return {
           content: [{ type: 'text', text: hostPatchResultText(outcome) }],
           // A rejection is not a tool failure: the user exercised the gate this
@@ -1033,7 +1132,12 @@ export class McpServerService {
         }
         // BLOCKS until the user answers the card, like `propose_patch` and
         // `ask_user_question` and unlike the two drawing tools.
-        const outcome = await this.plans.propose(runId, nodeId, read.plan);
+        const outcome = await this.whileCancellable(
+          runId,
+          nodeId,
+          extra.requestId,
+          (signal) => this.plans.propose(runId, nodeId, read.plan, signal),
+        );
         return {
           content: [{ type: 'text', text: hostPlanResultText(outcome) }],
           // A rejection is not a tool failure: the user exercised the gate this

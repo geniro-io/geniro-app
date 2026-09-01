@@ -72,6 +72,31 @@ export class ApprovalRegistry {
   }
 
   /**
+   * Drop ONE pending approval without delivering a verdict, and return what was
+   * dropped — or null when it had already been answered or swept.
+   *
+   * The single-request twin of {@link sweepNode}, carrying the same obligation:
+   * the caller MUST record the returned entry as an `unanswerable` transcript
+   * item, or the card stays on the user's screen with live buttons that answer
+   * into nothing.
+   *
+   * Separate from {@link resolve} because there is no verdict to deliver. This
+   * is the CALLER giving up on its own call (an agent whose MCP client timed
+   * the tool call out — see `ChatService`'s `abandonOnCancel`), and writing an
+   * `approval_verdict` for it would put into the transcript an answer the user
+   * never gave.
+   */
+  abandon(runId: string, requestId: string): PendingApproval | null {
+    const key = this.key(runId, requestId);
+    const entry = this.pending.get(key);
+    if (!entry) {
+      return null;
+    }
+    this.pending.delete(key);
+    return entry;
+  }
+
+  /**
    * Drop every pending approval of one node's turn (turn settled or died) and
    * return what was dropped.
    *

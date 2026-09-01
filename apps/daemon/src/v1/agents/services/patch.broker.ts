@@ -12,7 +12,10 @@ import { HostSinkBroker } from './host-sink.broker';
  * user presses Apply or Reject on the card, which is why an entry outliving its
  * turn would be answered into nothing.
  */
-export type PatchProposer = (patch: HostPatch) => Promise<HostPatchOutcome>;
+export type PatchProposer = (
+  patch: HostPatch,
+  signal?: AbortSignal,
+) => Promise<HostPatchOutcome>;
 
 @Injectable()
 export class PatchBroker extends HostSinkBroker<PatchProposer> {
@@ -21,18 +24,25 @@ export class PatchBroker extends HostSinkBroker<PatchProposer> {
     return this.has(runId, nodeId);
   }
 
-  /** Put the patch to the user and resolve with the verdict. Never throws. */
+  /**
+   * Put the patch to the user and resolve with the verdict. Never throws.
+   *
+   * `signal` is the CALLER abandoning its own call — `UserQuestionBroker.ask`
+   * carries the same argument for the same reason: every parking host tool
+   * leaves a live card behind when the agent stops waiting for it.
+   */
   async propose(
     runId: string,
     nodeId: string,
     patch: HostPatch,
+    signal?: AbortSignal,
   ): Promise<HostPatchOutcome> {
     return this.deliver(
       runId,
       nodeId,
       'no turn is running that could put it on screen',
       'propose a patch',
-      (proposer) => proposer(patch),
+      (proposer) => proposer(patch, signal),
     );
   }
 }

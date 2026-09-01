@@ -2301,6 +2301,15 @@ export class AcpTurnDriver implements TurnDriver {
       // here cannot overwrite a value some other announcement gave.
       tokens: null,
       toolUses: null,
+      // And with no tokens at all there is no breakdown to bill and nothing to
+      // price. The cost derivation needs a per-kind split and a model name,
+      // both of which this protocol withholds — so an ACP delegate reports its
+      // duration and no money, which is what the reader should see.
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
       // Declared absent for the same reason, and it is the honest answer: this
       // protocol's delegate frame says a delegate ran and how long for, never
       // how it ended. A guessed `completed` here would put a green check on a

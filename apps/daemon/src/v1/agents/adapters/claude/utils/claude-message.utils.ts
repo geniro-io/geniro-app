@@ -276,6 +276,109 @@ function readClaudeTaskUsage(
 }
 
 /**
+ * One delegate's bill, off the `tool_use_result` riding the `user` line that
+ * closes its launching `Task` call.
+ *
+ * This is the ONLY channel that breaks a delegate's spend down by token kind
+ * and names the model that ran it — `task_notification`, the other channel
+ * describing a delegate, reports a `total_tokens` roll-up with neither. Both
+ * are needed to price one: the four kinds bill at rates 12.5x apart, so a total
+ * cannot be priced, and a rate belongs to a model. Probed on 2.1.251:
+ *
+ * ```
+ * {"type":"user","tool_use_result":{"status":"completed","agentId":"a8ff…",
+ *  "agentType":"general-purpose","resolvedModel":"claude-opus-5[1m]",
+ *  "totalDurationMs":1761,"totalTokens":29388,"totalToolUseCount":0,
+ *  "usage":{"input_tokens":2,"cache_creation_input_tokens":29382,
+ *           "cache_read_input_tokens":0,"output_tokens":4,…}},…}
+ * ```
+ *
+ * `agentId` is the discriminator, and it has to be: this same root key carries
+ * the rich result of OTHER tools, and a shell's or a search's would otherwise
+ * be announced as a sub-agent. `costUsd` is left null here on purpose — the
+ * breakdown is recorded against the launching call and priced on the `result`
+ * line, which is the first line that says what any of it was charged at.
+ */
+function readClaudeDelegateResult(
+  root: Record<string, unknown>,
+  toolCallId: string,
+  costLedger: ClaudeSessionCostLedger,
+): AgentEvent | null {
+  const result = asRecord(root.tool_use_result);
+  const usage = result ? asRecord(result.usage) : null;
+  if (!result || !usage || asString(result.agentId) === null || !toolCallId) {
+    return null;
+  }
+  const model = asString(result.resolvedModel);
+  const spend = {
+    inputTokens: asNumber(usage.input_tokens),
+    outputTokens: asNumber(usage.output_tokens),
+    cacheReadTokens: asNumber(usage.cache_read_input_tokens),
+    cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
+  };
+  costLedger.delegates.record(toolCallId, { model, ...spend });
+  return {
+    type: 'subagent_info',
+    id: toolCallId,
+    // Nulls where this line says nothing, on the merge rule every
+    // `subagent_info` follows: the launching call already carried the brief and
+    // the description, and a null cannot overwrite them.
+    label: null,
+    kind: asString(result.agentType),
+    prompt: null,
+    model,
+    durationMs: asNumber(result.totalDurationMs),
+    tokens: asNumber(result.totalTokens),
+    toolUses: asNumber(result.totalToolUseCount),
+    ...spend,
+    costUsd: null,
+    stepsUnavailableReason: null,
+    // Deliberately silent on the lifecycle. `status` is right there and says
+    // `completed`, but the delegate lifecycle has one owner already
+    // (`announceDelegateWork`, off the task channels), and a second producer
+    // answering the same question is how two channels come to disagree about
+    // whether a delegate is still out.
+    backgroundOutcome: null,
+    backgroundOpen: null,
+  };
+}
+
+/**
+ * Every delegate this turn ran, priced — one `subagent_info` per delegate
+ * carrying the dollars and nothing else.
+ *
+ * A separate announcement rather than a field on `turn_complete` because the
+ * figure belongs to a DELEGATE, and the transcript already has a row per
+ * delegate that merges by preferring the last non-null field. It rides the
+ * `result` line because that is the first line stating what the CLI actually
+ * charged, which is what the derivation is calibrated against.
+ */
+function mapDelegateCosts(
+  root: Record<string, unknown>,
+  costLedger: ClaudeSessionCostLedger,
+): AgentEvent[] {
+  return costLedger.delegates.settle(root).map(({ id, costUsd }) => ({
+    type: 'subagent_info',
+    id,
+    label: null,
+    kind: null,
+    prompt: null,
+    model: null,
+    durationMs: null,
+    tokens: null,
+    toolUses: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
+    costUsd,
+    stepsUnavailableReason: null,
+    backgroundOutcome: null,
+    backgroundOpen: null,
+  }));
+}
+
+/**
  * A dynamic workflow's agent ROSTER, off a `system/task_progress` line.
  *
  * Undefined — never an empty array — when the line carries no
@@ -817,7 +920,17 @@ function mapClaudeLine(
         return [{ type: 'notice', message: injectedText, origin: 'cli' }];
       }
       const events: AgentEvent[] = [];
-      for (const block of asArray(message.content)) {
+      const blocks = asArray(message.content);
+      // A delegate's bill rides the LINE's root (`tool_use_result`) rather than
+      // any block on it, and carries no call id of its own — so it can only be
+      // attributed when the line closes exactly ONE call. Every delegate return
+      // observed does, but a line that ever closed two would otherwise bill both
+      // for the same work.
+      const soleToolResult =
+        blocks.filter(
+          (entry) => asString(asRecord(entry)?.type) === 'tool_result',
+        ).length === 1;
+      for (const block of blocks) {
         const b = asRecord(block);
         if (!b || asString(b.type) !== 'tool_result') {
           continue;
@@ -830,6 +943,15 @@ function mapClaudeLine(
           result: b.content ?? null,
           isError: asBoolean(b.is_error),
         });
+        // What the delegate behind this call SPENT, broken down the way billing
+        // breaks it down. The only line that states it, and it states it while
+        // the turn is still working — the price comes later, on `result`.
+        const delegate = soleToolResult
+          ? readClaudeDelegateResult(root, toolCallId, costLedger)
+          : null;
+        if (delegate !== null) {
+          events.push(delegate);
+        }
         // Half of claude's task list is only readable HERE: a created task's id
         // is in its result, and `TaskList`'s result is the only statement of the
         // whole list. An error result is skipped — a failed call moved nothing,
@@ -882,6 +1004,12 @@ function mapClaudeLine(
     }
 
     case 'result': {
+      // Price this turn's delegates FIRST, and on every path out of this arm —
+      // a failed turn still ran them, and a turn that "describes no work" still
+      // billed for whatever it delegated. Settling only on the happy path would
+      // leave those delegates in the pending map to be priced by the NEXT
+      // turn's calibration, which is a different turn's model mix.
+      const priced = mapDelegateCosts(root, costLedger);
       if (asBoolean(root.is_error)) {
         // The fallback carries the CLI's own `subtype` when the line has no
         // sentence of its own, because without it the user is handed three
@@ -911,6 +1039,7 @@ function mapClaudeLine(
         const aborted =
           code !== null && CLAUDE_ABORTED_TERMINAL_REASONS.has(code);
         return [
+          ...priced,
           {
             type: 'error',
             message:
@@ -929,9 +1058,10 @@ function mapClaudeLine(
       const stopReason = asString(root.stop_reason);
       const finalText = asString(root.result) ?? null;
       if (describesNoWork(usage, stopReason, finalText)) {
-        return [];
+        return priced;
       }
       return [
+        ...priced,
         {
           type: 'turn_complete',
           usage,

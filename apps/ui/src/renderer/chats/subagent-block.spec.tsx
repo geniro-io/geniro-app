@@ -418,6 +418,42 @@ describe('SubagentBlock', () => {
     expect(header?.textContent).toContain('took 2s');
   });
 
+  it('states a delegate’s COST on the closed header, marked approximate', () => {
+    // The third of the three the report asked for, and the only one no CLI
+    // states: the daemon derives it from the delegate's own token breakdown at
+    // its model's list rate, calibrated against what the CLI charged for that
+    // turn. The `≈` is what separates it from the exact per-turn figures this
+    // app shows elsewhere, so it is asserted with the number and not beside it.
+    const block: SubagentBlockEntry = {
+      ...makeBlock(),
+      tokens: 29_388,
+      durationMs: 1761,
+      costUsd: 0.2262808,
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
+
+    const header = container.querySelector(
+      '[data-role="subagent-block"] button[aria-label^="Show"]',
+    );
+    expect(header?.textContent).toContain('≈$0.23');
+  });
+
+  it('shows tokens but NO dollars when the cost could not be derived', () => {
+    // The required reading of a null cost: a delegate on a model this build
+    // has no price for, or one whose turn reported no roll-up to calibrate
+    // against, has an UNKNOWN cost — never a zero one. A `$0.00` beside 29k
+    // tokens would be the one wrong number this feature could produce.
+    const block: SubagentBlockEntry = {
+      ...makeBlock(),
+      tokens: 29_388,
+      costUsd: null,
+    };
+    act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
+
+    expect(container.textContent).toContain('29.4k tokens');
+    expect(container.textContent).not.toContain('$');
+  });
+
   it('shows no spend at all for a delegate whose CLI measured none', () => {
     // Every CLI but claude reports none of this, and a `— tokens` placeholder
     // on each of twenty delegate rows is noise about a blind spot the reader

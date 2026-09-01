@@ -787,19 +787,50 @@ type AgentEventBody =
        * How many tokens the delegate spent, and how many tools it called, when
        * the CLI reports them — {@link BackgroundUnitUsage}.
        *
-       * There is deliberately no COST field beside them. Probed on claude
-       * 2.1.237 across every channel that says anything about a delegate: the
-       * `task_notification` reports `{total_tokens, tool_uses, duration_ms}`,
-       * the launching call's `tool_use_result` adds `resolvedModel` and a token
-       * breakdown, the delegate's own sidechain JSONL holds no money figure at
-       * all, and the turn's `result` line prices the whole turn — its
+       * No CLI states a delegate's cost, and {@link costUsd} is derived rather
+       * than read. Re-probed on claude 2.1.251 across every channel that says
+       * anything about a delegate: `task_started`, `task_updated` and
+       * `task_notification` carry no money, the delegate's own sidechain JSONL
+       * holds none, and the turn's `result` line prices the whole turn — its
        * `modelUsage[model].costUSD` covers the main thread and every delegate
-       * together, with no way to split it. Deriving one would mean carrying a
-       * price table this app has no source for, so the delegate is reported in
-       * the units its CLI actually measured.
+       * together, with no way to split it.
        */
       tokens: number | null;
       toolUses: number | null;
+      /**
+       * The four token kinds BILLING distinguishes, when the CLI breaks the
+       * delegate's spend down that far — the launching call's `tool_use_result`
+       * does (`resolvedModel` plus an `input`/`output`/`cache_read`/
+       * `cache_creation` split), while `task_notification` reports only the
+       * {@link tokens} roll-up.
+       *
+       * They are separate from {@link tokens} rather than replacing it because
+       * the two arrive on different channels at different moments, and the
+       * merge rule (last non-null per field) is what lets a delegate be
+       * described by both without either blanking the other.
+       */
+      inputTokens: number | null;
+      outputTokens: number | null;
+      cacheReadTokens: number | null;
+      cacheCreationTokens: number | null;
+      /**
+       * What this delegate cost, in dollars — DERIVED, and the only figure on
+       * this event that no CLI ever stated.
+       *
+       * Priced from {@link inputTokens} and its three siblings at the list rate
+       * for {@link model}, then multiplied by a factor solved from the same
+       * turn's `result` line — what the CLI actually charged for that model over
+       * what this app's table says it should have. See
+       * `utils/claude-delegate-cost.utils.ts` for why the split cannot be done
+       * by token share (the four kinds price 12.5x apart) and why the list table
+       * alone is not enough (a model's rate doubles above the 200k boundary and
+       * nothing on the wire says where a turn fell).
+       *
+       * Null whenever any leg of that is missing — no breakdown, an unpriced
+       * model, or a calibration factor outside its believable band. A consumer
+       * must render the absence as "not shown", never as a free delegate.
+       */
+      costUsd: number | null;
       /**
        * {@link AdapterConfig.subagents.stepsUnavailableReason} — why this
        * delegate's own conversation is absent. Null for a CLI that streams it.

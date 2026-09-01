@@ -488,3 +488,90 @@ describe('runningShellsByAgent', () => {
     ).toEqual(['pnpm test']);
   });
 });
+
+describe('shellRuns — a background command this fold did not recognise', () => {
+  /**
+   * The `Monitor` launch verbatim from a live 18,607-item thread, trimmed to
+   * the fields that matter. It is claude's background watcher: its input is a
+   * `command`, it runs that command detached, and its reply names the work id
+   * in prose the launch matcher does not know.
+   */
+  const MONITOR_REPLY =
+    'Monitor started (task bc2jt28t6, timeout 1800000ms). You will be notified on each event. Keep working — do not poll or sleep.';
+
+  it('opens a row when the daemon says the call was detached', () => {
+    // THE REPORT: "я вижу, что тред что-то явно делает в бэкграунде, но не вижу
+    // никаких активных терминалов". Measured on the live thread — the run row
+    // said `shellsOpen: 1` and the header read `⌛ working`, while the panel
+    // stood empty, because the only thing that opened a row was this fold
+    // recognising the tool's NAME and the name was not `Bash`.
+    const shells = shellRuns([
+      namedCall('c1', 'Monitor', { command: 'kubectl get pods -w' }),
+      item('shell_open', { id: 'c1', workId: 'bc2jt28t6' }),
+      namedReply('c1', 'Monitor', MONITOR_REPLY),
+    ]);
+
+    expect(shells).toHaveLength(1);
+    expect(shells[0]?.command).toBe('kubectl get pods -w');
+    expect(shells[0]?.status).toBe('running');
+    expect(shells[0]?.background).toBe(true);
+  });
+
+  it('does not depend on the tool being NAMED, which is the whole fix', () => {
+    // Naming `Monitor` in the classifier fixes the thread that was reported and
+    // not the one after it. What must hold is that the DAEMON's own reading of
+    // the CLI's frames is enough on its own — a tool nothing here has heard of
+    // still gets a row when `shell_open` names its call.
+    const shells = shellRuns([
+      namedCall('c1', 'SomeToolShippedNextMonth', { command: 'tail -f log' }),
+      item('shell_open', { id: 'c1', workId: 'w1' }),
+    ]);
+
+    expect(shells).toHaveLength(1);
+    expect(shells[0]?.status).toBe('running');
+  });
+
+  it('closes that row on the settle, so it cannot latch on for ever', () => {
+    const items = [
+      namedCall('c1', 'Monitor', { command: 'kubectl get pods -w' }),
+      item('shell_open', { id: 'c1', workId: 'bc2jt28t6' }),
+      namedReply('c1', 'Monitor', MONITOR_REPLY),
+      // The settle names the WORK id and not the call, which is the channel
+      // that has to find a row opened by the `shell_open` rather than by a
+      // recognised launch.
+      item('shell_info', { id: null, workId: 'bc2jt28t6' }),
+    ];
+
+    expect(shellRuns(items)[0]?.status).toBe('completed');
+    // …and the PANEL, which is the surface that was empty, is empty again —
+    // for the right reason this time.
+    expect(runningShellsByAgent(items).size).toBe(0);
+  });
+
+  it('survives a shell_open that arrives AFTER the launch reply', () => {
+    // Nothing orders the two. Before the detached ids were collected in a pass
+    // of their own, this order let the reply's "no announcement in the prose
+    // means it exited" arm close the command a moment before the daemon said
+    // it had started.
+    const shells = shellRuns([
+      namedCall('c1', 'Monitor', { command: 'kubectl get pods -w' }),
+      namedReply('c1', 'Monitor', MONITOR_REPLY),
+      item('shell_open', { id: 'c1', workId: 'bc2jt28t6' }),
+    ]);
+
+    expect(shells[0]?.status).toBe('running');
+  });
+
+  it('still withholds a DELEGATE’s background command from the list', () => {
+    // The new row-opening path must not reach around the delegate drop, which
+    // is what keeps a ten-reviewer fan-out out of the agent's own panel.
+    const shells = shellRuns([
+      fromDelegate(
+        namedCall('c1', 'Monitor', { command: 'kubectl get pods -w' }),
+      ),
+      fromDelegate(item('shell_open', { id: 'c1', workId: 'w1' })),
+    ]);
+
+    expect(shells).toEqual([]);
+  });
+});

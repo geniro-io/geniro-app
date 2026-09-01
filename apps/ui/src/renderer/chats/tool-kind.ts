@@ -60,6 +60,17 @@ const SEARCH_TOOLS = new Set(['Grep', 'Glob']);
 /** Tools that leave the machine. */
 const WEB_TOOLS = new Set(['WebFetch', 'WebSearch']);
 /**
+ * Tools that RUN a shell command.
+ *
+ * `Monitor` belongs here beside `Bash` on what it does rather than on what it
+ * is for: its input is a `command`, it runs that command in the background, and
+ * the daemon brackets it as background work exactly as a detached `Bash` is.
+ * Read off a live thread's own transcript, where a `Monitor` call summarised as
+ * `Used 1 tool` — the catch-all for a call this cannot describe — directly
+ * under a header reading `⌛ working` because of that very command.
+ */
+const EXECUTE_TOOLS = new Set(['Bash', 'Monitor']);
+/**
  * Tools that hand a slice of the work to another agent.
  *
  * Exported because `transcript-groups` needs the same set to find the launching
@@ -110,7 +121,7 @@ export function toolOperationOf(payload: unknown): ToolOperation | null {
   if (typeof name !== 'string' || name === '') {
     return null;
   }
-  if (name === 'Bash') {
+  if (EXECUTE_TOOLS.has(name)) {
     return 'execute';
   }
   if (name === 'Write') {

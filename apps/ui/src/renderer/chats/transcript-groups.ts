@@ -336,10 +336,18 @@ export interface SubagentBlockEntry {
    * the probed delegate the gap is the whole reading — 26,124 tokens for a
    * conversation whose entire visible content is the word PONG.
    *
-   * No COST beside them, deliberately. See `SubagentDeclaration.tokens`.
+   * See {@link costUsd} for the money, which is derived rather than reported.
    */
   tokens: number | null;
   toolUses: number | null;
+  /**
+   * What it cost, in dollars — DERIVED by the daemon, never stated by a CLI.
+   *
+   * Null for every CLI but claude, and null on a claude delegate whose model
+   * this build has no price for. Renders as absent, never as zero: see
+   * `SubagentDeclaration.costUsd`.
+   */
+  costUsd: number | null;
   /**
    * Why this block opens onto no conversation — the daemon's own sentence, from
    * the CLI whose delegate this is.
@@ -1277,6 +1285,7 @@ export function buildSubagentBlocks(
       durationMs: declared?.durationMs ?? null,
       tokens: declared?.tokens ?? null,
       toolUses: declared?.toolUses ?? null,
+      costUsd: declared?.costUsd ?? null,
       stepsUnavailableReason: declared?.stepsUnavailableReason ?? null,
       backgroundOpen: declared?.backgroundOpen ?? null,
       backgroundOutcome: declared?.backgroundOutcome ?? null,

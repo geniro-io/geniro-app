@@ -3,7 +3,7 @@ import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
 import { Button } from '../components/ui/button';
-import { formatTokens } from './agent-activity';
+import { formatExactUsd, formatTokens } from './agent-activity';
 import {
   BlockRequest,
   BlockResult,
@@ -128,26 +128,33 @@ function joinFacts(facts: readonly React.ReactNode[]): React.ReactNode[] {
 }
 
 /**
- * What this delegate COST, as the words the header prints — its tokens and how
- * long it ran.
+ * What this delegate COST, as the words the header prints — its money, its
+ * tokens and how long it ran.
  *
  * REPORTED as "in front of each agent i wanna see amount of tokens/costs/time",
  * against a transcript of collapsed delegate rows that said only
- * `general-purpose · 49 tools`. Two of those three are here and the third is
- * not, which is a measurement rather than a shortfall: probed on claude 2.1.237
- * across every channel that says anything about a delegate — the
- * `task_notification`'s `usage`, the launching call's `tool_use_result`, the
- * delegate's own sidechain JSONL — none carries money, and the turn's `result`
- * line prices the main thread and all of its delegates together with no way to
- * split it. Showing a figure would mean inventing a price table, which is the
- * one thing this app's usage code is written never to do.
+ * `general-purpose · 49 tools`, and then a second time when the tokens were
+ * there but the money was not.
+ *
+ * **The money is APPROXIMATE and says so.** No CLI states a delegate's cost —
+ * re-probed on claude 2.1.251, every channel describing a delegate carries
+ * tokens and no dollars, and the turn's own price covers the main thread and
+ * all of its delegates together. The daemon derives it instead, calibrating a
+ * list-price table against what the CLI charged for that very turn; the `≈` is
+ * the whole of what distinguishes it from the exact per-turn figures elsewhere
+ * in this app, so it never renders without one.
  *
  * An empty list renders nothing at all: every CLI but claude reports none of
  * this, and a `— tokens` placeholder on every delegate row would be noise about
- * a blind spot the reader can do nothing with.
+ * a blind spot the reader can do nothing with. A null cost drops out the same
+ * way, which is the required reading — a delegate whose model this build cannot
+ * price has an unknown cost, not a zero one.
  */
 function subagentSpendParts(block: SubagentBlockEntry): string[] {
   const parts: string[] = [];
+  if (block.costUsd !== null) {
+    parts.push(`≈${formatExactUsd(block.costUsd)}`);
+  }
   if (block.tokens !== null) {
     parts.push(`${formatTokens(block.tokens)} tokens`);
   }

@@ -1297,6 +1297,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       durationMs: event.usage?.durationMs ?? null,
       tokens: event.usage?.tokens ?? null,
       toolUses: event.usage?.toolUses ?? null,
+      // The settle channel reports a token ROLL-UP and nothing finer, so the
+      // billing breakdown and the price derived from it are not this
+      // announcement's to make — they ride the launching call's own result,
+      // which is the only line that breaks a delegate's spend down by kind.
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
       stepsUnavailableReason: null,
       backgroundOpen: event.phase === 'started',
       // What the settle SAID, not merely that it happened. Null on a `started`

@@ -1986,3 +1986,195 @@ describe('mapClaudeMessage — dynamic workflows', () => {
     ).toEqual([expect.objectContaining({ type: 'workflow_info', agents: [] })]);
   });
 });
+
+describe('mapClaudeMessage — what a delegate spent, and what it cost', () => {
+  // Both lines below are verbatim from one 2.1.251 turn: a delegate told to
+  // answer `OK` and use no tools, and the `result` that closed the turn. They
+  // are the only two lines in the whole stream that bear on a delegate's price
+  // — probed across every channel, nothing else says anything about money.
+  const delegateReturn = {
+    type: 'user',
+    session_id: 'e8ff1386-3c9b-4aa3-b507-c82715de4346',
+    message: {
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+          content: [{ type: 'text', text: 'OK' }],
+        },
+      ],
+    },
+    tool_use_result: {
+      status: 'completed',
+      agentId: 'a8ff521205ae8b053',
+      agentType: 'general-purpose',
+      resolvedModel: 'claude-opus-5[1m]',
+      totalDurationMs: 1761,
+      totalTokens: 29_388,
+      totalToolUseCount: 0,
+      usage: {
+        input_tokens: 2,
+        cache_creation_input_tokens: 29_382,
+        cache_read_input_tokens: 0,
+        output_tokens: 4,
+      },
+    },
+  };
+
+  const turnResult = {
+    type: 'result',
+    subtype: 'success',
+    session_id: 'e8ff1386-3c9b-4aa3-b507-c82715de4346',
+    result: 'DONE',
+    duration_ms: 21_000,
+    total_cost_usd: 0.44389499999999993,
+    usage: { input_tokens: 6, output_tokens: 313 },
+    modelUsage: {
+      'claude-opus-5[1m]': {
+        inputTokens: 6,
+        outputTokens: 313,
+        cacheReadInputTokens: 59_805,
+        cacheCreationInputTokens: 51_632,
+        costUSD: 0.44389499999999993,
+        contextWindow: 1_000_000,
+      },
+    },
+  };
+
+  it('reads the delegate’s billing breakdown off the line that closes its call', () => {
+    const events = mapClaudeMessage(
+      delegateReturn,
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+        kind: 'general-purpose',
+        model: 'claude-opus-5[1m]',
+        durationMs: 1761,
+        tokens: 29_388,
+        toolUses: 0,
+        // The four kinds, which is the whole reason this channel is read at
+        // all: `task_notification` reports the 29,388 roll-up and no split,
+        // and a roll-up cannot be priced when its parts bill 12.5x apart.
+        inputTokens: 2,
+        outputTokens: 4,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 29_382,
+        // Not yet: no line so far has said what any of it was charged at.
+        costUsd: null,
+      }),
+    );
+  });
+
+  it('still closes the launching call, which is the row the block hangs on', () => {
+    const events = mapClaudeMessage(
+      delegateReturn,
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        type: 'tool_result',
+        id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+      }),
+    );
+  });
+
+  it('prices the delegate on the result line, calibrated against that turn', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    mapClaudeMessage(delegateReturn, ledger);
+
+    const events = mapClaudeMessage(turnResult, ledger);
+
+    const priced = events.find(
+      (event) => event.type === 'subagent_info' && event.costUsd !== null,
+    );
+    expect(priced).toEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        id: 'toolu_016irjy3GNmGTa2RzaFCy6HM',
+        costUsd: expect.closeTo(0.2263, 4),
+      }),
+    );
+    // The turn's own completion is unaffected — the delegate's price is an
+    // extra row about the delegate, never a change to the turn's accounting.
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'turn_complete' }),
+    );
+  });
+
+  it('says nothing about money when no delegate returned in the turn', () => {
+    const events = mapClaudeMessage(turnResult, new ClaudeSessionCostLedger());
+
+    expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('refuses to bill a line that closes two calls at once', () => {
+    // `tool_use_result` rides the LINE and names no call of its own, so a line
+    // closing two calls cannot say which one it describes. Charging both would
+    // double a delegate's tokens and its price.
+    const events = mapClaudeMessage(
+      {
+        ...delegateReturn,
+        message: {
+          role: 'user',
+          content: [
+            ...delegateReturn.message.content,
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_other',
+              content: [{ type: 'text', text: 'unrelated' }],
+            },
+          ],
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events.filter((event) => event.type === 'tool_result')).toHaveLength(
+      2,
+    );
+    expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('does not call an ordinary tool’s rich result a sub-agent', () => {
+    // The same root key carries other tools' structured results. `agentId` is
+    // the discriminator; without it a file read would be announced as a
+    // delegate, and the transcript would grow a sub-agent block per tool call.
+    const events = mapClaudeMessage(
+      {
+        ...delegateReturn,
+        tool_use_result: {
+          filenames: ['a.ts', 'b.ts'],
+          numFiles: 2,
+          usage: { input_tokens: 5, output_tokens: 5 },
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events.some((event) => event.type === 'subagent_info')).toBe(false);
+  });
+
+  it('prices a delegate whose turn then FAILED — it still ran and still billed', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    mapClaudeMessage(delegateReturn, ledger);
+
+    const events = mapClaudeMessage(
+      { ...turnResult, is_error: true, terminal_reason: 'api_error' },
+      ledger,
+    );
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'subagent_info',
+        costUsd: expect.closeTo(0.2263, 4),
+      }),
+    );
+    expect(events).toContainEqual(expect.objectContaining({ type: 'error' }));
+  });
+});

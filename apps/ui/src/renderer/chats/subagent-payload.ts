@@ -60,6 +60,28 @@ export interface SubagentDeclaration {
    */
   tokens: number | null;
   toolUses: number | null;
+  /**
+   * The four token kinds BILLING distinguishes, when the CLI broke the
+   * delegate's spend down that far.
+   *
+   * Separate from {@link tokens} rather than replacing it: the roll-up and the
+   * breakdown arrive on different channels at different moments, so a delegate
+   * can be described by one, the other, or both.
+   */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  /**
+   * What it cost, in dollars — the one figure here that no CLI stated.
+   *
+   * The daemon derives it from the breakdown above at its model's list rate,
+   * calibrated against what the CLI charged for the turn that ran the delegate;
+   * `apps/daemon/src/v1/agents/adapters/claude/utils/claude-delegate-cost.utils.ts`
+   * holds the measurements. Null whenever any leg of that was missing, which
+   * must render as "not shown" and never as a delegate that cost nothing.
+   */
+  costUsd: number | null;
   stepsUnavailableReason: string | null;
   /**
    * Whether the CLI says this delegate is still working in the BACKGROUND —
@@ -135,6 +157,11 @@ export function readSubagentDeclaration(
     model: str(record.model),
     durationMs: num(record.durationMs),
     tokens: num(record.tokens),
+    inputTokens: num(record.inputTokens),
+    outputTokens: num(record.outputTokens),
+    cacheReadTokens: num(record.cacheReadTokens),
+    cacheCreationTokens: num(record.cacheCreationTokens),
+    costUsd: num(record.costUsd),
     toolUses: num(record.toolUses),
     stepsUnavailableReason: str(record.stepsUnavailableReason),
     backgroundOpen:
@@ -163,6 +190,14 @@ export function mergeSubagentDeclarations(
     durationMs: next.durationMs ?? base.durationMs,
     tokens: next.tokens ?? base.tokens,
     toolUses: next.toolUses ?? base.toolUses,
+    inputTokens: next.inputTokens ?? base.inputTokens,
+    outputTokens: next.outputTokens ?? base.outputTokens,
+    cacheReadTokens: next.cacheReadTokens ?? base.cacheReadTokens,
+    cacheCreationTokens: next.cacheCreationTokens ?? base.cacheCreationTokens,
+    // Same last-non-null rule, and it is what carries the price across the two
+    // lines that produce it: the breakdown arrives when the delegate returns,
+    // the dollars only when the turn ends and the CLI says what it charged.
+    costUsd: next.costUsd ?? base.costUsd,
     stepsUnavailableReason:
       next.stepsUnavailableReason ?? base.stepsUnavailableReason,
     // Same last-non-null rule, and it is what carries the pair: the `started`

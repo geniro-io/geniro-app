@@ -362,13 +362,26 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
    * The launching calls the DAEMON said were detached — see
    * {@link detachFromShellOpen}.
    *
-   * Kept as well as applied, because nothing orders a `shell_open` against the
-   * launch's own reply: arriving first, it must survive that reply's "no
-   * announcement in the prose means the command has exited" arm, which is
-   * otherwise the correct reading and would close the shell a moment after the
-   * daemon opened it.
+   * Collected in a pass of its OWN, ahead of the fold, because nothing orders a
+   * `shell_open` against the launch it names. It used to be filled as the fold
+   * reached each row, which answered only one of the two orders: a `shell_open`
+   * arriving BEFORE the reply survived that reply's "no announcement in the
+   * prose means the command has exited" arm, and one arriving after did not.
+   * Knowing the whole set up front also lets the launch itself open a row (see
+   * the `tool_call` arm), which cannot be done from a set still being built.
    */
   const detached = new Set<string>();
+  for (const item of items) {
+    // The same drop the fold makes below, for the same reason: a delegate's
+    // detachment must not reach the main thread's list through this set.
+    if (item.kind !== 'shell_open' || subagentIdOf(item) !== null) {
+      continue;
+    }
+    const callId = payloadString(item.payload, 'id');
+    if (callId !== null) {
+      detached.add(callId);
+    }
+  }
   for (const item of items) {
     // Not the main thread's — see the doc block above. First, so a delegate's
     // launch is never indexed and nothing later can reach it.
@@ -378,11 +391,8 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
     const payload: unknown = item.payload;
     const callId = payloadString(payload, 'id');
     if (item.kind === 'shell_open') {
-      // Before the id guard, on `shell_info`'s reasoning: the row is read for
-      // both of its keys, and only one of them is the launching call.
-      if (callId !== null) {
-        detached.add(callId);
-      }
+      // The launching call ids are already known — see the pass above — so this
+      // arm only has to APPLY the detachment to the row that call opened.
       detachFromShellOpen(callId, payloadString(payload, 'workId'), {
         byCall,
         byHandle,
@@ -418,7 +428,22 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
       // The agent's OWN classification first, the tool name second — the one
       // shared reading, so a CLI that calls its shell tool anything at all is
       // still recognised (see `tool-kind.ts`).
-      if (toolOperationOf(payload) !== 'execute') {
+      //
+      // …and a call the DAEMON has already said was DETACHED opens a row
+      // whatever it is called, which is what the classification alone cannot
+      // do. `shell_open` is a reading of the CLI's own structured frames, so it
+      // knows a background unit began without knowing or caring what the tool
+      // was named; this fold's name-matching is a guess beside it, and one that
+      // by construction only knows the names written down when it was last
+      // edited. Measured on a live 18,607-item thread: claude's `Monitor` tool
+      // backgrounds a shell command exactly as `Bash` does, the daemon counted
+      // it (`shellsOpen: 1`) and the header read `⌛ working` — while the
+      // Terminals panel stood empty, because `Monitor` is not `Bash` and no row
+      // was ever opened for the `shell_open` to decorate. REPORTED as "я вижу,
+      // что тред что-то явно делает в бэкграунде, но не вижу никаких активных
+      // терминалов". Naming the next tool here would fix that thread and not
+      // the one after it.
+      if (toolOperationOf(payload) !== 'execute' && !detached.has(callId)) {
         continue;
       }
       const record = asRecord(input);

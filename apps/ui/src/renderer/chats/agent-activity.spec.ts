@@ -397,6 +397,7 @@ describe('subagentThreadsByAgent', () => {
       durationMs: null,
       tokens: null,
       toolUses: null,
+      costUsd: null,
       lastRowAt: null,
       stepsUnavailableReason: null,
       backgroundOpen: null,

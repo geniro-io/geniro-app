@@ -1758,6 +1758,38 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('completed');
   });
 
+  it('carries a delegate’s derived cost from the payload onto the block', () => {
+    // The seam between the daemon's two announcements and the header: the
+    // breakdown arrives when the delegate returns, the dollars only when the
+    // turn ends and the CLI says what it charged — so the merge has to hold
+    // BOTH, and a later null must not blank the earlier figure.
+    const entries = fold([
+      call('Task', 'task-cost', { description: 'Review the diff' }),
+      item('subagent_info', {
+        id: 'task-cost',
+        model: 'claude-opus-5[1m]',
+        tokens: 29_388,
+        costUsd: null,
+      }),
+      result('task-cost', 'done'),
+      item('subagent_info', { id: 'task-cost', costUsd: 0.2262808 }),
+    ]);
+
+    const block = onlyBlock(entries);
+    expect(block.costUsd).toBeCloseTo(0.2263, 4);
+    expect(block.tokens).toBe(29_388);
+  });
+
+  it('leaves a delegate no CLI priced with a null cost, never a zero', () => {
+    const entries = fold([
+      call('Task', 'task-free', { description: 'Review the diff' }),
+      item('subagent_info', { id: 'task-free', tokens: 1000 }),
+      result('task-free', 'done'),
+    ]);
+
+    expect(onlyBlock(entries).costUsd).toBeNull();
+  });
+
   it('strips the launching Task pair out of the main tool group', () => {
     // The block IS the delegation's rendering. Left in the group, the same
     // fact was told twice — "Delegated to 1 subagent" directly above a card

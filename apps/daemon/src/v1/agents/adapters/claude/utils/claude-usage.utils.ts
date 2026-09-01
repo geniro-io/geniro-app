@@ -5,6 +5,7 @@ import {
   asString,
 } from '../../../utils/json-util';
 import type { AgentUsage } from '../../adapter.types';
+import { ClaudeDelegateCostLedger } from './claude-delegate-cost.utils';
 
 /**
  * The running totals claude's own cost ledger reports, per CLI SESSION.
@@ -40,6 +41,19 @@ import type { AgentUsage } from '../../adapter.types';
 export class ClaudeSessionCostLedger {
   /** Insertion-ordered, so the oldest entry is the first key — see `remember`. */
   private readonly totals = new Map<string, SessionTotals>();
+
+  /**
+   * The OTHER cost state this adapter carries across lines: what each delegate
+   * spent, held until the `result` line that can price it.
+   *
+   * Composed here rather than threaded as a second parameter because the two
+   * want the identical lifetime and the identical call sites — both are read
+   * on the `result` line, both belong to one CLI process, and both are born
+   * and discarded with the adapter. A second parameter would say the same
+   * thing in ninety signatures, and every one of them a place to pass the
+   * wrong one.
+   */
+  readonly delegates = new ClaudeDelegateCostLedger();
 
   /**
    * This turn's own cost and API time, from the session totals the line

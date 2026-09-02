@@ -7657,10 +7657,12 @@ export function Chats({
                       <strong>
                         {archiving ? runLabel(archiving, workflowNames) : ''}
                       </strong>{' '}
-                      is still working. Archiving it stops the turn and closes
-                      its agent session first — whatever it is part-way through
-                      is lost. The conversation itself is kept, and you can
-                      unarchive it at any time.
+                      is still working. Archiving it{' '}
+                      {archiving.workflowId != null
+                        ? 'stops the run and every agent still working in it first — whatever they are part-way through is lost'
+                        : 'stops the turn and closes its agent session first — whatever it is part-way through is lost'}
+                      . The transcript itself is kept, and you can unarchive it
+                      at any time.
                     </>
                   ) : (
                     <>
@@ -7668,7 +7670,7 @@ export function Chats({
                       <strong>
                         {archiving ? runLabel(archiving, workflowNames) : ''}
                       </strong>
-                      ? It leaves the chat list and nothing is deleted — the
+                      ? It leaves the list and nothing is deleted — the
                       transcript is kept, and you can unarchive it at any time.
                     </>
                   )}

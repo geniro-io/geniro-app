@@ -430,6 +430,29 @@
 }
 
 /*
+ * The zoomable picture stays HIT-TESTABLE, against its own zoom library.
+ *
+ * `react-zoom-pan-pinch` injects `.transform-component-module_content__… img
+ * { pointer-events: none }` — its way of stopping a native image drag from
+ * fighting a pan, which `draggable={false}` on the tag already does here. The
+ * cost is invisible until you right-click: with the image out of the hit test,
+ * Chromium reports the LIBRARY's content div as the target, `mediaType` comes
+ * through as `'none'`, and `main/context-menu.ts` builds an EMPTY menu, which
+ * it draws as nothing at all. Measured in the running app — the reported "оно
+ * не воспринимается как изображение" survived the panning fix beside it and
+ * ended here.
+ *
+ * Unlayered and double-classed for the reason the two retints above state: the
+ * vendor's rule is unlayered and carries a type selector (0,1,1), so a Tailwind
+ * `pointer-events-auto` in `@layer utilities` loses on layer order however
+ * specific it is — verified by shipping exactly that and watching nothing
+ * change.
+ */
+.image-viewer-picture.image-viewer-picture {
+  pointer-events: auto;
+}
+
+/*
  * A horizontal scroll region that ADMITS it scrolls.
  *
  * macOS draws overlay scrollbars: they take no layout space and are invisible

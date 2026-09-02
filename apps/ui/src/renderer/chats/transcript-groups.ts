@@ -1336,7 +1336,7 @@ interface SubagentLaunch {
  * Read one string field off a tool call's `input` object.
  *
  * TWIN PARSER: the keys read through this — `subagent_type`, `description`,
- * `prompt` — are claude's own Task-tool argument schema, which reaches the
+ * `prompt`, `model` — are claude's own Task-tool argument schema, which reaches the
  * renderer inside a `tool_call` payload's `input` and so carries no generated
  * type (`apps/daemon/src/v1/agents/utils/event-to-item.ts` forwards
  * `event.input` verbatim; the shape originates in
@@ -1352,6 +1352,28 @@ function inputString(call: ChatItem | undefined, key: string): string | null {
   }
   const value = (input as Record<string, unknown>)[key];
   return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * What model the LAUNCHING call asked this delegate to run on — the stand-in
+ * until its CLI says which one actually did.
+ *
+ * The declaration OUTRANKS this, which inverts the rule its three neighbours
+ * follow (`kind`, `label` and `prompt` all prefer the call). The two sources
+ * are not the same fact here: the call carries the caller's own word for a
+ * model — an ALIAS like `sonnet` — while the declaration carries what the CLI
+ * resolved it to (`claude-sonnet-5`), which is the one a reader can look up.
+ * That declaration only arrives when the launching call RETURNS, so a delegate
+ * is otherwise unattributed for the whole time it runs, which is precisely
+ * when a column of a dozen of them is being read.
+ *
+ * `inherit` is dropped rather than shown: it is the schema's way of naming no
+ * model at all, and printing it would answer "which model" with a word about
+ * where the answer comes from.
+ */
+function requestedModel(call: ChatItem | undefined): string | null {
+  const model = inputString(call, 'model');
+  return model === 'inherit' ? null : model;
 }
 
 /**
@@ -1501,7 +1523,8 @@ export function buildSubagentBlocks(
       label:
         inputString(launch?.call, 'description') ?? declared?.label ?? null,
       prompt: inputString(launch?.call, 'prompt') ?? declared?.prompt ?? null,
-      model: declared?.model ?? null,
+      // The one field where the DECLARATION wins — see {@link requestedModel}.
+      model: declared?.model ?? requestedModel(launch?.call),
       durationMs: declared?.durationMs ?? null,
       tokens: declared?.tokens ?? null,
       toolUses: declared?.toolUses ?? null,

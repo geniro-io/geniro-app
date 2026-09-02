@@ -1886,6 +1886,58 @@ describe('buildSubagentBlocks', () => {
     expect(JSON.stringify(topLevel)).not.toContain('reading the diff');
   });
 
+  it('names the model the launching call ASKED for while the delegate runs', () => {
+    // The declaration carrying the resolved model only lands when the call
+    // returns, so without this a column of a dozen working verifiers says what
+    // each one IS and nothing about what it is running on — which is the ask.
+    const block = onlyBlock(
+      fold([
+        call('Task', 'task-1', {
+          subagent_type: 'code-reviewer',
+          description: 'Review the diff',
+          model: 'sonnet',
+        }),
+        delegated('message', { text: 'reading' }, 'task-1'),
+      ]),
+    );
+
+    expect(block.model).toBe('sonnet');
+  });
+
+  it('prefers the RESOLVED model over the alias the call asked for', () => {
+    // The one field where the declaration outranks the launching call: the
+    // call carries the caller's word (`sonnet`), the CLI's own line carries
+    // what it resolved that to, which is the name a reader can look up.
+    const block = onlyBlock(
+      fold([
+        call('Task', 'task-1', {
+          subagent_type: 'code-reviewer',
+          description: 'Review the diff',
+          model: 'sonnet',
+        }),
+        item('subagent_info', { id: 'task-1', model: 'claude-sonnet-5' }),
+        result('task-1', 'done'),
+      ]),
+    );
+
+    expect(block.model).toBe('claude-sonnet-5');
+  });
+
+  it('drops `inherit`, which names no model at all', () => {
+    const block = onlyBlock(
+      fold([
+        call('Task', 'task-1', {
+          subagent_type: 'code-reviewer',
+          description: 'Review the diff',
+          model: 'inherit',
+        }),
+        delegated('message', { text: 'reading' }, 'task-1'),
+      ]),
+    );
+
+    expect(block.model).toBeNull();
+  });
+
   it('keeps a fire-and-forget delegate RUNNING after its launching call returns', () => {
     // The reported case, end to end. A delegate the agent does not wait for has
     // its `Task` call answered in under a second ("started"), so `returned` is

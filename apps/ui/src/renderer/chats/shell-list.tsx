@@ -57,9 +57,20 @@ export function ShellIcon({
  */
 function ShellRow({
   shell,
+  agentName = null,
   onOpen,
 }: {
   shell: ShellRun;
+  /**
+   * WHOSE command this is, when the list mixes several agents' — a workflow's.
+   *
+   * Null everywhere the answer is already known: the agents panel draws this
+   * band inside one agent's card, and a 1:1 chat has one agent, so naming it on
+   * every row would be a column repeating the same word. Only the composer
+   * shelf, which flattens every agent's shells into one popover, has a list
+   * where the question can be asked at all.
+   */
+  agentName?: string | null;
   onOpen?: (shell: ShellRun) => void;
 }): React.JSX.Element {
   useSecondsTick();
@@ -99,6 +110,22 @@ function ShellRow({
           of what it takes off the leading, so the ink does not move at all.
           Verified twice, here and on the shelf chip. */}
       <ShellIcon className="-translate-y-px text-muted-foreground" />
+      {/* BEFORE the command and `shrink-0`, which is the whole of its layout
+          argument: the command is the row's subject and the one part worth the
+          flex space, while the name identifies the row and must not truncate to
+          nothing — an agent called `Engineer` clipped to `Eng…` answers the
+          question worse than not asking it. It is set in the muted colour the
+          clock beside it uses rather than as a `Badge`: a badge on every row of
+          a dozen is a second column of chrome, and this is a caption on the
+          command, not a status about it. */}
+      {agentName === null ? null : (
+        <span
+          data-slot="shell-agent"
+          className="shrink-0 text-[11px] text-muted-foreground"
+          title={`Started by ${agentName}`}>
+          {agentName}
+        </span>
+      )}
       {onOpen === undefined ? (
         <span
           className="min-w-0 flex-1 truncate font-mono text-[11px]"
@@ -180,10 +207,17 @@ function ShellRow({
 export function ShellRows({
   shells,
   className,
+  agentNameOf,
   onOpen,
 }: {
   shells: readonly ShellRun[];
   className?: string;
+  /**
+   * Which agent each command belongs to, keyed by shell id — see
+   * {@link ShellRow}'s `agentName`. Absent leaves every row unlabelled, which
+   * is right for a list that is already about one agent.
+   */
+  agentNameOf?: ReadonlyMap<string, string>;
   /**
    * Open one command's own output. Absent leaves the rows as plain text — the
    * list never invents a surface it was not given, the same rule the panel's
@@ -207,7 +241,12 @@ export function ShellRows({
       )}>
       <ul className={cn('m-0 flex list-none flex-col gap-1 p-0', className)}>
         {shells.map((shell) => (
-          <ShellRow key={shell.id} shell={shell} onOpen={onOpen} />
+          <ShellRow
+            key={shell.id}
+            shell={shell}
+            agentName={agentNameOf?.get(shell.id) ?? null}
+            onOpen={onOpen}
+          />
         ))}
       </ul>
     </div>

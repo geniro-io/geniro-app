@@ -355,9 +355,12 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
     expect(deps.published).toEqual([]);
   });
 
-  it('ignores a workflow NODE and a mid-turn row', async () => {
-    // A node's transcript is not a chat's, and scanning on every tool call
-    // would turn one indexed read per turn into one per row.
+  it('captures a WORKFLOW node’s turn, exactly as a chat’s', async () => {
+    // REPORTED as a shelf with no chip over a transcript reading "Draft PR
+    // #5303 is open". Every row of a workflow run carries a node id, and this
+    // subscriber required `nodeId === null` — so it never fired for one, while
+    // the other trigger (the chat listing) filters `workflowId: null`. Two
+    // gates, and a workflow's pull requests were captured on no path at all.
     const { itemDao, counts } = daos([
       call(1, 'toolu_1', 'gh pr create --base main'),
       result(2, 'toolu_1', CREATED),
@@ -375,11 +378,47 @@ describe('PullRequestCaptureService — capturing when a TURN ends', () => {
 
     await deps.listeners[0]?.({
       runId: 'run-1',
-      item: { nodeId: 'node-a', kind: 'turn_complete' },
+      item: { nodeId: 'engineer', kind: 'turn_complete' },
     });
+    await settled();
+
+    expect(counts.max).toBe(1);
+    expect(readRunPullRequests(run.pullRequests)).toHaveLength(1);
+    expect(deps.published).toEqual([
+      {
+        runId: 'run-1',
+        status: null,
+        pullRequests: [
+          { owner: 'acme', repo: 'platform', number: 87, url: CREATED, seq: 2 },
+        ],
+      },
+    ]);
+  });
+
+  it('still ignores a mid-turn row, whoever wrote it', async () => {
+    // The bound that survives: one pass per TURN, never one per tool call.
+    const { itemDao, counts } = daos([
+      call(1, 'toolu_1', 'gh pr create --base main'),
+      result(2, 'toolu_1', CREATED),
+    ]);
+    const run = chatRun();
+    const { dao } = settleRunDao(run);
+    const deps = settleDeps();
+    const service = new PullRequestCaptureService(
+      itemDao,
+      dao,
+      deps.em,
+      deps.bus,
+    );
+    service.onModuleInit();
+
     await deps.listeners[0]?.({
       runId: 'run-1',
       item: { nodeId: null, kind: 'tool_call' },
+    });
+    await deps.listeners[0]?.({
+      runId: 'run-1',
+      item: { nodeId: 'engineer', kind: 'tool_result' },
     });
     await settled();
 

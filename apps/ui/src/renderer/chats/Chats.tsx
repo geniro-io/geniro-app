@@ -56,6 +56,7 @@ import { Textarea } from '../components/ui/textarea';
 import { cn } from '../components/ui/utils';
 import {
   createDaemonApis,
+  daemonErrorCode,
   daemonErrorDetail,
   daemonErrorStatus,
   isRunBusyError,
@@ -68,6 +69,7 @@ import type { SettingsSection } from '../settings/Settings';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
 import {
+  type AgentActivity,
   type AgentDisplay,
   type AgentThread,
   CHAT_AGENT_KEY,
@@ -177,6 +179,7 @@ import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
+import type { AgentTaskGroup } from './task-list';
 import {
   type AgentTaskRow,
   taskListsByAgent,
@@ -229,6 +232,7 @@ import {
   useThreadPullRequests,
 } from './use-thread-pull-requests';
 import { useUnseenRuns } from './use-unseen-runs';
+import { rootAgentOf } from './workflow-root';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -1324,6 +1328,20 @@ export function Chats({
                       ),
                     ),
                   ),
+          )
+          .catch(fail);
+        return;
+      }
+      if (command.kind === 'auto-workflow') {
+        void groupApi
+          .updateRunGroup({
+            groupId,
+            updateRunGroupDto: { autoWorkflowId: command.slug },
+          })
+          .then((updated) =>
+            setGroups((prev) =>
+              prev.map((group) => (group.id === groupId ? updated : group)),
+            ),
           )
           .catch(fail);
         return;
@@ -2673,9 +2691,23 @@ export function Chats({
       // the chat route REFUSES a workflow run (its graph executor has state
       // the chat path knows nothing about), so routing every row through it
       // left the workflow rows permanently undeletable.
-      await (deleting.workflowId
-        ? workflowApi.deleteWorkflowRun({ runId: deleting.id })
-        : chatApi.deleteChat({ runId: deleting.id }));
+      try {
+        await (deleting.workflowId
+          ? workflowApi.deleteWorkflowRun({ runId: deleting.id })
+          : chatApi.deleteChat({ runId: deleting.id }));
+      } catch (err) {
+        // The run is ALREADY gone, which is what was asked for — so this falls
+        // through to the success path rather than being reported. It is the
+        // routine outcome of pressing Delete on a row another client destroyed:
+        // until `run_deleted` existed nothing could correct such a row, and it
+        // answered every press with `404 RUN_NOT_FOUND` and stayed put, which
+        // is how a user came to have a row they could neither open nor delete.
+        // Even with the broadcast this stays, for the window between the delete
+        // landing and the announce arriving.
+        if (daemonErrorCode(err) !== 'RUN_NOT_FOUND') {
+          throw err;
+        }
+      }
       // Nothing can ever show it again, so it must not be kept — the same rule
       // the daemon's own per-run maps follow, announced there on the bus.
       forgetContextReading(deleting.id);
@@ -2690,6 +2722,32 @@ export function Chats({
       setDeleteBusy(false);
     }
   }, [deleting, chatApi, workflowApi, dropRun, newChat, forgetContextReading]);
+
+  /**
+   * A run destroyed somewhere else — another window, the browser client, a
+   * teardown — leaves this list holding a row for it.
+   *
+   * The daemon broadcasts the deletion to EVERY client rather than to the run's
+   * room, because the row that has to disappear is in every sidebar and a
+   * client only ever joins the one run it is showing. Without it nothing here
+   * could learn the fact at all: `run_status` can only describe runs that still
+   * exist, so a ghost row survived until the next full re-list — and answered a
+   * click with `404 RUN_NOT_FOUND`, which is the reported "I cant delete thread
+   * from app".
+   *
+   * Subscribed HERE rather than in `use-chat-run`, where its siblings live,
+   * because closing the open transcript is this component's own business —
+   * `newChat` resets the composer as well as leaving the room, and the hook
+   * holds neither.
+   */
+  useEffect(
+    () =>
+      client.onRunDeleted((runId) => {
+        forgetContextReading(runId);
+        dropRun(runId, newChat);
+      }),
+    [client, dropRun, newChat, forgetContextReading],
+  );
 
   /**
    * Start one turn: mark the run working, send, render the user message
@@ -4195,7 +4253,13 @@ export function Chats({
     agents: WorkflowAgentNode[];
     triggers: WorkflowTriggerNode[];
     allIds: Set<string>;
-  }>({ agents: [], triggers: [], allIds: new Set() });
+    /**
+     * The agent the TRIGGER feeds — the one the run is a conversation WITH, so
+     * its rows need no identity (see {@link rootAgentOf}). Null when the graph
+     * has none or more than one.
+     */
+    rootId: string | null;
+  }>({ agents: [], triggers: [], allIds: new Set(), rootId: null });
   /**
    * Set when the active run's workflow is GONE from the library (a 404, not a
    * failed request) — the run's own history survives it, so the transcript
@@ -4209,7 +4273,12 @@ export function Chats({
     const workflowId = activeRun?.workflowId;
     setMissingWorkflow(null);
     if (!workflowId) {
-      setWfNodes({ agents: [], triggers: [], allIds: new Set() });
+      setWfNodes({
+        agents: [],
+        triggers: [],
+        allIds: new Set(),
+        rootId: null,
+      });
       return;
     }
     void workflowApi
@@ -4226,13 +4295,19 @@ export function Chats({
             (node): node is WorkflowTriggerNode => node.kind === 'trigger',
           ),
           allIds: new Set(workflow.nodes.map((node) => node.id)),
+          rootId: rootAgentOf(workflow),
         });
       })
       .catch((err: unknown) => {
         if (cancelled) {
           return;
         }
-        setWfNodes({ agents: [], triggers: [], allIds: new Set() });
+        setWfNodes({
+          agents: [],
+          triggers: [],
+          allIds: new Set(),
+          rootId: null,
+        });
         // A deleted workflow is not a failure to report as one: the request
         // worked, the graph is simply gone. Say that in the user's terms and
         // let the banner offer the way out, instead of pasting a 404 body
@@ -4258,7 +4333,14 @@ export function Chats({
   const nodeMeta = useMemo(() => {
     const map = new Map<string, TranscriptNodeMeta>();
     for (const node of wfNodes.agents) {
-      map.set(node.id, { name: node.name ?? node.id, kind: 'agent' });
+      // `agent` rides along so a block header can name the CLI under a node —
+      // the graph is the only thing that knows it, and no transcript item
+      // carries it.
+      map.set(node.id, {
+        name: node.name ?? node.id,
+        kind: 'agent',
+        agent: node.agent,
+      });
     }
     for (const node of wfNodes.triggers) {
       map.set(node.id, { name: node.name ?? node.id, kind: 'trigger' });
@@ -4560,7 +4642,13 @@ export function Chats({
    * since every `turn_complete` in the transcript needs its own entry and the
    * shells between are memoized.
    */
-  const turnScan = useMemo(() => scanTurns(items), [items]);
+  const turnScan = useMemo(
+    // A WORKFLOW's work belongs to its nodes — several of which run at once —
+    // and the run itself has no turn at all; a chat is the other way round.
+    // The two transcripts are scanned as the different things they are.
+    () => scanTurns(items, { nodeScoped: activeRun?.workflowId != null }),
+    [items, activeRun?.workflowId],
+  );
   const turnDurations = turnScan.durations;
   /** What this whole thread has worked, for the header. */
   const threadWorked = useMemo(
@@ -4671,6 +4759,11 @@ export function Chats({
           id: CHAT_AGENT_KEY,
           name: activeRun.agentKind ?? 'agent',
           agent: activeRun.agentKind,
+          // What its turns have RUN on, else what the chat asked for. The two
+          // differ whenever the run row names nothing (the CLI's own current
+          // model) or names something the CLI refused, and the reported one is
+          // the answer to "what is this agent".
+          model: chatActivity?.contextModel ?? activeRun.model,
           // The profile this chat's turns ACTUALLY run under — the folder's
           // pin where there is one, the chat's own pick otherwise (null on the
           // chats that run as the CLI's default). A workflow node reads its
@@ -4703,6 +4796,9 @@ export function Chats({
             chatActivity?.contextWindowTokens ??
             null,
           spentUsd: chatActivity?.spentUsd ?? null,
+          inputTokens: chatActivity?.inputTokens ?? null,
+          outputTokens: chatActivity?.outputTokens ?? null,
+          cacheTokens: chatActivity?.cacheTokens ?? null,
           threads: [
             {
               id: 'main',
@@ -4716,32 +4812,92 @@ export function Chats({
         },
       ];
     }
+    /**
+     * One node's call threads, each carrying its OWN context reading — read off
+     * the per-call owner key the daemon publishes it under (`partialOwnerKey`).
+     */
+    const callThreadsOf = (
+      nodeId: string,
+      nodeActivity: AgentActivity | undefined,
+    ): AgentThread[] =>
+      threadsOf(nodeActivity).map((thread) => {
+        if (thread.kind !== 'call') {
+          return thread;
+        }
+        const live = liveText.get(`${nodeId}::${thread.id}`);
+        return {
+          ...thread,
+          contextTokens: live?.contextTokens ?? null,
+          contextWindowTokens: live?.contextWindowTokens ?? null,
+        };
+      });
+    /**
+     * WHICH reading a node's CARD states — a SOURCE rather than two fields,
+     * because a count from one turn over a window from another is a percentage
+     * of nothing, so both figures come from whichever of these answers first.
+     *
+     * The node's own key is a DAG-scheduled turn, and LIVE beats durable for
+     * the reason the 1:1 branch above gives: a delta reports the node's context
+     * as of its latest request, while `activity` can only report its last
+     * COMPLETED turn.
+     *
+     * A CALLEE node has no DAG-scheduled turn at all — every turn it takes runs
+     * under a call, so the executor publishes its readings under that CALL's
+     * key and the node's own key never receives one. REPORTED as "I dont see QA
+     * context", against a running cursor node whose thread row showed a figure
+     * and whose card showed an empty ring. The newest thread wins because a
+     * node runs one turn per call and the list is in call order, so the last
+     * one carrying a reading is the turn now in flight.
+     *
+     * Shared by both branches below: the second one had the identical hole, and
+     * two copies of this order is how a card and its own thread rows come to
+     * disagree about one window.
+     */
+    const cardContextOf = (
+      nodeId: string,
+      nodeActivity: AgentActivity | undefined,
+      callThreads: readonly AgentThread[],
+    ): {
+      contextTokens?: number | null;
+      contextWindowTokens?: number | null;
+    } => {
+      const own = liveText.get(nodeId);
+      if ((own?.contextTokens ?? null) !== null) {
+        return own!;
+      }
+      return (
+        [...callThreads]
+          .reverse()
+          .find((thread) => (thread.contextTokens ?? null) !== null) ??
+        nodeActivity ??
+        {}
+      );
+    };
     const known = wfNodes.agents.map((node): AgentDisplay => {
       const nodeActivity = activity.get(node.id);
-      // LIVE first, for the same reason the 1:1 branch above does it: a delta
-      // reports the node's context as of its latest request, while `activity`
-      // can only report its last COMPLETED turn. A workflow node read the
-      // durable half alone, so its meter sat still for the whole of every turn
-      // — and on a node's FIRST turn there was no figure at all.
-      const nodeLive = liveText.get(node.id);
+      const callThreads = callThreadsOf(node.id, nodeActivity);
+      const nodeContext = cardContextOf(node.id, nodeActivity, callThreads);
       return {
         id: node.id,
         name: node.name ?? node.id,
         agent: node.agent,
+        // The graph's own value is the FALLBACK, not the answer: it is what
+        // this node was told to use, and a node that names none runs on the
+        // CLI's current model. A node yet to take a turn has only that.
+        model: nodeActivity?.contextModel ?? node.model ?? null,
         configDir: node.configDir ?? null,
-        status: displayStatus(nodeActivity),
+        // The card is per NODE (`awaitingAnswer` keys by the item's own node),
+        // so the agent that is waiting is the one that says so — a run-level
+        // reading would park every node in the graph at once.
+        status: displayStatus(nodeActivity, awaitingAnswer.has(node.id)),
         activeTurns: nodeActivity?.activeTurns ?? 0,
-        contextTokens:
-          nodeLive?.contextTokens ?? nodeActivity?.contextTokens ?? null,
-        contextWindowTokens:
-          nodeLive?.contextWindowTokens ??
-          nodeActivity?.contextWindowTokens ??
-          null,
+        contextTokens: nodeContext?.contextTokens ?? null,
+        contextWindowTokens: nodeContext?.contextWindowTokens ?? null,
         spentUsd: nodeActivity?.spentUsd ?? null,
-        threads: [
-          ...threadsOf(nodeActivity),
-          ...(subagentThreads.get(node.id) ?? []),
-        ],
+        inputTokens: nodeActivity?.inputTokens ?? null,
+        outputTokens: nodeActivity?.outputTokens ?? null,
+        cacheTokens: nodeActivity?.cacheTokens ?? null,
+        threads: [...callThreads, ...(subagentThreads.get(node.id) ?? [])],
       };
     });
     // Items can reference nodes a since-edited workflow no longer has — list
@@ -4750,26 +4906,30 @@ export function Chats({
       .filter(
         ([nodeId]) => nodeId !== CHAT_AGENT_KEY && !wfNodes.allIds.has(nodeId),
       )
-      .map(([nodeId, nodeActivity]): AgentDisplay => ({
-        id: nodeId,
-        name: nodeId,
-        agent: null,
-        // The workflow no longer has this node, so nothing states what it ran
-        // with. Claiming a config directory here would be an invention.
-        configDir: null,
-        status: displayStatus(nodeActivity),
-        activeTurns: nodeActivity.activeTurns,
-        contextTokens:
-          liveText.get(nodeId)?.contextTokens ?? nodeActivity.contextTokens,
-        contextWindowTokens:
-          liveText.get(nodeId)?.contextWindowTokens ??
-          nodeActivity.contextWindowTokens,
-        spentUsd: nodeActivity.spentUsd,
-        threads: [
-          ...threadsOf(nodeActivity),
-          ...(subagentThreads.get(nodeId) ?? []),
-        ],
-      }));
+      .map(([nodeId, nodeActivity]): AgentDisplay => {
+        const callThreads = callThreadsOf(nodeId, nodeActivity);
+        const nodeContext = cardContextOf(nodeId, nodeActivity, callThreads);
+        return {
+          id: nodeId,
+          name: nodeId,
+          agent: null,
+          // Only what its turns reported: the workflow no longer has this node,
+          // so there is no declared value to fall back to.
+          model: nodeActivity.contextModel,
+          // The workflow no longer has this node, so nothing states what it ran
+          // with. Claiming a config directory here would be an invention.
+          configDir: null,
+          status: displayStatus(nodeActivity, awaitingAnswer.has(nodeId)),
+          activeTurns: nodeActivity.activeTurns,
+          contextTokens: nodeContext.contextTokens ?? null,
+          contextWindowTokens: nodeContext.contextWindowTokens ?? null,
+          spentUsd: nodeActivity.spentUsd,
+          inputTokens: nodeActivity.inputTokens,
+          outputTokens: nodeActivity.outputTokens,
+          cacheTokens: nodeActivity.cacheTokens,
+          threads: [...callThreads, ...(subagentThreads.get(nodeId) ?? [])],
+        };
+      });
     return [...known, ...extras];
     // `liveText` is READ above for the live context figure, so it belongs here:
     // without it the meter could only move when a durable item landed, which is
@@ -4779,6 +4939,7 @@ export function Chats({
     activeRun,
     activeRunStatus,
     activity,
+    awaitingAnswer,
     streaming,
     wfNodes,
     liveText,
@@ -5007,26 +5168,61 @@ export function Chats({
     let done = 0;
     let total = 0;
     // Flattened in the panel's own agent order, so the popover's list reads
-    // top-to-bottom as the cards below it do.
+    // top-to-bottom as the cards below it do — and kept per agent BESIDE that
+    // flat run, off the one walk, because a workflow's popover draws a block
+    // per agent and re-deriving the split where it is drawn would be a second
+    // reading of one set of rows.
     const taskRows: AgentTaskRow[] = [];
-    for (const rows of tasksByAgent.values()) {
+    const taskGroups: AgentTaskGroup[] = [];
+    const seenTaskAgents = new Set<string>();
+    const takeTasks = (agentId: string, agentName: string): void => {
+      if (seenTaskAgents.has(agentId)) {
+        return;
+      }
+      seenTaskAgents.add(agentId);
+      const rows = tasksByAgent.get(agentId);
+      if (rows === undefined || rows.length === 0) {
+        return;
+      }
       const progress = taskProgress(rows);
       done += progress.done;
       total += progress.total;
       taskRows.push(...rows);
+      taskGroups.push({ agentId, agentName, tasks: rows });
+    };
+    for (const agent of agents) {
+      takeTasks(agent.id, agent.name);
+    }
+    // Anything that announced a list without earning a card — the totals are
+    // the SHELF's figure, so a set left out of this walk would be rows the
+    // popover lists under a count that never counted them.
+    for (const agentId of tasksByAgent.keys()) {
+      takeTasks(agentId, agentId);
     }
     // In the panel's own agent order, like the task rows above — the popover
     // reads top-to-bottom as the cards below it do.
     const shells: ShellRun[] = [];
+    // WHOSE each command is, built on the same walk that flattens them — a map
+    // rather than a field on the row, so `ShellRun` stays what the transcript
+    // fold produces and the agents panel's own bands are untouched. Whether it
+    // is USED is the caller's call (see the shelf's `agentNameOf`): naming the
+    // one agent of a 1:1 chat on every row would be a column of one word.
+    const shellAgents = new Map<string, string>();
     for (const agent of agents) {
-      shells.push(...(shellsByAgent.get(agent.id) ?? []));
+      const own = shellsByAgent.get(agent.id) ?? [];
+      shells.push(...own);
+      for (const shell of own) {
+        shellAgents.set(shell.id, agent.name);
+      }
     }
     return {
       subagents,
       subagentThreads,
       tasks: { done, total },
       taskRows,
+      taskGroups,
       shells,
+      shellAgents,
     };
   }, [agents, shellsByAgent, tasksByAgent]);
 
@@ -5898,6 +6094,11 @@ export function Chats({
                               naming={namingRunIds.has(run.id)}
                               label={runLabel(run, workflowNames)}
                               isWorkflow={run.workflowId != null}
+                              workflowName={
+                                run.workflowId
+                                  ? (workflowNames.get(run.workflowId) ?? null)
+                                  : null
+                              }
                               status={sidebarRunStatus(run)}
                               lastMessage={run.lastMessage}
                               lastActivityAt={run.updatedAt}
@@ -6017,6 +6218,7 @@ export function Chats({
                                   onToggle={handleToggleGroup}
                                   onRename={handleRenameGroup}
                                   onCommand={handleGroupCommand}
+                                  workflows={workflows}
                                   onDragStart={handleGroupDragStart}
                                   onDragEnd={handleDragEnd}
                                 />
@@ -6430,9 +6632,9 @@ export function Chats({
                         // days on a thread nothing is working on. The status
                         // is the authority on whether work is in flight; the
                         // rows only say what it started from.
-                        openTurn={
+                        openTurns={
                           isSettledRunStatus(activeRunStatus)
-                            ? null
+                            ? undefined
                             : openTurnForHeader
                         }
                         // The delegate, task and terminal counters that used to
@@ -6562,6 +6764,7 @@ export function Chats({
                                           activeRun?.agentKind ?? null
                                         }
                                         soloAgent={soloAgent}
+                                        soloNodeId={wfNodes.rootId}
                                       />
                                     );
                                   }
@@ -6805,6 +7008,15 @@ export function Chats({
                             done={sidePanelLive.tasks.done}
                             total={sidePanelLive.tasks.total}
                             tasks={sidePanelLive.taskRows}
+                            // Only a WORKFLOW's lists are split into blocks,
+                            // the same gate the terminals chip's labels take:
+                            // a 1:1 chat has one agent, so a heading over its
+                            // only list names nothing the reader could doubt.
+                            groups={
+                              activeRun?.workflowId
+                                ? sidePanelLive.taskGroups
+                                : undefined
+                            }
                             // The RUN's own liveness, not the list's: an
                             // unfinished task on a settled thread is one
                             // nothing is advancing, and a spinner there would
@@ -6828,6 +7040,15 @@ export function Chats({
                               and goes many times within a single turn. */}
                           <RunningShellChips
                             shells={sidePanelLive.shells}
+                            // Only a WORKFLOW's rows are labelled. A 1:1 chat
+                            // has one agent, so the name would be the same word
+                            // down every row — and the popover is 22rem, where
+                            // a redundant column costs the command its width.
+                            agentNameOf={
+                              activeRun?.workflowId
+                                ? sidePanelLive.shellAgents
+                                : undefined
+                            }
                             onOpen={setOpenShell}
                           />
                         </ComposerShelf>
@@ -6845,43 +7066,29 @@ export function Chats({
                             onHighlight={setSkillHighlight}
                           />
                         ) : null}
-                        <ComposerTopRow>
-                          {/* A workflow's trigger, and the run's folder — and for
-                      a single-agent thread with no cwd this row still collapses
-                      entirely (`empty:hidden`).
+                        {/* There is NO top row on an open run any more, and the
+                    last chip to leave it was the workflow's trigger — it is
+                    inside the card now, in the slot the model chip holds on a
+                    chat (see `ComposerBottomRow` below). REPORTED as "i see
+                    request - manual trigger here. We should not have it there.
+                    It should be in textarea, in same place where model suppose
+                    to be": one lone chip on a band of its own, between the
+                    shelf's chips and the card, read as a third row of chrome
+                    over a composer a workflow run cannot even type into.
 
-                      Two of the three chips that used to live here moved INTO
-                      the card and stayed there: the row states what is still to
-                      be DECIDED about the run, and the approval posture is a
-                      live per-turn control that belongs beside model and effort.
-                      The FOLDER came back up (see the chip below) — it is not a
-                      decision either, but it is a caption on the message rather
-                      than on the Send button. The
-                      branch chip is gone outright: it was read-only anyway, and
-                      naming live repo state under a transcript whose turns all
-                      run against the tree the run STARTED on only invited a
-                      switch the control could not perform.
-
-                      The agent is not here either — fixed for the run's whole
-                      life, so it belongs to the header's identity line. */}
-                          {activeRun?.workflowId &&
-                          wfNodes.triggers.length > 0 ? (
-                            <Chip>
-                              <Zap />
-                              <span className="max-w-52 truncate">
-                                {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                              </span>
-                            </Chip>
-                          ) : null}
-                          {/* The run's FOLDER is not here, and after four
-                      positions it is not in this composer at all — it is in the
-                      HEADER, beside the agent and the profile. See
-                      `chat-header.tsx`'s `cwd` prop for the three arrangements
-                      tried here first and why none of them held: a fact fixed
-                      for the run's life kept having to earn a band among
-                      controls that change things, and the band is what looked
-                      wrong every time. */}
-                        </ComposerTopRow>
+                    Every chip that used to live here went the same way and for
+                    the same reason. This row states what is still to be DECIDED
+                    about the run, and a run's identity is decided at creation:
+                    approval, model and effort are live per-turn controls and sit
+                    inside the card; the FOLDER, the agent and the profile are
+                    fixed for the run's life and belong to the header's identity
+                    line (see `chat-header.tsx`'s `cwd` prop for the three
+                    positions tried in this composer first, and why a fact that
+                    changes nothing kept looking wrong on a band of its own). The
+                    branch chip is gone outright: it was read-only anyway, and
+                    naming live repo state under a transcript whose turns all run
+                    against the tree the run STARTED on only invited a switch the
+                    control could not perform. */}
                         <ComposerCard>
                           <AttachmentStrip
                             attachments={attachments.attachments}
@@ -7204,6 +7411,25 @@ export function Chats({
                                   side="top"
                                 />
                               </>
+                            ) : activeRun?.workflowId &&
+                              wfNodes.triggers.length > 0 ? (
+                              /* A workflow run's one fact of this kind, in the
+                        slot the model chip holds on a chat. It is a STATIC
+                        chip, not a picker: a run's trigger is decided when the
+                        run is created and there is nothing here to change —
+                        which is exactly why it had no business on the row above,
+                        where every other chip was a decision still open.
+
+                        This slot is otherwise empty for a workflow run (its
+                        nodes each carry their own model, effort and approval in
+                        the graph), so the chip costs the row nothing and the
+                        band above the card goes away entirely. */
+                              <Chip>
+                                <Zap />
+                                <span className="max-w-52 truncate">
+                                  {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                                </span>
+                              </Chip>
                             ) : null}
                           </ComposerBottomRow>
                         </ComposerCard>

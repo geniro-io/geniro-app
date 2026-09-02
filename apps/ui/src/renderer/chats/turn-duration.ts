@@ -191,17 +191,24 @@ export interface OpenTurn {
  * `heldSince` undefined means not held, and the turn passes through untouched.
  */
 export function parkWhileHeld(
-  open: OpenTurn | null,
+  open: readonly OpenTurn[],
   heldSince: number | undefined,
-): OpenTurn | null {
-  if (open === null || heldSince === undefined) {
+): readonly OpenTurn[] {
+  if (heldSince === undefined) {
     return open;
   }
-  return { ...open, openSince: [...open.openSince, heldSince] };
+  // A hold is a fact about the RUN, so it parks every turn open under it. In a
+  // workflow that is several at once, and each of them is equally not working:
+  // the daemon holds the run's turn for background work, and the agents it was
+  // holding for are exactly the ones with turns still open.
+  return open.map((turn) => ({
+    ...turn,
+    openSince: [...turn.openSince, heldSince],
+  }));
 }
 
 /**
- * What the in-flight turn has worked as of `now` — 0 when nothing is running.
+ * What the in-flight turns have worked as of `now` — 0 when nothing is running.
  *
  * Measured the same way the wall-clock fallback measures a settled turn, so the
  * live figure and the one that replaces it at the settle mean the same thing.
@@ -209,11 +216,21 @@ export function parkWhileHeld(
  * the wall clock, so the total can tick back a second or two as a turn lands;
  * that is the price of the primary clock being the honest one, and it is
  * smaller than the error of showing a frozen total for the whole turn.
+ *
+ * SEVERAL turns are SUMMED, not merged into one stretch, because the settled
+ * figure they join is a sum too: `threadWorkedMs` adds every turn's own
+ * duration, so two agents working a minute in parallel is two agent-minutes
+ * there and must be two here — the alternative has the total jump downward the
+ * moment those turns land.
  */
-export function openTurnWorkedMs(open: OpenTurn | null, now: number): number {
-  if (open === null) {
-    return 0;
-  }
+export function openTurnWorkedMs(
+  open: readonly OpenTurn[],
+  now: number,
+): number {
+  return open.reduce((total, turn) => total + oneOpenTurnMs(turn, now), 0);
+}
+
+function oneOpenTurnMs(open: OpenTurn, now: number): number {
   let parked = open.parkedMs;
   // The UNION of the open stretches, not their sum — and they all end at `now`,
   // so the union is simply the earliest of them to here.
@@ -230,26 +247,85 @@ export function openTurnWorkedMs(open: OpenTurn | null, now: number): number {
   return Math.max(0, now - open.startedAt - parked);
 }
 
-/** Both readings off ONE pass: the settled turns, and the one still running. */
-export function scanTurns(items: readonly ChatItem[]): {
+/** One thread's clock, mid-scan. */
+interface TurnState {
+  startedAt: number | null;
+  /** Open approval cards, by request id — a turn can have several at once. */
+  parkedSince: Map<string, number>;
+  parkedMs: number;
+}
+
+/** Does this `status` row open a turn? Only the running one does. */
+function opensNodeTurn(payload: unknown): boolean {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === 'running'
+  );
+}
+
+/**
+ * Both readings off ONE pass: the settled turns, and the ones still running.
+ *
+ * `nodeScoped` is what a WORKFLOW run needs, and the two modes read disjoint
+ * halves of the transcript rather than one filtering the other. A workflow has
+ * no run-level turn at all — its work belongs to its NODES, several of which
+ * can be running at once — so a scan keyed to the run measures nothing there:
+ * every row carries a `nodeId`, the whole loop skipped them, and the header's
+ * live clock got no open turn to tick. REPORTED as "timer in header is stuck",
+ * against a workflow 41 minutes in whose figure had not moved since its last
+ * node turn landed. The per-row `took 13s` under each `turn_complete` was the
+ * same hole seen from the other side: a workflow node never had one.
+ *
+ * The two modes also start a turn from different rows, because the transcripts
+ * genuinely differ. A chat's turn begins with the USER's message. A workflow
+ * node's begins when the executor spawns it, which it says with a `status`
+ * row — the node is handed no user message of its own, and the one message the
+ * run does carry (the trigger's prompt, `nodeId: null`) is the run's input
+ * rather than any agent's turn. Reading it as one opened a turn at seq 0 that
+ * nothing could ever close.
+ */
+export function scanTurns(
+  items: readonly ChatItem[],
+  { nodeScoped = false }: { nodeScoped?: boolean } = {},
+): {
   durations: ReadonlyMap<string, TurnDuration>;
-  open: OpenTurn | null;
+  open: readonly OpenTurn[];
 } {
   const durations = new Map<string, TurnDuration>();
-  let startedAt: number | null = null;
-  /** Open approval cards, by request id — a turn can have several at once. */
-  const parkedSince = new Map<string, number>();
-  let parkedMs = 0;
+  const threads = new Map<string | null, TurnState>();
+  const stateOf = (key: string | null): TurnState => {
+    const found = threads.get(key);
+    if (found !== undefined) {
+      return found;
+    }
+    const fresh: TurnState = {
+      startedAt: null,
+      parkedSince: new Map(),
+      parkedMs: 0,
+    };
+    threads.set(key, fresh);
+    return fresh;
+  };
 
   for (const item of items) {
-    if (item.nodeId !== null) {
+    // Each mode reads its own rows and never the other's — see the doc above.
+    if (nodeScoped !== (item.nodeId !== null)) {
       continue;
     }
+    const state = stateOf(item.nodeId);
     const at = parsedAt(item.createdAt);
-    if (item.kind === 'message' && item.role === 'user') {
+    if (nodeScoped) {
+      if (item.kind === 'status') {
+        if (opensNodeTurn(item.payload)) {
+          state.startedAt ??= at;
+        }
+        continue;
+      }
+    } else if (item.kind === 'message' && item.role === 'user') {
       // A follow-up delivered INTO a running turn must not restart the clock:
       // the turn it joined began earlier and is still the one being measured.
-      startedAt ??= at;
+      state.startedAt ??= at;
       continue;
     }
     if (item.kind === 'approval_request' && at !== null) {
@@ -258,16 +334,16 @@ export function scanTurns(items: readonly ChatItem[]): {
       // an id-less request is ignored rather than guessed at, which costs the
       // subtraction and never invents one.
       if (id !== null) {
-        parkedSince.set(id, at);
+        state.parkedSince.set(id, at);
       }
       continue;
     }
     if (APPROVAL_CLOSING_KINDS.has(item.kind) && at !== null) {
       const id = approvalId(item.payload);
-      const since = id === null ? undefined : parkedSince.get(id);
+      const since = id === null ? undefined : state.parkedSince.get(id);
       if (since !== undefined && id !== null) {
-        parkedSince.delete(id);
-        parkedMs += Math.max(0, at - since);
+        state.parkedSince.delete(id);
+        state.parkedMs += Math.max(0, at - since);
       }
       continue;
     }
@@ -277,38 +353,38 @@ export function scanTurns(items: readonly ChatItem[]): {
     // The turn ended. A card still open when it did was never answered — the
     // wait it caused is real elapsed time nobody worked through, so it counts
     // as parked right up to the settle.
-    for (const since of parkedSince.values()) {
+    for (const since of state.parkedSince.values()) {
       if (at !== null) {
-        parkedMs += Math.max(0, at - since);
+        state.parkedMs += Math.max(0, at - since);
       }
     }
-    parkedSince.clear();
+    state.parkedSince.clear();
 
     const cli = cliTurnDurationMs(item.payload);
     if (cli !== null) {
       durations.set(item.id, { ms: cli, source: 'cli' });
-    } else if (startedAt !== null && at !== null) {
+    } else if (state.startedAt !== null && at !== null) {
       durations.set(item.id, {
-        ms: Math.max(0, at - startedAt - parkedMs),
+        ms: Math.max(0, at - state.startedAt - state.parkedMs),
         source: 'wall',
       });
     }
-    startedAt = null;
-    parkedMs = 0;
+    state.startedAt = null;
+    state.parkedMs = 0;
   }
-  return {
-    durations,
-    // A turn with a start and no terminal row yet is the one in flight. The
-    // scan already carries its parked stretches, so nothing is re-derived.
-    open:
-      startedAt === null
-        ? null
-        : {
-            startedAt,
-            parkedMs,
-            openSince: [...parkedSince.values()],
-          },
-  };
+  // A turn with a start and no terminal row yet is one in flight. The scan
+  // already carries its parked stretches, so nothing is re-derived.
+  const open: OpenTurn[] = [];
+  for (const state of threads.values()) {
+    if (state.startedAt !== null) {
+      open.push({
+        startedAt: state.startedAt,
+        parkedMs: state.parkedMs,
+        openSince: [...state.parkedSince.values()],
+      });
+    }
+  }
+  return { durations, open };
 }
 
 /** The `id` an approval row pairs on — both halves carry it. */

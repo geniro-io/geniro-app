@@ -137,10 +137,30 @@ describe('ChatListItem', () => {
     );
   });
 
-  it('labels a workflow run `graph`, whatever agent kind it carries', async () => {
-    // A workflow has no single CLI — its agents are per node — so the honest
-    // word is what the run IS. Given a kind as well, to pin that the workflow
-    // reading WINS rather than merely filling a gap.
+  it('labels a workflow run with the WORKFLOW’s name, whatever kind it carries', async () => {
+    // The label slot says what KIND of thing the row is, and every workflow row
+    // said `graph` — the same word for every run of every workflow, and now the
+    // least useful thing available, because the row's TITLE is the task rather
+    // than the workflow (see the daemon's `ChatTitleService`). Asked for as
+    // "name of workflow should be as chip". Given a kind as well, to pin that
+    // the workflow reading still WINS rather than merely filling a gap.
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          isWorkflow: true,
+          agentKind: 'claude',
+          workflowName: 'Dev Team Manifest',
+        })}
+      />,
+    );
+    expect(
+      container.querySelector('[data-slot="agent-kind"]')?.textContent,
+    ).toBe('Dev Team Manifest');
+  });
+
+  it('falls back to `graph` for a workflow this client cannot name', async () => {
+    // A run of a workflow since deleted from the library. The slot is always
+    // filled, so the honest generic is what it had before — never a blank chip.
     const container = await mount(
       <ChatListItem {...props({ isWorkflow: true, agentKind: 'claude' })} />,
     );

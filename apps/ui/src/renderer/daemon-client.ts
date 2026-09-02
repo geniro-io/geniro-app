@@ -332,6 +332,23 @@ export interface RunStatusEvent {
  * the shape has no generated type behind it: a version skew must degrade to
  * "no live badge update", never to a crashed sidebar.
  */
+/**
+ * The runId out of a `{runId}` envelope, or null.
+ *
+ * TWIN PARSER: the daemon writes this envelope in
+ * `notifications.gateway.ts`'s `run_deleted` emit. Deliberately its own reader
+ * rather than a field pulled off {@link parseRunStatus}: that one requires a
+ * status shape this event does not carry, and reusing it would refuse every
+ * deletion.
+ */
+export function parseDeletedRunId(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const { runId } = data as { runId?: unknown };
+  return typeof runId === 'string' && runId.length > 0 ? runId : null;
+}
+
 export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
@@ -611,6 +628,7 @@ export class DaemonClient {
   private readonly usageListeners = new Set<
     (event: UsageRecordedEvent) => void
   >();
+  private readonly runDeletedListeners = new Set<(runId: string) => void>();
   private readonly joinWaiters = new Map<string, Set<JoinWaiter>>();
   private readonly debugListeners = new Set<(entry: DebugLogEntry) => void>();
   private activeRunId: string | null = null;
@@ -716,6 +734,16 @@ export class DaemonClient {
           }
         }
       }
+      if (event === 'run_deleted') {
+        // Carries a runId and nothing else: the run is GONE, so there is no
+        // shape to parse beyond the id of what to forget.
+        const runId = parseDeletedRunId(data);
+        if (runId) {
+          for (const listener of this.runDeletedListeners) {
+            listener(runId);
+          }
+        }
+      }
       if (event === 'usage_recorded') {
         const usage = parseUsageRecorded(data);
         if (usage) {
@@ -790,6 +818,21 @@ export class DaemonClient {
     this.runStatusListeners.add(listener);
     return () => {
       this.runStatusListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to run DELETIONS, for every run rather than the focused one.
+   *
+   * The sibling of {@link onRunStatus} and needed for the same reason one step
+   * further: a status event can only ever describe a run that still exists, so
+   * without this a client that did not perform the delete had nothing able to
+   * tell it the row should go — and kept one for a run whose rows were gone.
+   */
+  onRunDeleted(listener: (runId: string) => void): () => void {
+    this.runDeletedListeners.add(listener);
+    return () => {
+      this.runDeletedListeners.delete(listener);
     };
   }
 

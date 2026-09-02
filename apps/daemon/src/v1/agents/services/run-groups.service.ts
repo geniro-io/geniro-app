@@ -44,6 +44,7 @@ export class RunGroupsService {
     name: string;
     color?: RunGroupColor;
     autoCwd?: string;
+    autoWorkflowId?: string;
   }): Promise<RunGroupWire> {
     const em = this.em.fork();
     const existing = await this.groupDao.listOrdered(em);
@@ -61,6 +62,7 @@ export class RunGroupsService {
         // still gets a sidebar they can tell apart at a glance.
         color: input.color ?? nextColor(existing),
         autoCwd: resolveAutoCwd(input.autoCwd ?? null),
+        autoWorkflowId: input.autoWorkflowId ?? null,
         // Appended, never inserted: a new group is the user's newest thought
         // and moving it is one click away.
         position: existing.length,
@@ -88,6 +90,7 @@ export class RunGroupsService {
       color?: RunGroupColor;
       collapsed?: boolean;
       autoCwd?: string | null;
+      autoWorkflowId?: string | null;
     },
   ): Promise<RunGroupWire> {
     const em = this.em.fork();
@@ -103,6 +106,12 @@ export class RunGroupsService {
     }
     if (patch.autoCwd !== undefined) {
       group.autoCwd = resolveAutoCwd(patch.autoCwd);
+    }
+    if (patch.autoWorkflowId !== undefined) {
+      // Stored as given: a slug is the library's own identity, so there is
+      // nothing to canonicalize, and a workflow deleted later simply stops
+      // matching rather than making this group unusable.
+      group.autoWorkflowId = patch.autoWorkflowId;
     }
     await em.flush();
     return toWire(group);
@@ -173,24 +182,47 @@ export class RunGroupsService {
   }
 
   /**
-   * Which group, if any, claims a new chat started in `cwd`.
+   * Which group, if any, claims a new run — by the WORKFLOW it runs, else by
+   * the folder it was started in.
    *
-   * A group claims the folder it names AND everything inside it, because a user
-   * who points a group at a project means the project — its packages, its
-   * apps — and an exact-match-only rule would silently never fire for the very
-   * chats they opened it for.
+   * A folder claim covers the folder it names AND everything inside it, because
+   * a user who points a group at a project means the project — its packages,
+   * its apps — and an exact-match-only rule would silently never fire for the
+   * very chats they opened it for. When several folders claim one run the MOST
+   * SPECIFIC wins: a group on `~/work/app` beats one on `~/work`, which is the
+   * only reading under which the two can usefully coexist.
    *
-   * When several claim the same run the MOST SPECIFIC wins: a group on
-   * `~/work/app` beats one on `~/work`, which is the only reading under which
-   * the two can usefully coexist. Sidebar order breaks a genuine tie, so the
-   * answer is deterministic rather than whatever the row order happened to be.
+   * A WORKFLOW claim OUTRANKS every folder claim, and that ranking is the whole
+   * reason the two rules can coexist. A team graph is run over a dozen
+   * repositories, so no folder names those runs — while the folders they run in
+   * are exactly the folders whose ordinary chats a user has already filed
+   * somewhere. Reading them as folder chats would put every workflow run into
+   * whichever project it happened to touch, which is the arrangement the
+   * workflow rule is asked for INSTEAD of.
+   *
+   * Sidebar order breaks a tie within either rank, so the answer is
+   * deterministic rather than whatever the row order happened to be.
    */
-  async resolveAutoGroupId(cwd: string | null): Promise<string | null> {
+  async resolveAutoGroupId(run: {
+    cwd: string | null;
+    /** The workflow slug this run executes, or null for a 1:1 chat. */
+    workflowId?: string | null;
+  }): Promise<string | null> {
+    const { cwd, workflowId = null } = run;
+    if (cwd === null && workflowId === null) {
+      return null;
+    }
+    const groups = await this.groupDao.listOrdered(this.em.fork());
+    if (workflowId !== null) {
+      const claim = groups.find((group) => group.autoWorkflowId === workflowId);
+      if (claim) {
+        return claim.id;
+      }
+    }
     if (cwd === null) {
       return null;
     }
-    const em = this.em.fork();
-    const claims = (await this.groupDao.listOrdered(em)).filter(
+    const claims = groups.filter(
       (group) =>
         group.autoCwd !== null && isWithinDirectory(cwd, group.autoCwd),
     );
@@ -252,5 +284,6 @@ function toWire(group: RunGroup): RunGroupWire {
     position: group.position,
     collapsed: group.collapsed,
     autoCwd: group.autoCwd,
+    autoWorkflowId: group.autoWorkflowId,
   };
 }

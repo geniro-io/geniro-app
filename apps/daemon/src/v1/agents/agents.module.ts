@@ -334,6 +334,13 @@ import { defaultSpawn } from './utils/spawn-cli';
     // Exported for main.ts's boot sweep — it runs before the server listens,
     // beside the other reconciles a crashed launch leaves behind.
     StrandedChildReaper,
+    // Exported so the WORKFLOW run listing backfills its pull requests the way
+    // the chat listing does. The live capture rides the event bus and covers a
+    // run whose turns end while a window is open; this covers the rest — a run
+    // whose `gh pr create` landed while the daemon was down, and every run that
+    // predates the capture existing, whose marker is null and is therefore read
+    // once from the beginning.
+    PullRequestCaptureService,
     // Exported so `CliAuthService` can drop an agent's cached vocabularies the
     // moment it signs that agent in or out: a different account is a different
     // set of models, and nothing about that moves the CLI's `--version`.
@@ -357,6 +364,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // report costs no new spawn: it serves the same per-binary memo the rest
     // of the daemon reads.
     AgentVersionService,
+    // Exported so a WORKFLOW run is filed by the same rule a chat is: a group
+    // can claim a workflow by slug, and the executor is the only place a
+    // workflow run row is created.
+    RunGroupsService,
   ],
 })
 export class AgentsModule {}

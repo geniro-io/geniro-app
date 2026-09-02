@@ -24,7 +24,12 @@ import { MetricsBroker } from '../../agents/services/metrics.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
-import type { RunCallCapability, WorkflowAgentNode } from '../graphs.types';
+import {
+  MAX_AWAIT_TIMEOUT_MS,
+  MIN_AWAIT_TIMEOUT_MS,
+  type RunCallCapability,
+  type WorkflowAgentNode,
+} from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
 
@@ -317,6 +322,74 @@ describe('McpServerService', () => {
     expect(tools[0]!.description).toContain('"question"');
     expect(tools[2]!.description).toContain('ask the user');
     expect(tools[2]!.description).toContain('await_agent');
+  });
+
+  it('offers await_agent a bounded wait, and says a pending answer is not a failure', async () => {
+    // The control that makes "wait or work in parallel" a decision the caller
+    // can take AFTER reading a callee's first answer — useless if the schema
+    // never mentions it, since a model calls what it is told about. The bounds
+    // are asserted against the LIVE constants: the ceiling is a measurement of
+    // the transport (a claude caller aborts its own fetch at ~338s), so a
+    // literal here would go on passing after the real one moved.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: {
+          name: string;
+          description: string;
+          inputSchema: {
+            properties: Record<string, { minimum?: number; maximum?: number }>;
+          };
+        }[];
+      }
+    ).tools;
+    const await_ = tools.find((t) => t.name === 'await_agent')!;
+    expect(await_.inputSchema.properties.timeout_ms).toMatchObject({
+      minimum: MIN_AWAIT_TIMEOUT_MS,
+      maximum: MAX_AWAIT_TIMEOUT_MS,
+    });
+    // The half a model gets wrong on its own: `pending` looks like a failure
+    // beside `ok`, and a caller that reads it as one re-issues a call that is
+    // running perfectly well — the descriptions are the routing logic here.
+    expect(await_.description).toContain('"pending"');
+    expect(await_.description).toContain('not a failure');
+  });
+
+  it('refuses a timeout_ms outside the window, or one that is not a whole number', async () => {
+    // NaN is the case worth pinning rather than the merely-large one: it is
+    // what a model's "5 seconds" parses to, `setTimeout` accepts it without
+    // complaint and fires immediately, so an unchecked one would answer
+    // `pending` on every collection and read as a callee that never gets
+    // anywhere.
+    for (const timeoutMs of [
+      0,
+      500,
+      MAX_AWAIT_TIMEOUT_MS + 1,
+      1.5,
+      Number.NaN,
+    ]) {
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'await_agent',
+          arguments: { call_id: 'call-1', timeout_ms: timeoutMs },
+        }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain('INVALID_ARGS');
+      expect(result.content[0]!.text).toContain('timeout_ms');
+    }
   });
 
   it('withholds ask_user_question from a node no turn can ask through', async () => {

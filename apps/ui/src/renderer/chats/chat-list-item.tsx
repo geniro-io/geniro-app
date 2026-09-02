@@ -14,6 +14,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { cn } from '../components/ui/utils';
+import { shortAgentLabel } from './agent-label';
 import { PullRequestBadge } from './pull-request-row';
 import { formatRelativeTime } from './relative-time';
 import {
@@ -38,19 +39,32 @@ import {
  * fact is not a fact about absence.
  *
  * Deliberately NOT shared with the agents panel, which renders `agent.agent`
- * raw in its own badge. That panel is about one run's agents and has room for
- * the exact kind; this is a 260px rail where every row carries the label. If a
- * third surface ever wants a display name, that is when this becomes a shared
- * mapping — promoting it now would make a rule out of one call site.
+ * raw in its own badge — that panel is about one run's agents and has room for
+ * the exact kind, where this is a 260px rail on which every row carries the
+ * label. The SHORTENING is shared, though: the call block's header became the
+ * third surface wanting a display name, which is the condition this note used
+ * to name for promoting it, so `cursor-agent → cursor` now lives in
+ * `agent-label.ts` and the two arms below are what stays local to a row whose
+ * label slot is always filled.
  */
-function agentLabel(agentKind: string | null, isWorkflow: boolean): string {
+function agentLabel(
+  agentKind: string | null,
+  isWorkflow: boolean,
+  workflowName: string | null,
+): string {
   if (isWorkflow) {
-    return 'graph';
+    // The WORKFLOW's own name when this client knows it, and `graph` only when
+    // it does not (a run of a workflow since deleted from the library).
+    //
+    // It said `graph` on every workflow row, which is the same word for every
+    // run of every workflow — true, and the least useful true thing available:
+    // the label slot is the one part of the row that says what KIND of thing it
+    // is, and the row's title now says what the run is DOING rather than which
+    // workflow it is (see the daemon's `ChatTitleService`). Asked for as the
+    // other half of that change — "name of workflow should be as chip".
+    return workflowName ?? 'graph';
   }
-  if (agentKind === null) {
-    return 'agent';
-  }
-  return agentKind === 'cursor-agent' ? 'cursor' : agentKind;
+  return shortAgentLabel(agentKind) ?? 'agent';
 }
 
 /**
@@ -79,6 +93,7 @@ export const ChatListItem = memo(function ChatListItem({
   runId,
   label,
   isWorkflow,
+  workflowName = null,
   status,
   lastMessage,
   lastActivityAt,
@@ -103,6 +118,11 @@ export const ChatListItem = memo(function ChatListItem({
   label: string;
   /** Show the workflow glyph before the label (a team run, not a 1:1 chat). */
   isWorkflow: boolean;
+  /**
+   * The workflow's own name, for the label chip — see {@link agentLabel}. Null
+   * for a 1:1 chat, and for a run whose workflow this client cannot name.
+   */
+  workflowName?: string | null;
   /**
    * The DISPLAY status, not the daemon's row value — wider than `RunStatus`
    * because `needs-input` is derived in the renderer (`displayRunStatus`) and
@@ -469,7 +489,7 @@ export const ChatListItem = memo(function ChatListItem({
               : `Driven by ${agentKind ?? 'an unrecorded CLI'}`
           }
           className="gap-1 px-1.5 py-0 font-normal">
-          {agentLabel(agentKind, isWorkflow)}
+          {agentLabel(agentKind, isWorkflow, workflowName)}
         </Badge>
       </span>
       <span className="flex items-center gap-1 text-xs">

@@ -2134,6 +2134,19 @@ export interface RunDeltaEvent {
   runId: string;
   /** Owning graph node; null for a 1:1 chat's single agent. */
   nodeId: string | null;
+  /**
+   * Which CONVERSATION of that node this is — the node's id for its own turn,
+   * `<nodeId>::<callId>` for one of its call threads, and the sentinel for a
+   * 1:1 chat's single agent.
+   *
+   * On the wire because a node can hold several conversations at once and each
+   * has its own window: keyed by `nodeId`, a caller running two of the same
+   * callee had both turns' readings land in one client-side entry, last writer
+   * winning, so the panel counted "2 active · 2 threads" honestly above a
+   * single ring flickering between two unrelated windows. `nodeId` stays beside
+   * it — that is who is working, and this is which of their threads.
+   */
+  ownerKey: string;
   text: string;
   /**
    * Reasoning tokens spent in the CURRENT stretch, or null when the agent is
@@ -2276,6 +2289,12 @@ export const RunGroupWireSchema = z.object({
     .nullable()
     .describe(
       'Canonical project folder whose new chats file themselves here — a run started in it, or anywhere inside it, matches; null for a group filled by hand',
+    ),
+  autoWorkflowId: z
+    .string()
+    .nullable()
+    .describe(
+      'Workflow slug whose runs file themselves here, whatever folder they run in; outranks the folder rule. Null for a group that claims no workflow',
     ),
 });
 export type RunGroupWire = z.infer<typeof RunGroupWireSchema>;

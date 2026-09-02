@@ -216,8 +216,8 @@ describe('scanTurns + openTurnWorkedMs', () => {
       userAt('2026-08-14T10:00:00.000Z'),
       untimedDone('2026-08-14T10:00:10.000Z'),
     ];
-    expect(scanTurns(items).open).toBeNull();
-    expect(openTurnWorkedMs(null, at('2026-08-14T11:00:00.000Z'))).toBe(0);
+    expect(scanTurns(items).open).toEqual([]);
+    expect(openTurnWorkedMs([], at('2026-08-14T11:00:00.000Z'))).toBe(0);
   });
 
   it('measures the turn in flight from its own start, not from now', () => {
@@ -307,7 +307,7 @@ describe('scanTurns + openTurnWorkedMs', () => {
     ]);
     const held = parkWhileHeld(open, at('2026-08-14T10:00:30.000Z'));
 
-    expect(held?.openSince).toHaveLength(2);
+    expect(held[0]?.openSince).toHaveLength(2);
     expect(openTurnWorkedMs(held, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
   });
 
@@ -329,7 +329,7 @@ describe('scanTurns + openTurnWorkedMs', () => {
     ]);
 
     // 20s of work before the first card, and both waits are the SAME wait.
-    expect(open?.openSince).toHaveLength(2);
+    expect(open[0]?.openSince).toHaveLength(2);
     expect(openTurnWorkedMs(open, at('2026-08-14T10:30:00.000Z'))).toBe(20_000);
   });
 
@@ -342,6 +342,102 @@ describe('scanTurns + openTurnWorkedMs', () => {
       userAt('2026-08-14T10:05:00.000Z'),
     ];
     expect(scanTurns(items).durations).toEqual(turnDurations(items));
+  });
+});
+
+describe('scanTurns over a WORKFLOW run', () => {
+  const at = (iso: string): number => Date.parse(iso);
+
+  /** The executor's own spawn row — a workflow node's turn begins here. */
+  const nodeRunning = (nodeId: string, iso: string): ChatItem =>
+    item('status', iso, { nodeId, payload: { nodeId, status: 'running' } });
+
+  const nodeDone = (
+    nodeId: string,
+    iso: string,
+    durationMs: number,
+  ): ChatItem =>
+    item('turn_complete', iso, { nodeId, payload: { usage: { durationMs } } });
+
+  it('measures the turn a NODE has in flight', () => {
+    // REPORTED as "timer in header is stuck": every row of a workflow carries a
+    // `nodeId`, the scan skipped all of them, and the header's live clock had
+    // no open turn to tick — so the figure sat on the settled sum for the whole
+    // of a turn, which for this run was 41 minutes.
+    const { open } = scanTurns(
+      [
+        // The trigger's own prompt, which belongs to no agent.
+        userAt('2026-08-14T10:00:00.000Z'),
+        nodeRunning('engineer', '2026-08-14T10:00:05.000Z'),
+      ],
+      { nodeScoped: true },
+    );
+    expect(open).toHaveLength(1);
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:00:35.000Z'))).toBe(30_000);
+  });
+
+  it('never opens a turn for the trigger prompt, which nothing can close', () => {
+    // The run's own input is `nodeId: null` and no node-level terminal row ever
+    // answers it, so reading it as a turn left a clock running from seq 0 for
+    // the life of the run — on top of the node clocks, and never settling.
+    const { open } = scanTurns([userAt('2026-08-14T10:00:00.000Z')], {
+      nodeScoped: true,
+    });
+    expect(open).toEqual([]);
+  });
+
+  it('counts several nodes at once, each from its own start', () => {
+    const { open } = scanTurns(
+      [
+        nodeRunning('engineer', '2026-08-14T10:00:00.000Z'),
+        nodeRunning('reviewer', '2026-08-14T10:00:20.000Z'),
+      ],
+      { nodeScoped: true },
+    );
+    // 30s of one and 10s of the other — SUMMED, as the settled total they join
+    // sums each turn's own duration.
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:00:30.000Z'))).toBe(40_000);
+  });
+
+  it('closes a node turn on its own terminal row, and keeps its duration', () => {
+    const { durations, open } = scanTurns(
+      [
+        nodeRunning('engineer', '2026-08-14T10:00:00.000Z'),
+        nodeDone('engineer', '2026-08-14T10:03:00.000Z', 170_000),
+      ],
+      { nodeScoped: true },
+    );
+    expect(open).toEqual([]);
+    // The per-row `took 2m 50s` a workflow node never used to get, for the same
+    // reason its clock never ticked.
+    expect([...durations.values()]).toEqual([{ ms: 170_000, source: 'cli' }]);
+  });
+
+  it('reopens on the node’s NEXT turn rather than staying shut', () => {
+    // A callee node runs a turn per call, so one settle must not end its clock
+    // for the run.
+    const { open } = scanTurns(
+      [
+        nodeRunning('engineer', '2026-08-14T10:00:00.000Z'),
+        nodeDone('engineer', '2026-08-14T10:01:00.000Z', 60_000),
+        nodeRunning('engineer', '2026-08-14T10:05:00.000Z'),
+      ],
+      { nodeScoped: true },
+    );
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:05:30.000Z'))).toBe(30_000);
+  });
+
+  it('leaves a CHAT run measured exactly as before', () => {
+    // The default mode is the 1:1 one, and it must not have moved: a chat has
+    // no `status` rows at all, and its turn still begins with the user.
+    const items = [
+      userAt('2026-08-14T10:00:00.000Z'),
+      cliDone('2026-08-14T10:00:10.000Z', 7618),
+      userAt('2026-08-14T10:05:00.000Z'),
+    ];
+    const { durations, open } = scanTurns(items);
+    expect([...durations.values()]).toEqual([{ ms: 7618, source: 'cli' }]);
+    expect(openTurnWorkedMs(open, at('2026-08-14T10:05:30.000Z'))).toBe(30_000);
   });
 });
 

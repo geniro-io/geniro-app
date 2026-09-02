@@ -87,16 +87,27 @@ export class PullRequestCaptureService implements OnModuleInit {
    * one: the bus is where both execution paths converge, and nothing in the
    * turn path should have to remember to do this.
    *
-   * Only a CHAT run (`nodeId === null`) and only a terminal item, which is
-   * what keeps this to one pass per turn rather than one per tool call — in
-   * the steady state that pass is a single indexed `max(seq)` read.
+   * A terminal item of ANY run, which is what keeps this to one pass per turn
+   * rather than one per tool call — in the steady state that pass is a single
+   * indexed `max(seq)` read.
+   *
+   * It used to require `nodeId === null` as well, and that was a WORKFLOW run
+   * excluded outright: every row of one carries a node id, so this subscriber
+   * never fired for a single one of them — and the other trigger, the chat
+   * listing, reads `RunDao.listChats`, which filters `workflowId: null`. Two
+   * independent gates, so a workflow's pull requests were never captured on
+   * any path. REPORTED as a shelf showing no chip over a transcript reading
+   * "Draft PR #5303 is open"; measured on that run, `pullRequests` and
+   * `pullRequestsScannedSeq` were both still null with the `gh pr create` at
+   * seq 1347. Nothing about the capture itself is per-node — it reads the run's
+   * whole transcript by seq — so a workflow needed no new machinery, only to
+   * stop being filtered out. One pass per NODE turn now, which is the same
+   * bound seen from the other side: a fan-out's nodes settle a handful of times
+   * between them, and each pass is that one `max(seq)` read.
    */
   onModuleInit(): void {
     this.bus.all().subscribe((event) => {
-      if (
-        event.item.nodeId !== null ||
-        !TURN_ENDING_KINDS.has(event.item.kind)
-      ) {
+      if (!TURN_ENDING_KINDS.has(event.item.kind)) {
         return;
       }
       void this.captureAndAnnounce(event.runId);

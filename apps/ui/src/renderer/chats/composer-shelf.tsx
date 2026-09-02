@@ -19,7 +19,13 @@ import {
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { SubagentRows } from './subagent-list';
-import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
+import {
+  type AgentTaskGroup,
+  TaskCount,
+  TaskGroupRows,
+  TaskIcon,
+  TaskScrollRows,
+} from './task-list';
 import type { AgentTaskRow } from './task-payload';
 import type { WorkflowEntry } from './transcript-groups';
 import { shelfThreadPullRequests } from './use-thread-pull-requests';
@@ -209,9 +215,16 @@ export function ThreadPullRequestChips({
  */
 export function RunningShellChips({
   shells,
+  agentNameOf,
   onOpen,
 }: {
   shells: readonly ShellRun[];
+  /**
+   * Which agent started each command — see {@link ShellRows}. This is the ONE
+   * list in the app that mixes several agents' shells, so it is the one place
+   * the question arises; a 1:1 chat passes none.
+   */
+  agentNameOf?: ReadonlyMap<string, string>;
   onOpen: (shell: ShellRun) => void;
 }): React.JSX.Element | null {
   if (shells.length === 0) {
@@ -238,7 +251,7 @@ export function RunningShellChips({
           </span>
         </>
       }>
-      <ShellRows shells={shells} onOpen={onOpen} />
+      <ShellRows shells={shells} agentNameOf={agentNameOf} onOpen={onOpen} />
     </HoverPopover>
   );
 }
@@ -356,11 +369,19 @@ export function TaskListChip({
   done,
   total,
   tasks,
+  groups,
   live,
 }: {
   done: number;
   total: number;
   tasks: readonly AgentTaskRow[];
+  /**
+   * The same rows split per agent, drawn as one block each. Absent leaves the
+   * flat list — the caller decides, on the terminals chip's rule: a 1:1 chat
+   * has one agent, so a heading over its only list is a word that names
+   * nothing the reader could have doubted.
+   */
+  groups?: readonly AgentTaskGroup[];
   /**
    * Whether anything is still working through the list — what stops the
    * in-progress row spinning on a thread nobody is advancing.
@@ -379,7 +400,14 @@ export function TaskListChip({
       align="start"
       className={SHELF_CHIP_WRAPPER_CLASS}
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
-      panelClassName="w-[20rem]"
+      // Grouped, the panel holds one bounded block per agent, so it needs a
+      // bound of its own — three agents' blocks stack past the top of the
+      // window otherwise. Flat, the single block already bounds itself and a
+      // second scroller over it would be one nested inside another.
+      panelClassName={cn(
+        'w-[20rem]',
+        groups && 'max-h-[26rem] overflow-y-auto',
+      )}
       trigger={
         <>
           <TaskIcon className="size-3.5 text-muted-foreground" />
@@ -389,10 +417,14 @@ export function TaskListChip({
           </span>
         </>
       }>
-      {/* The panel's own bounded list — it already scrolls itself and follows
-          the task that is RUNNING, so a thirteen-row list opens on the row that
-          matters rather than on five finished ones. */}
-      <TaskScrollRows tasks={tasks} live={live} />
+      {/* Each list is bounded and scrolls itself, following the task that is
+          RUNNING, so a thirteen-row list opens on the row that matters rather
+          than on five finished ones. */}
+      {groups === undefined ? (
+        <TaskScrollRows tasks={tasks} live={live} />
+      ) : (
+        <TaskGroupRows groups={groups} live={live} />
+      )}
     </HoverPopover>
   );
 }

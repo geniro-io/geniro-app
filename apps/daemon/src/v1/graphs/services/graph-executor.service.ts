@@ -24,10 +24,16 @@ import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.registry';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
-import { PartialStreamService } from '../../agents/services/partial-stream.service';
+import {
+  partialOwnerKey,
+  PartialStreamService,
+} from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
+import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import {
@@ -320,10 +326,12 @@ export class GraphExecutorService {
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
+    private readonly pullRequests: PullRequestCaptureService,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
+    private readonly sessions: AgentSessionRegistry,
     private readonly approvals: ApprovalRegistry,
     private readonly adapters: AgentAdapterRegistry,
     private readonly callTokens: CallTokenRegistry,
@@ -333,6 +341,7 @@ export class GraphExecutorService {
     private readonly mcpHarvest: McpHarvestStore,
     private readonly store: WorkflowStoreService,
     private readonly teardown: RunTeardownService,
+    private readonly groups: RunGroupsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly partials: PartialStreamService,
   ) {}
@@ -411,10 +420,20 @@ export class GraphExecutorService {
       (kind) => this.adapterFor(kind),
     );
 
+    // Which sidebar group claims this run — by the WORKFLOW first, which is the
+    // rule a graph exists for: one team graph runs over a dozen repositories,
+    // so no folder names its runs. Resolved here for the reason the chat
+    // service resolves its own here: this is the one place a workflow run row
+    // is created, so the rule cannot be missed by a second caller.
+    const groupId = await this.groups.resolveAutoGroupId({
+      cwd,
+      workflowId: input.slug,
+    });
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
         workflowId: input.slug,
+        groupId,
         status: 'running',
         agentKind: null,
         cwd,
@@ -424,7 +443,17 @@ export class GraphExecutorService {
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
         cursorMaxMode: input.cursorMaxMode ?? null,
-        title: workflow.name,
+        // NOT the workflow's name. A stamped title reads as "this run has been
+        // named", which is what kept `ChatTitleService` off workflow runs
+        // entirely — so every run of one workflow carried the identical row and
+        // the sidebar said which WORKFLOW three times and which TASK not once
+        // (reported as "title generation should work for workflow as well").
+        // Left null, `title === null` means unnamed here exactly as it does for
+        // a chat, and the seed prompt names it a moment later. Nothing is
+        // nameless in between: the renderer's own `runLabel` already falls back
+        // to the workflow's name for an untitled workflow run, which is also
+        // where that name now lives permanently — as the row's label chip.
+        title: null,
       },
       em,
     );
@@ -522,6 +551,13 @@ export class GraphExecutorService {
   async listRuns(): Promise<RunWire[]> {
     const em = this.em.fork();
     const runs = await this.runDao.listWorkflowRuns(em);
+    // The chat listing's own backfill, on the same terms: incremental and
+    // error-swallowing by construction, so this is a `max(seq)` read per run in
+    // the steady state and can never fail the listing. It is what recovers a
+    // pull request opened while no window was watching — and every one opened
+    // before a workflow run was captured at all, since those runs carry a null
+    // marker and are read once from the beginning.
+    await this.pullRequests.sync(runs, em);
     const previews = await this.itemDao.latestMessageTextPerRun(
       runs.map((run) => run.id),
       em,
@@ -547,6 +583,8 @@ export class GraphExecutorService {
       runId: row.runId,
       nodeId: row.nodeId,
       status: row.status,
+      contextTokens: row.contextTokens,
+      contextWindowTokens: row.contextWindowTokens,
       startedAt: row.startedAt,
       endedAt: row.endedAt,
       error: row.error,
@@ -787,6 +825,16 @@ export class GraphExecutorService {
     // `runningHandles`, or the ProcessRegistry — they ride the aggregate
     // handle, and only `liveSubTurns` holds the run open for them.
     const subTurnHandles = new Map<string, AgentTurnHandle>();
+    /**
+     * Every `AgentSessionRegistry` key this run opened, so the run can close
+     * what it opened — nothing else will.
+     *
+     * The registry's own reapers (idle window, LRU eviction, shutdown) bound a
+     * session that goes quiet; this bounds one that does not. A workflow run is
+     * the natural owner because it is the only thing that knows the work is
+     * over: the processes exist to outlive their TURNS, not their run.
+     */
+    const sessionKeys = new Set<string>();
     const subTurnSlots = createTurnSemaphore(MAX_PARALLEL_SUB_TURNS);
     let liveSubTurns = 0;
     const calleeTurnCounts = new Map<string, number>();
@@ -960,6 +1008,21 @@ export class GraphExecutorService {
       } finally {
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
+        // The processes die with the run, and this is the ONLY thing that ends
+        // them: a session-scoped CLI is never closed by its own turn ending.
+        // Before the token revoke below, which is the same idea one layer up —
+        // a child that outlives its run must not still be able to act.
+        //
+        // A kept session going quiet is the registry's to reap; a run that is
+        // OVER is this method's, because nothing else can know that. Note what
+        // it costs by design: background work still running when the last node
+        // settles is terminated here. That is the right way round — the run is
+        // the user's unit of work, and keeping processes alive past it would
+        // mean a finished workflow that never actually stops.
+        for (const key of sessionKeys) {
+          this.sessions.close(key);
+        }
+        sessionKeys.clear();
         // The call surface dies with the run — broker state dropped, every
         // caller-node token revoked, so a child that outlived its run can't
         // reopen its MCP endpoint.
@@ -1276,7 +1339,7 @@ export class GraphExecutorService {
             ) {
               this.partials.rememberWindow(
                 runId,
-                node.id,
+                ownerKey,
                 event.contextWindowTokens,
                 event.contextModel ?? null,
                 node.contextWindow ?? null,
@@ -1286,7 +1349,30 @@ export class GraphExecutorService {
             // turn_complete usage. This is what lets a NODE's meter move while
             // its turn runs — the owner key is the node, so a fan-out's agents
             // each report their own conversation rather than one shared figure.
-            this.partials.context(runId, node.id, node.id, event.contextTokens);
+            this.partials.context(
+              runId,
+              ownerKey,
+              node.id,
+              event.contextTokens,
+            );
+            // …and the DURABLE copy, which is what a client with no live plane
+            // reads. The live plane is dropped on a reload, a reconnect and a
+            // first open, and a node parked in `await_agent` emits nothing for
+            // minutes — so without this the ring simply went blank on exactly
+            // the node the reader was asking about. Fire-and-forget for the
+            // reason every other write on this path is: a failed bookkeeping
+            // write must not fail the turn.
+            enqueue(() =>
+              this.nodeStateDao
+                .rememberContext(
+                  runId,
+                  node.id,
+                  event.contextTokens,
+                  event.contextWindowTokens ?? null,
+                  em,
+                )
+                .catch(() => {}),
+            );
             return;
           }
           if (event.type === 'turn_model') {
@@ -1295,7 +1381,7 @@ export class GraphExecutorService {
             // and what teaches the cross-run cache a model it has never seen.
             this.partials.useModel(
               runId,
-              node.id,
+              ownerKey,
               adapter.getConfig().kind,
               event.model,
               node.contextWindow ?? null,
@@ -1312,10 +1398,25 @@ export class GraphExecutorService {
             // file that model's window under the requested one.
             this.partials.rememberWindow(
               runId,
-              node.id,
+              ownerKey,
               event.usage?.contextWindowTokens ?? null,
               event.usage?.contextModel ?? null,
               node.contextWindow ?? null,
+            );
+            // The result line is the ONLY one carrying the window, so it is
+            // where a node's denominator becomes durable — the count beside it
+            // is written too, since a turn that reported none mid-flight still
+            // states its total here.
+            enqueue(() =>
+              this.nodeStateDao
+                .rememberContext(
+                  runId,
+                  node.id,
+                  event.usage?.contextTokens ?? null,
+                  event.usage?.contextWindowTokens ?? null,
+                  em,
+                )
+                .catch(() => {}),
             );
           }
           const terminal = terminalStatus(event);
@@ -1394,7 +1495,7 @@ export class GraphExecutorService {
           // the model went quiet to prepare carries no text delta to close it
           // (see `PartialStreamService.endThinking`). Kept in step with the
           // chat path, which does the same at its own persist seam.
-          this.partials.endThinking(runId, node.id, node.id);
+          this.partials.endThinking(runId, ownerKey, node.id);
           const mapped = mapEventToItem(event);
           if (mapped) {
             // A callee sub-turn tags every streamed item with its callId so
@@ -1468,7 +1569,95 @@ export class GraphExecutorService {
           }
         });
       };
-      const handle: AgentTurnHandle = adapter.start(input, onEvent);
+      /**
+       * What the CLI does AFTER this turn's terminal line, filed under the node
+       * that was working — the graph's half of `ChatService`'s own between-turn
+       * handler, and the reason the process is now kept.
+       *
+       * A turn's `result` ends what the AGENT was saying; it does not stop the
+       * process, which routinely opens a further turn of its own when work it
+       * backgrounded reports back. Every row of that used to be dropped here —
+       * `adapter.start` supplied no sink — so a callee that launched a build and
+       * said so left nothing in the transcript afterwards but the sentence that
+       * it had started.
+       *
+       * Rows ONLY. It deliberately touches none of the turn bookkeeping above:
+       * `outcome`, `finalText` and `textChunks` describe a turn whose envelope
+       * the caller has already been handed, and rewriting any of them would
+       * change an answer that has been acted on. So this makes the work VISIBLE
+       * without re-opening a settled call — which is also why it stops at
+       * `runFinished`: past that point the run has written its own
+       * `turn_complete`, and a row after it would claim the workflow was still
+       * going when nothing can make it finish again.
+       */
+      const onOffTurnEvent = (event: AgentEvent): void => {
+        enqueue(async () => {
+          if (runFinished) {
+            return;
+          }
+          const mapped = mapEventToItem(event);
+          if (!mapped) {
+            return;
+          }
+          await persistItem(node.id, mapped.kind, mapped.role, {
+            ...(mapped.payload as Record<string, unknown>),
+            nodeId: node.id,
+            ...(callContext ? { callId: callContext.callId } : {}),
+          });
+        });
+      };
+      /**
+       * The same verdict the in-turn path gives, for a request that arrives with
+       * no turn left to carry it — see the `questionCapable && auto` branch in
+       * `onEvent`.
+       *
+       * Without it the between-turn default (refuse a permission) would reach
+       * the agent as the USER's own "no" on an unattended graph node, for a card
+       * nobody was ever shown — and the continuation that a backgrounded unit's
+       * report opens is made almost entirely of tool calls, so keeping the
+       * process alive while refusing everything it then tries to do would be a
+       * worse failure than killing it.
+       *
+       * Everything else HOLDS (`null`) rather than being decided: a question
+       * raised here can no longer be bridged to a caller whose call has settled,
+       * and no card can be drawn for it, so answering either way would be
+       * inventing a verdict. The request stays parked until the run closes the
+       * session, which is the honest end for it.
+       */
+      const onBetweenTurnApproval = (request: {
+        toolName: string;
+      }): boolean | null =>
+        questionCapable &&
+        approval === 'auto' &&
+        !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)
+          ? true
+          : null;
+      // One registry key per TURN, never per node: a callable DAG node can hold
+      // its own turn and several callee turns at once, and a key serving two
+      // concurrent turns would have the second refused — which the registry
+      // reads as "replace it", killing the first turn's process mid-work. A
+      // call id is unique per call and a DAG node runs once, so both are
+      // single-turn keys; the `call:`/`node:` prefixes keep a callable node's
+      // two kinds of turn from colliding on its own id.
+      // The live plane's key for THIS turn. Per CALL rather than per node,
+      // because a node can hold several at once — a caller running two of the
+      // same callee had both write to one key, so the panel showed one ring
+      // flickering between two unrelated conversations while honestly counting
+      // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
+      // so a client can still attribute the reading.
+      const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
+      const sessionKey = `${runId}::${
+        callContext ? `call:${callContext.callId}` : `node:${node.id}`
+      }`;
+      sessionKeys.add(sessionKey);
+      const handle: AgentTurnHandle = this.sessions.startTurn(
+        sessionKey,
+        adapter,
+        input,
+        onEvent,
+        onBetweenTurnApproval,
+        onOffTurnEvent,
+      );
 
       const finish = (): {
         outcome: NodeOutcome;

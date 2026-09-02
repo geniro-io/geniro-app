@@ -124,9 +124,11 @@ describe('RunGroupsService', () => {
     const group = await service.create({ name: 'App', autoCwd: dir });
     // The point of containment over equality: the user pointed the group at a
     // project, and its packages are inside that project.
-    expect(await service.resolveAutoGroupId(nested)).toBe(group.id);
-    expect(await service.resolveAutoGroupId(realpathSync(tmpdir()))).toBeNull();
-    expect(await service.resolveAutoGroupId(null)).toBeNull();
+    expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(group.id);
+    expect(
+      await service.resolveAutoGroupId({ cwd: realpathSync(tmpdir()) }),
+    ).toBeNull();
+    expect(await service.resolveAutoGroupId({ cwd: null })).toBeNull();
   });
 
   it('gives the run to the MOST SPECIFIC folder when two groups claim it', async () => {
@@ -138,7 +140,64 @@ describe('RunGroupsService', () => {
       name: 'This package',
       autoCwd: nested,
     });
-    expect(await service.resolveAutoGroupId(nested)).toBe(inner.id);
+    expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(inner.id);
+  });
+
+  it('files a run by its WORKFLOW, whatever folder it runs in', async () => {
+    const { service } = setup();
+    const group = await service.create({
+      name: 'Dev team',
+      autoWorkflowId: 'dev-team',
+    });
+    // No folder rule anywhere: a graph runs over many repositories, so the
+    // folder is exactly what cannot identify these runs.
+    expect(
+      await service.resolveAutoGroupId({
+        cwd: realpathSync(tmpdir()),
+        workflowId: 'dev-team',
+      }),
+    ).toBe(group.id);
+    // Another workflow, and an ordinary chat, are both unclaimed.
+    expect(
+      await service.resolveAutoGroupId({ cwd: nested, workflowId: 'other' }),
+    ).toBeNull();
+    expect(await service.resolveAutoGroupId({ cwd: nested })).toBeNull();
+  });
+
+  it('lets a WORKFLOW claim outrank a folder claim on the same run', async () => {
+    // The ranking is the whole reason both rules can coexist: a workflow run
+    // starts inside the very project whose ordinary chats the user already
+    // files elsewhere, so reading it as a folder chat puts it in the wrong
+    // group every time.
+    const { service } = setup();
+    const byFolder = await service.create({ name: 'App', autoCwd: nested });
+    const byWorkflow = await service.create({
+      name: 'Dev team',
+      autoWorkflowId: 'dev-team',
+    });
+    expect(
+      await service.resolveAutoGroupId({
+        cwd: nested,
+        workflowId: 'dev-team',
+      }),
+    ).toBe(byWorkflow.id);
+    // …and the folder rule still answers for a chat in the same folder.
+    expect(await service.resolveAutoGroupId({ cwd: nested })).toBe(byFolder.id);
+  });
+
+  it('clears the WORKFLOW rule on an explicit null too', async () => {
+    const { service } = setup();
+    const group = await service.create({
+      name: 'Dev team',
+      autoWorkflowId: 'dev-team',
+    });
+    const renamed = await service.update(group.id, { name: 'Renamed' });
+    expect(renamed.autoWorkflowId).toBe('dev-team'); // omitting changes nothing
+    const cleared = await service.update(group.id, { autoWorkflowId: null });
+    expect(cleared.autoWorkflowId).toBeNull();
+    expect(
+      await service.resolveAutoGroupId({ cwd: null, workflowId: 'dev-team' }),
+    ).toBeNull();
   });
 
   it('clears the auto-file rule on an explicit null, which omitting cannot say', async () => {
@@ -148,7 +207,7 @@ describe('RunGroupsService', () => {
     expect(renamed.autoCwd).not.toBeNull(); // an omitted key changes nothing
     const cleared = await service.update(group.id, { autoCwd: null });
     expect(cleared.autoCwd).toBeNull();
-    expect(await service.resolveAutoGroupId(nested)).toBeNull();
+    expect(await service.resolveAutoGroupId({ cwd: nested })).toBeNull();
   });
 
   it('does not sweep up chats that already exist when a rule is added', async () => {

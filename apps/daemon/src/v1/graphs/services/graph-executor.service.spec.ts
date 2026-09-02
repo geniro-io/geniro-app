@@ -47,6 +47,8 @@ import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import type { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import { PartialStreamService } from '../../agents/services/partial-stream.service';
 import { ProcessRegistry } from '../../agents/services/process-registry';
+import { PullRequestCaptureService } from '../../agents/services/pull-request-capture.service';
+import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
 import type { SkillHarvestStore } from '../../agents/services/skill-harvest.store';
 import type { Item } from '../../runs/entity/item.entity';
@@ -174,6 +176,8 @@ interface FakeNodeRow {
   nodeId: string;
   status: string;
   agentSessionId: string | null;
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
   startedAt: number | null;
   endedAt: number | null;
   error: string | null;
@@ -181,6 +185,31 @@ interface FakeNodeRow {
 
 class FakeNodeStateDao {
   readonly rows = new Map<string, FakeNodeRow>();
+  /**
+   * The durable per-node context reading, following the real DAO's two rules:
+   * a figure the reading OMITS is left alone (a `context_progress` carries a
+   * count with no window and a `turn_complete` carries the window, so writing
+   * the absent half as null would have each erase what the other recorded),
+   * and a row that does not exist is not CREATED — a reading belongs to a turn,
+   * which always has its pending row by the time one arrives.
+   */
+  async rememberContext(
+    runId: string,
+    nodeId: string,
+    contextTokens: number | null,
+    contextWindowTokens: number | null,
+  ): Promise<void> {
+    const found = this.row(runId, nodeId);
+    if (!found) {
+      return;
+    }
+    if (contextTokens !== null && contextTokens > 0) {
+      found.contextTokens = contextTokens;
+    }
+    if (contextWindowTokens !== null && contextWindowTokens > 0) {
+      found.contextWindowTokens = contextWindowTokens;
+    }
+  }
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
   readonly hardDeleted: unknown[] = [];
   private key(runId: string, nodeId: string): string {
@@ -216,6 +245,8 @@ class FakeNodeStateDao {
       nodeId,
       status: 'pending',
       agentSessionId: null,
+      contextTokens: null,
+      contextWindowTokens: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -236,6 +267,8 @@ class FakeNodeStateDao {
       nodeId,
       status: patch.status,
       agentSessionId: null,
+      contextTokens: null,
+      contextWindowTokens: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -271,6 +304,16 @@ interface FakeTurn {
   finish: () => void;
   respondApproval: ReturnType<typeof vi.fn>;
   cancelled: boolean;
+  /**
+   * The sink the executor gave this turn's SESSION for events arriving after
+   * the turn settles, and the answer it supplied for an approval request that
+   * arrives there — the two halves of a kept process's between-turn contract,
+   * exposed so a test can drive the CLI carrying on by itself.
+   */
+  emitOffTurn: (event: AgentEvent) => void;
+  betweenTurnApproval: (request: { toolName: string }) => boolean | null;
+  /** Whether the process behind this turn is still alive. */
+  sessionClosed: boolean;
 }
 
 class FakeAdapter {
@@ -329,15 +372,80 @@ class FakeAdapter {
   ): InstalledApprovalSupport {
     return this.real.approvalSupportFrom(capabilities);
   }
-  start(
-    input: AgentTurnInput,
-    onEvent: (event: AgentEvent) => void,
-  ): { done: Promise<void>; cancel: () => void; respondApproval: unknown } {
+  /**
+   * The seam the executor actually takes, since every workflow turn now runs
+   * on a session the RUN owns rather than on a process that dies with its turn.
+   *
+   * The double models the two properties the executor depends on and nothing
+   * else: the process outlives its turn (so `close` is the only thing that ends
+   * it) and it carries the between-turn sinks. `throwNextStart` is raised HERE
+   * rather than from `startTurn` because that is where the real failure it
+   * stands for happens — `prepareTurn` writes its config file inside
+   * `startSession`, before any turn exists — and because a session that threw
+   * out of `startTurn` would be one nothing could ever close.
+   */
+  startSession(
+    _input: AgentTurnInput,
+    opts: {
+      onBetweenTurnEvent?: (event: AgentEvent) => void;
+      betweenTurnApproval?: (request: { toolName: string }) => boolean | null;
+    } = {},
+  ): unknown {
     if (this.throwNextStart) {
       const err = this.throwNextStart;
       this.throwNextStart = null;
       throw err;
     }
+    let live: FakeTurn | null = null;
+    let closed = false;
+    let resolveClosed!: () => void;
+    const closedPromise = new Promise<void>((resolve) => {
+      resolveClosed = resolve;
+    });
+    return {
+      ask: () => Promise.resolve(null),
+      startTurn: (
+        turnInput: AgentTurnInput,
+        onEvent: (event: AgentEvent) => void,
+      ) => {
+        // One turn per fake session, which is what the executor asks of it: it
+        // opens a key per TURN. A second would mean the key collided, and
+        // returning a handle for it would hide that.
+        if (closed || (live !== null && !live.cancelled)) {
+          return null;
+        }
+        const turn = this.start(turnInput, onEvent);
+        live = this.starts[this.starts.length - 1]!;
+        live.emitOffTurn = (event) => opts.onBetweenTurnEvent?.(event);
+        live.betweenTurnApproval = (request) =>
+          opts.betweenTurnApproval?.(request) ?? null;
+        return turn;
+      },
+      get idle(): boolean {
+        return live === null;
+      },
+      get alive(): boolean {
+        return !closed;
+      },
+      retired: false,
+      parked: false,
+      close: () => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        if (live) {
+          live.sessionClosed = true;
+        }
+        resolveClosed();
+      },
+      closed: closedPromise,
+    };
+  }
+  start(
+    input: AgentTurnInput,
+    onEvent: (event: AgentEvent) => void,
+  ): { done: Promise<void>; cancel: () => void; respondApproval: unknown } {
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
@@ -349,6 +457,11 @@ class FakeAdapter {
       finish: resolveDone,
       respondApproval,
       cancelled: false,
+      // Replaced by `startSession` the moment it hands this turn back; the
+      // no-op stands only for the window before that.
+      emitOffTurn: () => undefined,
+      betweenTurnApproval: () => null,
+      sessionClosed: false,
     };
     this.starts.push(turn);
     return {
@@ -407,6 +520,8 @@ function setup(
     mergeOk?: boolean;
     gitTracked?: boolean;
     mergeImpl?: () => Promise<unknown>;
+    /** The group a claiming rule would file this run's workflow under. */
+    autoGroupId?: string | null;
   } = {},
 ): {
   service: GraphExecutorService;
@@ -531,10 +646,20 @@ function setup(
   const service = new GraphExecutorService(
     em,
     runDao as unknown as RunDao,
+    // The listing's pull-request backfill. A no-op double: what it does is
+    // pinned in its own spec, and a real one here would read a transcript
+    // these fakes do not keep.
+    {
+      sync: async () => {},
+    } as unknown as PullRequestCaptureService,
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
     bus,
     registry,
+    // The SAME instance the teardown holds, as DI hands out: the executor opens
+    // this run's processes on it and the teardown closes them, so two would let
+    // a delete pass while leaving the real ones running.
+    sessions,
     approvals,
     new AgentAdapterRegistry(
       claude as unknown as ClaudeAdapter,
@@ -547,6 +672,15 @@ function setup(
     mcpHarvest,
     workflowStore,
     teardown,
+    // The real rule over a fake store: a group claiming this run's workflow
+    // slug is what the executor files it under, and `autoGroupId` is the seam
+    // a test sets to say a group does.
+    {
+      resolveAutoGroupId: async (run: { workflowId?: string | null }) =>
+        run.workflowId !== null && run.workflowId !== undefined
+          ? (opts.autoGroupId ?? null)
+          : null,
+    } as unknown as RunGroupsService,
     {
       token: 'launch-token',
       version: '0.0.0-test',
@@ -616,6 +750,26 @@ const LINEAR: Workflow = {
 };
 
 describe('GraphExecutorService', () => {
+  it('files the run into the group that claims its WORKFLOW', async () => {
+    // A workflow run row is created HERE and nowhere else, so a rule applied
+    // only by the chat service would never reach one — which is the whole of
+    // "file every run of this graph into that folder".
+    const { service, runDao } = setup(4870, { autoGroupId: 'grp-dev-team' });
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered({
+        name: 'one',
+        nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+        edges: [],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.groupId).toBe('grp-dev-team');
+  });
+
   it('ANNOUNCES a COMPLETED settle, so a workflow row in the sidebar goes live too', async () => {
     // The chat sidebar lists workflow runs beside chats. The chat path writes
     // status through a helper that also publishes; the executor wrote the
@@ -3621,5 +3775,229 @@ describe('instruction blocks past the ceiling', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+});
+
+describe('GraphExecutorService — a callee process outlives its turn', () => {
+  const CALL_WORKFLOW: Workflow = {
+    name: 'bg',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+
+  it('keeps the callee alive after its turn settles, and closes it when the RUN ends', async () => {
+    // The defect this replaces: a workflow turn ran on a process that died two
+    // seconds after its own terminal line (`TURN_END_EXIT_GRACE_MS`), so a
+    // callee that backgrounded a build, said "I started it" and settled had
+    // that build killed underneath it — while the caller carried on believing
+    // the work was running. A chat turn had already been given the kept process
+    // for exactly this reason; a graph turn had not.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'start the build in the background',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'I started the build in the background');
+    // The caller has its answer and the turn is over — and the process must
+    // NOT be, or the work the answer describes is already dead.
+    expect(await call).toMatchObject({ status: 'ok' });
+    await drain();
+    expect(callee.sessionClosed).toBe(false);
+
+    // The run is what ends them: nothing else can know the work is over.
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(callee.sessionClosed).toBe(true);
+  });
+
+  it('files what the callee does AFTER its turn under that callee and its call', async () => {
+    // A kept process is only half the fix: the CLI opens a further turn of its
+    // own when the backgrounded work reports, and every row of it used to be
+    // dropped for want of a sink. The callId is what puts them inside the call
+    // block the reader is already looking at, rather than loose under the node.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    callee.emitOffTurn({
+      type: 'text',
+      text: 'the build finished: 0 errors',
+    });
+    await drain();
+    const row = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' &&
+        JSON.stringify(item.payload).includes('0 errors'),
+    );
+    expect(row?.nodeId).toBe('callee');
+    expect(JSON.parse(row!.payload as string)).toMatchObject({
+      text: 'the build finished: 0 errors',
+      callId: 'call-1',
+    });
+  });
+
+  it('answers an off-turn permission the way the in-turn path would', async () => {
+    // The continuation a backgrounded unit's report opens is made almost
+    // entirely of tool calls, and `spawn-cli`'s own default between turns is to
+    // REFUSE a permission — which reaches the agent as the user's own "no" on
+    // an unattended node, for a card nobody was shown. Keeping the process
+    // alive while denying everything it then tries would be a worse failure
+    // than killing it, so the auto node's verdict has to follow it off-turn.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'go',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+
+    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(true);
+    // A QUESTION is not the node's to answer once its call has settled: there
+    // is no caller left to bridge it to and no card to draw, so it HOLDS
+    // rather than being decided in the user's name either way.
+    expect(callee.betweenTurnApproval({ toolName: 'AskUserQuestion' })).toBe(
+      null,
+    );
+  });
+});
+
+describe('GraphExecutorService — a node’s context reading', () => {
+  const CALL_WORKFLOW: Workflow = {
+    name: 'ctx',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+
+  it('files the reading DURABLY on the node, so a cold client can still draw it', async () => {
+    // The live plane is ephemeral — dropped on a reload, a reconnect and a
+    // first open — and a node parked in `await_agent` emits nothing for
+    // minutes, so the ring went blank on exactly the node the reader was
+    // asking about. A chat has had `Run.contextTokens` for this reason since
+    // the same defect was reported against it; `node_state` had no such column
+    // at all. Reported as "here i dont see manager context".
+    const { service, claude, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    claude.starts[0]!.emit({
+      type: 'context_progress',
+      contextTokens: 47_221,
+      contextWindowTokens: 272_000,
+    });
+    await drain();
+    expect(nodeDao.row(run.id, 'a')).toMatchObject({
+      contextTokens: 47_221,
+      contextWindowTokens: 272_000,
+    });
+
+    // A later reading that names no WINDOW must not erase the one recorded:
+    // `context_progress` routinely carries a count alone, and writing the
+    // absent half as null would have each reading erase the other's.
+    claude.starts[0]!.emit({
+      type: 'context_progress',
+      contextTokens: 51_004,
+    });
+    await drain();
+    expect(nodeDao.row(run.id, 'a')).toMatchObject({
+      contextTokens: 51_004,
+      contextWindowTokens: 272_000,
+    });
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('keys the LIVE reading per CALL, so two calls on one node cannot overwrite each other', async () => {
+    // The panel counted "2 active · 2 threads" honestly above a single ring,
+    // because the owner key was the NODE: a caller running two of the same
+    // callee had both turns writing to one entry, last writer winning, so the
+    // ring flickered between two unrelated windows.
+    const { service, claude, callBroker, deltas } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await first;
+    await second;
+    await drain();
+
+    const [callOne, callTwo] = claude.starts.slice(1, 3);
+    callOne!.emit({ type: 'context_progress', contextTokens: 10_000 });
+    callTwo!.emit({ type: 'context_progress', contextTokens: 90_000 });
+    await drain();
+
+    // Two owner keys, two readings — and both name the NODE, so a client can
+    // still attribute each to the agent that produced it.
+    const readings = deltas.filter((d) => d.contextTokens !== undefined);
+    expect(readings.find((d) => d.ownerKey === 'callee::call-1')).toMatchObject(
+      { nodeId: 'callee', contextTokens: 10_000 },
+    );
+    expect(readings.find((d) => d.ownerKey === 'callee::call-2')).toMatchObject(
+      { nodeId: 'callee', contextTokens: 90_000 },
+    );
+
+    completeTurn(callOne!, 'one done');
+    completeTurn(callTwo!, 'two done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 });

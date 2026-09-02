@@ -21,6 +21,17 @@
 export interface TranscriptNodeMeta {
   name: string;
   kind: 'agent' | 'trigger';
+  /**
+   * The CLI this node runs on (`claude`, `cursor-agent`), or null where the
+   * graph does not say — a trigger, or a node loaded from a workflow whose
+   * agent field is unset.
+   *
+   * A node's NAME is the user's word for the persona and says nothing about
+   * what is under it, which is the whole reason this is a separate field: a
+   * workflow routinely mixes the two CLIs, and which one answered is a fact
+   * about the reply that nothing else on the row carries.
+   */
+  agent?: string | null;
 }
 
 /** Read a string field out of an item's payload, defensively. */

@@ -1521,6 +1521,12 @@ export interface CreateRunGroupDto {
      * @memberof CreateRunGroupDto
      */
     autoCwd?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateRunGroupDto
+     */
+    autoWorkflowId?: string;
 }
 
 
@@ -2235,6 +2241,18 @@ export interface NodeStateDto {
      * @type {number}
      * @memberof NodeStateDto
      */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
+    contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
     startedAt: number | null;
     /**
      * 
@@ -2635,6 +2653,12 @@ export interface RunGroupDto {
      * @memberof RunGroupDto
      */
     autoCwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunGroupDto
+     */
+    autoWorkflowId: string | null;
 }
 
 
@@ -3044,6 +3068,12 @@ export interface UpdateRunGroupDto {
      * @memberof UpdateRunGroupDto
      */
     autoCwd?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateRunGroupDto
+     */
+    autoWorkflowId?: string | null;
 }
 
 

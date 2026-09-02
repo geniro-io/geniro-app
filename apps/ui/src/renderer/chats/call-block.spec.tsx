@@ -82,15 +82,51 @@ afterEach(() => {
 });
 
 describe('CallBlock', () => {
-  it('renders the geniro communication card: eyebrow, avatar pair, name line, status chip — always open', () => {
+  /** Open the card — every one of these starts shut now. */
+  function expand(): void {
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-expanded]',
+    )!;
+    act(() => toggle.click());
+  }
+
+  it('opens SHUT, with the callee’s last words as its state', () => {
+    // REPORTED as "those blocks should be collapsable. By default it should be
+    // collapsed. And we always should see last message there, like its current
+    // state" — a manager routing work to three agents drew three cards each
+    // holding a brief, a whole sub-turn and a result, so its own sentences were
+    // pages apart.
     act(() =>
       root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
     );
 
-    // Always-open card (no collapse toggle), identity in the header.
+    const toggle = container.querySelector('button[aria-expanded]')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // The header still says who and how it is going.
+    expect(container.textContent).toContain('Orchestrator → Poet');
+    expect(container.querySelector('svg.animate-spin')).not.toBeNull();
+    // …and the callee's newest words stand in for the body.
+    expect(
+      container.querySelector('[data-slot="block-summary"]')?.textContent,
+    ).toBe('Waves rise and retreat');
+    // The body itself is not drawn.
+    expect(container.textContent).not.toContain(
+      'Providing instructions for Poet',
+    );
+  });
+
+  it('renders the geniro communication card: eyebrow, avatar pair, name line, status chip', () => {
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
+    expand();
+
+    // Identity in the header.
     expect(container.textContent).toContain('Agent communication');
     expect(container.textContent).toContain('Orchestrator → Poet');
-    expect(container.querySelector('button[aria-expanded]')).toBeNull();
+    // Open, the summary steps aside — the rows below it are the answer, and
+    // the line would restate the last of them.
+    expect(container.querySelector('[data-slot="block-summary"]')).toBeNull();
     // Wire plumbing stays out — no mode label, no call id.
     expect(container.textContent).not.toContain('async');
     expect(container.textContent).not.toContain('call-1');
@@ -104,6 +140,223 @@ describe('CallBlock', () => {
     expect(container.textContent).not.toContain('Poet started');
     // The callee's streamed messages render INSIDE the card, live.
     expect(container.textContent).toContain('Waves rise and retreat');
+  });
+
+  it('names the callee ONCE — its rows inside carry no sender frame of their own', () => {
+    // Reported over a six-message sub-turn: the same face and the same
+    // `Engineer · 14:51` line under every row, inside a card whose header had
+    // just said `Manager → Engineer`. The card IS the identity, which is the
+    // rule the sub-agent block already applied to a delegate's thread.
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
+    expand();
+
+    expect(container.textContent).toContain('Orchestrator → Poet');
+    expect(container.textContent).toContain('Waves rise and retreat');
+    expect(container.querySelector('[data-slot="sender-row"]')).toBeNull();
+  });
+
+  it('states what the callee SPENT in the footer, beside the tool count', () => {
+    // ASKED FOR as "for footer lets write also tokens and money". Both figures
+    // were already in the block — on the `turn_complete` row — and reachable
+    // only by opening it, which on a card that is shut by default is two
+    // clicks to the number a fan-out is compared by.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item('tool_call', { id: 't1', name: 'Read', input: {} }, 'poet'),
+      item('tool_result', { id: 't1', result: 'ok' }, 'poet'),
+      item(
+        'message',
+        { text: 'Waves rise and retreat', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'turn_complete',
+        {
+          callId: 'call-1',
+          usage: {
+            inputTokens: 310,
+            outputTokens: 117_300,
+            cacheReadTokens: 48_300_000_000,
+            costUsd: 44.17,
+          },
+        },
+        'poet',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    expand();
+
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    // INPUT + OUTPUT, the agents panel's own rule — never the 48.3B of cache
+    // reads, which would print the same figure on every block.
+    expect(footer.textContent).toContain('117.6k tokens');
+    expect(footer.textContent).toContain('$44.17');
+    // The border is what separates the summary from the rows above it.
+    expect(footer.className).toContain('border-t');
+  });
+
+  it('draws NO figure for a call whose turn has not ended', () => {
+    // There is no live token or cost channel on either CLI, so both land when
+    // the turn does — and a `0 tokens · $0.00` would claim a measurement
+    // nobody took.
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
+    expand();
+
+    // Nothing to summarize at all here, so there is no footer — and where one
+    // IS drawn (a block with tools), neither figure appears until its turn
+    // lands.
+    expect(
+      container.querySelector('[data-slot="block-footer-tokens"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-slot="block-footer-cost"]'),
+    ).toBeNull();
+  });
+
+  it('states the SPENT figures on the shut card, beside the last message', () => {
+    // ASKED FOR as "here i should see tokens and price as well" — the footer's
+    // figures were behind the fold, so a shut card said how far the callee had
+    // got and nothing about what it had cost.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Waves rise and retreat', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'turn_complete',
+        {
+          callId: 'call-1',
+          usage: { inputTokens: 310, outputTokens: 117_300, costUsd: 44.17 },
+        },
+        'poet',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]')!;
+    expect(
+      shut.querySelector('[data-slot="call-summary-tokens"]')?.textContent,
+    ).toBe('117.6k');
+    expect(
+      shut.querySelector('[data-slot="call-summary-cost"]')?.textContent,
+    ).toBe('$44.17');
+    // The words are still there, and they are the half that gives way.
+    expect(shut.textContent).toContain('Waves rise and retreat');
+  });
+
+  it('offers the callee’s TASK LIST from the shut card', async () => {
+    // ASKED FOR as "also current tasks icon with popover". A checklist answers
+    // "how far through is it" without reading anything, and the fold had put
+    // it two clicks away.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'task_list',
+        {
+          callId: 'call-1',
+          mode: 'snapshot',
+          tasks: [
+            { id: '1', title: 'read the brief', status: 'completed' },
+            { id: '2', title: 'write the haiku', status: 'in_progress' },
+            { id: '3', title: 'check the metre', status: 'pending' },
+          ],
+        },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const chip = container.querySelector<HTMLButtonElement>(
+      '[data-slot="call-tasks"] button',
+    )!;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain('1/3');
+    // The list itself is behind it — not on the shut card.
+    expect(container.textContent).not.toContain('check the metre');
+    act(() => chip.click());
+    expect(document.body.textContent).toContain('check the metre');
+  });
+
+  it('draws no task chip for a callee that keeps no list', () => {
+    // `0/0` states that this agent has no plan, which is not a fact about its
+    // progress.
+    act(() =>
+      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
+    );
+    expect(container.querySelector('[data-slot="call-tasks"]')).toBeNull();
+  });
+
+  it('says which CLI the callee runs on, and nothing when the graph has not', () => {
+    // A graph mixes the two CLIs and a node's NAME is the user's word for a
+    // persona, so which one answered is a fact nothing else on the card
+    // carries. `cursor-agent` is stated as `cursor` — the header has room for
+    // one word beside a name that truncates.
+    const withAgent: ReadonlyMap<string, TranscriptNodeMeta> = new Map([
+      ['orch', { name: 'Orchestrator', kind: 'agent', agent: 'claude' }],
+      ['poet', { name: 'Poet', kind: 'agent', agent: 'cursor-agent' }],
+    ]);
+    act(() => root.render(<CallBlock block={makeBlock()} nodes={withAgent} />));
+    expect(container.textContent).toContain('cursor');
+    expect(container.textContent).not.toContain('cursor-agent');
+
+    // The graph did not say — so nothing is drawn rather than a guess.
+    act(() => root.render(<CallBlock block={makeBlock()} nodes={NODES} />));
+    expect(container.querySelector('[data-slot="badge"]')).toBeNull();
   });
 
   it('a COMPLETED call ends with the "Result from X" section', () => {
@@ -139,6 +392,13 @@ describe('CallBlock', () => {
       throw new Error('expected a call block');
     }
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    // Shut, a finished call states its RESULT — the callee's final answer,
+    // which lands after every row in the block.
+    expect(
+      container.querySelector('[data-slot="block-summary"]')?.textContent,
+    ).toBe('Waves rise and retreat');
+    expand();
 
     // The final message renders under the "Result from X" label (pulled out
     // of the flow), the status chip flips to done.

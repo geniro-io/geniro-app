@@ -117,6 +117,42 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * Record this node's latest context reading — the per-node twin of
+   * `RunDao.rememberContext`, and it follows that method's rules exactly.
+   *
+   * Neither figure is ever cleared by a reading that OMITS it: a
+   * `context_progress` carries a count with no window and a `turn_complete`
+   * carries the window, so writing the absent half as null would have each
+   * erase what the other had just recorded. A non-positive count is not a
+   * measurement and is ignored for the same reason it is on the live plane.
+   *
+   * It writes nothing when no row exists yet, unlike `saveSessionId` beside it:
+   * a reading is about a turn, and a turn always has its `createPending` row by
+   * the time one arrives — creating one HERE would invent a node with a status
+   * nobody chose.
+   */
+  async rememberContext(
+    runId: string,
+    nodeId: string,
+    contextTokens: number | null,
+    contextWindowTokens: number | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em;
+    const existing = await this.getRepo(txEm).findOne({ runId, nodeId });
+    if (!existing) {
+      return;
+    }
+    if (contextTokens !== null && contextTokens > 0) {
+      existing.contextTokens = contextTokens;
+    }
+    if (contextWindowTokens !== null && contextWindowTokens > 0) {
+      existing.contextWindowTokens = contextWindowTokens;
+    }
+    await em.flush();
+  }
+
+  /**
    * Forget the CLI session this node was resuming, so the next turn starts a
    * fresh one.
    *

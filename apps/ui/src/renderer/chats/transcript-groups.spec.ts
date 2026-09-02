@@ -7,6 +7,7 @@ import {
   buildSubagentBlocks,
   buildTurnBlocks,
   type CallBlockEntry,
+  callBlockSummary,
   collectSubagentBlocks,
   countTools,
   groupTranscript,
@@ -324,6 +325,142 @@ describe('groupTranscript', () => {
         item('show_metrics', { metrics: [{ label: 'Coverage', value: 0.82 }] }),
       ]),
     ).toEqual([]);
+  });
+
+  describe('an ORPHAN geniro tool result', () => {
+    // The envelope the daemon serializes, as it actually reached the row —
+    // claude wraps a result in content blocks and writes `name: null` on it.
+    const envelope = (text: string): unknown => ({
+      id: 'toolu_orphan',
+      name: null,
+      result: [{ type: 'text', text }],
+    });
+
+    it('is hidden when its own call fell out of the window', () => {
+      // REPORTED as "I see raw tool result". Measured on the reporter's run:
+      // the `await_agent` sat at seq 899 and its result at 1099, with the
+      // loaded window starting near 926 — so `hiddenCallIds` never saw the
+      // call and the envelope was printed under a RESULT caption.
+      const entries = groupTranscript([
+        item(
+          'tool_result',
+          envelope(
+            '{"status":"ok","result":{"call_id":"call-3","agent":"engineer","text":"22 files"}}',
+          ),
+        ),
+      ]);
+      expect(entries).toEqual([]);
+    });
+
+    it('is hidden for the arms whose call id sits at the ROOT', () => {
+      // `pending` and `question` carry it there rather than under `result`.
+      expect(
+        groupTranscript([
+          item(
+            'tool_result',
+            envelope('{"status":"pending","call_id":"call-1","agent":"qa"}'),
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it('leaves an ordinary orphan result alone', () => {
+      // The guard is geniro's OWN envelope, never "a result that looks like
+      // JSON" — a user's own MCP server answering with an object must still
+      // render, and so must an agent's JSON output.
+      const entries = groupTranscript([
+        item('tool_result', envelope('{"status":"ok","files":3}')),
+      ]);
+      expect(entries.map((e) => e.type)).toEqual(['item']);
+    });
+
+    it('leaves PROSE alone even when it quotes an envelope', () => {
+      const entries = groupTranscript([
+        item(
+          'tool_result',
+          envelope('the call returned {"status":"ok","call_id":"call-3"}'),
+        ),
+      ]);
+      expect(entries.map((e) => e.type)).toEqual(['item']);
+    });
+  });
+
+  describe('callBlockSummary', () => {
+    function callBlockOf(items: ChatItem[]): CallBlockEntry {
+      const found = groupTranscript(items).find(
+        (entry) => entry.type === 'call-block',
+      );
+      if (found?.type !== 'call-block') {
+        throw new Error('expected a call block');
+      }
+      return found;
+    }
+
+    it('is the callee’s newest words while the call runs', () => {
+      // What a COLLAPSED card shows as its current state — asked for with the
+      // fold itself ("we always should see last message there").
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Write a haiku.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'first thought', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'second thought', callId: 'call-1' }, 'poet'),
+      ]);
+      expect(callBlockSummary(block)).toBe('second thought');
+    });
+
+    it('is the RESULT once there is one — it lands after every row', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Write a haiku.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item('message', { text: 'working on it', callId: 'call-1' }, 'poet'),
+        item(
+          'message',
+          { text: 'Waves rise and retreat', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'status',
+          { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+      expect(block.result).toBe('Waves rise and retreat');
+      expect(callBlockSummary(block)).toBe('Waves rise and retreat');
+    });
+
+    it('is NULL before the callee has spoken, and never the caller’s ask', () => {
+      // The ask is what the block was asked, not where it has got to — and the
+      // header already names both ends of the call.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Write a haiku.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+      expect(callBlockSummary(block)).toBeNull();
+    });
   });
 
   it('counts a scorecard as a CARD everywhere the other three are', () => {
@@ -644,8 +781,15 @@ describe('groupTranscript — call blocks', () => {
     ]);
 
     const block = entries[0] as CallBlockEntry;
+    // The callee's work is folded by the SAME pipeline the main flow ends
+    // with, `buildTurnBlocks` included — that last step is what makes its
+    // prose render like an ordinary thread's instead of in a bubble of its
+    // own. So the group is one level in, and still one group.
     expect(block.entries).toHaveLength(1);
-    expect(block.entries[0]?.type).toBe('tools');
+    const turn = block.entries[0] as TurnBlockEntry;
+    expect(turn.type).toBe('turn-block');
+    expect(turn.entries).toHaveLength(1);
+    expect(turn.entries[0]?.type).toBe('tools');
   });
 
   it('UNTAGGED (legacy) callee items stay in the main flow with the flat call row', () => {
@@ -1448,6 +1592,113 @@ describe('withLiveText', () => {
     );
     const block = entries[0] as TurnBlockEntry;
     expect(block.entries).toHaveLength(1);
+  });
+
+  /**
+   * A caller's turn holding ONE still-running call to `poet`. The shape the
+   * two tests below are about: the block is not a top-level entry — `ownerOf`
+   * attributes it to its CALLER, so it is folded inside the caller's own turn
+   * block, one level down.
+   */
+  const openCall = (): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Routing this to the Poet.' }, 'orch'),
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+      ]),
+    );
+
+  /** The one call block inside a caller's turn block. */
+  const calleeBlock = (entries: readonly TranscriptEntry[]): CallBlockEntry => {
+    const outer = entries[0] as TurnBlockEntry;
+    const block = outer.entries.find((e) => e.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block inside the caller’s turn');
+    }
+    return block;
+  };
+
+  it('writes a callee’s live words INSIDE the call still waiting on it', () => {
+    // The callee's DURABLE rows are claimed into that block by callId, so a
+    // live row left out here does not merely sit in the wrong place: it puts
+    // the callee on screen twice — a block of its own beside the call it is
+    // answering — and every word jumps into the card the moment it lands.
+    const entries = withLiveText(
+      openCall(),
+      new Map([['poet', live({ text: 'Waves rise and' })]]),
+    );
+
+    expect(entries).toHaveLength(1); // nothing beside the caller's own turn
+    const tail = calleeBlock(entries).entries.at(-1);
+    expect(tail?.type).toBe('item');
+    expect(tail?.type === 'item' ? tail.item.payload : null).toEqual({
+      text: 'Waves rise and',
+    });
+  });
+
+  it('draws NO working row for a callee the open call already narrates', () => {
+    // The reported bug: an all-but-empty `Engineer · Working… 2s` block at the
+    // root of the transcript, beside the call block that had just said
+    // `Engineer is thinking...`. A callee inside an open call is not silent,
+    // so the silence fallback has nothing to answer.
+    const entries = withLiveText(openCall(), new Map(), new Set(['poet']));
+
+    expect(entries).toHaveLength(1);
+    const rows = calleeBlock(entries).entries;
+    expect(
+      rows.some((e) => e.type === 'item' && liveRowKind(e.item.payload)),
+    ).toBe(false);
+  });
+
+  it('still draws the CALLER’s own working row while it waits', () => {
+    // The caller is genuinely silent — it is holding its turn open for the
+    // callee — so the fallback above must not have been narrowed to "any agent
+    // involved in a call".
+    const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
+
+    const outer = entries[0] as TurnBlockEntry;
+    expect(
+      liveRowKind((outer.entries.at(-1) as { item: ChatItem }).item.payload),
+    ).toBe('working');
+  });
+
+  it('names the call the caller is blocked on, on its own working row', () => {
+    // A caller inside `await_agent` produces nothing for as long as its callee
+    // runs — measured at 334s on one real turn — so a bare `Working…` over a
+    // clock counting five silent minutes reads as a hang. The fact was already
+    // on screen (the call block, the callee's rows streaming inside it) and
+    // nothing connected the two.
+    const entries = withLiveText(openCall(), new Map(), new Set(['orch']));
+
+    const outer = entries[0] as TurnBlockEntry;
+    const row = (outer.entries.at(-1) as { item: ChatItem }).item;
+    expect(row.payload).toMatchObject({
+      live: 'working',
+      waitingCallId: 'call-1',
+      waitingOnNodeId: 'poet',
+    });
+  });
+
+  it('says nothing about waiting when the agent is silent for its OWN reasons', () => {
+    // The other half: the phrase is about a blocked CALLER, so an agent with no
+    // open call of its own must keep the plain working row. Without this the
+    // pin above would hold for a mechanism that named a call on every row.
+    const blocks = buildTurnBlocks(
+      groupTranscript([item('message', { text: 'from orch' }, 'orch')]),
+    );
+    const entries = withLiveText(blocks, new Map(), new Set(['writer']));
+
+    const row = entries
+      .flatMap((e) => (e.type === 'turn-block' ? e.entries : [e]))
+      .find(
+        (e) => e.type === 'item' && liveRowKind(e.item.payload) === 'working',
+      ) as { item: ChatItem };
+    expect(row.item.payload).not.toHaveProperty('waitingCallId');
   });
 
   it('leaves every untouched block’s identity alone', () => {

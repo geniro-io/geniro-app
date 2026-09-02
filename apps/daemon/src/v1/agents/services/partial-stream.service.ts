@@ -445,6 +445,7 @@ export class PartialStreamService {
     return {
       runId,
       nodeId,
+      ownerKey,
       text: state.text,
       thinkingTokens: state.thinkingCurrent,
       // Null rather than '' when there is none, so "this CLI redacts its
@@ -551,10 +552,12 @@ export class PartialStreamService {
         return;
       }
       for (const [ownerKey, state] of byOwner) {
-        // Owner keys and node ids coincide for every producer of this plane:
-        // the chat's single agent uses the sentinel and publishes nodeId null,
-        // a graph node uses its own id for both.
-        const nodeId = ownerKey === SINGLE_AGENT_NODE ? null : ownerKey;
+        // The chat's single agent uses the sentinel and publishes nodeId null;
+        // a graph node uses its own id, and a CALLEE turn uses
+        // `<nodeId>::<callId>` — one node can hold several calls at once, and
+        // one key per node had them overwrite each other's reading.
+        const nodeId =
+          ownerKey === SINGLE_AGENT_NODE ? null : ownerOfKey(ownerKey);
         this.publish(
           this.eventOf(runId, ownerKey, nodeId, {
             ...state,
@@ -608,4 +611,27 @@ export class PartialStreamService {
       `live stream ${where} failed (the durable transcript is unaffected): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
+}
+
+/**
+ * The NODE an owner key belongs to — the key itself for a node's own turn, and
+ * the part before `::` for a callee turn's per-call key.
+ *
+ * The two used to be the same string, and that is exactly what made a node's
+ * concurrent calls share one reading: the last writer won, so a caller running
+ * two of the same callee saw one ring flickering between two unrelated
+ * conversations. The key is per CALL now and this is the one place the node is
+ * read back out of it.
+ */
+export function ownerOfKey(ownerKey: string): string {
+  const split = ownerKey.indexOf(OWNER_KEY_SEPARATOR);
+  return split === -1 ? ownerKey : ownerKey.slice(0, split);
+}
+
+/** Separator between a node id and the call id in a per-call owner key. */
+export const OWNER_KEY_SEPARATOR = '::';
+
+/** The live-plane owner key for one node's turn, or one of its CALL threads. */
+export function partialOwnerKey(nodeId: string, callId: string | null): string {
+  return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
 }

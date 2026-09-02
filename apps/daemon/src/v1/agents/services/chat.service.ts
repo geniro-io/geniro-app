@@ -660,7 +660,7 @@ export class ChatService implements OnModuleInit {
     // creates, and against the CANONICAL cwd above rather than the one the
     // request spelled — a group's folder is canonical too, so a symlinked path
     // matches the rule the user actually set.
-    const groupId = await this.groups.resolveAutoGroupId(cwd);
+    const groupId = await this.groups.resolveAutoGroupId({ cwd });
     // BEFORE the run row exists. A CLI that has to bring the conversation
     // across can refuse (it was deleted, it is under another profile), and a
     // refusal must leave no half-made thread behind — the user gets the CLI's

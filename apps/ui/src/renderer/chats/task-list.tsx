@@ -213,6 +213,80 @@ export function TaskScrollRows({
   );
 }
 
+/** One agent's task set, as a surface that draws several of them at once. */
+export interface AgentTaskGroup {
+  /** The agent card's id — the React key, and what the caller grouped by. */
+  agentId: string;
+  /** What to call that agent on screen. */
+  agentName: string;
+  tasks: readonly AgentTaskRow[];
+}
+
+/**
+ * Several agents' task sets, one BLOCK each under the name of the agent that
+ * keeps it.
+ *
+ * REPORTED against a workflow run: "if we working with workflows - each task
+ * set should be inside popover in block related to its connected agent". The
+ * shelf chip flattened every agent's rows into one run, so a Manager's four
+ * tasks and an Engineer's nine arrived as thirteen rows with nothing between
+ * them — and the two lists are not one list: they are two agents' plans, each
+ * complete on its own, and read end to end they say neither.
+ *
+ * Each block keeps its OWN bounded scroller ({@link TaskScrollRows}) rather
+ * than the panel holding one over all of them, which is what makes a block
+ * readable: the follow lands each set on the row that agent is working, so a
+ * long list belonging to one agent cannot push another's off the panel. It is
+ * the arrangement the agents panel already draws — a card per agent, each with
+ * its own scrolling list — so the popover and the column agree.
+ *
+ * A group's own `done/total` sits on its heading for the reason the chip's
+ * does: a bare set of rows says nothing about how far through it that agent is,
+ * and the shelf's figure is the SUM across every agent, which answers a
+ * different question.
+ *
+ * The heading is drawn for every group INCLUDING a lone one. Whether the
+ * grouping happens at all is the caller's decision (a workflow, never a 1:1
+ * chat — the same gate the terminals chip's labels take), so a run whose only
+ * task list happens to belong to one node still says whose it is.
+ */
+export function TaskGroupRows({
+  groups,
+  live,
+}: {
+  groups: readonly AgentTaskGroup[];
+  /**
+   * Whether anything is still working through these lists — the RUN's own
+   * liveness, exactly as the flat list takes it.
+   */
+  live: boolean;
+}): React.JSX.Element {
+  return (
+    <div data-slot="task-groups" className="flex flex-col gap-3">
+      {groups.map((group) => {
+        const progress = taskProgress(group.tasks);
+        return (
+          <section key={group.agentId} data-slot="task-group">
+            <SectionLabel>
+              <span className="flex items-baseline gap-2">
+                <span
+                  data-slot="task-group-agent"
+                  className="min-w-0 flex-1 truncate">
+                  {group.agentName}
+                </span>
+                <span className="shrink-0 normal-case tabular-nums">
+                  <TaskCount done={progress.done} total={progress.total} />
+                </span>
+              </span>
+            </SectionLabel>
+            <TaskScrollRows tasks={group.tasks} live={live} />
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
 /** `2/5` — said the same way wherever a list is summarized. */
 export function TaskCount({
   done,

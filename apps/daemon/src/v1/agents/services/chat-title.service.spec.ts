@@ -586,10 +586,41 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('leaves a workflow run to its workflow label', async () => {
+  it('names a workflow run from its SEED PROMPT, without asking any CLI', async () => {
+    // It used to be skipped entirely, on the reading that the workflow's own
+    // name is already a true label — which holds for ONE run and fails for two:
+    // every run of one workflow then carried the identical row, so a sidebar
+    // holding three Dev Team runs said which WORKFLOW three times and which
+    // TASK not once. Reported as "title generation should work for workflow as
+    // well". The workflow's name is not lost — the row now carries it as its
+    // own label chip.
+    const { settle, retitle, generateTitle, readSessionTitle } = build({
+      run: { workflowId: 'wf-1', agentKind: null },
+      firstUserMessageText: 'implement CI-619 scorecard percentages',
+    });
+
+    await settle();
+
+    expect(retitle).toHaveBeenCalledWith(
+      expect.anything(),
+      'implement CI-619 scorecard percentages',
+      null,
+      expect.anything(),
+    );
+    // DERIVED only, and never asked: the upgrade replaces a derived title with
+    // the name an AGENT gave the conversation, which needs ONE CLI to ask —
+    // and a workflow is N conversations, which is why its `agentKind` is null.
+    expect(generateTitle).not.toHaveBeenCalled();
+    expect(readSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it('leaves an already-named workflow run alone, so a rename survives', async () => {
+    // `title === null` is "unnamed" for a workflow exactly as it is for a chat
+    // — the executor stamps nothing — so anything already written is either
+    // this derivation or the user's own rename, and re-deriving would undo it.
     const { settle, retitle } = build({
-      run: { workflowId: 'wf-1' },
-      firstUserMessageText: 'the first node prompt',
+      run: { workflowId: 'wf-1', agentKind: null, title: 'My own name' },
+      firstUserMessageText: 'implement CI-619 scorecard percentages',
     });
 
     await settle();

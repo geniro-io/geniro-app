@@ -220,9 +220,23 @@ export function ThinkingRow({
  */
 export function WorkingRow({
   since = null,
+  waitingOn = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
   since?: number | null;
+  /**
+   * The open call this agent is BLOCKED on, when it is — what it is waiting
+   * for rather than what it is doing.
+   *
+   * It OUTRANKS the run's activity phrase, which is the one place this row
+   * prefers a locally-derived answer to the daemon's: the announce describes
+   * the run, and while a caller sits in `await_agent` the truest thing about
+   * this agent is whose answer it is waiting for. Reported over a caller that
+   * had been blocked for five silent minutes under a bare `Working…`, which
+   * reads as a hang — the callee's own rows were streaming one card below,
+   * with nothing connecting the two.
+   */
+  waitingOn?: { callId: string; callee: string | null } | null;
 }): React.JSX.Element {
   const [mountedAt] = useState(() => Date.now());
   const runActivity = useContext(RunActivityContext);
@@ -233,10 +247,14 @@ export function WorkingRow({
   // the clock, which is what the row said before any phrase existed.
   const nested = useContext(NestedThreadContext);
   const activity = nested ? null : runActivity;
+  const waiting =
+    waitingOn === null
+      ? null
+      : `waiting on ${waitingOn.callee ?? 'a called agent'} · ${waitingOn.callId}`;
   useSecondsTick();
   return (
     <LiveRow
-      text={activity ?? STANDING_ACTIVITY}
+      text={waiting ?? activity ?? STANDING_ACTIVITY}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
     />
   );

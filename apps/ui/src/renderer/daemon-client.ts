@@ -226,6 +226,18 @@ export interface RunStatusEvent {
    */
   shellsOpen?: number;
   /**
+   * When this run's FETCHED spend last CHANGED — the signal to ask for its
+   * totals again, carrying no figure of its own.
+   *
+   * TWIN PARSER of the daemon's `RunStatusEvent`, where the reasoning is: it
+   * exists for cursor, whose price is fetched from Cursor on a cadence no client
+   * can see, so without it a figure landed on screen only when something else
+   * happened to refetch — the next turn's settle, or reopening the chat.
+   * `useChatTotals` re-asks on it; nothing here reads a number off it, and the
+   * daemon sends none, because the totals route is the one place they are summed.
+   */
+  spendUpdatedAt?: number;
+  /**
    * The pull requests this run has been seen to OPEN, when a capture pass has
    * just found one.
    *
@@ -361,6 +373,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     awaiting,
     holdingFor,
     shellsOpen,
+    spendUpdatedAt,
     pullRequests,
     taskList,
     contextTokens,
@@ -427,6 +440,14 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // `pnpm dev` was still running.
     ...(typeof shellsOpen === 'number' && Number.isFinite(shellsOpen)
       ? { shellsOpen: Math.max(0, Math.trunc(shellsOpen)) }
+      : {}),
+    // A MARKER rather than a reading: only its presence and its being newer
+    // than the last one matter, so nothing here clamps or interprets the value
+    // beyond requiring a finite number — a nonsense one would at worst cost one
+    // extra totals fetch, where a `NaN` would compare unequal to itself forever
+    // and re-fetch on every render.
+    ...(typeof spendUpdatedAt === 'number' && Number.isFinite(spendUpdatedAt)
+      ? { spendUpdatedAt }
       : {}),
     // Every entry checked, not merely the array: this arrives as a socket
     // payload rather than through the generated client, and a half-shaped ref

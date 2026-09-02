@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
+import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -21,6 +22,7 @@ import {
   mergeCursorSpend,
 } from '../utils/cursor-usage';
 import { asNumber, asRecord } from '../utils/json-util';
+import { AgentEventBus } from './agent-events.bus';
 
 const run = promisify(execFile);
 
@@ -44,6 +46,27 @@ const KEYCHAIN_ACCOUNT = 'cursor-user';
  * still feeling live to somebody watching a thread's price settle.
  */
 const MIN_POLL_INTERVAL_MS = 10 * 60_000;
+
+/**
+ * The floor while a cursor conversation is actually PRODUCING.
+ *
+ * Ten minutes is the right cadence for an ambient trigger — somebody opened a
+ * thread, so its figure may as well be current. It is the wrong one for the
+ * thread being watched, and that is what got reported ("i still dont see any
+ * costs for cursor chat"). Reconstructed from the reporter's own database: the
+ * previous poll ran at 19:09:16, the chat's first billable event was written by
+ * Cursor at 19:09:33, and the next poll was not due until 19:19 — so a run
+ * costing $4.89 showed no price at all for the whole time anyone was looking at
+ * it. Cursor bills per REQUEST rather than at the turn's end, so the figure
+ * genuinely does move while a turn is in flight; there was nothing to wait for.
+ *
+ * It is bounded by the work rather than by a timer: the tick comes from items
+ * a CURSOR run persisted, so an idle machine polls nothing at all and a claude
+ * user polls nothing ever. The worst case is one request a minute while a
+ * cursor agent is working, against turns that cost dollars each — proportionate,
+ * and still far inside the hourly guidance {@link MIN_POLL_INTERVAL_MS} cites.
+ */
+const LIVE_POLL_INTERVAL_MS = 60_000;
 
 /**
  * How far back a poll looks past the last one it completed.
@@ -93,7 +116,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
  *   requests, and dropped; nothing here stores it and no log line can carry it.
  */
 @Injectable()
-export class CursorUsageService {
+export class CursorUsageService implements OnModuleInit {
   private readonly logger = new Logger(CursorUsageService.name);
 
   /** When the last poll ATTEMPT started — the floor is on attempts, not wins. */
@@ -102,12 +125,78 @@ export class CursorUsageService {
   private lastSuccessMs: number | null = null;
   /** The poll in flight, so concurrent callers join it rather than duplicate it. */
   private inFlight: Promise<void> | null = null;
+  /**
+   * Which runs are cursor runs, so the live tick below costs one indexed read
+   * per run and not one per item.
+   *
+   * A run's agent kind is fixed at creation, so this can never go stale in the
+   * direction that matters; an entry is dropped when its run is destroyed. It is
+   * a cache of a FACT rather than of an answer, which is why nothing expires it.
+   */
+  private readonly cursorRuns = new Map<string, boolean>();
 
   constructor(
     private readonly runDao: RunDao,
     private readonly nodeStates: NodeStateDao,
     private readonly em: EntityManager,
+    private readonly bus: AgentEventBus,
   ) {}
+
+  /**
+   * Follow the work, which is the only thing that moves these figures.
+   *
+   * A subscriber rather than a call from the turn path, on
+   * `PullRequestCaptureService`'s reasoning exactly: the bus is where both
+   * execution paths converge, and nothing in a turn should have to remember to
+   * do this. Every item, not the turn-ending ones — Cursor bills per request, so
+   * a twenty-minute turn accrues cost throughout and its END is far too late to
+   * be the only trigger.
+   *
+   * The floor is checked BEFORE the run is looked up, so an item on a busy
+   * conversation costs one comparison; the lookup that follows is at most one
+   * per run for the life of the daemon.
+   */
+  onModuleInit(): void {
+    this.bus.all().subscribe((event) => {
+      void this.noteItem(event.runId);
+    });
+    // A destroyed run can never produce another item, so this is housekeeping
+    // rather than correctness — but the map would otherwise hold ids for rows
+    // that no longer exist for as long as the daemon runs.
+    this.bus.allDeleted().subscribe((runId) => {
+      this.cursorRuns.delete(runId);
+    });
+  }
+
+  private async noteItem(runId: string): Promise<void> {
+    if (Date.now() - this.lastAttemptAtMs < LIVE_POLL_INTERVAL_MS) {
+      return;
+    }
+    if (!(await this.isCursorRun(runId))) {
+      return;
+    }
+    await this.refreshWithin(LIVE_POLL_INTERVAL_MS);
+  }
+
+  private async isCursorRun(runId: string): Promise<boolean> {
+    const known = this.cursorRuns.get(runId);
+    if (known !== undefined) {
+      return known;
+    }
+    try {
+      const run = await this.runDao.getById(runId, this.em.fork());
+      // A run that could not be read is NOT filed: the next item asks again,
+      // where caching the miss would exempt that conversation for good.
+      if (run === null) {
+        return false;
+      }
+      const isCursor = run.agentKind === AgentKind.CursorAgent;
+      this.cursorRuns.set(runId, isCursor);
+      return isCursor;
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * Bring every cursor run's cost up to date, if enough time has passed.
@@ -117,8 +206,13 @@ export class CursorUsageService {
    * cannot start a second concurrent poll.
    */
   async refresh(force = false): Promise<void> {
+    return this.refreshWithin(force ? 0 : MIN_POLL_INTERVAL_MS);
+  }
+
+  /** The one gate: a floor on attempts, and never two polls at once. */
+  private async refreshWithin(floorMs: number): Promise<void> {
     const now = Date.now();
-    if (!force && now - this.lastAttemptAtMs < MIN_POLL_INTERVAL_MS) {
+    if (now - this.lastAttemptAtMs < floorMs) {
       return;
     }
     if (this.inFlight) {
@@ -158,7 +252,7 @@ export class CursorUsageService {
       if (spend === null) {
         return;
       }
-      await this.writeSpend(conversations, spend, em);
+      await this.writeSpend(conversations, spend, em, now);
       this.lastSuccessMs = now;
     } catch (error) {
       // Swallowed on the `github-prs` rule: a thread missing its price is a far
@@ -180,8 +274,8 @@ export class CursorUsageService {
    */
   private async conversationsByRun(
     em: EntityManager,
-  ): Promise<Map<string, string>> {
-    const byConversation = new Map<string, string>();
+  ): Promise<Map<string, Run>> {
+    const byConversation = new Map<string, Run>();
     const runs = await this.runDao.getAll(
       { agentKind: AgentKind.CursorAgent },
       undefined,
@@ -194,7 +288,7 @@ export class CursorUsageService {
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         const sessionId = state.agentSessionId;
         if (sessionId !== null && sessionId !== '') {
-          byConversation.set(sessionId, row.id);
+          byConversation.set(sessionId, row);
         }
       }
     }
@@ -204,8 +298,13 @@ export class CursorUsageService {
   /**
    * The team and user ids the events are scoped by, from the CLI's OWN identity
    * block. Read rather than invented, and absent identity is a clean decline.
+   *
+   * `protected`, like {@link readToken} below, purely so a spec can stand in for
+   * this MACHINE — the two of them are the whole of what a poll needs from it,
+   * and a test that reached the real ones would read the author's own Keychain
+   * on macOS and decline on CI. Nothing in the app overrides either.
    */
-  private async readIdentity(): Promise<{
+  protected async readIdentity(): Promise<{
     teamId: number;
     userId: number;
   } | null> {
@@ -230,7 +329,7 @@ export class CursorUsageService {
    * `gh` calls do, one step closer in. A denial, a missing item or a machine
    * that is not macOS all answer null, which the caller reads as "no cost".
    */
-  private async readToken(): Promise<string | null> {
+  protected async readToken(): Promise<string | null> {
     if (process.platform !== 'darwin') {
       return null;
     }
@@ -300,32 +399,70 @@ export class CursorUsageService {
   }
 
   /**
-   * Write each conversation's total onto the run that holds it.
+   * Write each run's total, and TELL every window what changed.
    *
    * REPLACES rather than adds, which is what makes the overlapping window safe:
    * the fold is over the whole window every time, so an event re-read on the
-   * next poll cannot be counted twice. A run whose conversation the window did
+   * next poll cannot be counted twice. A run whose conversations the window did
    * not mention is left exactly as it was — silence about a period says nothing
    * about a total already recorded for it.
+   *
+   * Summed PER RUN before the write, because the map is keyed by conversation
+   * and a run can hold more than one: written per conversation, a run's second
+   * conversation overwrote the first's figure with its own rather than adding
+   * to it, so the thread reported part of what it spent.
+   *
+   * The ANNOUNCE is what makes any of this visible while a thread is open. The
+   * poll is the only thing that learns a cursor price, the header only re-asks
+   * when a turn settles, and the two never lined up — so the figure this write
+   * produced was first shown by whatever refetched NEXT, typically the following
+   * turn or a reopen. It is a `run_status` for the same reason
+   * `PullRequestCaptureService` announces on one: a fact settled a moment after
+   * the client last asked, on a broadcast every window already receives.
+   * `status: null` on the same rule as every announce beside it — this says what
+   * the run has SPENT and nothing about whether it is still going. Only for a
+   * run whose figure actually MOVED: a poll covers every cursor conversation the
+   * machine holds, so announcing them all would put an event per thread on the
+   * wire every minute to say that nothing had changed.
    */
   private async writeSpend(
-    conversations: ReadonlyMap<string, string>,
+    conversations: ReadonlyMap<string, Run>,
     spend: ReadonlyMap<string, CursorConversationSpend>,
     em: EntityManager,
+    at: number,
   ): Promise<void> {
-    for (const [conversationId, runId] of conversations) {
+    const byRun = new Map<
+      string,
+      { run: Run; cents: number; events: number }
+    >();
+    for (const [conversationId, run] of conversations) {
       const one = spend.get(conversationId);
       if (one === undefined || one.events === 0) {
         continue;
       }
+      const known = byRun.get(run.id);
+      byRun.set(run.id, {
+        run,
+        cents: (known?.cents ?? 0) + one.costCents,
+        events: (known?.events ?? 0) + one.events,
+      });
+    }
+    for (const { run, cents, events } of byRun.values()) {
+      if (run.cursorCostCents === cents && run.cursorCostEvents === events) {
+        continue;
+      }
       await this.runDao.updateById(
-        runId,
-        {
-          cursorCostCents: one.costCents,
-          cursorCostEvents: one.events,
-        },
+        run.id,
+        { cursorCostCents: cents, cursorCostEvents: events },
         em,
       );
+      run.cursorCostCents = cents;
+      run.cursorCostEvents = events;
+      this.bus.publishRunStatus({
+        runId: run.id,
+        status: null,
+        spendUpdatedAt: at,
+      });
     }
   }
 }

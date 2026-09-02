@@ -241,7 +241,14 @@ function makeClient(): {
   let disconnectListener: (() => void) | null = null;
   let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
   let liveTextListener: ((event: LiveTextEvent) => void) | null = null;
-  let runStatusListener: ((event: RunStatusEvent) => void) | null = null;
+  /**
+   * A SET, unlike its one-listener neighbours: the real client fans a
+   * `run_status` out to every subscriber, and this screen has more than one —
+   * `use-chat-run` for the badge and `use-chat-totals` for the fetched spend.
+   * Holding a single listener let whichever subscribed last silence the other,
+   * which is a defect of the double and never of the client.
+   */
+  const runStatusListeners = new Set<(event: RunStatusEvent) => void>();
   let runDeletedListener: ((runId: string) => void) | null = null;
   const joinRun = vi.fn(async () => {});
   const client = {
@@ -270,9 +277,9 @@ function makeClient(): {
       };
     },
     onRunStatus: (l: (event: RunStatusEvent) => void) => {
-      runStatusListener = l;
+      runStatusListeners.add(l);
       return () => {
-        runStatusListener = null;
+        runStatusListeners.delete(l);
       };
     },
     onRunDeleted: (l: (runId: string) => void) => {
@@ -298,7 +305,11 @@ function makeClient(): {
     fireReconnect: () => reconnectListener?.(),
     fireVerdictAck: (ack) => verdictAckListener?.(ack),
     emitLiveText: (event) => liveTextListener?.(event),
-    emitRunStatus: (event) => runStatusListener?.(event),
+    emitRunStatus: (event) => {
+      for (const listener of [...runStatusListeners]) {
+        listener(event);
+      }
+    },
     emitRunDeleted: (runId: string) => runDeletedListener?.(runId),
     joinRun,
   };

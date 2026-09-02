@@ -4662,7 +4662,12 @@ export function Chats({
    * that is the only thing that moves the total, and a count changes exactly
    * once per turn rather than on every delta the turn streams.
    */
-  const threadTotals = useChatTotals(chatApi, activeRunId, threadWorked.turns);
+  const threadTotals = useChatTotals(
+    chatApi,
+    activeRunId,
+    threadWorked.turns,
+    client,
+  );
   /**
    * What the header states about the thread as a WHOLE — the daemon's answer
    * where it has one, this component's fold where it does not.

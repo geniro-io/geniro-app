@@ -1895,6 +1895,25 @@ export interface RunStatusEvent {
    */
   shellsOpen?: number;
   /**
+   * When this run's FETCHED spend last CHANGED — absent on every announce that
+   * did not change it, which is all but one producer.
+   *
+   * It carries no figure, and that is deliberate: the totals have their own
+   * route, summed on the daemon over the whole transcript, and a second copy
+   * riding a broadcast is how two surfaces come to disagree about one thread's
+   * price. This says only "ask again", which is the one thing the client could
+   * not know.
+   *
+   * It exists for cursor, the one CLI whose cost is neither on its wire nor on
+   * this machine — `CursorUsageService` fetches it, on a cadence of its own that
+   * no client can see. Nothing announced the result, so a price landed on screen
+   * only when something else happened to refetch the totals: the next turn's
+   * settle, or reopening the chat. REPORTED as "i still dont see any costs for
+   * cursor chat", against a running conversation whose first billable event
+   * Cursor had already recorded.
+   */
+  spendUpdatedAt?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *

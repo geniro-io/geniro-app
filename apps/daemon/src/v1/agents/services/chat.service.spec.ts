@@ -260,7 +260,7 @@ class FakeRunDao {
         (a, b) =>
           (a.archivedAt?.getTime() ?? 0) - (b.archivedAt?.getTime() ?? 0),
       )
-      .map((run) => run.id);
+      .map((run) => ({ id: run.id, workflowId: run.workflowId }));
   }
 }
 
@@ -1823,25 +1823,29 @@ describe('ChatService', () => {
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
-    it('closes the card when the AGENT gives up on its own call, mid-turn', async () => {
-      // The turn is still running and the user has answered nothing — what
-      // ended is the CALLER's patience: an MCP client puts its own deadline on
-      // a `tools/call` (cursor-agent's is 60s, measured) and cancels. Before
-      // this the card stayed on screen with live buttons, so an agent that
-      // re-asked left the user two identical questions and only one of them
-      // connected to anything.
+    it('KEEPS the card when the agent gives up on its own call, and the retry adopts it', async () => {
+      // The turn is still running and the user is mid-answer — what ended is
+      // the CALLER's patience: an MCP client puts a hard deadline on a
+      // `tools/call` (cursor-agent's is 60s, and it passes no options to the
+      // SDK, so nothing can move it). Closing the card there was the first
+      // answer, and it made the deadline the USER's: two questions could not be
+      // answered inside a minute, and the second was lost. REPORTED as "я
+      // ответил первую половину, а вторую я просто не успел".
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
       });
       await service.sendMessage(run.id, 'hello');
+      const QUESTIONS = [
+        { question: 'How deep?', options: [{ label: 'Standard' }] },
+      ];
 
       const cancel = new AbortController();
-      const asked = userQuestions.ask(
+      const first = userQuestions.ask(
         run.id,
         SINGLE_AGENT_NODE,
-        [{ question: 'How deep?', options: [{ label: 'Standard' }] }],
+        QUESTIONS,
         null,
         cancel.signal,
       );
@@ -1851,33 +1855,88 @@ describe('ChatService', () => {
 
       cancel.abort();
 
-      expect(await asked).toEqual({
+      // The CALL is released — its client has gone, and holding the promise
+      // would leave the turn's own bookkeeping waiting on nothing.
+      expect(await first).toEqual({
         status: 'unavailable',
-        reason: 'the agent stopped waiting for an answer',
+        reason: 'the agent stopped waiting for this answer',
       });
       await drain();
-      // The card is CLOSED in the transcript — the same `unanswerable` row the
-      // settle-time sweep writes, which is what the renderer already reads.
+      // …but the CARD stands: nothing is written, the registry entry is intact,
+      // and the badge still says the run is waiting on the user.
+      expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+        false,
+      );
+      expect(approvals.awaitingFor(run.id)).not.toBeNull();
+
+      // The retry re-sends the same words, and ADOPTS the card rather than
+      // raising a second one — which is the older defect this path was written
+      // for, and what a naive retry produces.
+      const second = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        QUESTIONS,
+        null,
+      );
+      await drain();
+      expect(
+        itemDao.items.filter((item) => item.kind === 'approval_request'),
+      ).toHaveLength(1);
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+      // Answering that one card reaches the call now in flight.
+      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
+        true,
+      );
+      expect(await second).toEqual({ status: 'answered', answer: 'Standard' });
+      await settle(cursor);
+    });
+
+    it('holds an answer given while the agent had nothing in flight', async () => {
+      // The exact window the report describes: the client's deadline lapsed
+      // while the user was still typing. The answer is theirs and it is not
+      // thrown away — it waits for the retry and is handed over at once.
+      const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+      const QUESTIONS = [
+        { question: 'How deep?', options: [{ label: 'Standard' }] },
+      ];
+
+      const cancel = new AbortController();
+      const abandoned = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        QUESTIONS,
+        null,
+        cancel.signal,
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]?.requestId;
+      cancel.abort();
+      await abandoned;
+
+      // Answered with NO call waiting for it.
+      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
+        true,
+      );
+      await drain();
+      // Recorded in the transcript like any other verdict — the user answered,
+      // and the card is closed on screen.
       expect(
         itemDao.items.some(
           (item) =>
-            item.kind === 'unanswerable' && item.payload.includes(requestId!),
+            item.kind === 'approval_verdict' &&
+            item.payload.includes('Standard'),
         ),
       ).toBe(true);
-      // …and no `approval_verdict`: the user never answered, so recording one
-      // would put words in their mouth.
-      expect(itemDao.items.some((i) => i.kind === 'approval_verdict')).toBe(
-        false,
-      );
-      // The registry entry is gone with it, so the badge stops saying the run
-      // is parked on a question and a late verdict is refused rather than
-      // delivered into nothing.
-      expect(approvals.awaitingFor(run.id)).toBeNull();
-      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
-        false,
-      );
-      // The turn itself is untouched — only that one call was abandoned.
-      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      expect(
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null),
+      ).toEqual({ status: 'answered', answer: 'Standard' });
       await settle(cursor);
     });
 
@@ -2396,15 +2455,6 @@ describe('ChatService', () => {
       // And unarchiving is genuinely the way back, not just a row move.
       await service.unarchive(run.id);
       await expect(service.sendMessage(run.id, 'go')).resolves.toBeDefined();
-    });
-
-    it('refuses a workflow run on both routes', async () => {
-      const { service, runDao } = setup();
-      const wf = await runDao.create({ workflowId: 'wf-1' });
-      // The kind guard's own message, not a bare throw — a TypeError would
-      // satisfy `rejects.toThrow()` and tell us nothing.
-      await expect(service.archive(wf.id)).rejects.toThrow(/chat/i);
-      await expect(service.unarchive(wf.id)).rejects.toThrow(/chat/i);
     });
 
     it('404s for a run that does not exist', async () => {

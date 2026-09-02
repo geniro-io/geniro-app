@@ -1433,6 +1433,17 @@ describe('McpServerService — what the descriptions tell a model', () => {
     return tool!.description;
   };
 
+  it('tells the asker a timed-out question is still on screen, and how to keep waiting', async () => {
+    // The runtime DEPENDS on this sentence: the card outlives the call, and a
+    // retry only re-attaches to it when the words are identical. Drop the
+    // instruction and the model re-asks in its own words, which raises a second
+    // card and asks the person twice — the exact defect the standing card
+    // exists to prevent.
+    const ask = find(await everyHostTool(), HOST_QUESTION_TOOL);
+    expect(ask).toMatch(/identical/i);
+    expect(ask).toMatch(/same card/i);
+  });
+
   it('makes BOTH sides of the chart/scorecard boundary name the other', async () => {
     // The pair that actually collides: a model with numbers in hand must pick
     // one. Stating the rule on one side only leaves a model reading top-down —

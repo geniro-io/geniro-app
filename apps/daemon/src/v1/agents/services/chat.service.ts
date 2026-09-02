@@ -52,6 +52,7 @@ import {
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
+  type StandingHostQuestion,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -1237,9 +1238,9 @@ export class ChatService implements OnModuleInit {
    * the one-way delete beside it is per-row. This is that delete, applied on a
    * clock the user sets.
    *
-   * **It is the SAME one-way door**, not a gentler one: `delete` per run, so a
-   * swept chat loses its rows, its attachments, its call tokens and its kept
-   * session exactly as a pressed delete does, and `usage_events` survives for
+   * **It is the SAME one-way door**, not a gentler one: the full teardown per
+   * run, so a swept run loses its rows, its attachments, its call tokens and
+   * its kept session exactly as a pressed delete does, and `usage_events` survives for
    * the reason it survives there — a lifetime spend total must not shrink
    * because a conversation was tidied away. There is no trash and none is
    * planned, which is why the POLICY lives with the user (the retention window
@@ -1276,7 +1277,7 @@ export class ChatService implements OnModuleInit {
         // never reaches the rest — and the row it stopped on is the one nobody
         // is watching.
         this.logger.warn(
-          `could not sweep archived chat ${runId}: ${
+          `could not sweep archived run ${id}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -1414,7 +1415,13 @@ export class ChatService implements OnModuleInit {
    * chat whose turn is mid-claim AND one that never sent a message at all, and
    * `cancel()` would write the second a `cancelled` status and a
    * `turn_cancelled` row it never earned. The mid-claim case is answered by
-   * {@link archiving} instead, which is the only mechanism that can see it.
+   * {@link archiving} instead, which is the only mechanism that can see it —
+   * and it is read by the CHAT turn path alone, so a workflow walk crossing its
+   * own claim→register window can still register behind an archive. That window
+   * is milliseconds at a run's very start, and the cost is a shelved run that
+   * goes on working until it is cancelled by hand; closing it would mean this
+   * service reaching into the executor's claim, which the module direction
+   * forbids.
    *
    * The session is closed on EVERY archive, not only the running one. A kept
    * process is ~1GB of the machine's memory held so the next turn opens fast,
@@ -2949,6 +2956,19 @@ export class ChatService implements OnModuleInit {
         (outcome: HostQuestionOutcome) => boolean
       >();
       /**
+       * The question CARDS this turn has on screen, keyed by what each ASKS.
+       *
+       * A card outlives the agent call that raised it — see
+       * {@link StandingHostQuestion} for the measurement that forces it — so a
+       * re-ask adopts the card already up rather than raising a second one, and
+       * an answer given between the two is held here for the retry to collect.
+       *
+       * Per TURN, like the sets beside it: the agent's retry lands inside the
+       * same turn (measured — 14 seconds later on the reported run), and a map
+       * outliving the turn would offer a card the sweep has already closed.
+       */
+      const standingAsks = new Map<string, StandingHostQuestion>();
+      /**
        * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
        * widening of the one above.
        *
@@ -3023,6 +3043,46 @@ export class ChatService implements OnModuleInit {
         signal.addEventListener('abort', close, { once: true });
       };
       /**
+       * The QUESTION channel's own cancel handling, and the one place it parts
+       * company with {@link abandonOnCancel} above.
+       *
+       * That one closes the card, which is right for a patch or a plan: those
+       * are decisions about work the agent is holding, and a caller that has
+       * given up is no longer holding it. A question is different — the person
+       * is mid-answer, and the deadline that just lapsed is 60 seconds long. So
+       * this DETACHES the call and leaves the card standing: the buttons still
+       * work, the badge still says the run is waiting on the user, and the
+       * answer is held for the agent's retry.
+       *
+       * The identity check is what keeps an OLD call's abort from detaching a
+       * NEWER one: by the time a client's deadline fires, its retry may already
+       * have adopted this record.
+       */
+      const detachAskOnCancel = (
+        signal: AbortSignal | undefined,
+        record: StandingHostQuestion,
+        resolve: (outcome: HostQuestionOutcome) => void,
+      ): void => {
+        if (signal === undefined) {
+          return;
+        }
+        const detach = (): void => {
+          if (record.closed || record.waiting !== resolve) {
+            return;
+          }
+          record.waiting = null;
+          resolve({
+            status: 'unavailable',
+            reason: 'the agent stopped waiting for this answer',
+          });
+        };
+        if (signal.aborted) {
+          detach();
+          return;
+        }
+        signal.addEventListener('abort', detach, { once: true });
+      };
+      /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
        *
@@ -3039,6 +3099,30 @@ export class ChatService implements OnModuleInit {
         title: string | null,
         signal?: AbortSignal,
       ): Promise<HostQuestionOutcome> => {
+        // What IDENTIFIES an ask: every word the card shows. A retry after the
+        // client's deadline re-sends exactly this — observed on the reported
+        // run, where the agent said "the question timed out — re-firing it" —
+        // so the same words are the same question and get the same card. Any
+        // rewording is a NEW question, which is the honest reading: the user is
+        // being asked something else.
+        const key = JSON.stringify({ title, questions });
+        const standing = standingAsks.get(key);
+        if (standing !== undefined) {
+          // The user answered while the agent had nothing in flight. Hand it
+          // over at once — this is the collection the retry came for.
+          const held = standing.held;
+          if (held !== null) {
+            standingAsks.delete(key);
+            return held;
+          }
+          // Still unanswered: ADOPT the card rather than raise a second one.
+          // Two cards for one question is the older defect this whole path was
+          // written for, and it is what a naive retry produces.
+          return await new Promise<HostQuestionOutcome>((resolve) => {
+            standing.waiting = resolve;
+            detachAskOnCancel(signal, standing, resolve);
+          });
+        }
         const requestId = randomUUID();
         const input = {
           ...(title === null ? {} : { title }),
@@ -3064,11 +3148,28 @@ export class ChatService implements OnModuleInit {
           };
         }
         return await new Promise<HostQuestionOutcome>((resolve) => {
+          const record: StandingHostQuestion = {
+            requestId,
+            waiting: resolve,
+            held: null,
+            closed: false,
+          };
+          standingAsks.set(key, record);
+          /**
+           * The SWEEP's handle: the turn is over, so nothing can reach this
+           * card any more and the record goes with it. An answer takes its own
+           * path below, because that one may have nobody to resolve.
+           */
           const settle = (outcome: HostQuestionOutcome): boolean => {
-            if (!outstandingAsks.delete(settle)) {
+            if (record.closed) {
               return false;
             }
-            resolve(outcome);
+            record.closed = true;
+            outstandingAsks.delete(settle);
+            standingAsks.delete(key);
+            const waiting = record.waiting;
+            record.waiting = null;
+            waiting?.(outcome);
             return true;
           };
           outstandingAsks.add(settle);
@@ -3082,7 +3183,10 @@ export class ChatService implements OnModuleInit {
             // the user something, not a tool held at a permission gate.
             question: true,
             respond: (allow, answer) => {
-              const delivered = settle(
+              if (record.closed) {
+                return false;
+              }
+              const outcome: HostQuestionOutcome =
                 allow && answer !== undefined
                   ? { status: 'answered', answer }
                   : allow
@@ -3090,8 +3194,23 @@ export class ChatService implements OnModuleInit {
                       // produce this, and an empty answer is not the same as
                       // a refusal.
                       { status: 'answered', answer: '' }
-                    : { status: 'declined' },
-              );
+                    : { status: 'declined' };
+              record.closed = true;
+              outstandingAsks.delete(settle);
+              const waiting = record.waiting;
+              record.waiting = null;
+              if (waiting !== null) {
+                // The ordinary case: the agent is still on the line.
+                standingAsks.delete(key);
+                waiting(outcome);
+              } else {
+                // Nobody was waiting — the client's 60s deadline had lapsed
+                // while the user was still answering. The answer is not lost:
+                // it is kept for the retry, which is the whole point of the
+                // card outliving the call.
+                record.held = outcome;
+              }
+              const delivered = true;
               this.announceAwaiting(
                 runId,
                 runningToolActivity() ?? idleActivity(),
@@ -3119,10 +3238,7 @@ export class ChatService implements OnModuleInit {
               return delivered;
             },
           });
-          abandonOnCancel(signal, requestId, settle, {
-            status: 'unavailable',
-            reason: 'the agent stopped waiting for an answer',
-          });
+          detachAskOnCancel(signal, record, resolve);
           this.announceAwaiting(runId);
         });
       };

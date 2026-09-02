@@ -177,6 +177,38 @@ export type HostQuestionOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * One question CARD that is on screen, tracked for as long as the TURN runs
+ * rather than for as long as the agent's call does.
+ *
+ * The two are not the same span, and that is the whole reason this exists: an
+ * MCP client puts a hard deadline on `tools/call` — cursor-agent's is 60
+ * seconds, and it passes no options to the SDK's `callTool`, so neither a
+ * config field nor progress notifications can move it (measured on 2026-09-02
+ * against run `e727f7fe`: a card raised at 20:03:11 was abandoned at 20:04:11,
+ * and another at 19:57:29 at 19:58:29 — 60.0s each, to the second). A person
+ * answering two questions routinely takes longer than that, which is what got
+ * REPORTED: "я ответил первую половину, а вторую половину я просто не успел".
+ *
+ * So the card outlives the call. A re-ask with the same words ADOPTS this
+ * record instead of raising a second card (which is the older report the abort
+ * handling was written for), and an answer given while no call is in flight is
+ * HELD here until the retry collects it.
+ */
+export interface StandingHostQuestion {
+  /** The `approval_request` this card was written as. */
+  requestId: string;
+  /**
+   * Resolver of the agent call currently blocked on this card, or null when
+   * none is — the client gave up and its retry has not arrived yet.
+   */
+  waiting: ((outcome: HostQuestionOutcome) => void) | null;
+  /** An answer given while nobody was waiting, kept for the next ask. */
+  held: HostQuestionOutcome | null;
+  /** Answered or swept: nothing more can reach this card. */
+  closed: boolean;
+}
+
+/**
  * TWIN PARSER: apps/ui/src/renderer/chats/findings-payload.ts — the reader over
  * the `report_findings` item payload this tool produces.
  *

@@ -7268,24 +7268,40 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).not.toContain('Shelved chat');
   });
 
-  it('does not list workflow runs in the archive', async () => {
-    // Archive is a CHAT feature — a workflow row there would offer Unarchive
-    // and permanent Delete for a run that has no archive to come back from.
-    workflowApi.listWorkflowRuns.mockResolvedValue([
-      { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
-    ]);
+  it('sends the SAME scope to both halves of the listing', async () => {
+    // The two are one sidebar, so a shelved workflow run belongs in the archive
+    // beside the chats — it used to be excluded outright, back when a workflow
+    // run had no archive to come back from.
+    workflowApi.listWorkflowRuns.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [
+                {
+                  ...run1,
+                  id: 'wf-run-1',
+                  title: 'Call Demo',
+                  workflowId: 'call-demo',
+                  archivedAt: 'then',
+                },
+              ]
+            : [],
+        ),
+    );
     api.listChats.mockImplementation(
       (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(params?.scope === 'archived' ? [] : [run1]),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    expect(container.textContent).toContain('Call Demo');
+    expect(container.textContent).not.toContain('Call Demo');
 
     await pickScope(container, 'Archived only');
 
-    expect(container.textContent).not.toContain('Call Demo');
-    expect(container.textContent).toContain('Nothing archived yet');
+    expect(workflowApi.listWorkflowRuns).toHaveBeenCalledWith({
+      scope: 'archived',
+    });
+    expect(container.textContent).toContain('Call Demo');
   });
 
   it('`Show all` lists both sides at once, each row with its OWN actions', async () => {
@@ -7410,17 +7426,20 @@ describe('Chats sidebar list', () => {
     expect(rowAction(container, 'Archive My chat')).toBeNull();
   });
 
-  it('keeps Delete — and offers no Archive — on a WORKFLOW row', async () => {
-    // Chats-only scope, stated as a deliberate asymmetry rather than left to
-    // be discovered: a workflow run has no archive.
+  it('offers Archive on a WORKFLOW row, and moves its Delete behind the shelf', async () => {
+    // REPORTED against a completed `Dev Team Manifest` row whose only action
+    // was Delete: shelving is a property of the run row, and the run whose
+    // history is most worth keeping had no way off the desk but destroying it.
+    // The delete follows the chats' rule the moment there is a shelf to put it
+    // behind — it is still reachable from the archive (pinned below).
     workflowApi.listWorkflowRuns.mockResolvedValue([
       { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
     ]);
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(rowAction(container, 'Delete Call Demo')).not.toBeNull();
-    expect(rowAction(container, 'Archive Call Demo')).toBeNull();
+    expect(rowAction(container, 'Archive Call Demo')).not.toBeNull();
+    expect(rowAction(container, 'Delete Call Demo')).toBeNull();
   });
 
   it('asks before archiving a SETTLED chat, without calling it destructive', async () => {
@@ -7856,11 +7875,29 @@ describe('Chats sidebar list', () => {
     // every row's delete went to the chat route — which REFUSES a workflow run
     // (its executor owns teardown the chat path knows nothing about), so those
     // rows could not be deleted at all.
-    workflowApi.listWorkflowRuns.mockResolvedValue([
-      { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
-    ]);
+    //
+    // From the ARCHIVE, which is where the one-way door lives for both kinds of
+    // row now — a workflow row on the desk offers Archive and no Delete.
+    api.listChats.mockResolvedValue([]);
+    workflowApi.listWorkflowRuns.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [
+                {
+                  ...run1,
+                  id: 'wf-run-1',
+                  title: 'Call Demo',
+                  workflowId: 'call-demo',
+                  archivedAt: 'then',
+                },
+              ]
+            : [],
+        ),
+    );
     const { client } = makeClient();
     const container = await mount(client);
+    await pickScope(container, 'Archived only');
 
     await act(async () => {
       container

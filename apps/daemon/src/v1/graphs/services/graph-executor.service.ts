@@ -14,6 +14,7 @@ import type {
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import {
+  type ChatListScope,
   type ClaudeModesCapability,
   type ItemWire,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -547,10 +548,17 @@ export class GraphExecutorService {
     }
   }
 
-  /** Workflow runs, newest first (the Chats page's run picker). */
-  async listRuns(): Promise<RunWire[]> {
+  /**
+   * Workflow runs, newest first (the Chats page's run picker).
+   *
+   * `scope` is the chat listing's own, and the sidebar sends the SAME one to
+   * both: a workflow run is shelved by `archivedAt` exactly as a chat is, so
+   * the two halves of one list have to agree about how much of the archive they
+   * are showing.
+   */
+  async listRuns(scope: ChatListScope = 'active'): Promise<RunWire[]> {
     const em = this.em.fork();
-    const runs = await this.runDao.listWorkflowRuns(em);
+    const runs = await this.runDao.listWorkflowRuns(scope, em);
     // The chat listing's own backfill, on the same terms: incremental and
     // error-swallowing by construction, so this is a `max(seq)` read per run in
     // the steady state and can never fail the listing. It is what recovers a

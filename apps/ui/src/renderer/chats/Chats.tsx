@@ -413,6 +413,34 @@ const NEW_CHAT_DRAFT = '__new__';
  */
 const NO_PARAMETER_VALUES: Record<string, string> = {};
 
+/**
+ * What the archive dialog CALLS the thing it is asking about, and what its
+ * confirm button promises.
+ *
+ * Four readings rather than a noun substituted into one sentence: a workflow
+ * run is stopped as a RUN — every agent still working in it — where a chat's
+ * cancel is one turn, and "Archive a running run" is not a sentence. It says
+ * `run` and never `workflow`, on the delete dialog's own rule: the library
+ * workflow is untouched, and naming it here is how a reader comes to think
+ * otherwise.
+ */
+function archiveDialogCopy(run: ChatRun | null): {
+  title: string;
+  confirmLabel: string;
+} {
+  const working = run?.status === 'running';
+  if (run?.workflowId != null) {
+    return {
+      title: working ? 'Archive a working run' : 'Archive run',
+      confirmLabel: working ? 'Stop run & archive' : 'Archive',
+    };
+  }
+  return {
+    title: working ? 'Archive a running chat' : 'Archive chat',
+    confirmLabel: working ? 'Cancel turn & archive' : 'Archive',
+  };
+}
+
 export function Chats({
   client,
   handle,
@@ -6125,15 +6153,12 @@ export function Chats({
                               // Unarchive on a live thread and Archive on a
                               // shelved one, in the same list.
                               archived={run.archivedAt != null}
-                              // Chats only. A workflow row has no archive, so
-                              // withholding the handler is what leaves it on
-                              // the Delete it has always had — the asymmetry
-                              // is deliberate, not an oversight.
-                              onArchive={
-                                run.workflowId == null
-                                  ? handleArchiveRun
-                                  : undefined
-                              }
+                              // Both kinds. It was chats only for a release,
+                              // which left a finished workflow run with Delete
+                              // as its one row action — the thread whose
+                              // history is most worth keeping had no way off
+                              // the desk but destroying it.
+                              onArchive={handleArchiveRun}
                               onUnarchive={handleUnarchiveRun}
                               onDragStartRun={handleRunDragStart}
                               onDragEndRun={handleDragEnd}
@@ -7619,16 +7644,8 @@ export function Chats({
                   open={archiving !== null}
                   busy={archiveBusy}
                   error={archiveError}
-                  title={
-                    archiving?.status === 'running'
-                      ? 'Archive a running chat'
-                      : 'Archive chat'
-                  }
-                  confirmLabel={
-                    archiving?.status === 'running'
-                      ? 'Cancel turn & archive'
-                      : 'Archive'
-                  }
+                  title={archiveDialogCopy(archiving).title}
+                  confirmLabel={archiveDialogCopy(archiving).confirmLabel}
                   confirmVariant={
                     archiving?.status === 'running' ? 'destructive' : 'default'
                   }

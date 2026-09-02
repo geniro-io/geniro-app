@@ -6,12 +6,17 @@ import {
   Param,
   Post,
   Put,
+  Query,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
 import type { RunWire } from '../../agents/chat.types';
-import { CancelledDto, RunDto } from '../../agents/dto/chat.dto';
+import {
+  CancelledDto,
+  ListChatsQueryDto,
+  RunDto,
+} from '../../agents/dto/chat.dto';
 import {
   CreateWorkflowDto,
   ExportedDto,
@@ -50,11 +55,17 @@ export class WorkflowsController {
     private readonly executor: GraphExecutorService,
   ) {}
 
+  /**
+   * `ListChatsQueryDto` rather than a query type of this module's own: the
+   * scope is ONE vocabulary — the sidebar lists chats and workflow runs
+   * together and sends both halves the same answer — and a second spelling of
+   * it is how the two would come to disagree about what `all` means.
+   */
   @Get('runs')
   @ApiOperation({ operationId: 'listWorkflowRuns' })
   @ZodResponse({ status: 200, type: [RunDto] })
-  listRuns(): Promise<RunWire[]> {
-    return this.executor.listRuns();
+  listRuns(@Query() query: ListChatsQueryDto): Promise<RunWire[]> {
+    return this.executor.listRuns(query.scope ?? 'active');
   }
 
   @Get('runs/:runId/nodes')

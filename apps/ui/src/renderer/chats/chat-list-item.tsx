@@ -187,9 +187,9 @@ export const ChatListItem = memo(function ChatListItem({
   onRename: (runId: string, title: string) => Promise<void>;
   onDelete: (runId: string) => void;
   /**
-   * Shelve this chat. Absent on a workflow row, which has no archive — its
-   * runs belong to the graph executor's history and the sidebar's archive is
-   * a chat feature.
+   * Shelve this run — a chat or a workflow run alike; the archive is a
+   * property of the row, not a chat feature. Optional only so a harness can
+   * render a row with no shelving at all.
    */
   onArchive?: (runId: string) => void;
   /** Put an archived chat back. Only ever passed in the archived view. */
@@ -405,8 +405,7 @@ export const ChatListItem = memo(function ChatListItem({
             )}
             {/* The desk's destructive-looking action is ARCHIVE, and it is
                 reversible: nothing is destroyed, the thread moves to the
-                shelf. Chats only — a workflow row has no archive, so it keeps
-                going straight to Delete below. */}
+                shelf. Both kinds of row. */}
             {!archived && onArchive ? (
               <Button
                 type="button"
@@ -437,11 +436,15 @@ export const ChatListItem = memo(function ChatListItem({
                 <ArchiveRestore className="size-3 shrink-0" />
               </Button>
             ) : null}
-            {/* The one-way door, and it is now reached only from the archive
-                (or from a workflow row, which has no archive to reach it
-                from). A workflow ROW is one run's history, not the workflow —
-                deleting it leaves the library entry untouched. */}
-            {archived || isWorkflow ? (
+            {/* The one-way door, and it is reached from the ARCHIVE alone —
+                for both kinds of row now. A workflow row kept it on the desk
+                while it had no archive to put it behind; leaving it there once
+                it did would mean the gesture that destroys a run's history is
+                one hover-click away on exactly one kind of row, which is the
+                arrangement archiving exists to end. A workflow ROW is one
+                run's history, not the workflow — deleting it leaves the
+                library entry untouched. */}
+            {archived ? (
               <Button
                 type="button"
                 variant="ghost"

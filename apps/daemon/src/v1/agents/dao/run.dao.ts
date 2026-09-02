@@ -35,34 +35,36 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
-   * The ids of ARCHIVED chat runs shelved before `cutoff`, oldest first.
+   * Every ARCHIVED run shelved before `cutoff`, oldest first — both kinds.
    *
-   * Ids rather than rows: every one of them is about to be destroyed, so
-   * hydrating entities buys nothing and a long archive would load its whole
-   * history into the forked EM to read one column off each.
+   * TWO columns rather than whole rows: every one of them is about to be
+   * destroyed, so hydrating entities buys nothing and a long archive would load
+   * its whole history into the forked EM. The `workflowId` rides along because
+   * the sweep has to know which teardown a run needs, and asking per id would
+   * be a second query for a column this one already touches.
+   *
+   * It answered CHAT runs alone until workflow runs became archivable — a limit
+   * that then meant the retention window silently did not cover half the shelf.
    *
    * Oldest FIRST, which is the reverse of every other listing here and is the
    * one ordering that degrades well: a sweep interrupted part-way — the daemon
    * quits, the disk fills — has removed the runs furthest past the retention
    * window, so the next sweep resumes rather than starting over on rows it has
    * already reached.
-   *
-   * `workflowId: null` for the reason `listChats` has it: a workflow run has no
-   * archive, so it can never be shelved and must never be swept.
    */
-  async archivedChatIdsBefore(
+  async archivedRunsBefore(
     cutoff: Date,
     txEm?: EntityManager,
-  ): Promise<string[]> {
+  ): Promise<{ id: string; workflowId: string | null }[]> {
     const rows = await this.getRepo(txEm).find(
-      { workflowId: null, archivedAt: { $ne: null, $lte: cutoff } },
+      { archivedAt: { $ne: null, $lte: cutoff } },
       {
-        fields: ['id'],
+        fields: ['id', 'workflowId'],
         orderBy: { archivedAt: 'asc' },
         disableIdentityMap: true,
       },
     );
-    return rows.map((run) => run.id);
+    return rows.map((run) => ({ id: run.id, workflowId: run.workflowId }));
   }
 
   /**
@@ -304,10 +306,26 @@ export class RunDao extends BaseDao<Run> {
     return runs.length;
   }
 
-  /** Workflow runs (graph executions), newest first. */
-  async listWorkflowRuns(txEm?: EntityManager): Promise<Run[]> {
+  /**
+   * Workflow runs (graph executions), newest first, filtered by how much of the
+   * archive the caller asked for.
+   *
+   * The archive predicate is {@link listChats}' own, down to `all` stating no
+   * condition at all — the two listings feed ONE sidebar, so a scope that meant
+   * different things on either side of it would put a shelved workflow run in a
+   * view the user opened to see only live work.
+   */
+  async listWorkflowRuns(
+    scope: ChatListScope,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
     return this.getRepo(txEm).find(
-      { workflowId: { $ne: null } },
+      {
+        workflowId: { $ne: null },
+        ...(scope === 'all'
+          ? {}
+          : { archivedAt: scope === 'archived' ? { $ne: null } : null }),
+      },
       { orderBy: { createdAt: 'desc' }, disableIdentityMap: true },
     );
   }

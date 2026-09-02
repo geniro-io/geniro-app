@@ -1262,11 +1262,11 @@ export class ChatService implements OnModuleInit {
   async sweepArchived(olderThanDays: number): Promise<{ deleted: number }> {
     const em = this.em.fork();
     const cutoff = new Date(Date.now() - olderThanDays * DAY_MS);
-    const ids = await this.runDao.archivedChatIdsBefore(cutoff, em);
+    const runs = await this.runDao.archivedRunsBefore(cutoff, em);
     let deleted = 0;
-    for (const runId of ids) {
+    for (const { id, workflowId } of runs) {
       try {
-        const result = await this.delete(runId);
+        const result = await this.purgeArchived(id, workflowId);
         if (result.deleted) {
           deleted += 1;
         }
@@ -1284,10 +1284,45 @@ export class ChatService implements OnModuleInit {
     }
     if (deleted > 0) {
       this.logger.log(
-        `deleted ${deleted} chat(s) archived more than ${olderThanDays} day(s) ago`,
+        `deleted ${deleted} archived run(s) shelved more than ${olderThanDays} day(s) ago`,
       );
     }
     return { deleted };
+  }
+
+  /**
+   * Destroy one shelved run, whichever engine owned it.
+   *
+   * A chat goes through {@link delete}, which is that kind's whole delete.
+   *
+   * A workflow run goes STRAIGHT to the shared teardown, and cannot go through
+   * `GraphExecutorService.deleteRun` for the module reason its cancel cannot
+   * either — `GraphsModule` imports `AgentsModule`. What that service adds over
+   * the teardown is two things, and both are answered here rather than skipped.
+   * Its call-broker cleanup now happens on the `runDeleted` broadcast the purge
+   * itself publishes, which is what that stream exists for (`CallBroker`
+   * subscribes). And its `deleting` claim guards a WALK crossing its own
+   * claim→register window — a race that needs a run about to start, while every
+   * run this method sees has been shelved for days and had its work cancelled
+   * when it was. The settle promise is the registry's, which both engines
+   * share.
+   *
+   * This is the sweep's path alone. `DELETE /v1/chats/:runId` stays kind-guarded:
+   * there the executor's route is right there to be used, and a run deleted
+   * through the wrong one would skip the claim for no reason.
+   */
+  private async purgeArchived(
+    runId: string,
+    workflowId: string | null,
+  ): Promise<{ deleted: boolean }> {
+    if (workflowId === null) {
+      return this.delete(runId);
+    }
+    return this.teardown.purge(
+      this.em.fork(),
+      runId,
+      this.registry.settled(runId),
+    );
   }
 
   async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {
@@ -1350,7 +1385,18 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Shelve a chat out of the sidebar without destroying any part of it.
+   * Shelve a RUN out of the sidebar without destroying any part of it — a chat
+   * or a workflow run alike.
+   *
+   * Kind-BLIND, like {@link rename} and {@link setGroup} and unlike
+   * {@link cancel} and {@link delete}: `archivedAt` is a property of the run
+   * ROW, and the sidebar that reads it lists both kinds together. It was
+   * chat-only for a release, on the reading that the archive was a chat
+   * feature — which left a finished workflow run with Delete as its only row
+   * action, so the one kind of thread whose history is most worth keeping had
+   * no way off the desk but destroying it. REPORTED as exactly that, against a
+   * completed `Dev Team Manifest` row. Nothing about shelving is per-kind; only
+   * how a RUNNING one is stopped is, and that is {@link stopForArchive}.
    *
    * The reversible half of what used to be a single one-way Delete: everything
    * the run owns — transcript, attachments, node state, call tokens — is left
@@ -1377,16 +1423,20 @@ export class ChatService implements OnModuleInit {
    */
   async archive(runId: string): Promise<RunWire> {
     const em = this.em.fork();
-    // Kind-guarded like cancel and delete: workflow runs have no archive, so
-    // one reaching this route must 400 rather than be marked with a column
-    // nothing on their side of the sidebar reads.
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
     // Claimed BEFORE the cancel, exactly as `delete` claims — see {@link archiving}.
     this.archiving.add(runId);
     try {
       if (run.status === 'running') {
-        await this.cancel(runId);
+        await this.stopForArchive(run);
       }
+      // Keyed by RUN, so this reaches a chat's kept process and none of a
+      // workflow's, whose sessions are keyed `<runId>::node:<id>` by the
+      // executor and are closed by that engine's own teardown when the cancel
+      // above settles its aggregate handle.
       this.sessions.close(runId);
       const archivedAt = new Date();
       await this.runDao.updateById(runId, { archivedAt }, em);
@@ -1403,10 +1453,37 @@ export class ChatService implements OnModuleInit {
     }
   }
 
-  /** Put an archived chat back on the desk. Nothing else about it changed. */
+  /**
+   * Stop a run that is being shelved, whichever engine owns it.
+   *
+   * A chat goes through {@link cancel}, which also RECONCILES a row left
+   * `running` by a daemon that died mid-turn — nothing else writes a chat's
+   * status, so without it a shelved thread would keep a spinner for good.
+   *
+   * A workflow run gets the registry cancel alone, which is the whole of
+   * `GraphExecutorService.cancel` once its own kind guard has run: both engines
+   * converge on ONE registry key. It cannot call that service — `GraphsModule`
+   * imports `AgentsModule`, so the dependency points one way — and it does not
+   * need to, because cancelling the aggregate handle runs the executor's own
+   * teardown: the per-node sessions close and the run's call tokens are
+   * revoked. A workflow row left `running` by a crash is that engine's boot
+   * reconcile to fix, and it does.
+   */
+  private async stopForArchive(run: Run): Promise<void> {
+    if (run.workflowId === null) {
+      await this.cancel(run.id);
+      return;
+    }
+    this.registry.cancel(run.id);
+  }
+
+  /** Put an archived run back on the desk. Nothing else about it changed. */
   async unarchive(runId: string): Promise<RunWire> {
     const em = this.em.fork();
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
     await this.runDao.updateById(runId, { archivedAt: null }, em);
     run.archivedAt = null;
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);

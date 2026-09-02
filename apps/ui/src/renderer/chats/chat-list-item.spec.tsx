@@ -421,23 +421,35 @@ describe('ChatListItem', () => {
     expect(container.textContent).not.toContain('daemon PATCH failed');
   });
 
-  it('a WORKFLOW row offers delete but not rename', async () => {
+  it('a WORKFLOW row on the desk offers archive, and neither rename nor delete', async () => {
     // Its NAME comes from the workflow it ran, so renaming here would read as
-    // editing the library entry from another view. Deleting does not: the row
-    // is one run's history, and the workflow stays in the library. Gating the
-    // two together is what left these rows undeletable.
+    // editing the library entry from another view. The DELETE moved behind the
+    // archive with the chats': it destroys one run's history, and leaving it a
+    // hover-click away on the one row kind that had no shelf is the
+    // arrangement archiving exists to end.
     const p = props({ isWorkflow: true });
     const container = await mount(<ChatListItem {...p} />);
+
     expect(buttonLabelled(container, 'Rename Review team')).toBeNull();
+    expect(buttonLabelled(container, 'Delete Review team')).toBeNull();
+    expect(buttonLabelled(container, 'Archive Review team')).not.toBeNull();
+    // The row still activates.
+    expect(buttonLabelled(container, 'Review team')).not.toBeNull();
+  });
+
+  it('an ARCHIVED workflow row can still be destroyed — the door moved, it did not close', async () => {
+    // Gating delete behind a kind is what once left these rows undeletable;
+    // gating it behind the archive must not do the same thing again.
+    const p = props({ isWorkflow: true, archived: true });
+    const container = await mount(<ChatListItem {...p} />);
 
     await act(async () => {
       buttonLabelled(container, 'Delete Review team').dispatchEvent(
         new MouseEvent('click', { bubbles: true }),
       );
     });
+
     expect(p.onDelete).toHaveBeenCalledWith('run-1');
-    // The row still activates.
-    expect(buttonLabelled(container, 'Review team')).not.toBeNull();
   });
 
   it('delete asks the parent WITHOUT activating the row', async () => {

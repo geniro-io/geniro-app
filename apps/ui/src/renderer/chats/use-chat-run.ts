@@ -818,13 +818,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // The param is omitted for the default rather than sent as `'active'`,
       // so the common request is the one the daemon reads with no query at all.
       chatApi.listChats(scope === 'active' ? {} : { scope }),
-      // ARCHIVED holds chats and nothing else — workflow runs have no archive,
-      // so listing them there would put rows in a view whose own controls
-      // (unarchive, delete permanently) cannot act on them. Under `all` they
-      // belong: that scope widens the archive, not the run kind.
-      scope === 'archived'
-        ? Promise.resolve([])
-        : workflowApi.listWorkflowRuns(),
+      // The SAME scope to both halves, and the same omit-the-default rule.
+      // Workflow runs used to be excluded from `archived` outright, on the
+      // reading that they had no archive — they do now, so the scope is a
+      // question about how much of the shelf to show and never about the run
+      // kind.
+      workflowApi.listWorkflowRuns(scope === 'active' ? {} : { scope }),
     ])
       .then(([chats, workflowRuns]) => {
         if (generation !== refreshGenerationRef.current) {

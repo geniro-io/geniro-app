@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type {
   CalleeTurnOutcome,
   CallEnvelope,
@@ -139,8 +140,38 @@ interface RunCallState {
  * round-trip.
  */
 @Injectable()
-export class CallBroker {
+export class CallBroker implements OnModuleInit {
   private readonly runs = new Map<string, RunCallState>();
+
+  /**
+   * `@Optional()` on the bus, exactly as `AgentEventBus` itself takes its
+   * registry: a dozen specs build a bare `new CallBroker()` to drive call
+   * semantics, and none of them is about run deletion. Without one the
+   * subscription below simply never happens — which is the pre-existing
+   * behaviour rather than a degraded one.
+   */
+  constructor(@Optional() private readonly bus?: AgentEventBus) {}
+
+  /**
+   * Drop a run's call state when the run itself is DESTROYED.
+   *
+   * The executor already unregisters on its own delete, so this is the second
+   * belt — and the one that covers a purge it never sees. The retention sweep
+   * destroys an archived run through `ChatService`, which sits in the module
+   * BELOW this one and cannot call into it; announcing the deletion downward is
+   * the inversion `AgentEventBus.publishRunDeleted` exists for, and it says so
+   * at its own definition. Without this, a swept workflow run left its capability,
+   * its uncollected async results and any parked question's timer behind for the
+   * life of the daemon.
+   *
+   * Idempotent, which is what makes two callers safe: `unregisterRun` on a run
+   * it has never heard of clears nothing and throws nothing.
+   */
+  onModuleInit(): void {
+    this.bus?.allDeleted().subscribe((runId) => {
+      this.unregisterRun(runId);
+    });
+  }
 
   /** The executor announces a run whose workflow carries call edges. */
   registerRun(runId: string, capability: RunCallCapability): void {

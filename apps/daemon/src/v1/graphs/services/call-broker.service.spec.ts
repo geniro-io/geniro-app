@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
@@ -571,6 +572,23 @@ describe('CallBroker', () => {
       call_id: 'call-1',
     });
     expect(errorOf(goneAwait)).toContain('RUN_NOT_ACTIVE');
+  });
+
+  it('drops a run\u2019s state when the RUN is destroyed, off the bus', () => {
+    // The executor unregisters on its own delete; this covers the purge it
+    // never sees — the retention sweep, which destroys an archived workflow run
+    // from the module BELOW this one and can only announce it. Without the
+    // subscription a swept run left its capability, its uncollected results and
+    // any parked question's timer behind for the life of the daemon.
+    const bus = new AgentEventBus();
+    const broker = new CallBroker(bus);
+    broker.onModuleInit();
+    broker.registerRun('run-1', harness().capability);
+    expect(broker.hasRun('run-1')).toBe(true);
+
+    bus.publishRunDeleted('run-1');
+
+    expect(broker.hasRun('run-1')).toBe(false);
   });
 
   it('listCallees exposes the wiring the tool description advertises', () => {

@@ -238,20 +238,21 @@ class FakeRunDao {
     return cleared;
   }
 
-  /** The cutoffs `archivedChatIdsBefore` was asked about, newest call last. */
+  /** The cutoffs `archivedRunsBefore` was asked about, newest call last. */
   readonly sweepCutoffs: Date[] = [];
 
   /**
-   * Mirrors the real query's scoping — archived only, chats only, oldest first.
+   * Mirrors the real query's scoping — archived only, BOTH kinds, oldest first.
    * The predicate itself is pinned against real SQL in `run.dao.spec.ts`; what
    * this exists for is the CUTOFF, which is the service's own arithmetic.
    */
-  async archivedChatIdsBefore(cutoff: Date): Promise<string[]> {
+  async archivedRunsBefore(
+    cutoff: Date,
+  ): Promise<{ id: string; workflowId: string | null }[]> {
     this.sweepCutoffs.push(cutoff);
     return [...this.runs.values()]
       .filter(
         (run) =>
-          run.workflowId === null &&
           run.archivedAt !== null &&
           run.archivedAt.getTime() <= cutoff.getTime(),
       )
@@ -2128,6 +2129,52 @@ describe('ChatService', () => {
       expect((await service.listChats('archived')).map((r) => r.id)).toEqual(
         [],
       );
+    });
+
+    it('shelves a WORKFLOW run too — the archive is not a chat feature', async () => {
+      // REPORTED against a completed `Dev Team Manifest` row, whose only row
+      // action was Delete: shelving is a property of the run ROW, and the
+      // sidebar that reads it lists both kinds together.
+      const { service, runDao } = setup();
+      const run = await runDao.create({
+        workflowId: 'wf-1',
+        status: 'completed',
+      });
+
+      const archived = await service.archive(run.id);
+
+      expect(archived.archivedAt).not.toBeNull();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+      expect((await service.unarchive(run.id)).archivedAt).toBeNull();
+      expect((await runDao.getById(run.id))?.archivedAt).toBeNull();
+    });
+
+    it('stops a RUNNING workflow run through the registry both engines share', async () => {
+      // Its cancel cannot go through `ChatService.cancel`, which is kind-guarded
+      // — and must still happen, or a shelved run goes on spending out of
+      // sight. The registry key is the one both engines converge on.
+      const { service, runDao, registry } = setup();
+      const run = await runDao.create({
+        workflowId: 'wf-1',
+        status: 'running',
+      });
+      registry.tryClaim(run.id);
+      const cancelled = vi.fn();
+      registry.register(run.id, {
+        // Deliberately NEVER settles: the registry drops its entry when `done`
+        // does, so an already-resolved promise would leave nothing registered
+        // to cancel by the time the archive gets there.
+        done: new Promise<void>(() => undefined),
+        cancel: cancelled,
+        respondApproval: () => false,
+        sendUserMessage: () => false,
+        setApprovalMode: () => false,
+      });
+
+      await service.archive(run.id);
+
+      expect(cancelled).toHaveBeenCalled();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
     });
 
     it('`all` is the one scope that hides neither side', async () => {
@@ -5037,6 +5084,30 @@ describe('ChatService — sweeping the archive is the same one-way door', () => 
     expect(await ctx.runDao.getById(old.id)).toBeNull();
     expect(await ctx.runDao.getById(fresh.id)).not.toBeNull();
     expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([fresh.id]);
+  });
+
+  it('sweeps an archived WORKFLOW run, which the chat delete cannot touch', async () => {
+    // The other half of making workflow runs archivable: without it the
+    // retention window silently covered only chats, and a shelved workflow run
+    // was kept for the life of the install. It cannot go through `delete`,
+    // which is kind-guarded — the teardown underneath both is what runs.
+    const ctx = setup();
+    const run = await ctx.runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+      archivedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+    });
+    await ctx.itemDao.create({
+      runId: run.id,
+      seq: 0,
+      kind: 'message',
+      payload: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(await ctx.service.sweepArchived(30)).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(run.id)).toBeNull();
+    expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([]);
   });
 
   it('steps over a chat it cannot tear down and still reaches the rest', async () => {

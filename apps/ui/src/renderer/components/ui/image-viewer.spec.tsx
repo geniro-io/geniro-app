@@ -215,6 +215,46 @@ describe('an image the user can open', () => {
     expect(control('Zoom in')!.disabled).toBe(false);
   });
 
+  it('leaves a right-click alone, so the app can offer Copy Image over it', () => {
+    // REPORTED as the open picture not being "воспринимается как изображение":
+    // right-clicking it produced no menu at all. macOS raises the context menu
+    // FROM this mousedown, and `main/context-menu.ts` builds Copy Image off the
+    // `context-menu` event Chromium then emits — so a prevented default is a
+    // picture with no menu. The zoom layer prevents it for every button it will
+    // pan with, and it pans with the right one unless told otherwise.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+    press(thumbnail()!);
+
+    const down = new MouseEvent('mousedown', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+    });
+    act(() => {
+      viewer()!.dispatchEvent(down);
+    });
+
+    expect(down.defaultPrevented).toBe(false);
+  });
+
+  it('keeps the picture in the HIT TEST, against its own zoom library', () => {
+    // The other half of the same defect, and the half the panning fix above
+    // does not reach: the library injects `…_content__… img { pointer-events:
+    // none }`, so Chromium reported its own content DIV as the right-click's
+    // target and the menu was built for `mediaType: 'none'` — empty, therefore
+    // invisible. Driven over CDP in the running app before and after: the
+    // event's target went from DIV to IMG.
+    //
+    // The CLASS is the whole of the mechanism — its one declaration lives in
+    // `styles/global.css`, unlayered and double-classed so it can beat the
+    // vendor rule, which no Tailwind utility can — and jsdom computes no
+    // cascade, so the class is the only thing a spec here can hold.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+    press(thumbnail()!);
+
+    expect(viewer()!.classList.contains('image-viewer-picture')).toBe(true);
+  });
+
   it('offers a FULL SCREEN control that is never dead', () => {
     // The fix for the report above: the glyph now belongs to a control that
     // really does something, and it is live at every magnification — including

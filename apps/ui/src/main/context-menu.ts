@@ -1,4 +1,5 @@
 import {
+  BrowserWindow,
   Menu,
   type MenuItemConstructorOptions,
   type WebContents,
@@ -147,6 +148,17 @@ export function installContextMenu(contents: WebContents): void {
       }
       return { role: entry.role };
     });
-    Menu.buildFromTemplate(template).popup({});
+    // Popped at the CLICK, not at the pointer. With a mouse the two are the
+    // same point, so this changes nothing a user can see there — it matters
+    // for the ways a context menu is raised WITHOUT a pointer (the keyboard's
+    // menu key, an accessibility client), where Electron's default of "wherever
+    // the cursor happens to be" draws the menu somewhere the request never
+    // named. It also matches what the menu ACTS on: `copyImageAt` is given
+    // these same coordinates.
+    Menu.buildFromTemplate(template).popup({
+      window: BrowserWindow.fromWebContents(contents) ?? undefined,
+      x: params.x,
+      y: params.y,
+    });
   });
 }

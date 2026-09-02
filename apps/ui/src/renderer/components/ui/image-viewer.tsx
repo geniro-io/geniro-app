@@ -297,7 +297,13 @@ function ZoomableSurface({
           src={src}
           alt={alt ?? ''}
           draggable={false}
-          className="mx-auto max-h-[min(78vh,100%)] w-auto max-w-full rounded-md object-contain"
+          // `image-viewer-picture` carries ONE declaration and it is the second
+          // half of making this picture right-clickable: it takes back the
+          // `pointer-events: none` the zoom library puts on every `img` inside
+          // its content. Its retint lives in `styles/global.css` with the other
+          // two, because a Tailwind utility cannot win that argument — see the
+          // rule there for the measurement.
+          className="image-viewer-picture mx-auto max-h-[min(78vh,100%)] w-auto max-w-full rounded-md object-contain"
         />
       </TransformComponent>
     </div>
@@ -457,6 +463,18 @@ export function ImageViewer({
           // content can be pushed no further than its own scaled edges, so a
           // picture at rest cannot be dragged off into empty card.
           limitToBounds
+          // RIGHT-CLICK PANNING OFF, and this is what restores the right-click
+          // MENU over the open picture. The library's mousedown handler calls
+          // `preventDefault()` for every button it is willing to pan with, and
+          // `allowRightClickPan` defaults to true — so button 2 was prevented
+          // too. On macOS the context menu is dispatched FROM that mousedown,
+          // so preventing it suppresses the `contextmenu` event, and with it
+          // the `context-menu` event `main/context-menu.ts` builds Copy Image
+          // from. Reported twice as the same thing: the picture "не
+          // воспринимается как изображение" — right-clicking it did nothing,
+          // while right-clicking the thumbnail (outside this wrapper) worked.
+          // Nothing is lost: left-drag pans, and no one right-drags a picture.
+          panning={{ allowRightClickPan: false }}
           wheel={{ step: 0.12 }}
           doubleClick={{ mode: 'toggle', step: 1.5 }}>
           {/* The RENDER-PROP child, which is the only route to the library's

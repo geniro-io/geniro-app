@@ -1585,20 +1585,11 @@ describe('AgentsPanel — MCP toggle', () => {
     // CLI's DEFAULT profile — a different account's config from the one the
     // rows the user was looking at had been listed under.
     const onSetMcpEnabled = vi.fn();
-    const profiled: AgentDisplay[] = [
-      {
-        id: 'orchestrator',
-        name: 'Orchestrator',
-        agent: 'claude',
-        configDir: '/profiles/work',
-        status: 'running',
-        activeTurns: 1,
-        contextTokens: 45_200,
-        contextWindowTokens: 1_000_000,
-        spentUsd: 0.236,
-        threads: [{ ...mainThread, status: 'running' }],
-      },
-    ];
+    // Derived from the shared fixture rather than respelled, so a field added
+    // to `AgentDisplay` reaches this case with the rest of the file.
+    const profiled: AgentDisplay[] = agents
+      .filter((card) => card.id === 'orchestrator')
+      .map((card) => ({ ...card, configDir: '/profiles/work' }));
     const el = render(
       <AgentsPanel
         terminalReasons={TERMINALS}

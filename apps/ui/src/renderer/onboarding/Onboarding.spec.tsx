@@ -47,6 +47,11 @@ function det(
     path: `/detected/${kind}`,
     version: '1.0.0',
     loggedIn: null,
+    update: {
+      available: null,
+      latestVersion: null,
+      checkUnavailableReason: null,
+    },
     ...overrides,
   };
 }

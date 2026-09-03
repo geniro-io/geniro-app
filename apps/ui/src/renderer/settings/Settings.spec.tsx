@@ -115,6 +115,11 @@ function det(
     path: `/bin/${kind}`,
     version: '1.2.3',
     loggedIn: null,
+    update: {
+      available: null,
+      latestVersion: null,
+      checkUnavailableReason: null,
+    },
     ...overrides,
   };
 }

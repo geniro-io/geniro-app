@@ -54,6 +54,13 @@ const cliKind = z.enum(CLI_KINDS as unknown as [CliKind, ...CliKind[]]);
  * evaluates its shape immediately, so a reference to a `const` declared further
  * down is a temporal-dead-zone error at module load, not a type error.
  */
+/**
+ * One CLI kind, for a channel whose whole argument is which agent it is about.
+ * The renderer is the untrusted side of this boundary, and this is what stops
+ * an arbitrary string reaching a `Record<CliKind, string[]>` lookup as argv.
+ */
+export const cliKindSchema = cliKind;
+
 export const branchNameSchema = z
   .string()
   .min(1)

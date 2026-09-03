@@ -3,8 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { CliDetection, CliKind } from '../../shared/contracts';
-import { AgentConfigList, statusFor } from './agent-config-list';
+import type {
+  CliDetection,
+  CliKind,
+  CliUpdateState,
+} from '../../shared/contracts';
+import { AgentConfigList, cliUpdateRow, statusFor } from './agent-config-list';
 import type { StatusTone } from './status-dot';
 
 function det(
@@ -17,6 +21,13 @@ function det(
     path: `/bin/${kind}`,
     version: '1.2.3',
     loggedIn: null,
+    // Nothing known about updates unless a case says so — the state a CLI with
+    // no check of its own reports, so the default exercises no new behaviour.
+    update: {
+      available: null,
+      latestVersion: null,
+      checkUnavailableReason: null,
+    },
     ...overrides,
   };
 }
@@ -160,19 +171,18 @@ describe('AgentConfigList — CLI sign-in control', () => {
       <AgentConfigList
         {...baseProps}
         clis={[
-          {
-            kind: 'claude',
-            found: true,
-            path: '/usr/local/bin/claude',
-            version: '1.2.3',
-            loggedIn: null,
-          },
+          det('claude', { path: '/usr/local/bin/claude' }),
           {
             kind: 'cursor-agent',
             found: false,
             path: null,
             version: null,
             loggedIn: null,
+            update: {
+              available: null,
+              latestVersion: null,
+              checkUnavailableReason: null,
+            },
           },
         ]}
         onSignIn={onSignIn}
@@ -420,5 +430,279 @@ describe('AgentConfigList — the account control matches the reported state', (
     );
 
     expect(accountButtons(el)).toHaveLength(0);
+  });
+});
+
+describe('cliUpdateRow', () => {
+  const nothingKnown: CliUpdateState = {
+    available: null,
+    latestVersion: null,
+    checkUnavailableReason: null,
+  };
+
+  it('offers the press when the CLI cannot be asked, and says why', () => {
+    // claude's shape, and the case the whole three-state design exists for:
+    // running its updater IS its only check, so an unaskable CLI must still
+    // offer the button. Collapse `null` into "no update" and the one CLI that
+    // can never advertise one loses its only way to be updated.
+    const row = cliUpdateRow(
+      { ...nothingKnown, checkUnavailableReason: 'claude has no check.' },
+      undefined,
+    );
+
+    expect(row).toEqual({
+      text: 'claude has no check.',
+      tone: 'muted',
+      offer: true,
+    });
+  });
+
+  it('offers nothing when the CLI answered that it is up to date', () => {
+    // The app's own rule about controls with nothing behind them. Re-asking is
+    // what `Re-check` above the list does, and it re-runs this very probe.
+    expect(
+      cliUpdateRow({ ...nothingKnown, available: false }, undefined),
+    ).toEqual({ text: 'Up to date', tone: 'muted', offer: false });
+  });
+
+  it('names the waiting version when the CLI reported one', () => {
+    expect(
+      cliUpdateRow(
+        {
+          available: true,
+          latestVersion: '2026.09.02-c22c1a3',
+          checkUnavailableReason: null,
+        },
+        undefined,
+      ),
+    ).toEqual({
+      text: 'Update available · 2026.09.02-c22c1a3',
+      tone: 'news',
+      offer: true,
+    });
+
+    // An update the CLI announced without naming a version still earns the
+    // press — the row simply has one fewer fact to state.
+    expect(
+      cliUpdateRow({ ...nothingKnown, available: true }, undefined),
+    ).toEqual({
+      text: 'Update available',
+      tone: 'news',
+      offer: true,
+    });
+  });
+
+  it('reports a new version only when the binary actually answered differently', () => {
+    const result = {
+      kind: 'cursor-agent' as const,
+      ok: true,
+      previousVersion: '2026.08.11',
+      version: '2026.09.02-c22c1a3',
+      output: null,
+    };
+
+    // The check still says an update is waiting — it was taken BEFORE the
+    // install — and the outcome outranks it, or the card would go on offering
+    // the update it has just applied.
+    expect(
+      cliUpdateRow(
+        {
+          available: true,
+          latestVersion: '2026.09.02-c22c1a3',
+          checkUnavailableReason: null,
+        },
+        result,
+      ),
+    ).toEqual({
+      text: 'Updated to 2026.09.02-c22c1a3',
+      tone: 'ok',
+      offer: false,
+    });
+
+    // Same version back: the updater ran and nothing moved.
+    expect(
+      cliUpdateRow(nothingKnown, { ...result, version: '2026.08.11' }),
+    ).toEqual({
+      text: 'Already on the latest version',
+      tone: 'muted',
+      offer: false,
+    });
+  });
+
+  it('claims nothing about the version when either read failed', () => {
+    // A clean exit with an unreadable `--version` is not evidence of being up
+    // to date. Reporting "Already on the latest version" here would state a
+    // comparison that never happened.
+    for (const versions of [
+      { previousVersion: null, version: '2.1.255' },
+      { previousVersion: '2.1.251', version: null },
+    ]) {
+      expect(
+        cliUpdateRow(nothingKnown, {
+          kind: 'claude',
+          ok: true,
+          output: null,
+          ...versions,
+        }),
+      ).toEqual({ text: 'Update finished', tone: 'muted', offer: false });
+    }
+  });
+
+  it('keeps the press after a failure, so a retry is one click away', () => {
+    expect(
+      cliUpdateRow(nothingKnown, {
+        kind: 'claude',
+        ok: false,
+        previousVersion: '2.1.251',
+        version: '2.1.251',
+        output: 'permission denied',
+      }),
+    ).toEqual({ text: 'Update failed', tone: 'bad', offer: true });
+  });
+});
+
+describe('AgentConfigList — the update band', () => {
+  const baseProps = {
+    clis: bothFound,
+    open: { claude: true, 'cursor-agent': true },
+    onToggle: vi.fn(),
+    binaryPaths: {},
+    onBinaryPathChange: vi.fn(),
+    onBrowse: vi.fn(),
+  };
+
+  // `Updat`, not `Update`: a running card's button reads `Updating…`, so the
+  // obvious substring silently drops the very button the disabled case is about.
+  const updateButtons = (el: HTMLElement): HTMLButtonElement[] =>
+    [...el.querySelectorAll('button')].filter((b) =>
+      b.textContent?.startsWith('Updat'),
+    );
+
+  it('draws no band at all when the owner passes no handler — onboarding’s shape', () => {
+    // An out-of-date CLI is not a setup step, and onboarding has nowhere to
+    // report what an update did.
+    const el = render(<AgentConfigList {...baseProps} />);
+
+    expect(updateButtons(el)).toHaveLength(0);
+    expect(el.textContent).not.toContain('Up to date');
+  });
+
+  it('presses through to the card’s own kind', () => {
+    const onUpdate = vi.fn();
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', {
+            update: {
+              available: true,
+              latestVersion: '2.1.255',
+              checkUnavailableReason: null,
+            },
+          }),
+          det('cursor-agent', {
+            update: {
+              available: false,
+              latestVersion: null,
+              checkUnavailableReason: null,
+            },
+          }),
+        ]}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    // Exactly one button: cursor answered "up to date" and offers no press,
+    // which is also what localizes the click below to the right card.
+    const buttons = updateButtons(el);
+    expect(buttons).toHaveLength(1);
+    act(() => {
+      buttons[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(onUpdate).toHaveBeenCalledWith('claude');
+  });
+
+  it('offers no update for a binary that was not found', () => {
+    // The same gate the sign-in control carries, for its reason: pressing this
+    // would run a binary that is not there.
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', {
+            found: false,
+            path: null,
+            version: null,
+            update: {
+              available: true,
+              latestVersion: '2.1.255',
+              checkUnavailableReason: null,
+            },
+          }),
+        ]}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    expect(updateButtons(el)).toHaveLength(0);
+  });
+
+  it('disables the running card’s button and leaves the other card alone', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[
+          det('claude', {
+            update: {
+              available: true,
+              latestVersion: '2.1.255',
+              checkUnavailableReason: null,
+            },
+          }),
+          det('cursor-agent', {
+            update: {
+              available: true,
+              latestVersion: '2026.09.02',
+              checkUnavailableReason: null,
+            },
+          }),
+        ]}
+        onUpdate={vi.fn()}
+        updating="claude"
+      />,
+    );
+
+    const buttons = updateButtons(el);
+    expect(buttons).toHaveLength(2);
+    // A second press would run a second installer over the files the first is
+    // writing, so the running card's button is disabled — and only that one.
+    expect(buttons[0]!.disabled).toBe(true);
+    expect(buttons[1]!.disabled).toBe(false);
+  });
+
+  it('carries a failed updater’s own words on the row', () => {
+    const el = render(
+      <AgentConfigList
+        {...baseProps}
+        clis={[det('claude')]}
+        onUpdate={vi.fn()}
+        updateResults={{
+          claude: {
+            kind: 'claude',
+            ok: false,
+            previousVersion: '2.1.251',
+            version: '2.1.251',
+            output: 'permission denied',
+          },
+        }}
+      />,
+    );
+
+    // The one state this app cannot explain, so the tool's own sentence is the
+    // only thing worth showing — and it is reachable rather than swallowed.
+    const row = [...el.querySelectorAll('span')].find(
+      (s) => s.textContent === 'Update failed',
+    );
+    expect(row?.getAttribute('title')).toBe('permission denied');
   });
 });

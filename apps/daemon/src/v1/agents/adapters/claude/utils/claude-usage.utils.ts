@@ -45,7 +45,7 @@ import { ClaudeDelegateCostLedger } from './claude-delegate-cost.utils';
  * this the oldest entry is dropped, which costs at most one repeated
  * declaration row for a delegate still running after a hundred others started.
  */
-const MAX_TRACKED_DELEGATE_MODELS = 200;
+export const MAX_TRACKED_DELEGATE_MODELS = 200;
 
 export class ClaudeSessionCostLedger {
   /** Insertion-ordered, so the oldest entry is the first key — see `remember`. */

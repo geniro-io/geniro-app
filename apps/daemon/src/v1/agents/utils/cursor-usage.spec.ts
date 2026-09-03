@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyCursorSpend,
+  cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
   foldCursorUsagePage,
@@ -147,5 +148,96 @@ describe('applyCursorSpend', () => {
         cursorCostEvents: 0,
       }),
     ).toEqual(totals);
+  });
+});
+
+describe('foldCursorUsagePage — the watermark arm', () => {
+  it('drops an event the watermark has already counted, and keeps a newer one', () => {
+    // The overlapping window deliberately re-reads an hour, so this is the whole
+    // of what stops `writeSpend`'s accumulate counting it twice.
+    const page = {
+      usageEventsDisplay: [
+        event({ timestamp: '1000', chargedCents: 5 }),
+        event({ timestamp: '2000', chargedCents: 7 }),
+        event({ timestamp: '3000', chargedCents: 11 }),
+      ],
+    };
+    const since = new Map([['7d781e85-8ed6-4771-8d81-b2e132fd0c2d', 2000]]);
+
+    const fold = foldCursorUsagePage(page, since);
+
+    const one = fold.get('7d781e85-8ed6-4771-8d81-b2e132fd0c2d');
+    expect(one?.events).toBe(1);
+    expect(one?.costCents).toBe(11);
+    expect(one?.latestAtMs).toBe(3000);
+  });
+
+  it('counts an event exactly at the watermark ONCE — on the poll that set it', () => {
+    const page = { usageEventsDisplay: [event({ timestamp: '2000' })] };
+    const id = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
+
+    expect(foldCursorUsagePage(page).get(id)?.events).toBe(1);
+    expect(
+      foldCursorUsagePage(page, new Map([[id, 2000]])).get(id),
+    ).toBeUndefined();
+  });
+
+  it('yields NO watermark for an unreadable timestamp, and drops it once one exists', () => {
+    // This pins the CONTRACT the caller relies on, not the parse: a fold that
+    // counted events without producing a positive `latestAtMs` is what tells
+    // `writeSpend` it has nothing to watermark from — see that method's spec
+    // for the behaviour that hangs off it.
+    const id = '7d781e85-8ed6-4771-8d81-b2e132fd0c2d';
+    const missing = { usageEventsDisplay: [event({ timestamp: undefined })] };
+    const nonNumeric = { usageEventsDisplay: [event({ timestamp: 'nope' })] };
+
+    // First pricing: counted, because there is no watermark to place it against.
+    expect(foldCursorUsagePage(missing).get(id)?.events).toBe(1);
+    expect(foldCursorUsagePage(missing).get(id)?.latestAtMs).toBe(0);
+    expect(foldCursorUsagePage(nonNumeric).get(id)?.latestAtMs).toBe(0);
+
+    // Once watermarked it is dropped rather than re-counted for ever.
+    expect(
+      foldCursorUsagePage(missing, new Map([[id, 1000]])).get(id),
+    ).toBeUndefined();
+  });
+
+  it('watermarks each conversation independently', () => {
+    const page = {
+      usageEventsDisplay: [
+        event({ conversationId: 'conv-a', timestamp: '1000' }),
+        event({ conversationId: 'conv-b', timestamp: '1000' }),
+      ],
+    };
+
+    const fold = foldCursorUsagePage(page, new Map([['conv-a', 5000]]));
+
+    expect(fold.get('conv-a')).toBeUndefined();
+    expect(fold.get('conv-b')?.events).toBe(1);
+  });
+});
+
+describe('cursorUsagePageLength', () => {
+  it('counts the page as the wire sent it, before any folding', () => {
+    // The paging loop terminates on this rather than on the fold's event
+    // totals: the fold drops what an earlier poll counted, so on an overlapping
+    // window its totals no longer sum towards `cursorUsageTotalCount` and the
+    // loop would walk every page it is allowed without ever reaching it.
+    expect(
+      cursorUsagePageLength({ usageEventsDisplay: [event(), event()] }),
+    ).toBe(2);
+    // …including events the fold will drop.
+    expect(
+      cursorUsagePageLength({
+        usageEventsDisplay: [event({ isChargeable: false })],
+      }),
+    ).toBe(1);
+  });
+
+  it('answers 0 for every shape that is not a page', () => {
+    expect(cursorUsagePageLength(null)).toBe(0);
+    expect(cursorUsagePageLength({})).toBe(0);
+    expect(cursorUsagePageLength({ usageEventsDisplay: 'nope' })).toBe(0);
+    expect(cursorUsagePageLength('not an object')).toBe(0);
   });
 });

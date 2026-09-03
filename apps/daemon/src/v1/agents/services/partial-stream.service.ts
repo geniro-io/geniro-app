@@ -628,7 +628,15 @@ export function ownerOfKey(ownerKey: string): string {
   return split === -1 ? ownerKey : ownerKey.slice(0, split);
 }
 
-/** Separator between a node id and the call id in a per-call owner key. */
+/**
+ * Separator between a node id and the call id in a per-call owner key.
+ *
+ * TWIN PARSER: `apps/ui/src/renderer/chats/live-text.ts` re-implements this
+ * constant and both directions around it. The key rides `agent_delta`, which is
+ * deliberately outside the generated HTTP contract, so the renderer has no
+ * generated type to read it with — a change here MUST be mirrored there, or the
+ * call threads' context rings blank with nothing failing to compile.
+ */
 export const OWNER_KEY_SEPARATOR = '::';
 
 /** The live-plane owner key for one node's turn, or one of its CALL threads. */

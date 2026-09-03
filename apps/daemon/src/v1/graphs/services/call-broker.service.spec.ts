@@ -1070,3 +1070,77 @@ describe('CallBroker — thread continuation', () => {
     expect(errorOf(envelope)).toContain('THREAD_UNAVAILABLE');
   });
 });
+
+/**
+ * F22: `untilAbandoned` and `untilDeadline` (the two private wrappers
+ * `awaitAgent` composes around `waitForOutcome`) used to forward only the
+ * fulfillment arm of the promise they wrap (`promise.then(onFulfilled)`,
+ * no rejection handler). A rejecting inner promise therefore left the
+ * wrapper's own returned promise pending FOREVER instead of propagating the
+ * failure — `awaitAgent` would hang rather than let the rejection reach the
+ * MCP dispatcher's ordinary error mapping.
+ *
+ * These specs call the two wrappers directly (via a narrow structural cast —
+ * neither method reads `this`) rather than staging a call/callee scenario
+ * that reaches a rejection: in production `call.settled` always carries a
+ * `.catch` (see `callAgent`), so this is a defensive contract the wrappers
+ * must honor even though nothing on the ordinary call path exercises it
+ * today.
+ */
+interface UntilWrappers {
+  untilAbandoned<T>(
+    signal: AbortSignal | undefined,
+    promise: Promise<T>,
+  ): Promise<T | symbol>;
+  untilDeadline<T>(
+    timeoutMs: number | undefined,
+    promise: Promise<T>,
+  ): Promise<T | symbol>;
+}
+
+function untilWrappersOf(broker: CallBroker): UntilWrappers {
+  return broker as unknown as UntilWrappers;
+}
+
+describe('CallBroker — untilAbandoned / untilDeadline reject propagation', () => {
+  it('untilAbandoned rejects instead of hanging when the wrapped promise rejects', async () => {
+    const { untilAbandoned } = untilWrappersOf(new CallBroker());
+    // Never aborts — this exercises the reject arm of the settle race, not
+    // the abort arm.
+    const controller = new AbortController();
+    const failure = new Error('callee turn blew up');
+    await expect(
+      untilAbandoned(controller.signal, Promise.reject(failure)),
+    ).rejects.toBe(failure);
+  }, 2000);
+
+  it('untilAbandoned still resolves normally when the wrapped promise resolves', async () => {
+    const { untilAbandoned } = untilWrappersOf(new CallBroker());
+    const controller = new AbortController();
+    const outcome = { status: 'ok' as const };
+    await expect(
+      untilAbandoned(controller.signal, Promise.resolve(outcome)),
+    ).resolves.toBe(outcome);
+  });
+
+  it('untilDeadline rejects instead of hanging when the wrapped promise rejects', async () => {
+    const { untilDeadline } = untilWrappersOf(new CallBroker());
+    const failure = new Error('callee turn blew up');
+    // A deadline far outside this test's own timeout: on the unfixed wrapper
+    // the promise never settles within that window (no reject arm, and the
+    // timer would not fire first either), so the assertion below fails by
+    // timing out rather than by resolving to the wrong thing — still a red
+    // test either way.
+    await expect(untilDeadline(60_000, Promise.reject(failure))).rejects.toBe(
+      failure,
+    );
+  }, 2000);
+
+  it('untilDeadline still resolves normally when the wrapped promise resolves', async () => {
+    const { untilDeadline } = untilWrappersOf(new CallBroker());
+    const outcome = { status: 'ok' as const };
+    await expect(untilDeadline(60_000, Promise.resolve(outcome))).resolves.toBe(
+      outcome,
+    );
+  });
+});

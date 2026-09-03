@@ -9,7 +9,7 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
-import { CHAT_LIVE_KEY, type LiveState } from './live-text';
+import { CHAT_LIVE_KEY, type LiveState, ownerOfKey } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
   type BackgroundOutcome,
@@ -2858,7 +2858,10 @@ export const LIVE_TEXT_ITEM_PREFIX = 'live:';
 
 /** A live entry's owning node id, from the per-agent map's key. */
 function nodeIdOf(key: string): string | null {
-  return key === CHAT_LIVE_KEY ? null : key;
+  // Through the DECOMPOSER, not the raw key: a callee turn's key is
+  // `<node>::<callId>`, and every caller here looks a NODE up by it — so the
+  // raw key matched nothing on exactly the threads a call opens.
+  return key === CHAT_LIVE_KEY ? null : ownerOfKey(key);
 }
 
 /**

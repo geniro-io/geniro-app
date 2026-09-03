@@ -117,7 +117,7 @@ import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
 import { JumpToLatest } from './jump-to-latest';
 import { RunActivityContext, RunSettledContext } from './live-row';
-import { CHAT_LIVE_KEY, liveTextKey } from './live-text';
+import { CHAT_LIVE_KEY, liveTextKey, partialOwnerKey } from './live-text';
 import { LocalImageLoaderContext } from './local-image-loader';
 import { AttachmentLoaderContext } from './message-attachments';
 import { MessageBubble } from './message-bubble';
@@ -226,6 +226,7 @@ import { type StagedAttachment, useAttachments } from './use-attachments';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
+import { useNodeContextReadings } from './use-node-context';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import {
   threadPullRequestsOf,
@@ -431,7 +432,12 @@ function archiveDialogCopy(run: ChatRun | null): {
   const working = run?.status === 'running';
   if (run?.workflowId != null) {
     return {
-      title: working ? 'Archive a working run' : 'Archive run',
+      // NOT "working": `RUN_STATUS_META` reserves that word for `held`, and the
+      // header of the very run being archived reads `running` — so the dialog
+      // named a different state than the row behind it. "A running run" is not
+      // a sentence, which is what "working" was reaching for; this says the
+      // same thing without borrowing another status's word.
+      title: working ? 'Archive a run in progress' : 'Archive run',
       confirmLabel: working ? 'Stop run & archive' : 'Archive',
     };
   }
@@ -836,6 +842,7 @@ export function Chats({
     namingRunIds,
     markRenamed,
     liveText,
+    reconnectNonce,
     streaming,
     setStreaming,
     error,
@@ -3635,6 +3642,19 @@ export function Chats({
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
   /**
+   * The daemon's own per-node context readings for a WORKFLOW run — the source
+   * that made `NodeState.contextTokens` reach a client at all.
+   *
+   * Asked on open and on reconnect; everything in between arrives as a live
+   * delta, which outranks it. See {@link useNodeContextReadings}.
+   */
+  const nodeReadings = useNodeContextReadings(
+    activeRunId,
+    activeRun?.workflowId != null,
+    workflowApi,
+    reconnectNonce,
+  );
+  /**
    * The open thread is shelved, so its composer is inert.
    *
    * Read off the ROW rather than off `chatScope`: the scope says what the list
@@ -4857,7 +4877,7 @@ export function Chats({
         if (thread.kind !== 'call') {
           return thread;
         }
-        const live = liveText.get(`${nodeId}::${thread.id}`);
+        const live = liveText.get(partialOwnerKey(nodeId, thread.id));
         return {
           ...thread,
           contextTokens: live?.contextTokens ?? null,
@@ -4898,13 +4918,23 @@ export function Chats({
       if ((own?.contextTokens ?? null) !== null) {
         return own!;
       }
-      return (
-        [...callThreads]
-          .reverse()
-          .find((thread) => (thread.contextTokens ?? null) !== null) ??
-        nodeActivity ??
-        {}
-      );
+      const liveThread = [...callThreads]
+        .reverse()
+        .find((thread) => (thread.contextTokens ?? null) !== null);
+      if (liveThread !== undefined) {
+        return liveThread;
+      }
+      // The daemon's own `node_state` row, which outranks the transcript for
+      // the reason the run row outranks it on a chat: it moves with every
+      // reading the CLI reports, while the transcript can only carry a figure
+      // per SETTLED turn. This is the source that makes a reloaded window — or
+      // a node parked in `await_agent`, which emits nothing for minutes — draw
+      // a ring at all.
+      const row = nodeReadings.get(nodeId);
+      if (row !== undefined && row.contextTokens !== null) {
+        return row;
+      }
+      return nodeActivity ?? {};
     };
     const known = wfNodes.agents.map((node): AgentDisplay => {
       const nodeActivity = activity.get(node.id);

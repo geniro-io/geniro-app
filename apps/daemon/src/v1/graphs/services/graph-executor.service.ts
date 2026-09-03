@@ -1631,10 +1631,20 @@ export class GraphExecutorService {
        * and no card can be drawn for it, so answering either way would be
        * inventing a verdict. The request stays parked until the run closes the
        * session, which is the honest end for it.
+       *
+       * And it holds EVERYTHING once `runFinished`, on the same boundary
+       * `onOffTurnEvent` stops at — the two hooks have to agree about when the
+       * run stopped accepting work, or the window between `runFinished` and the
+       * `sessions.close(key)` loop in the `finally` is one where a kept process
+       * is granted every permission it asks for while every row describing what
+       * it then did is dropped. That is a RECORDING gap rather than a privilege
+       * one — `auto` already means unattended — and a grant with no transcript
+       * is the half worth refusing.
        */
       const onBetweenTurnApproval = (request: {
         toolName: string;
       }): boolean | null =>
+        !runFinished &&
         questionCapable &&
         approval === 'auto' &&
         !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)

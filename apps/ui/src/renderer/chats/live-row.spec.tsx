@@ -197,6 +197,35 @@ describe('WorkingRow', () => {
     expect(container.textContent).not.toContain('Working…');
   });
 
+  it('says WHOSE answer it is blocked on, over the run activity', () => {
+    // The line exists for a caller parked in `await_agent`, which sits silent
+    // for minutes: a bare "Working…" there reads as a hang, with the callee's
+    // own rows streaming one card below and nothing connecting the two. It
+    // OUTRANKS the run's activity phrase on purpose — the announce describes
+    // the RUN, and the truest thing about this agent is whose answer it awaits.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value="running Bash">
+        <WorkingRow waitingOn={{ callId: 'call-1', callee: 'Poet' }} />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain('waiting on Poet · call-1');
+    expect(container.textContent).not.toContain('running Bash');
+    expect(container.textContent).not.toContain('Working…');
+  });
+
+  it('names a callee it has no name for rather than dropping the line', () => {
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <WorkingRow waitingOn={{ callId: 'call-9', callee: null }} />,
+    );
+
+    expect(container.textContent).toContain(
+      'waiting on a called agent · call-9',
+    );
+  });
+
   it('caps a long phrase to one truncated half-row, clock intact', () => {
     // The reported defect, twice over: a shell tool's "name" is the WHOLE
     // command, so `running <command>` filled eight wrapped lines of the

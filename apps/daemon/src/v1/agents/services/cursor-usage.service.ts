@@ -16,6 +16,7 @@ import {
   CURSOR_USAGE_MAX_PAGES,
   CURSOR_USAGE_METHOD,
   type CursorConversationSpend,
+  cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
   foldCursorUsagePage,
@@ -52,13 +53,9 @@ const MIN_POLL_INTERVAL_MS = 10 * 60_000;
  *
  * Ten minutes is the right cadence for an ambient trigger — somebody opened a
  * thread, so its figure may as well be current. It is the wrong one for the
- * thread being watched, and that is what got reported ("i still dont see any
- * costs for cursor chat"). Reconstructed from the reporter's own database: the
- * previous poll ran at 19:09:16, the chat's first billable event was written by
- * Cursor at 19:09:33, and the next poll was not due until 19:19 — so a run
- * costing $4.89 showed no price at all for the whole time anyone was looking at
- * it. Cursor bills per REQUEST rather than at the turn's end, so the figure
- * genuinely does move while a turn is in flight; there was nothing to wait for.
+ * thread being watched: Cursor bills per REQUEST rather than at the turn's end,
+ * so the figure genuinely moves while a turn is in flight, and at the ambient
+ * cadence a run could be minutes old and still priced at nothing.
  *
  * It is bounded by the work rather than by a timer: the tick comes from items
  * a CURSOR run persisted, so an idle machine polls nothing at all and a claude
@@ -73,8 +70,10 @@ const LIVE_POLL_INTERVAL_MS = 60_000;
  *
  * An event is written when Cursor bills it, which is not the instant the turn
  * ended, so a window that started exactly where the last one stopped would drop
- * whatever landed late. Re-reading an overlapping hour costs one page and the
- * fold is a REPLACEMENT per conversation, so a re-read event cannot double-count.
+ * whatever landed late. Re-reading an overlapping hour costs one page, and the
+ * per-conversation watermark on `node_state` is what keeps a re-read event from
+ * being counted twice now that {@link CursorUsageService.writeSpend}
+ * accumulates — see that method for why it no longer replaces.
  */
 const POLL_OVERLAP_MS = 60 * 60_000;
 
@@ -92,6 +91,25 @@ const FIRST_POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 const KEYCHAIN_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/** One cursor conversation, the run that holds it, and how far it is priced. */
+interface CursorConversationTarget {
+  run: Run;
+  /** The `node_state` row carrying this conversation's session id. */
+  nodeId: string;
+  /** Its watermark, or 0 when the conversation has never been priced. */
+  throughMs: number;
+}
+
+/** What one poll found that one run has newly spent. */
+interface CursorRunDelta {
+  run: Run;
+  cents: number;
+  events: number;
+  /** Whether any of this run's conversations already carries a watermark. */
+  priced: boolean;
+  marks: { nodeId: string; throughMs: number }[];
+}
+
 /**
  * What each cursor CONVERSATION has cost, fetched in one batched poll and
  * written onto the runs that hold those conversations.
@@ -102,11 +120,13 @@ const REQUEST_TIMEOUT_MS = 20_000;
  *
  * Three properties shape it:
  *
- * - It is **batched and floored**. Every caller goes through {@link refresh},
- *   which does nothing at all inside {@link MIN_POLL_INTERVAL_MS} of the last
- *   attempt and never runs two polls at once. One poll updates every cursor
- *   conversation, so there is no per-thread or per-message request anywhere in
- *   this file.
+ * - It is **batched and floored**, on TWO floors. An ambient caller goes through
+ *   {@link refresh} and does nothing inside {@link MIN_POLL_INTERVAL_MS} of the
+ *   last attempt; while a cursor run is producing items the floor is the shorter
+ *   {@link LIVE_POLL_INTERVAL_MS}, because Cursor bills per request and the
+ *   figure moves mid-turn. Neither ever runs two polls at once, and one poll
+ *   updates every cursor conversation — so there is no per-thread or
+ *   per-message request anywhere in this file, at either cadence.
  * - It **fails closed and silent**, exactly as `main/github-prs.ts` does for the
  *   same shape of call: no CLI installed, no Keychain item, a denied prompt, a
  *   signed-out account, no network — every one of them ends as "no cost
@@ -248,7 +268,11 @@ export class CursorUsageService implements OnModuleInit {
         this.lastSuccessMs === null
           ? now - FIRST_POLL_LOOKBACK_MS
           : this.lastSuccessMs - POLL_OVERLAP_MS;
-      const spend = await this.fetchSpend(token, identity, startMs, now);
+      const since = new Map<string, number>();
+      for (const [conversationId, target] of conversations) {
+        since.set(conversationId, target.throughMs);
+      }
+      const spend = await this.fetchSpend(token, identity, startMs, now, since);
       if (spend === null) {
         return;
       }
@@ -266,16 +290,18 @@ export class CursorUsageService implements OnModuleInit {
   }
 
   /**
-   * Which run holds which cursor conversation.
+   * Which run holds which cursor conversation, and how far each has been
+   * priced.
    *
    * The join is the ACP session id `node_state` already records, which is the
    * same value Cursor calls `conversationId` — so nothing new has to be stored
-   * to make the attribution exact.
+   * to make the attribution exact. The node id rides along because the
+   * watermark lives on that same row.
    */
   private async conversationsByRun(
     em: EntityManager,
-  ): Promise<Map<string, Run>> {
-    const byConversation = new Map<string, Run>();
+  ): Promise<Map<string, CursorConversationTarget>> {
+    const byConversation = new Map<string, CursorConversationTarget>();
     const runs = await this.runDao.getAll(
       { agentKind: AgentKind.CursorAgent },
       undefined,
@@ -288,7 +314,11 @@ export class CursorUsageService implements OnModuleInit {
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         const sessionId = state.agentSessionId;
         if (sessionId !== null && sessionId !== '') {
-          byConversation.set(sessionId, row);
+          byConversation.set(sessionId, {
+            run: row,
+            nodeId: state.nodeId,
+            throughMs: state.cursorSpendThroughMs ?? 0,
+          });
         }
       }
     }
@@ -353,12 +383,16 @@ export class CursorUsageService implements OnModuleInit {
     }
   }
 
-  /** Walk the window's pages and fold them into one per-conversation total. */
+  /**
+   * Walk the window's pages and fold them into one per-conversation total of
+   * what is NEW since each conversation was last priced.
+   */
   private async fetchSpend(
     token: string,
     identity: { teamId: number; userId: number },
     startMs: number,
     endMs: number,
+    since: ReadonlyMap<string, number>,
   ): Promise<Map<string, CursorConversationSpend> | null> {
     const spend = new Map<string, CursorConversationSpend>();
     let seen = 0;
@@ -387,11 +421,15 @@ export class CursorUsageService implements OnModuleInit {
         return null;
       }
       const payload: unknown = await reply.json();
-      const pageFold = foldCursorUsagePage(payload);
-      mergeCursorSpend(spend, pageFold);
+      mergeCursorSpend(spend, foldCursorUsagePage(payload, since));
       const total = cursorUsageTotalCount(payload);
-      seen += [...pageFold.values()].reduce((n, one) => n + one.events, 0);
-      if (total === null || seen >= total || pageFold.size === 0) {
+      // Counted against the page's OWN length rather than the fold's: the fold
+      // drops events an earlier poll already counted, so paging on the fold
+      // would walk every page an overlapping window is allowed while never
+      // reaching a total it can no longer sum to.
+      const pageLength = cursorUsagePageLength(payload);
+      seen += pageLength;
+      if (total === null || seen >= total || pageLength === 0) {
         break;
       }
     }
@@ -399,18 +437,38 @@ export class CursorUsageService implements OnModuleInit {
   }
 
   /**
-   * Write each run's total, and TELL every window what changed.
+   * Add what is NEW to each run's total, advance the watermarks, and TELL every
+   * window what changed.
    *
-   * REPLACES rather than adds, which is what makes the overlapping window safe:
-   * the fold is over the whole window every time, so an event re-read on the
-   * next poll cannot be counted twice. A run whose conversations the window did
-   * not mention is left exactly as it was — silence about a period says nothing
-   * about a total already recorded for it.
+   * It ACCUMULATES rather than replaces, and the watermark is what makes the
+   * overlapping window safe: {@link foldCursorUsagePage} drops every event a
+   * previous poll already counted, so a re-read event cannot be counted twice.
+   *
+   * Replacing was the older shape, and it silently truncated. The window is
+   * `lastSuccessMs - POLL_OVERLAP_MS` wide — about an hour, and about
+   * sixty-one minutes once the live tick is running — so a conversation billed
+   * for longer than that had its recorded total overwritten with only the
+   * recent slice, and its displayed cost visibly ticked DOWNWARD on the very
+   * screen this poll exists to keep current.
+   *
+   * A run whose conversations the window did not mention is left exactly as it
+   * was: silence about a period says nothing about a total already recorded.
    *
    * Summed PER RUN before the write, because the map is keyed by conversation
-   * and a run can hold more than one: written per conversation, a run's second
-   * conversation overwrote the first's figure with its own rather than adding
-   * to it, so the thread reported part of what it spent.
+   * and a run can hold more than one.
+   *
+   * A run carrying a total but NO watermark on any of its conversations is
+   * re-baselined rather than added to — its total was written by the replacing
+   * build, so adding this window to it would count that window twice. Reading
+   * the base as zero is exactly that one-time replace, after which the
+   * watermarks make every later poll incremental.
+   *
+   * The watermarks advance BEFORE the run row is written, which is the safe
+   * order of the two: nothing here is transactional, so a failure between them
+   * either drops a slice that was counted (this order) or counts one slice
+   * twice (the other). A thread reporting slightly less than it spent is the
+   * direction this whole module already errs in, because the figure is one a
+   * user checks against their own bill.
    *
    * The ANNOUNCE is what makes any of this visible while a thread is open. The
    * poll is the only thing that learns a cursor price, the header only re-asks
@@ -426,38 +484,83 @@ export class CursorUsageService implements OnModuleInit {
    * wire every minute to say that nothing had changed.
    */
   private async writeSpend(
-    conversations: ReadonlyMap<string, Run>,
+    conversations: ReadonlyMap<string, CursorConversationTarget>,
     spend: ReadonlyMap<string, CursorConversationSpend>,
     em: EntityManager,
     at: number,
   ): Promise<void> {
-    const byRun = new Map<
-      string,
-      { run: Run; cents: number; events: number }
-    >();
-    for (const [conversationId, run] of conversations) {
+    const byRun = new Map<string, CursorRunDelta>();
+    for (const [conversationId, target] of conversations) {
+      const entry = byRun.get(target.run.id) ?? {
+        run: target.run,
+        cents: 0,
+        events: 0,
+        priced: false,
+        marks: [],
+      };
+      // Any watermark at all means this run's total is already an accumulator
+      // rather than one window's snapshot.
+      entry.priced = entry.priced || target.throughMs > 0;
       const one = spend.get(conversationId);
-      if (one === undefined || one.events === 0) {
+      if (one !== undefined && one.events > 0) {
+        entry.cents += one.costCents;
+        entry.events += one.events;
+        // A conversation whose counted events carried no readable timestamp is
+        // watermarked at the POLL's own end rather than left unmarked. Unmarked
+        // it is re-counted on every later poll — the run's `priced` flag is
+        // already true from any sibling conversation that DID mark — and the
+        // total then climbs without bound. What marking at `now` risks is
+        // skipping a late-billed event inside this window; what not marking
+        // guarantees is a figure that never stops growing, and on a total a
+        // user checks against their own bill, over-reporting is the failure
+        // this module refuses.
+        entry.marks.push({
+          nodeId: target.nodeId,
+          throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
+        });
+      }
+      byRun.set(target.run.id, entry);
+    }
+    for (const { run, cents, events, priced, marks } of byRun.values()) {
+      if (events === 0) {
         continue;
       }
-      const known = byRun.get(run.id);
-      byRun.set(run.id, {
-        run,
-        cents: (known?.cents ?? 0) + one.costCents,
-        events: (known?.events ?? 0) + one.events,
-      });
-    }
-    for (const { run, cents, events } of byRun.values()) {
-      if (run.cursorCostCents === cents && run.cursorCostEvents === events) {
+      const recordedCents = run.cursorCostCents ?? 0;
+      const recordedEvents = run.cursorCostEvents ?? 0;
+      const nextCents = priced
+        ? recordedCents + cents
+        : // The one-time re-baseline: the recorded figure came from the
+          // replacing build, so it is one window's snapshot and this window's
+          // fold is another. Adding them double-counts wherever they overlap;
+          // replacing outright can SHRINK the total, which is the very defect
+          // the accumulator exists to fix, happening once more on upgrade.
+          // The larger of the two does neither — it can only under-report a
+          // disjoint stretch, the direction this module already errs in.
+          Math.max(recordedCents, cents);
+      const nextEvents = priced
+        ? recordedEvents + events
+        : Math.max(recordedEvents, events);
+      for (const mark of marks) {
+        await this.nodeStates.rememberCursorSpendThrough(
+          run.id,
+          mark.nodeId,
+          mark.throughMs,
+          em,
+        );
+      }
+      if (
+        run.cursorCostCents === nextCents &&
+        run.cursorCostEvents === nextEvents
+      ) {
         continue;
       }
       await this.runDao.updateById(
         run.id,
-        { cursorCostCents: cents, cursorCostEvents: events },
+        { cursorCostCents: nextCents, cursorCostEvents: nextEvents },
         em,
       );
-      run.cursorCostCents = cents;
-      run.cursorCostEvents = events;
+      run.cursorCostCents = nextCents;
+      run.cursorCostEvents = nextEvents;
       this.bus.publishRunStatus({
         runId: run.id,
         status: null,

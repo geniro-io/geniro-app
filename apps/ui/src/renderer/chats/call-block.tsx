@@ -184,6 +184,24 @@ export const CallBlock = memo(function CallBlock({
   const tail = block.entries[block.entries.length - 1];
   const liveTail =
     tail?.type === 'item' && liveRowKind(tail.item.payload) !== null;
+  const summaryText = callBlockSummary(block);
+  /**
+   * A shut card must still say its state, and between `call_started` and the
+   * callee's first non-status row there are no words, no tasks and no figures
+   * to say it with.
+   */
+  const pending = status === 'running' && summaryText === null;
+  /**
+   * Whether there is anything to put in the band at all — `BlockShell` renders
+   * it on `summary ?`, and an element is always truthy, so the caller has to
+   * pass `undefined` to say it has nothing to show.
+   */
+  const hasSummary =
+    summaryText !== null ||
+    pending ||
+    tasks.length > 0 ||
+    usage.tokens !== null ||
+    usage.costUsd !== null;
   return (
     <div data-role="call-block" className="w-full">
       <BlockShell
@@ -195,37 +213,45 @@ export const CallBlock = memo(function CallBlock({
           caller ? `${caller} → ${callee} call` : `Call to ${callee}`
         }
         summary={
-          <>
-            {/* The words give way — the figures and the chip beside them are a
-                fixed handful of characters, while a callee's last message is a
-                paragraph. */}
-            <span className="min-w-0 flex-1 truncate">
-              {callBlockSummary(block) ?? ''}
-            </span>
-            {/* WHAT IT IS ON, without opening the card — asked for beside the
+          hasSummary ? (
+            <>
+              {pending ? (
+                // The same sentence the OPEN card shows in this state, so the
+                // fold changes what is on screen and not what is true.
+                <BlockPendingLine>{callee} is thinking...</BlockPendingLine>
+              ) : (
+                /* The words give way — the figures and the chip beside them are a
+                 fixed handful of characters, while a callee's last message is a
+                 paragraph. */
+                <span className="min-w-0 flex-1 truncate">
+                  {summaryText ?? ''}
+                </span>
+              )}
+              {/* WHAT IT IS ON, without opening the card — asked for beside the
                 figures ("also current tasks icon with popover"). The list is
                 the callee's own, folded out of this block, so a card that is
                 shut still answers the question a reader opens it for. */}
-            <CallTaskChip
-              tasks={tasks}
-              live={status === 'running'}
-              callee={callee}
-            />
-            {usage.tokens === null ? null : (
-              <span
-                data-slot="call-summary-tokens"
-                className="shrink-0 tabular-nums">
-                {formatTokens(usage.tokens)}
-              </span>
-            )}
-            {usage.costUsd === null ? null : (
-              <span
-                data-slot="call-summary-cost"
-                className="shrink-0 tabular-nums">
-                {formatExactUsd(usage.costUsd)}
-              </span>
-            )}
-          </>
+              <CallTaskChip
+                tasks={tasks}
+                live={status === 'running'}
+                callee={callee}
+              />
+              {usage.tokens === null ? null : (
+                <span
+                  data-slot="call-summary-tokens"
+                  className="shrink-0 tabular-nums">
+                  {formatTokens(usage.tokens)} tokens
+                </span>
+              )}
+              {usage.costUsd === null ? null : (
+                <span
+                  data-slot="call-summary-cost"
+                  className="shrink-0 tabular-nums">
+                  {formatExactUsd(usage.costUsd)}
+                </span>
+              )}
+            </>
+          ) : undefined
         }
         header={
           <>

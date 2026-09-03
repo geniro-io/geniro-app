@@ -172,6 +172,16 @@ export interface ChatRunState {
    */
   markRenamed: (runId: string) => void;
   liveText: ReadonlyMap<string, LiveState>;
+  /**
+   * Bumped on every successful reconnect, for a reader that has to RE-ASK the
+   * daemon rather than replay items.
+   *
+   * The item delta below covers everything that is a row; a durable figure that
+   * lives on a `node_state` column is not one, so a window that was away while
+   * a workflow's nodes went on working has no way to learn the readings it
+   * missed except by asking again.
+   */
+  reconnectNonce: number;
   streaming: boolean;
   setStreaming: Dispatch<SetStateAction<boolean>>;
   error: string | null;
@@ -354,6 +364,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   // only the items missed during a disconnect.
   const lastSeqRef = useRef(-1);
   const reconnectAfterSeqRef = useRef(-1);
+  const [reconnectNonce, setReconnectNonce] = useState(0);
   const runsRef = useRef<ChatRun[]>([]);
   // A boolean rather than Workflows' `| null` sentinel deliberately: `runs` has
   // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
@@ -1112,6 +1123,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         setError(joinError.message);
         return;
       }
+      setReconnectNonce((n) => n + 1);
       void chatApi
         .listRunItems({ runId: active, afterSeq: reconnectAfterSeqRef.current })
         // A replay, not live: no individual row here may fire the drain, or a
@@ -1600,6 +1612,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     namingRunIds,
     markRenamed,
     liveText,
+    reconnectNonce,
     streaming,
     setStreaming,
     error,

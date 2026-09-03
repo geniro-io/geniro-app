@@ -90,6 +90,7 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
+import { StandingQuestions } from '../utils/standing-questions';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -2944,30 +2945,28 @@ export class ChatService implements OnModuleInit {
         );
       }
       /**
-       * Every ask still parked, so the settle can answer them.
-       *
-       * `ApprovalRegistry.sweepNode` DROPS a pending card without responding —
-       * correct for a CLI-raised question, whose asker dies with the process,
-       * and not for this one, where the promise is held by an MCP request that
-       * would otherwise wait for its own client timeout with the turn already
-       * gone.
-       */
-      const outstandingAsks = new Set<
-        (outcome: HostQuestionOutcome) => boolean
-      >();
-      /**
-       * The question CARDS this turn has on screen, keyed by what each ASKS.
+       * The question CARDS this turn has on screen, keyed by what each ASKS,
+       * and every ask parked on one.
        *
        * A card outlives the agent call that raised it — see
        * {@link StandingHostQuestion} for the measurement that forces it — so a
        * re-ask adopts the card already up rather than raising a second one, and
-       * an answer given between the two is held here for the retry to collect.
+       * an answer given between the two is held for the retry to collect. The
+       * map and its four transitions live in {@link StandingQuestions}, which
+       * holds no persistence, so the states two racing calls can put one card
+       * into are reachable without driving a whole turn.
+       *
+       * Its sweep is what `ApprovalRegistry.sweepNode` cannot do:
+       * that one DROPS a pending card without responding — correct for a
+       * CLI-raised question, whose asker dies with the process, and not for
+       * this one, where the promise is held by an MCP request that would
+       * otherwise wait for its own client timeout with the turn already gone.
        *
        * Per TURN, like the sets beside it: the agent's retry lands inside the
        * same turn (measured — 14 seconds later on the reported run), and a map
        * outliving the turn would offer a card the sweep has already closed.
        */
-      const standingAsks = new Map<string, StandingHostQuestion>();
+      const standingQuestions = new StandingQuestions();
       /**
        * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
        * widening of the one above.
@@ -3067,14 +3066,7 @@ export class ChatService implements OnModuleInit {
           return;
         }
         const detach = (): void => {
-          if (record.closed || record.waiting !== resolve) {
-            return;
-          }
-          record.waiting = null;
-          resolve({
-            status: 'unavailable',
-            reason: 'the agent stopped waiting for this answer',
-          });
+          standingQuestions.detach(record, resolve);
         };
         if (signal.aborted) {
           detach();
@@ -3105,21 +3097,20 @@ export class ChatService implements OnModuleInit {
         // so the same words are the same question and get the same card. Any
         // rewording is a NEW question, which is the honest reading: the user is
         // being asked something else.
-        const key = JSON.stringify({ title, questions });
-        const standing = standingAsks.get(key);
+        const key = StandingQuestions.keyFor(title, questions);
+        const standing = standingQuestions.peek(key);
         if (standing !== undefined) {
           // The user answered while the agent had nothing in flight. Hand it
           // over at once — this is the collection the retry came for.
-          const held = standing.held;
+          const held = standingQuestions.collectHeld(key);
           if (held !== null) {
-            standingAsks.delete(key);
             return held;
           }
           // Still unanswered: ADOPT the card rather than raise a second one.
           // Two cards for one question is the older defect this whole path was
           // written for, and it is what a naive retry produces.
           return await new Promise<HostQuestionOutcome>((resolve) => {
-            standing.waiting = resolve;
+            standingQuestions.adopt(standing, resolve);
             detachAskOnCancel(signal, standing, resolve);
           });
         }
@@ -3148,31 +3139,7 @@ export class ChatService implements OnModuleInit {
           };
         }
         return await new Promise<HostQuestionOutcome>((resolve) => {
-          const record: StandingHostQuestion = {
-            requestId,
-            waiting: resolve,
-            held: null,
-            closed: false,
-          };
-          standingAsks.set(key, record);
-          /**
-           * The SWEEP's handle: the turn is over, so nothing can reach this
-           * card any more and the record goes with it. An answer takes its own
-           * path below, because that one may have nobody to resolve.
-           */
-          const settle = (outcome: HostQuestionOutcome): boolean => {
-            if (record.closed) {
-              return false;
-            }
-            record.closed = true;
-            outstandingAsks.delete(settle);
-            standingAsks.delete(key);
-            const waiting = record.waiting;
-            record.waiting = null;
-            waiting?.(outcome);
-            return true;
-          };
-          outstandingAsks.add(settle);
+          const record = standingQuestions.open(key, requestId, resolve);
           this.approvals.track({
             runId,
             nodeId: SINGLE_AGENT_NODE,
@@ -3195,21 +3162,14 @@ export class ChatService implements OnModuleInit {
                       // a refusal.
                       { status: 'answered', answer: '' }
                     : { status: 'declined' };
-              record.closed = true;
-              outstandingAsks.delete(settle);
-              const waiting = record.waiting;
-              record.waiting = null;
-              if (waiting !== null) {
-                // The ordinary case: the agent is still on the line.
-                standingAsks.delete(key);
-                waiting(outcome);
-              } else {
-                // Nobody was waiting — the client's 60s deadline had lapsed
-                // while the user was still answering. The answer is not lost:
-                // it is kept for the retry, which is the whole point of the
-                // card outliving the call.
-                record.held = outcome;
-              }
+              // Reaches the agent when one is still on the line; otherwise the
+              // client's 60s deadline lapsed while the user was answering and
+              // the outcome is HELD for the retry, which is the whole point of
+              // the card outliving the call.
+              standingQuestions.deliver(key, record, outcome);
+              // Either way the verdict is recorded and reported delivered: a
+              // held answer reaches the agent a moment later, and the answer IS
+              // the tool's result, so there is no fold that could drop it.
               const delivered = true;
               this.announceAwaiting(
                 runId,
@@ -4385,12 +4345,10 @@ export class ChatService implements OnModuleInit {
           // has just been drained, so a report landing after this point would
           // reserve a seq against a turn that has finished writing.
           disposeHostTools();
-          for (const settle of [...outstandingAsks]) {
-            settle({
-              status: 'unavailable',
-              reason: 'the turn ended before the question was answered',
-            });
-          }
+          standingQuestions.sweep({
+            status: 'unavailable',
+            reason: 'the turn ended before the question was answered',
+          });
           for (const settle of [...outstandingPatches]) {
             settle({
               status: 'unavailable',

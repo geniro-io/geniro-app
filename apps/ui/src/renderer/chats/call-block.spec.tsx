@@ -215,18 +215,102 @@ describe('CallBlock', () => {
     expect(footer.className).toContain('border-t');
   });
 
+  it('says the callee is thinking on a SHUT card that has no words yet', () => {
+    // A shut card must still say its state, and this is the state where that
+    // matters most — the first seconds of a call, before the callee has spoken.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]');
+    expect(shut).not.toBeNull();
+    expect(shut!.textContent).toContain('is thinking');
+  });
+
+  it('draws NO summary band at all when there is nothing to put in it', () => {
+    // The band used to be unconditional, because `BlockShell` renders it on
+    // `summary ?` and an element is always truthy — so a card with nothing to
+    // say still paid for its padding.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    expect(container.querySelector('[data-slot="block-summary"]')).toBeNull();
+  });
+
   it('draws NO figure for a call whose turn has not ended', () => {
     // There is no live token or cost channel on either CLI, so both land when
     // the turn does — and a `0 tokens · $0.00` would claim a measurement
     // nobody took.
-    act(() =>
-      root.render(<TranscriptEntryView entry={makeBlock()} nodes={NODES} />),
-    );
+    //
+    // The call FAILED, which is what makes the footer reachable at all here:
+    // `BlockToolFooter` short-circuits to null on no tools, no figures and no
+    // note, so a fixture carrying none of the three cannot observe the figure
+    // slots — the assertions below would hold with the guard deleted. A failed
+    // call passes a note, so the footer is drawn and the two slots are a real
+    // observation rather than a vacuous one.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'message',
+        { text: 'Waves rise and retreat', callId: 'call-1' },
+        'poet',
+      ),
+      // Ends WITHOUT a `turn_complete`, which is the case under test: the
+      // figures ride that row, so a call that never produced one has none.
+      item(
+        'status',
+        { status: 'failed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
     expand();
 
-    // Nothing to summarize at all here, so there is no footer — and where one
-    // IS drawn (a block with tools), neither figure appears until its turn
-    // lands.
+    const footer = container.querySelector('[data-slot="block-footer"]');
+    expect(footer).not.toBeNull();
+    expect(footer!.textContent).toContain('finished with an error');
     expect(
       container.querySelector('[data-slot="block-footer-tokens"]'),
     ).toBeNull();
@@ -276,9 +360,11 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
 
     const shut = container.querySelector('[data-slot="block-summary"]')!;
+    // Labelled, like this block's own footer and the sub-agent header — this is
+    // the one place the figure is read without the card open.
     expect(
       shut.querySelector('[data-slot="call-summary-tokens"]')?.textContent,
-    ).toBe('117.6k');
+    ).toBe('117.6k tokens');
     expect(
       shut.querySelector('[data-slot="call-summary-cost"]')?.textContent,
     ).toBe('$44.17');

@@ -5,7 +5,10 @@ import {
   CHAT_LIVE_KEY,
   type LiveState,
   type LiveTextEvent,
+  OWNER_KEY_SEPARATOR,
+  ownerOfKey,
   parseLiveText,
+  partialOwnerKey,
 } from './live-text';
 
 const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
@@ -174,5 +177,54 @@ describe('applyLiveText', () => {
     );
     expect(next.get('node-a')?.text).toBe('hi');
     expect(next.get(CHAT_LIVE_KEY)).toBeUndefined();
+  });
+});
+
+describe('the owner-key twin', () => {
+  it('composes a node’s own turn as the bare node id', () => {
+    expect(partialOwnerKey('reviewer', null)).toBe('reviewer');
+  });
+
+  it('composes a CALL thread with the separator the daemon publishes under', () => {
+    expect(partialOwnerKey('reviewer', 'call-1')).toBe('reviewer::call-1');
+  });
+
+  it('reads the node back out of either shape', () => {
+    expect(ownerOfKey(partialOwnerKey('reviewer', null))).toBe('reviewer');
+    expect(ownerOfKey(partialOwnerKey('reviewer', 'call-1'))).toBe('reviewer');
+  });
+
+  it('keeps a node id that itself contains the separator whole', () => {
+    // Splits at the FIRST separator, so a call id may contain one and a node id
+    // may not. This pins THIS side only — a renderer assertion cannot see the
+    // daemon's decomposer; `partial-stream.service.spec.ts` pins that one.
+    expect(
+      ownerOfKey(partialOwnerKey('reviewer', `a${OWNER_KEY_SEPARATOR}b`)),
+    ).toBe('reviewer');
+  });
+
+  it('gives two calls of one node two entries', () => {
+    // The defect the per-call key exists for: keyed by node alone the two
+    // shared an entry and the last writer won, so a caller running the same
+    // callee twice showed one ring flickering between two conversations.
+    const first = applyLiveText(
+      new Map(),
+      event({
+        nodeId: 'a',
+        ownerKey: partialOwnerKey('a', 'call-1'),
+        text: 'one',
+      }),
+    );
+    const both = applyLiveText(
+      first,
+      event({
+        nodeId: 'a',
+        ownerKey: partialOwnerKey('a', 'call-2'),
+        text: 'two',
+      }),
+    );
+
+    expect(both.get('a::call-1')?.text).toBe('one');
+    expect(both.get('a::call-2')?.text).toBe('two');
   });
 });

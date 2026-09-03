@@ -42,14 +42,18 @@ function cursorRun(overrides: Partial<Run> = {}): Run {
 function deps(
   runs: Run[],
   sessionsByRun: Record<string, string[]>,
+  /** Per-conversation watermark, keyed by session id. Absent = never priced. */
+  watermarks: Record<string, number> = {},
 ): {
   service: CursorUsageService;
   writes: { id: string; data: Partial<Run> }[];
+  marks: { runId: string; nodeId: string; throughMs: number }[];
   published: unknown[];
   onItem: (event: { runId: string }) => void;
   counts: { listed: number };
 } {
   const writes: { id: string; data: Partial<Run> }[] = [];
+  const marks: { runId: string; nodeId: string; throughMs: number }[] = [];
   const published: unknown[] = [];
   const counts = { listed: 0 };
   let onItem: (event: { runId: string }) => void = () => undefined;
@@ -69,8 +73,20 @@ function deps(
   const nodeStates = {
     listByRun: async (runId: string) =>
       (sessionsByRun[runId] ?? []).map(
-        (agentSessionId) => ({ agentSessionId }) as NodeState,
+        (agentSessionId, index) =>
+          ({
+            agentSessionId,
+            nodeId: `node-${index}`,
+            cursorSpendThroughMs: watermarks[agentSessionId] ?? null,
+          }) as NodeState,
       ),
+    rememberCursorSpendThrough: async (
+      runId: string,
+      nodeId: string,
+      throughMs: number,
+    ) => {
+      marks.push({ runId, nodeId, throughMs });
+    },
   } as unknown as NodeStateDao;
 
   const bus = {
@@ -91,18 +107,25 @@ function deps(
   return {
     service,
     writes,
+    marks,
     published,
     onItem: (event) => onItem(event),
     counts,
   };
 }
 
-function event(conversationId: string, chargedCents: number): unknown {
+const EVENT_AT_MS = 1_788_358_173_608;
+
+function event(
+  conversationId: string,
+  chargedCents: number,
+  atMs: number = EVENT_AT_MS,
+): unknown {
   return {
     conversationId,
     chargedCents,
     isChargeable: true,
-    timestamp: '1788358173608',
+    timestamp: String(atMs),
   };
 }
 
@@ -209,6 +232,121 @@ describe('CursorUsageService', () => {
     onItem({ runId: 'run-1' });
     await flush();
     expect(counts.listed).toBe(2);
+  });
+
+  it('ADDS what is new, so a thread billed for longer than the window never shrinks', async () => {
+    // The window is ~61 minutes wide, so a conversation billed for longer than
+    // that used to have its whole recorded total overwritten by the recent
+    // slice — the displayed cost visibly ticking downward. Written as an add
+    // over the watermark, the earlier spend survives.
+    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const { service, writes } = deps(
+      [run],
+      { 'run-1': ['conv-1'] },
+      { 'conv-1': EVENT_AT_MS - 1_000 },
+    );
+    answerWith(event('conv-1', 20));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([
+      { id: 'run-1', data: { cursorCostCents: 520, cursorCostEvents: 6 } },
+    ]);
+  });
+
+  it('counts an event the overlapping window re-reads exactly once', async () => {
+    const run = cursorRun({ cursorCostCents: 500, cursorCostEvents: 5 });
+    const { service, writes } = deps(
+      [run],
+      { 'run-1': ['conv-1'] },
+      { 'conv-1': EVENT_AT_MS },
+    );
+    answerWith(event('conv-1', 20));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([]);
+  });
+
+  it('re-baselines a run whose total predates the watermark, upward only', async () => {
+    // Written by the replacing build, so it is one window's snapshot rather
+    // than an accumulator — adding this window to it would count the overlap
+    // twice. The LARGER of the two is taken instead: replacing outright would
+    // shrink a long thread's recorded cost once on upgrade, which is the defect
+    // the accumulator exists to fix.
+    const run = cursorRun({ cursorCostCents: 999, cursorCostEvents: 9 });
+    const { service, writes } = deps([run], { 'run-1': ['conv-1'] });
+    answerWith(event('conv-1', 100));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([]);
+  });
+
+  it('re-baselines UP when this window knows more than the old snapshot', async () => {
+    const run = cursorRun({ cursorCostCents: 10, cursorCostEvents: 1 });
+    const { service, writes } = deps([run], { 'run-1': ['conv-1'] });
+    answerWith(event('conv-1', 40), event('conv-1', 60, EVENT_AT_MS + 1_000));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([
+      { id: 'run-1', data: { cursorCostCents: 100, cursorCostEvents: 2 } },
+    ]);
+  });
+
+  it('advances the watermark to the newest event it counted', async () => {
+    const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
+    answerWith(
+      event('conv-1', 10, EVENT_AT_MS),
+      event('conv-1', 15, EVENT_AT_MS + 5_000),
+    );
+
+    await service.refresh(true);
+
+    expect(marks).toEqual([
+      { runId: 'run-1', nodeId: 'node-0', throughMs: EVENT_AT_MS + 5_000 },
+    ]);
+  });
+
+  it('watermarks a conversation whose events carried NO readable timestamp', async () => {
+    // Left unmarked, such a conversation is re-counted on every later poll —
+    // the run's `priced` flag is set by any sibling that did mark — and the
+    // total climbs without bound on a figure the user checks against their own
+    // bill. Marked at the poll's own end, it is counted once.
+    at(1_000_000);
+    const { service, marks } = deps([cursorRun()], { 'run-1': ['conv-1'] });
+    answerWith({
+      conversationId: 'conv-1',
+      chargedCents: 10,
+      isChargeable: true,
+      // no `timestamp` at all — the shape the fold cannot place
+    });
+
+    await service.refresh(true);
+
+    expect(marks).toEqual([
+      { runId: 'run-1', nodeId: 'node-0', throughMs: 1_000_000 },
+    ]);
+  });
+
+  it('re-counts nothing on the poll after that watermark', async () => {
+    at(2_000_000);
+    const run = cursorRun({ cursorCostCents: 10, cursorCostEvents: 1 });
+    const { service, writes } = deps(
+      [run],
+      { 'run-1': ['conv-1'] },
+      { 'conv-1': 1_000_000 },
+    );
+    answerWith({
+      conversationId: 'conv-1',
+      chargedCents: 10,
+      isChargeable: true,
+    });
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([]);
   });
 
   it('does not poll on an item from a run of another CLI', async () => {

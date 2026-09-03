@@ -120,6 +120,49 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Workflow runs that actually CARRY a title — the only rows the title
+   * backfill can act on.
+   *
+   * The predicate is in SQL and the read is projected, both for the same
+   * reason: this runs on the pre-listen boot path, where hydrating a whole
+   * install's workflow-run history to discard most of it is latency every
+   * launch pays. A run whose title is already null can never match the sweep's
+   * own predicate, so the database is the right place to drop it.
+   */
+  async listTitledWorkflowRuns(
+    txEm?: EntityManager,
+  ): Promise<Pick<Run, 'id' | 'title' | 'workflowId'>[]> {
+    return this.getRepo(txEm).find(
+      { workflowId: { $ne: null }, title: { $ne: null } },
+      {
+        fields: ['id', 'title', 'workflowId'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * Clear a run's title, but only while it still reads exactly as `expected`.
+   *
+   * Its own method rather than a nullable `title` on {@link retitle}: that one
+   * is how a run gets NAMED, and widening it would put "erase this run's name"
+   * one argument away from every call site that writes one. The compare is the
+   * same guard for the same reason — a user's rename landing between the read
+   * and the write must win.
+   */
+  async forgetTitle(
+    runId: string,
+    expected: string,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const written = await this.getRepo(txEm).nativeUpdate(
+      { id: runId, title: expected },
+      { title: null },
+    );
+    return written > 0;
+  }
+
+  /**
    * File how full this run's context window is, as the CLI just reported it.
    *
    * A bare `nativeUpdate` rather than `updateById`, and for the ordinary reason

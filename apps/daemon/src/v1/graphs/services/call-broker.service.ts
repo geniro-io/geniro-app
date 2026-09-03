@@ -706,7 +706,10 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * Resolve with `promise`, or with {@link ABANDONED} the moment `signal`
-   * trips — whichever happens first.
+   * trips — whichever happens first. A rejection from `promise` REJECTS the
+   * returned promise too (never left pending) — `awaitAgent`'s caller needs
+   * that to reach the MCP dispatcher's ordinary error mapping instead of
+   * hanging forever.
    *
    * The point is the CALLER's side of the race rather than the callee's:
    * nothing here cancels the callee, which goes on working and settles into
@@ -723,20 +726,31 @@ export class CallBroker implements OnModuleInit {
     if (signal.aborted) {
       return Promise.resolve(ABANDONED);
     }
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const onAbort = (): void => resolve(ABANDONED);
       signal.addEventListener('abort', onAbort, { once: true });
-      void promise.then((envelope) => {
-        signal.removeEventListener('abort', onAbort);
-        resolve(envelope);
-      });
+      // Both arms must remove the listener before settling — a rejection
+      // left it attached, which is otherwise harmless (the promise is
+      // already settled) but keeps the signal referencing this closure.
+      void promise.then(
+        (envelope) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(envelope);
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
     });
   }
 
   /**
    * Resolve with `promise`, or with {@link TIMED_OUT} after `timeoutMs` —
    * whichever happens first. No window means no race at all, which is the
-   * unbounded wait every caller had before.
+   * unbounded wait every caller had before. A rejection from `promise`
+   * REJECTS the returned promise too, on the same terms as
+   * {@link untilAbandoned}.
    *
    * Nothing here touches the callee, exactly as {@link untilAbandoned} does
    * not: this decides only how long THIS collection stands there. It nests
@@ -753,15 +767,21 @@ export class CallBroker implements OnModuleInit {
     if (timeoutMs === undefined) {
       return promise;
     }
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
       // A deadline is a convenience for the caller, never a reason to keep the
       // daemon alive — the callee's own turn is what holds the run open.
       timer.unref?.();
-      void promise.then((outcome) => {
-        clearTimeout(timer);
-        resolve(outcome);
-      });
+      void promise.then(
+        (outcome) => {
+          clearTimeout(timer);
+          resolve(outcome);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
     });
   }
 

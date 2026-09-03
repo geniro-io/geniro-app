@@ -144,6 +144,33 @@ export function liveTextKey(
 }
 
 /**
+ * TWIN PARSER: `apps/daemon/src/v1/agents/services/partial-stream.service.ts`
+ * `OWNER_KEY_SEPARATOR` / {@link partialOwnerKey} / {@link ownerOfKey}.
+ *
+ * The daemon OWNS this encoding — it is what `agent_delta` is published under —
+ * and nothing generated spans the seam, since the event is deliberately outside
+ * the HTTP contract. So the separator and both directions are spelled here as
+ * an independent implementation, and a change to either side MUST be mirrored
+ * on the other. Nothing fails to compile when they drift: the symptom is every
+ * call thread's context ring going blank.
+ */
+export const OWNER_KEY_SEPARATOR = '::';
+
+/** The live-plane owner key for one node's turn, or one of its CALL threads. */
+export function partialOwnerKey(nodeId: string, callId: string | null): string {
+  return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+}
+
+/**
+ * The NODE an owner key belongs to — the key itself for a node's own turn, and
+ * the part before the separator for a callee turn's per-call key.
+ */
+export function ownerOfKey(ownerKey: string): string {
+  const split = ownerKey.indexOf(OWNER_KEY_SEPARATOR);
+  return split === -1 ? ownerKey : ownerKey.slice(0, split);
+}
+
+/**
  * Apply one event to the per-agent live map. An agent with neither words nor a
  * reasoning total is REMOVED rather than stored empty, so callers can treat
  * "has a key" as "is doing something right now".

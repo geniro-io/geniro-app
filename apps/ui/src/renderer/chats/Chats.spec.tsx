@@ -84,6 +84,10 @@ const workflowApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   getWorkflow: vi.fn(),
   listWorkflowRuns: vi.fn(),
+  // The per-node context readings a workflow run's rings fall back to
+  // (`use-node-context.ts`). Every workflow case reaches it, so it is reset to
+  // an empty list beside the others below rather than stubbed per test.
+  listWorkflowRunNodes: vi.fn(),
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
@@ -691,6 +695,7 @@ beforeEach(() => {
     workflow: { name: 'Review team', nodes: [], edges: [] },
   });
   workflowApi.listWorkflowRuns.mockReset().mockResolvedValue([]);
+  workflowApi.listWorkflowRunNodes.mockReset().mockResolvedValue([]);
   workflowApi.startWorkflowRun.mockReset();
   workflowApi.cancelWorkflowRun
     .mockReset()
@@ -8221,6 +8226,92 @@ describe('Chats sidebar list', () => {
     ).toBeNull();
     expect(
       container.querySelector('button[aria-label="Open side panel"]'),
+    ).toBeNull();
+  });
+
+  it('draws a workflow node’s ring from the DAEMON row, and yields to a live delta', async () => {
+    // The RANK F4 exists for. `node_state` carries every reading the CLI
+    // reported, so it is the only source a reloaded window — or a node parked
+    // in `await_agent`, which emits nothing for minutes — can draw a ring from.
+    // It sits BELOW the live delta and ABOVE the transcript's settled turn, and
+    // that ordering is the part a future edit can silently reverse.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        awaiting: null,
+        holdingFor: 0,
+        shellsOpen: 0,
+        title: 'Big team',
+        agentKind: null,
+        workflowId: 'big-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'big-team',
+      workflow: {
+        name: 'Big team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'w-a',
+            kind: 'agent',
+            name: 'Worker A',
+            agent: 'claude',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'w-a',
+        status: 'running',
+        contextTokens: 90_000,
+        contextWindowTokens: 1_000_000,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Big team');
+
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+    // No live delta and no settled turn in the transcript — without the row
+    // this node would draw no ring at all, which is the reported blank.
+    expect(
+      panel.querySelector('button[aria-label="Context 9% full — 90k of 1M"]'),
+    ).not.toBeNull();
+
+    // A live delta is a LATER moment than the row, so it wins.
+    await act(async () => {
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'w-a',
+        text: '',
+        ownerKey: null,
+        thinkingTokens: null,
+        thinkingText: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 500_000,
+        contextWindowTokens: 1_000_000,
+      });
+    });
+    expect(
+      panel.querySelector('button[aria-label="Context 50% full — 500k of 1M"]'),
+    ).not.toBeNull();
+    expect(
+      panel.querySelector('button[aria-label="Context 9% full — 90k of 1M"]'),
     ).toBeNull();
   });
 

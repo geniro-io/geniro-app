@@ -54,6 +54,7 @@ export function OptionList({
   selected,
   arity,
   disabled = false,
+  inert = false,
   label = 'Options',
   onPick,
   className,
@@ -63,6 +64,19 @@ export function OptionList({
   selected: readonly string[];
   arity: OptionArity;
   disabled?: boolean;
+  /**
+   * Unpressable like {@link disabled}, and drawn at FULL strength.
+   *
+   * For a card that SHOWS a question somebody else answers — a call thread's
+   * question card, where the options are the whole point of the row and the
+   * reader is not the one who can pick. Borrowing `disabled` there took its
+   * tint with it and dropped the option text to about 3.1:1 on the light
+   * theme, under the 4.5:1 AA floor for 14px — so the faintest thing on the
+   * card was the content it exists to show. It keeps the real `disabled`
+   * attribute, since "you cannot press this" is exactly what it means to
+   * a screen reader and to the pointer; only the dimming is dropped.
+   */
+  inert?: boolean;
   /** What this set of options is FOR — prefixes the group's accessible name. */
   label?: string;
   onPick: (option: string) => void;
@@ -89,14 +103,15 @@ export function OptionList({
           <button
             key={`${index}-${option}`}
             type="button"
-            disabled={disabled}
+            disabled={disabled || inert}
             // Only where there is a state to be in. On the `none` path the
             // press sends the answer, and a button that reports itself
             // unpressed after being pressed is a lie about what just happened.
             aria-pressed={arity === 'none' ? undefined : chosen}
             onClick={() => onPick(option)}
             className={cn(
-              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50',
+              'inline-flex max-w-full cursor-pointer items-start gap-2 rounded-md border px-2 py-1 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none',
+              inert ? 'disabled:opacity-100' : 'disabled:opacity-50',
               chosen
                 ? 'border-primary/50 bg-primary/10 text-foreground'
                 : 'border-border hover:bg-accent hover:text-accent-foreground',

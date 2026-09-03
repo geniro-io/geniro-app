@@ -9,6 +9,7 @@ import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
 import { McpServerService } from './services/mcp-server.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
+import { WorkflowTitleBackfillService } from './services/workflow-title-backfill.service';
 
 /**
  * Workflow graphs (M3): the YAML workflow library, the ported graph core
@@ -34,7 +35,8 @@ import { WorkflowStoreService } from './services/workflow-store.service';
     GraphExecutorService,
     CallBroker,
     McpServerService,
+    WorkflowTitleBackfillService,
   ],
-  exports: [WorkflowStoreService],
+  exports: [WorkflowStoreService, WorkflowTitleBackfillService],
 })
 export class GraphsModule {}

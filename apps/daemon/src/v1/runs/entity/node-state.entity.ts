@@ -65,6 +65,24 @@ export class NodeState extends TimestampsEntity {
   @Property({ type: 'integer', nullable: true })
   contextWindowTokens: number | null = null;
 
+  /**
+   * The newest cursor usage event already folded into this run's recorded
+   * spend, as epoch millis — the watermark that makes `Run.cursorCostCents` an
+   * ACCUMULATOR rather than a snapshot of one window.
+   *
+   * Per NODE rather than per run because it is really per CONVERSATION, and
+   * {@link agentSessionId} — which is the id Cursor calls `conversationId` — is
+   * on this row. A run holding several conversations would otherwise share one
+   * watermark, and a late-billed event on the older conversation would fall
+   * behind the newer one's mark and never be counted.
+   *
+   * Null means this conversation has never been priced, which is also how a row
+   * written before the watermark existed reads: the next poll re-baselines it
+   * by replacing the run's total once, then accumulates from here on.
+   */
+  @Property({ type: 'integer', nullable: true })
+  cursorSpendThroughMs: number | null = null;
+
   @Property({ type: 'integer', nullable: true })
   startedAt: number | null = null;
 

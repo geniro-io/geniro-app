@@ -8,16 +8,12 @@ import { OptionList } from '../components/ui/option-list';
  * A question one agent put to ANOTHER, drawn as the question card it is —
  * inert.
  *
- * It used to be a plain bubble: the question as prose with its options folded
- * into a parenthesised grey run at the end (`(Ticket-literal fix only / Also
- * fix … / Fix panel only)`). That is the same content, but nothing about it
- * said it WAS a question with answers on offer — a reader had to parse a
- * sentence to learn there were three choices, where the live card two rows
- * further down says it at a glance. Reported as "render question here
- * differently — like same as we render real one, but disabled".
+ * It is a CARD rather than prose because the fact worth reading at a glance is
+ * that a question was asked and how many answers are on offer — which a
+ * sentence with its options folded into it makes a reader parse for.
  *
  * So it borrows the live card's shape (`approval-card.tsx`): the same glyph,
- * the same arity line, the same {@link OptionList} — and its `disabled` arm,
+ * the same arity line, the same {@link OptionList} — under its `inert` arm,
  * which is why no second option control had to be written.
  *
  * **What it must NOT borrow is the promise.** The live card is the user's to
@@ -65,11 +61,13 @@ export function CallQuestionCard({
             options={options}
             selected={[]}
             arity="one"
-            disabled
+            // INERT rather than `disabled`: unpressable either way, but the
+            // options are what this card exists to show at a glance and the
+            // disabled tint puts them below the AA contrast floor for text this
+            // size. There is also no channel from this row to the parked callee
+            // — the answer travels `answer_agent`, from the caller's own turn.
+            inert
             label="Options"
-            // Inert by construction as well as by `disabled`: there is no
-            // channel from this row to the parked callee — the answer travels
-            // `answer_agent`, from the caller's own turn.
             onPick={() => undefined}
           />
         </>

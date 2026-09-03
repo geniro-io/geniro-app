@@ -3896,6 +3896,39 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
       null,
     );
   });
+
+  it('HOLDS an off-turn permission once the RUN has finished', async () => {
+    // The row sink stops at `runFinished`, so between that flag and the
+    // session-close loop in the `finally` a kept process was granted every
+    // permission it asked for while every row describing what it then did was
+    // dropped. A recording gap rather than a privilege one — `auto` already
+    // means unattended — and the two off-turn hooks have to agree about when
+    // the run stopped accepting work.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'go',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+    // Still granted while the run is going — this is the case above.
+    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(true);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(null);
+  });
 });
 
 describe('GraphExecutorService — a node’s context reading', () => {

@@ -455,7 +455,16 @@ export const SubagentBlock = memo(function SubagentBlock({
                 each other, and adding the tokens and the duration would have
                 made it six, each of which is a place for a leading or doubled
                 middot to appear on some combination nobody thought to check. */}
-            <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+            {/* SHRINKABLE, and capped, which the title's own `flex-1 basis-0`
+                cannot do for itself: every other child of this row is
+                unshrinkable, so an unshrinkable fact run left `BlockTitle` the
+                only thing that could give way — and the name is the one thing
+                that tells two parallel delegates apart, so it was the first to
+                go. The run has grown to six facts, and past the cap it clips
+                its own tail (the task progress, which the card's
+                `overflow-hidden` was clipping anyway) instead of taking the
+                name with it. */}
+            <span className="flex min-w-0 max-w-[55%] shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
               {joinFacts([
                 block.kind && block.label ? (
                   <span key="kind">{block.kind}</span>

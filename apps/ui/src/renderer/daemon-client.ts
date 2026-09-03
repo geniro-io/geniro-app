@@ -340,11 +340,6 @@ export interface RunStatusEvent {
 }
 
 /**
- * Read a `run_status` payload, or null when it is not one. Defensive because
- * the shape has no generated type behind it: a version skew must degrade to
- * "no live badge update", never to a crashed sidebar.
- */
-/**
  * The runId out of a `{runId}` envelope, or null.
  *
  * TWIN PARSER: the daemon writes this envelope in
@@ -361,6 +356,11 @@ export function parseDeletedRunId(data: unknown): string | null {
   return typeof runId === 'string' && runId.length > 0 ? runId : null;
 }
 
+/**
+ * Read a `run_status` payload, or null when it is not one. Defensive because
+ * the shape has no generated type behind it: a version skew must degrade to
+ * "no live badge update", never to a crashed sidebar.
+ */
 export function parseRunStatus(data: unknown): RunStatusEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;

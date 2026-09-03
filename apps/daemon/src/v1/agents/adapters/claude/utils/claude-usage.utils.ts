@@ -38,6 +38,15 @@ import { ClaudeDelegateCostLedger } from './claude-delegate-cost.utils';
  * → 1,485, and `duration_ms` 2,395 → 2,093), so subtracting them would turn
  * correct figures into nonsense.
  */
+/**
+ * How many delegates one process remembers having announced a model for.
+ *
+ * A bound rather than a target: a fan-out of a dozen is a busy turn, and past
+ * this the oldest entry is dropped, which costs at most one repeated
+ * declaration row for a delegate still running after a hundred others started.
+ */
+export const MAX_TRACKED_DELEGATE_MODELS = 200;
+
 export class ClaudeSessionCostLedger {
   /** Insertion-ordered, so the oldest entry is the first key — see `remember`. */
   private readonly totals = new Map<string, SessionTotals>();
@@ -54,6 +63,51 @@ export class ClaudeSessionCostLedger {
    * wrong one.
    */
   readonly delegates = new ClaudeDelegateCostLedger();
+
+  /**
+   * Which delegates have already had their MODEL announced, and as what.
+   *
+   * Not cost state, and it rides this object anyway for the reason
+   * {@link delegates} does: this is the adapter's ONE piece of per-process,
+   * across-lines state, born and discarded with the CLI process a delegate's
+   * launching call belongs to. A second parameter would say the same thing in
+   * ninety signatures.
+   *
+   * Keyed by the LAUNCHING TOOL CALL, which is what a `subagent_info` names —
+   * so an entry is per delegate rather than per line, and the map answers "have
+   * we said this already".
+   */
+  private readonly delegateModels = new Map<string, string>();
+
+  /**
+   * Record a delegate's model and say whether it is NEWS.
+   *
+   * The caller announces only on a true, because a delegate writes an assistant
+   * line per response and every one of them names its model — announcing each
+   * would persist dozens of identical declaration rows per delegate.
+   *
+   * A CHANGED model is news again: nothing observed on this wire changes one
+   * mid-delegate, but reporting a change costs one row where suppressing it
+   * would leave the transcript naming a model the delegate had stopped using.
+   *
+   * Bounded like {@link ClaudeDelegateCostLedger}'s own pending set, and the
+   * eviction is harmless in a way that one is not: the worst a forgotten entry
+   * can do is let a long-lived delegate announce its model a second time.
+   */
+  noteDelegateModel(toolCallId: string, model: string): boolean {
+    if (this.delegateModels.get(toolCallId) === model) {
+      return false;
+    }
+    this.delegateModels.set(toolCallId, model);
+    while (this.delegateModels.size > MAX_TRACKED_DELEGATE_MODELS) {
+      const oldest = this.delegateModels.keys().next();
+      if (oldest.done === true) {
+        break;
+      }
+      this.delegateModels.delete(oldest.value);
+    }
+    return true;
+  }
 
   /**
    * This turn's own cost and API time, from the session totals the line

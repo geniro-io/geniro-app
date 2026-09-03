@@ -501,7 +501,16 @@ export function mapClaudeMessage(
   // about which thread wrote it.
   const parentToolUseId = asString(root.parent_tool_use_id) || null;
   return mapClaudeLine(root, parentToolUseId, costLedger).map((event) =>
-    parentToolUseId === null ? event : { ...event, parentToolUseId },
+    // `subagent_info` is the ONE exception, and it is the same rule
+    // `utils/event-to-item.ts` states from the other side: that event is ABOUT
+    // a delegate rather than produced BY one, so it carries the launching call
+    // in its own `id` and must never carry an origin as well. It is emitted
+    // from a delegate's own line below — the only line that names the model it
+    // is running — so without this carve-out the stamp would file the
+    // declaration as one of the delegate's own rows.
+    parentToolUseId === null || event.type === 'subagent_info'
+      ? event
+      : { ...event, parentToolUseId },
   );
 }
 
@@ -833,6 +842,59 @@ function mapClaudeLine(
         parentToolUseId === null ? readClaudeAssistantContext(message) : null;
       if (contextTokens !== null) {
         events.push({ type: 'context_progress', contextTokens });
+      }
+      // WHICH MODEL a delegate is running, from the first line it speaks on.
+      //
+      // Every other channel that names a delegate's model reports it when the
+      // work is OVER — the launching call's `tool_use_result` carries
+      // `resolvedModel`, and nothing before it says anything — so a delegate
+      // was unattributed for exactly as long as it ran, which is when a column
+      // of a dozen of them is being read. The user's objection is what settled
+      // it: a sub-agent always runs on SOME model, and both vendors' own UIs
+      // say which throughout.
+      //
+      // The source is the Messages-API envelope every assistant line carries,
+      // and it needs no new channel: this is the same `parent_tool_use_id` the
+      // context meter above branches on. Verified on disk against a real
+      // delegate's own transcript (2026-09-02) — its first assistant row
+      // carries `message.model: 'claude-opus-5'`, and it is written before any
+      // content block.
+      //
+      // ONCE per delegate per model (`noteDelegateModel`): a delegate emits an
+      // assistant line per response, so announcing on each would persist
+      // dozens of identical declaration rows per delegate. The later
+      // `resolvedModel` still wins under the merge rule — it names the VARIANT
+      // (`claude-opus-5[1m]`), which this line does not.
+      if (parentToolUseId !== null) {
+        const model = asString(message.model);
+        if (
+          model !== null &&
+          costLedger.noteDelegateModel(parentToolUseId, model)
+        ) {
+          events.push({
+            type: 'subagent_info',
+            id: parentToolUseId,
+            // Nulls throughout: this announcement claims ONE fact, and the
+            // consumer merges by preferring the last non-null per field — so it
+            // must not blank the label, the brief or the figures other
+            // announcements gave.
+            label: null,
+            kind: null,
+            prompt: null,
+            model,
+            durationMs: null,
+            tokens: null,
+            toolUses: null,
+            inputTokens: null,
+            outputTokens: null,
+            cacheReadTokens: null,
+            cacheCreationTokens: null,
+            costUsd: null,
+            stepsUnavailableReason: null,
+            backgroundOutcome: null,
+            backgroundOpen: null,
+          });
+        }
       }
       for (const block of asArray(message.content)) {
         const b = asRecord(block);

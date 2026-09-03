@@ -29,6 +29,11 @@ export const CHAT_LIVE_KEY = '\u0000chat';
 export interface LiveTextEvent {
   runId: string;
   nodeId: string | null;
+  /**
+   * Which CONVERSATION of that node this is — see {@link liveTextKey}. Null
+   * from a daemon predating the per-call key, where the node WAS the key.
+   */
+  ownerKey: string | null;
   text: string;
   /**
    * Reasoning tokens spent in the CURRENT stretch, or null when not thinking.
@@ -79,7 +84,7 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { runId, nodeId, text } = data as Record<string, unknown>;
+  const { runId, nodeId, ownerKey, text } = data as Record<string, unknown>;
   if (typeof runId !== 'string' || typeof text !== 'string') {
     return null;
   }
@@ -87,6 +92,10 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
   return {
     runId,
     nodeId: typeof nodeId === 'string' ? nodeId : null,
+    // Absent on an event from a daemon older than the per-call key, where the
+    // node WAS the key — so falling back to it is the honest reading of that
+    // wire rather than a guess.
+    ownerKey: typeof ownerKey === 'string' ? ownerKey : null,
     text,
     // Zero is a real answer here and nowhere else on this event: a stretch's
     // very first delta can legitimately report no tokens yet, and reading that
@@ -118,9 +127,47 @@ function nonNegativeNumber(value: unknown): number | null {
   return typeof value === 'number' && value >= 0 ? value : null;
 }
 
-/** Which agent's bubble a delta belongs to. */
-export function liveTextKey(nodeId: string | null): string {
-  return nodeId ?? CHAT_LIVE_KEY;
+/**
+ * Which CONVERSATION a delta belongs to — the map key.
+ *
+ * The daemon's own owner key when it sent one: a node can hold several threads
+ * at once (its own turn, and one per call it is serving), and each has its own
+ * context window. Keyed by node alone they shared one entry and the last
+ * writer won, which is what put one flickering ring over a panel honestly
+ * counting two threads.
+ */
+export function liveTextKey(
+  nodeId: string | null,
+  ownerKey: string | null = null,
+): string {
+  return ownerKey ?? nodeId ?? CHAT_LIVE_KEY;
+}
+
+/**
+ * TWIN PARSER: `apps/daemon/src/v1/agents/services/partial-stream.service.ts`
+ * `OWNER_KEY_SEPARATOR` / {@link partialOwnerKey} / {@link ownerOfKey}.
+ *
+ * The daemon OWNS this encoding — it is what `agent_delta` is published under —
+ * and nothing generated spans the seam, since the event is deliberately outside
+ * the HTTP contract. So the separator and both directions are spelled here as
+ * an independent implementation, and a change to either side MUST be mirrored
+ * on the other. Nothing fails to compile when they drift: the symptom is every
+ * call thread's context ring going blank.
+ */
+export const OWNER_KEY_SEPARATOR = '::';
+
+/** The live-plane owner key for one node's turn, or one of its CALL threads. */
+export function partialOwnerKey(nodeId: string, callId: string | null): string {
+  return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+}
+
+/**
+ * The NODE an owner key belongs to — the key itself for a node's own turn, and
+ * the part before the separator for a callee turn's per-call key.
+ */
+export function ownerOfKey(ownerKey: string): string {
+  const split = ownerKey.indexOf(OWNER_KEY_SEPARATOR);
+  return split === -1 ? ownerKey : ownerKey.slice(0, split);
 }
 
 /**
@@ -133,7 +180,7 @@ export function applyLiveText(
   event: LiveTextEvent,
 ): Map<string, LiveState> {
   const next = new Map(current);
-  const key = liveTextKey(event.nodeId);
+  const key = liveTextKey(event.nodeId, event.ownerKey);
   // A context figure alone is NOT "doing something" — it keeps arriving after
   // a block goes durable — so the entry is KEPT (the meter still needs the
   // number) while `withLiveText` declines to draw a bubble for it. Only an

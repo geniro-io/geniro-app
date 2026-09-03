@@ -11,12 +11,19 @@ function Probe({
   api,
   runId,
   settledTurns,
+  client = null,
 }: {
   api: Parameters<typeof useChatTotals>[0];
   runId: string | null;
   settledTurns: number;
+  client?: Parameters<typeof useChatTotals>[3];
 }): React.JSX.Element {
-  const { costUsd, costedTurns } = useChatTotals(api, runId, settledTurns);
+  const { costUsd, costedTurns } = useChatTotals(
+    api,
+    runId,
+    settledTurns,
+    client,
+  );
   return (
     <>
       <span data-slot="spend">{costUsd === null ? 'none' : costUsd}</span>
@@ -78,6 +85,38 @@ function apiReturning(
   };
 }
 
+/**
+ * A daemon client whose `run_status` stream a test drives by hand.
+ *
+ * Typed off the hook's own parameter, so it cannot go on satisfying a shape the
+ * client stopped having.
+ */
+function announcingClient(): {
+  client: NonNullable<Parameters<typeof useChatTotals>[3]>;
+  announce: (event: {
+    runId: string;
+    spendUpdatedAt?: number;
+  }) => Promise<void>;
+} {
+  let listener: ((event: never) => void) | null = null;
+  return {
+    client: {
+      onRunStatus: (fn) => {
+        listener = fn as (event: never) => void;
+        return () => {
+          listener = null;
+        };
+      },
+    } as NonNullable<Parameters<typeof useChatTotals>[3]>,
+    announce: async (event) => {
+      await act(async () => {
+        listener?.({ status: null, ...event } as never);
+        await Promise.resolve();
+      });
+    },
+  };
+}
+
 describe('useChatTotals', () => {
   it('asks once per thread and reports what the daemon summed', async () => {
     const api = apiReturning(1.25);
@@ -113,6 +152,42 @@ describe('useChatTotals', () => {
     await settle();
 
     expect(api.readChatTotals).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-asks when the daemon says this run’s FETCHED spend moved', async () => {
+    // cursor's price is fetched from Cursor on the daemon's own cadence, which
+    // has no reason to coincide with a turn ending — so without this the figure
+    // reached the screen only on the next settle or on reopening the chat.
+    const api = apiReturning(null, 0);
+    const { client, announce } = announcingClient();
+    mount({ api, runId: 'run-1', settledTurns: 1, client });
+    await settle();
+    expect(api.readChatTotals).toHaveBeenCalledTimes(1);
+
+    api.readChatTotals.mockResolvedValue({
+      totals: { costUsd: 4.89, costedTurns: 1 },
+    } as Awaited<ReturnType<ChatsApi['readChatTotals']>>);
+    await announce({ runId: 'run-1', spendUpdatedAt: 1_788_358_173_608 });
+
+    expect(api.readChatTotals).toHaveBeenCalledTimes(2);
+    expect(host?.querySelector('[data-slot="spend"]')?.textContent).toBe(
+      '4.89',
+    );
+  });
+
+  it('ignores an announce for another run, or one carrying no marker', async () => {
+    // The status broadcast reaches every client for every run and fires on
+    // ordinary activity, so anything but this run's own spend marker must cost
+    // no request at all.
+    const api = apiReturning(1.25);
+    const { client, announce } = announcingClient();
+    mount({ api, runId: 'run-1', settledTurns: 1, client });
+    await settle();
+
+    await announce({ runId: 'run-2', spendUpdatedAt: 1_788_358_173_608 });
+    await announce({ runId: 'run-1' });
+
+    expect(api.readChatTotals).toHaveBeenCalledTimes(1);
   });
 
   it('shows no spend rather than the previous thread’s while switching', async () => {

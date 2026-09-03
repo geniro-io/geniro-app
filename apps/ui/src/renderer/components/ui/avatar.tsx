@@ -18,10 +18,18 @@ const TONES = [
   'bg-avatar-8',
 ] as const;
 
-/** Mirrors geniro web's AgentAvatar SIZE_MAP (sm = pair chips, md = rows). */
+/**
+ * Mirrors geniro web's AgentAvatar SIZE_MAP (sm = pair chips, md = rows).
+ *
+ * `md` is sized against a transcript row's own first line, which is 14px text:
+ * a disc much larger than this outweighs it and reads as the row's subject
+ * rather than as its label. It must stay a clear step above `sm`, which is a
+ * different thing in a different place — two of them inside a card header, at
+ * caption scale.
+ */
 const SIZES = {
   sm: 'size-5 text-[9px]',
-  md: 'size-8 text-[11px]',
+  md: 'size-6 text-[10px]',
 } as const;
 
 function hashKey(key: string): number {

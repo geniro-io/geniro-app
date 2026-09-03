@@ -42,6 +42,7 @@ import { createPinoSinkStream } from './v1/diagnostics/utils/pino-sink-stream';
 import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
+import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
 
 installCrashGuards();
 
@@ -162,6 +163,13 @@ bootstrapper.addExtension(
       // a fresh install, so a logged reconcile error always means a real failure.
       await app.get(ChatService).reconcileOrphanedRuns();
       await app.get(GraphExecutorService).reconcileOrphanedRuns();
+
+      // Forget the titles the executor used to stamp from the workflow's own
+      // name: the derivation that replaced it reads any title as "already
+      // named", so without this every run made before it keeps saying which
+      // workflow twice and which task not once. Boot is the only moment —
+      // nothing revisits a settled run.
+      await app.get(WorkflowTitleBackfillService).backfillQuietly();
 
       // Sweep MCP config files a prior crash left behind (the per-turn
       // disposer only runs on a clean settle). The tokens in them are already

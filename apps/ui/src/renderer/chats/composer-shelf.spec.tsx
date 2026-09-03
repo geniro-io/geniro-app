@@ -349,6 +349,74 @@ describe('TaskListChip', () => {
     expect(panel.textContent).toContain('write the adapter');
     expect(panel.textContent).not.toContain('writing the adapter');
   });
+
+  it('splits a workflow run into one BLOCK per agent, each under its name', async () => {
+    // REPORTED: "if we working with workflows - each task set should be inside
+    // popover in block related to its connected agent". Flattened, a Manager's
+    // plan and an Engineer's arrive as one run of rows that is neither.
+    const el = mount(
+      <TaskListChip
+        done={1}
+        total={3}
+        tasks={[]}
+        groups={[
+          {
+            agentId: 'manager',
+            agentName: 'Manager',
+            tasks: [task({ id: 'm1', title: 'brief the engineer' })],
+          },
+          {
+            agentId: 'engineer',
+            agentName: 'Engineer',
+            tasks: [
+              task({ id: 'e1', title: 'read the spec', status: 'pending' }),
+              task({ id: 'e2', title: 'write the adapter', status: 'pending' }),
+            ],
+          },
+        ]}
+        live={true}
+      />,
+    );
+    await press(el, 'open-tasks');
+
+    const blocks = document.querySelectorAll('[data-slot="task-group"]');
+    expect(blocks).toHaveLength(2);
+    // In the order given — the panel's own agent order, so the popover reads
+    // top-to-bottom as the agent cards below it do.
+    expect(
+      [...blocks].map(
+        (block) =>
+          block.querySelector('[data-slot="task-group-agent"]')!.textContent,
+      ),
+    ).toEqual(['Manager', 'Engineer']);
+    // Each block states its OWN progress, not the shelf's sum: the chip says
+    // 1/3 across both agents, which answers a different question from how far
+    // through its own list either one is.
+    expect(blocks[0]!.textContent).toContain('1/1');
+    expect(blocks[1]!.textContent).toContain('0/2');
+    // And a block holds only its own agent's rows.
+    expect(blocks[0]!.textContent).toContain('brief the engineer');
+    expect(blocks[0]!.textContent).not.toContain('read the spec');
+    expect(blocks[1]!.textContent).toContain('write the adapter');
+  });
+
+  it('leaves a 1:1 chat its one flat list, with no agent heading', async () => {
+    // The gate is the caller's (a workflow, never a 1:1 chat) — this pins that
+    // the chip honours an ABSENT `groups` rather than grouping regardless.
+    const el = mount(
+      <TaskListChip
+        done={0}
+        total={1}
+        tasks={[task({ id: '1', title: 'read the spec', status: 'pending' })]}
+        live={true}
+      />,
+    );
+    await press(el, 'open-tasks');
+
+    const panel = document.querySelector('[aria-label="Task list"]')!;
+    expect(panel.textContent).toContain('read the spec');
+    expect(panel.querySelector('[data-slot="task-group"]')).toBeNull();
+  });
 });
 
 describe('every shelf chip', () => {

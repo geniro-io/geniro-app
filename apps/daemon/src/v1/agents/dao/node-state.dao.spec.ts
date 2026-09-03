@@ -1,9 +1,20 @@
 import {
   defineConfig,
+  EntityManager,
   MikroORM,
+  SqlEntityRepository,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
@@ -72,5 +83,121 @@ describe('NodeStateDao (in-memory sqlite)', () => {
     await dao.createPending('run-1', 'node-a');
     const row = await dao.getByRunNode('run-1', 'node-a');
     expect(row?.agentKind).toBeNull();
+  });
+
+  describe('rememberContext', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('issues a single nativeUpdate against {runId, nodeId} and never reads or flushes', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      const nativeUpdateSpy = vi.spyOn(
+        SqlEntityRepository.prototype,
+        'nativeUpdate',
+      );
+      const findOneSpy = vi.spyOn(SqlEntityRepository.prototype, 'findOne');
+      const flushSpy = vi.spyOn(EntityManager.prototype, 'flush');
+
+      await dao.rememberContext('run-1', 'node-a', 500, 1000);
+
+      expect(nativeUpdateSpy).toHaveBeenCalledTimes(1);
+      expect(nativeUpdateSpy).toHaveBeenCalledWith(
+        { runId: 'run-1', nodeId: 'node-a' },
+        { contextTokens: 500, contextWindowTokens: 1000 },
+      );
+      expect(findOneSpy).not.toHaveBeenCalled();
+      expect(flushSpy).not.toHaveBeenCalled();
+
+      // A fresh fork, not `dao`'s own: `nativeUpdate` writes past the identity
+      // map, so re-reading through the same fork that ran `createPending`
+      // would assert the cached entity rather than the row (see `retitle`'s
+      // spec above for the same caveat on `RunDao`).
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.contextTokens).toBe(500);
+      expect(row?.contextWindowTokens).toBe(1000);
+    });
+
+    it('a runId/nodeId pair with no row writes nothing and does not throw', async () => {
+      await expect(
+        dao.rememberContext('missing-run', 'missing-node', 500, 1000),
+      ).resolves.toBeUndefined();
+
+      const row = await dao.getByRunNode('missing-run', 'missing-node');
+      expect(row).toBeNull();
+    });
+
+    it('a reading with NOTHING positive in it does not reach the database', async () => {
+      await dao.createPending('run-1', 'node-a');
+      await dao.rememberContext('run-1', 'node-a', 500, 1000);
+
+      const nativeUpdateSpy = vi.spyOn(
+        SqlEntityRepository.prototype,
+        'nativeUpdate',
+      );
+      // Neither half is a measurement — a zero count is what a turn that
+      // measured nothing reports, and null is silence. Writing either would
+      // erase the reading beside it, which is the whole reason this method
+      // builds its patch field by field.
+      await dao.rememberContext('run-1', 'node-a', 0, null);
+
+      expect(nativeUpdateSpy).not.toHaveBeenCalled();
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.contextTokens).toBe(500);
+      expect(row?.contextWindowTokens).toBe(1000);
+    });
+  });
+
+  describe('rememberCursorSpendThrough', () => {
+    it('advances the watermark forward', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 2000);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.cursorSpendThroughMs).toBe(2000);
+    });
+
+    it('REFUSES to move a watermark backwards', async () => {
+      // The whole double-count defence for the cursor spend accumulator: a mark
+      // that went backwards would re-open a stretch of events the run's total
+      // already holds, and that total is a figure the user checks against their
+      // own bill.
+      await dao.createPending('run-1', 'node-a');
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 2000);
+
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 1000);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.cursorSpendThroughMs).toBe(2000);
+    });
+
+    it('writes nothing for a non-positive mark, or for a row that does not exist', async () => {
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberCursorSpendThrough('run-1', 'node-a', 0);
+      await expect(
+        dao.rememberCursorSpendThrough('missing-run', 'missing-node', 5000),
+      ).resolves.toBeUndefined();
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.cursorSpendThroughMs).toBeNull();
+    });
   });
 });

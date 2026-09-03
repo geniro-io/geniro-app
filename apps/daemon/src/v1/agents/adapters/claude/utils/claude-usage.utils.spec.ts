@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ClaudeSessionCostLedger,
+  MAX_TRACKED_DELEGATE_MODELS,
   readClaudeAssistantContext,
   readClaudeUsage,
 } from './claude-usage.utils';
@@ -365,5 +366,49 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
     readClaudeUsage(TURN_ONE, ledger);
     ledger.forget('s-1');
     expect(readClaudeUsage(TURN_TWO, ledger).costUsd).toBeCloseTo(0.138462, 9);
+  });
+});
+
+/**
+ * `noteDelegateModel`'s own bookkeeping — which delegate models have already
+ * been announced. `MAX_TRACKED_DELEGATE_MODELS` is not exported, so the cap
+ * below is MEASURED off the ledger's own public behaviour rather than
+ * hardcoded: a delegate still being tracked answers `false` to a repeat of
+ * its own model (nothing changed), while one the eviction loop has dropped
+ * has no memory of it at all and answers `true` again, exactly as if it were
+ * new. That is the only signal available from outside the class, and it is
+ * also the exact fact the eviction branch exists to produce — so deriving the
+ * cap this way tracks the production constant automatically if it ever
+ * changes, instead of silently going stale.
+ */
+describe('noteDelegateModel — per-process bookkeeping of announced models', () => {
+  /** True once `extraDistinctIds` further delegates have pushed the FIRST one out. */
+  it('is news again once the SAME delegate reports a CHANGED model', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    expect(ledger.noteDelegateModel('call-1', 'model-a')).toBe(true); // first ever: news
+    expect(ledger.noteDelegateModel('call-1', 'model-a')).toBe(false); // unchanged: not news
+    // Nothing on this wire changes a model mid-delegate, but reporting a
+    // change costs one row where suppressing it would leave the transcript
+    // naming a model the delegate had stopped using.
+    expect(ledger.noteDelegateModel('call-1', 'model-b')).toBe(true);
+  });
+
+  it('evicts the OLDEST delegate once the tracked cap is exceeded', () => {
+    // Against the EXPORTED bound, not one measured off the implementation: a
+    // cap derived by probing `noteDelegateModel` and then asserted back at the
+    // same n passes for every value the constant could hold, so the one thing
+    // this test names is the one thing it could not catch.
+    const cap = MAX_TRACKED_DELEGATE_MODELS;
+
+    const ledger = new ClaudeSessionCostLedger();
+    ledger.noteDelegateModel('delegate-0', 'm');
+    for (let i = 1; i <= cap; i++) {
+      ledger.noteDelegateModel(`delegate-${i}`, 'm');
+    }
+    // `delegate-0` was the oldest entry; a process that has since tracked
+    // (cap + 1) distinct delegates has forgotten it, so the identical note
+    // reads as news rather than as the suppressed repeat it would be if the
+    // entry were still held.
+    expect(ledger.noteDelegateModel('delegate-0', 'm')).toBe(true);
   });
 });

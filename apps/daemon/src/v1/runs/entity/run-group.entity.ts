@@ -58,4 +58,22 @@ export class RunGroup extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   autoCwd: string | null = null;
+
+  /**
+   * A workflow whose runs land in this group automatically, by SLUG — the
+   * workflow library's own identity — or null for a group that claims none.
+   *
+   * The sibling of {@link autoCwd} and a different question: that one files by
+   * WHERE a conversation was started, this one by WHAT it is. A user running
+   * one team graph over a dozen repositories has no folder that names those
+   * runs, and a folder rule set on any of them would sweep up their ordinary
+   * chats as well.
+   *
+   * Nothing validates that it names a workflow still in the library: a slug
+   * that has been deleted simply never matches, and a group is not the place a
+   * workflow's absence should be reported. It OUTRANKS a folder claim — see
+   * `RunGroupsService.resolveAutoGroupId`.
+   */
+  @Property({ type: 'text', nullable: true })
+  autoWorkflowId: string | null = null;
 }

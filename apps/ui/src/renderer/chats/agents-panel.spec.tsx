@@ -125,6 +125,10 @@ const agents: AgentDisplay[] = [
     id: 'orchestrator',
     name: 'Orchestrator',
     agent: 'claude',
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
     configDir: null,
     status: 'running',
     activeTurns: 1,
@@ -138,6 +142,10 @@ const agents: AgentDisplay[] = [
     id: 'worker',
     name: 'Worker',
     agent: 'claude',
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
     configDir: null,
     status: 'running',
     activeTurns: 3,
@@ -165,6 +173,10 @@ const agents: AgentDisplay[] = [
     id: 'reviewer',
     name: 'Reviewer',
     agent: 'cursor-agent',
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
     configDir: null,
     status: 'pending',
     activeTurns: 0,
@@ -181,6 +193,99 @@ function scope(agent: CliKind, configDir: string | null = null): string {
 }
 
 describe('AgentsPanel', () => {
+  it('names each agent’s MODEL under its name, and draws none where nothing said', () => {
+    // ASKED FOR as "for each agent in right sidebar under its name we should
+    // have its model".
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          { ...agents[0]!, model: 'claude-opus-5' },
+          // A node that names no model and has not run yet: the CLI's own
+          // default is a guess, so the line is absent rather than filled in.
+          agents[2]!,
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
+    const orchestrator = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    const model = orchestrator.querySelector('[data-slot="agent-model"]')!;
+    expect(model.textContent).toBe('claude-opus-5');
+    // UNDER the name, not beside it — a model alias is the longest string on
+    // this card and would take the name's width in a 280px panel.
+    const name = orchestrator.querySelector('.font-medium')!;
+    expect(
+      name.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
+    expect(reviewer.querySelector('[data-slot="agent-model"]')).toBeNull();
+  });
+
+  it('states what each agent SPENT — tokens and price, under its name', () => {
+    // ASKED FOR as "I should see spent tokens and price for each agent in the
+    // list". The price was reachable only by hovering the context ring; the
+    // tokens existed nowhere.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[0]!,
+            inputTokens: 310,
+            outputTokens: 117_300,
+            cacheTokens: 48_300_000_000,
+            spentUsd: 44.17,
+          },
+          // Nothing measured yet — no line at all, rather than `0 tokens ·
+          // $0.00` about a turn nobody has taken.
+          agents[2]!,
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const rows = [...el.querySelectorAll(CARD_SELECTOR)];
+    const orchestrator = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    const spend = orchestrator.querySelector('[data-slot="agent-spend"]')!;
+    // INPUT + OUTPUT, never the cache reads: 48.3B of them would print the
+    // same enormous figure on every card and say nothing about the work.
+    expect(spend.textContent).toBe('117.6k tokens · $44.17');
+    // The cache is not dropped — it is on the hover, with the split.
+    expect(spend.getAttribute('title')).toBe(
+      '310 in · 117.3k out · 48.3B cached',
+    );
+
+    const reviewer = rows.find((row) => row.textContent?.includes('Reviewer'))!;
+    expect(reviewer.querySelector('[data-slot="agent-spend"]')).toBeNull();
+  });
+
+  it('shows the tokens alone for a CLI that reports no cost', () => {
+    // cursor-agent sends no cost at all (probed), so the two halves are
+    // independent — a card with tokens and no price says what it knows.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...agents[0]!,
+            inputTokens: 400,
+            outputTokens: 1_100,
+            spentUsd: null,
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="agent-spend"]')?.textContent).toBe(
+      '1.5k tokens',
+    );
+  });
+
   it('lists EVERY agent with status, context + ring, and spend — counts inside the list', () => {
     const el = render(
       <AgentsPanel
@@ -369,6 +474,10 @@ describe('AgentsPanel', () => {
       id: 'cursor-caller',
       name: 'Cursor caller',
       agent: 'cursor-agent',
+      model: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheTokens: null,
     };
     const el = render(
       <AgentsPanel
@@ -458,6 +567,10 @@ describe('AgentsPanel', () => {
       id,
       name: id,
       agent: 'claude',
+      model: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheTokens: null,
       configDir: null,
       status: 'completed',
       activeTurns: 0,
@@ -1659,6 +1772,10 @@ describe('AgentsPanel — sub-agent threads', () => {
     id: 'orchestrator',
     name: 'Orchestrator',
     agent: 'claude',
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
     configDir: null,
     status: 'running',
     activeTurns: 1,
@@ -1907,6 +2024,10 @@ describe('AgentsPanel — the thread expander', () => {
     id: 'orchestrator',
     name: 'Orchestrator',
     agent: 'claude',
+    model: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
     configDir: null,
     status: 'running',
     activeTurns: 1,
@@ -2390,6 +2511,9 @@ describe('AgentsPanel workflows', () => {
             phase: null,
             state: index === 1 ? ('done' as const) : ('running' as const),
             model: null,
+            inputTokens: null,
+            outputTokens: null,
+            cacheTokens: null,
             tokens: null,
             toolCalls: null,
             durationMs: null,

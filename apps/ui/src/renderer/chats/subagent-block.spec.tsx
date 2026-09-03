@@ -40,6 +40,7 @@ function makeBlock({
   withResult = true,
   stopped = false,
   failed = false,
+  model,
 }: {
   /** The launching Task tool returned. */
   withResult?: boolean;
@@ -47,6 +48,8 @@ function makeBlock({
   stopped?: boolean;
   /** It returned, but with `isError`. */
   failed?: boolean;
+  /** The model its CLI says it resolved to, declared as the daemon declares it. */
+  model?: string;
 } = {}): SubagentBlockEntry {
   const items: ChatItem[] = [
     item('tool_call', {
@@ -58,6 +61,9 @@ function makeBlock({
         prompt: 'Look for off-by-one errors.',
       },
     }),
+    ...(model === undefined
+      ? []
+      : [item('subagent_info', { id: 'task-1', model })]),
     item('message', {
       text: 'reading the diff now',
       parentToolUseId: 'task-1',
@@ -163,6 +169,34 @@ describe('SubagentBlock', () => {
     // requirement this block exists to satisfy.
     expect(container.textContent).not.toContain('reading the diff now');
     expect(container.textContent).not.toContain('Look for off-by-one errors.');
+  });
+
+  it('names the MODEL on the closed header, and does not repeat it inside', () => {
+    // ASKED FOR against a column of a dozen verifiers whose headers read
+    // `geniro:finding-verifier-agent · 33 tools` — the agent type and nothing
+    // about what it was running on. The header is what a reader scans, since
+    // the block is shut by default; the body under it would be the same
+    // reading printed twice a couple of inches apart.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ model: 'claude-opus-5' })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+
+    // The disclosure IS the header row — the fact has to be legible without
+    // pressing it.
+    expect(disclosure()?.textContent).toContain('claude-opus-5');
+
+    act(() =>
+      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+    );
+
+    // ONCE in the whole enclosure, open or shut.
+    expect(container.textContent?.split('claude-opus-5').length).toBe(2);
   });
 
   it('expands into the delegate own thread — its ask, its work, its result', () => {

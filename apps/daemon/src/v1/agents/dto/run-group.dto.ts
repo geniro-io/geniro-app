@@ -30,6 +30,12 @@ export const createRunGroupSchema = z.object({
    * pointing at a folder that does not exist could never fire.
    */
   autoCwd: z.string().min(1).optional(),
+  /**
+   * A workflow whose runs land here automatically, by slug. Omitted = the
+   * group claims no workflow. Unchecked against the library on purpose — see
+   * the entity's own note.
+   */
+  autoWorkflowId: z.string().min(1).optional(),
 });
 export class CreateRunGroupDto extends createZodDto(createRunGroupSchema) {}
 
@@ -44,14 +50,17 @@ export const updateRunGroupSchema = z
      * patch uses for `model` and `effort`.
      */
     autoCwd: z.string().min(1).nullable().optional(),
+    /** Explicit null clears the workflow rule, exactly as `autoCwd` does. */
+    autoWorkflowId: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) =>
       dto.name !== undefined ||
       dto.color !== undefined ||
       dto.collapsed !== undefined ||
-      dto.autoCwd !== undefined,
-    'a group patch must change the name, the colour, the folded state or the auto-file folder',
+      dto.autoCwd !== undefined ||
+      dto.autoWorkflowId !== undefined,
+    'a group patch must change the name, the colour, the folded state, the auto-file folder or the auto-file workflow',
   );
 export class UpdateRunGroupDto extends createZodDto(updateRunGroupSchema) {}
 

@@ -93,16 +93,23 @@ function useSecondTick(active: boolean): void {
  * were summed and priced none of them draws {@link UNPRICED} instead, with the
  * reason on the row's hover.
  */
+/**
+ * The "nothing is running" default, hoisted so it is one identity: a `[]`
+ * written at the default would be a fresh array on every render, which is the
+ * usual way a memoized child stops being memoized.
+ */
+const EMPTY_OPEN_TURNS: readonly OpenTurn[] = [];
+
 function ThreadMetrics({
   settledMs,
   turnCount,
-  openTurn,
+  openTurns,
   costUsd,
   costedTurns,
 }: {
   settledMs: number;
   turnCount: number;
-  openTurn: OpenTurn | null;
+  openTurns: readonly OpenTurn[];
   costUsd: number | null;
   /**
    * How many of this thread's finished turns carried a price — the daemon's
@@ -111,13 +118,14 @@ function ThreadMetrics({
    */
   costedTurns: number | null;
 }): React.JSX.Element | null {
-  useSecondTick(openTurn !== null);
-  const liveMs = openTurnWorkedMs(openTurn, Date.now());
+  useSecondTick(openTurns.length > 0);
+  const liveMs = openTurnWorkedMs(openTurns, Date.now());
   const totalMs = settledMs + liveMs;
-  // The running turn counts toward the tally because its time counts toward
+  // The running turns count toward the tally because their time counts toward
   // the total — a sum over fifteen turns labelled "14 turns" is the kind of
-  // small lie a reader has no way to catch.
-  const turns = turnCount + (openTurn === null ? 0 : 1);
+  // small lie a reader has no way to catch. A workflow can have several of
+  // them at once, which is why this is a length rather than a 0-or-1.
+  const turns = turnCount + openTurns.length;
   const worked = totalMs > 0 ? formatDuration(totalMs) : null;
   // A thread the daemon HAS summed, whose turns carried no price between them.
   // Not the same as having nothing to say, which is what it used to render as.
@@ -134,7 +142,7 @@ function ThreadMetrics({
       title={threadMetricsTitle(
         worked,
         turns,
-        openTurn !== null,
+        openTurns.length > 0,
         spend,
         unpriced,
       )}>
@@ -415,7 +423,7 @@ export function ChatHeader({
   turnCount = 0,
   costUsd = null,
   costedTurns = null,
-  openTurn = null,
+  openTurns = EMPTY_OPEN_TURNS,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -500,17 +508,19 @@ export function ChatHeader({
    */
   costedTurns?: number | null;
   /**
-   * The turn still in flight, so the total keeps MOVING while one is — null
+   * The turns still in flight, so the total keeps MOVING while any is — empty
    * when nothing is running.
    *
-   * {@link workedMs} alone is the settled sum, which is a figure that stands
-   * still for the whole of a turn: the reported defect was a header sitting on
-   * `worked 64m 34s` while the agent visibly worked. Handed over as the turn's
-   * pieces rather than as a number, because a number would freeze the instant
-   * it was computed — a timestamp rather than an elapsed count, for the same
-   * reason `turn-duration.ts` records against its own.
+   * A LIST because a workflow runs several nodes at once and each is a turn of
+   * its own; a 1:1 chat hands over the one it has. {@link workedMs} alone is
+   * the settled sum, which is a figure that stands still for the whole of a
+   * turn: the reported defect was a header sitting on `worked 64m 34s` while
+   * the agent visibly worked. Handed over as each turn's pieces rather than as
+   * a number, because a number would freeze the instant it was computed — a
+   * timestamp rather than an elapsed count, for the same reason
+   * `turn-duration.ts` records against its own.
    */
-  openTurn?: OpenTurn | null;
+  openTurns?: readonly OpenTurn[];
 }): React.JSX.Element {
   return (
     // A header for the TRANSCRIPT, not for the window: the shell's title bar is
@@ -606,7 +616,7 @@ export function ChatHeader({
         <ThreadMetrics
           settledMs={workedMs}
           turnCount={turnCount}
-          openTurn={openTurn}
+          openTurns={openTurns}
           costUsd={costUsd}
           costedTurns={costedTurns}
         />

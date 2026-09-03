@@ -347,14 +347,48 @@ export class ChatTitleService implements OnModuleInit {
       if (unnamedOnly && run?.title !== null) {
         return;
       }
-      if (
-        !run ||
-        // A workflow run is labelled by its workflow, which `runLabel` already
-        // falls back to — naming it after a node's opening prompt would replace
-        // a true label with a worse one.
-        run.workflowId !== null ||
-        run.agentKind === null
-      ) {
+      if (!run) {
+        return;
+      }
+      // A WORKFLOW run is named from its seed prompt and never asks a CLI.
+      //
+      // It used to be skipped outright, on the reading that the workflow's own
+      // name is already a true label. That holds for ONE run and fails for two:
+      // every run of one workflow then carries the identical row, so a sidebar
+      // holding three Dev Team runs says which WORKFLOW three times and which
+      // TASK not once — reported as "title generation should work for workflow
+      // as well", over exactly that. The workflow's name is not lost with it:
+      // the row now carries it as its own label (`chat-list-item.tsx`), which
+      // is the pairing the ask asked for — the title says what this run is
+      // doing, the chip says what it is.
+      //
+      // DERIVED only, and that is not a compromise. The upgrade replaces a
+      // derived title with the name an AGENT gave the conversation, which needs
+      // one CLI to ask; a workflow is N conversations and `run.agentKind` is
+      // null for exactly that reason. The seed prompt is also the better source
+      // here than any node's transcript would be — the run IS that one task,
+      // handed to a fleet, and the prompt is the user's own statement of it.
+      if (run.workflowId !== null) {
+        // `title === null` is "unnamed" here exactly as it is for a chat — the
+        // executor stamps nothing — so anything already written is either this
+        // derivation or the user's own rename, and neither is improved on by
+        // re-deriving.
+        if (run.title !== null) {
+          return;
+        }
+        const seed = await this.itemDao.firstUserMessageText(run.id, em);
+        const derived =
+          seed === null ? null : titleFromText(seed, CHAT_TITLE_MAX_CHARS);
+        if (derived === null || derived === '') {
+          return;
+        }
+        if (!(await this.runDao.retitle(runId, derived, run.title, em))) {
+          return;
+        }
+        this.bus.publishRunStatus({ runId, status: null, title: derived });
+        return;
+      }
+      if (run.agentKind === null) {
         return;
       }
       // Narrowed above; restated so the two paths need not re-check it.

@@ -3,6 +3,7 @@ import { useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
+import { formatExactUsd, formatTokens } from './agent-activity';
 import { MarkdownContent } from './markdown-content';
 import {
   RUN_STATUS_META,
@@ -297,22 +298,63 @@ export function BlockResult({
   );
 }
 
-/** The block's footer: how much tool work happened inside, and any caveat. */
+/**
+ * The block's footer: what the work inside COST, and any caveat.
+ *
+ * It was the tool count alone. The figures were asked for beside it ("for
+ * footer lets write also tokens and money") and they were in the block already
+ * — every `turn_complete` row carries them — so the only way to read what a
+ * callee had spent was to open that row and look. On a card that is shut by
+ * default, that is two clicks to reach the number a reader of a fan-out is
+ * actually comparing.
+ *
+ * Each figure is drawn only when something ANSWERS it, which is why they are
+ * three independent slots rather than one line: a call whose turn has not
+ * ended has reported no tokens and no cost (there is no live channel for
+ * either on either CLI, so both land when the turn does), and cursor-agent
+ * reports no cost at all. A `$0.00` or a `0 tokens` in those cases would claim
+ * a measurement nobody took.
+ *
+ * The BORDER was asked for in the same breath, and it earns itself: the footer
+ * sits directly under the callee's own rows inside a card that already has an
+ * outer edge, so an unruled line of muted 10px text read as one more row of
+ * the conversation rather than as a summary of it.
+ */
 export function BlockToolFooter({
   count,
+  tokens = null,
+  costUsd = null,
   note,
 }: {
   count: number;
+  /** Input + output the work inside reported; null when unmeasured. */
+  tokens?: number | null;
+  /** What it cost; null when the CLI reported none. */
+  costUsd?: number | null;
   note?: React.ReactNode;
 }): React.JSX.Element | null {
-  if (count === 0) {
+  if (count === 0 && tokens === null && costUsd === null && !note) {
     return null;
   }
   return (
-    <div className="flex items-center gap-3 pt-0.5 text-[10px] text-muted-foreground">
-      <span>
-        {count} tool{count === 1 ? '' : 's'}
-      </span>
+    <div
+      data-slot="block-footer"
+      className="flex items-center gap-3 border-t border-border pt-1.5 text-[10px] text-muted-foreground">
+      {count === 0 ? null : (
+        <span>
+          {count} tool{count === 1 ? '' : 's'}
+        </span>
+      )}
+      {tokens === null ? null : (
+        <span data-slot="block-footer-tokens" className="tabular-nums">
+          {formatTokens(tokens)} tokens
+        </span>
+      )}
+      {costUsd === null ? null : (
+        <span data-slot="block-footer-cost" className="tabular-nums">
+          {formatExactUsd(costUsd)}
+        </span>
+      )}
       {note}
     </div>
   );
@@ -388,6 +430,7 @@ export function BlockShell({
   collapsible = false,
   toggleLabel,
   headerAction,
+  summary,
   children,
 }: {
   /**
@@ -402,6 +445,19 @@ export function BlockShell({
   status: BlockStatus;
   /** A control sitting beside the header — outside the disclosure button. */
   headerAction?: React.ReactNode;
+  /**
+   * One line of where this block has got to, shown only while it is SHUT.
+   *
+   * A closed card otherwise says that some nested work exists and nothing about
+   * its state, which for work still running is the one thing worth knowing
+   * without opening it. Withheld when open, where the rows themselves are the
+   * answer and the line would restate the last of them.
+   *
+   * A NODE rather than a string: the call block puts its figures and its task
+   * chip on this row beside the words, and a shell that took only text would
+   * have every caller building a second row under it instead.
+   */
+  summary?: React.ReactNode;
   children: React.ReactNode;
 } & (
   | {
@@ -497,6 +553,17 @@ export function BlockShell({
         </div>
         {open ? (
           <div className="flex flex-col gap-2 p-2.5">{children}</div>
+        ) : summary ? (
+          // ONE line: this is a state readout on a shut card, and a callee's
+          // last message is routinely a paragraph — three of them under a
+          // closed header is the wall the fold exists to prevent. The caller
+          // owns the clamping, since only it knows which part of the row gives
+          // way; the full text is one click away either way.
+          <div
+            data-slot="block-summary"
+            className="flex items-center gap-2 px-3 pt-1 pb-2 text-xs text-muted-foreground">
+            {summary}
+          </div>
         ) : null}
       </div>
     </div>

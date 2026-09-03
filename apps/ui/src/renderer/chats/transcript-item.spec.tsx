@@ -121,11 +121,16 @@ describe('TranscriptItem — agent-call rows', () => {
 });
 
 describe('TranscriptItem — Q&A bridge rows (M4)', () => {
-  it('renders call_question with the callee, question text, and options', () => {
+  it('draws call_question as the live question card, INERT and saying who owes the answer', () => {
+    // It was prose with its options folded into a parenthesised grey run, so
+    // nothing said there were choices on offer until you had read the
+    // sentence. It borrows the live card's shape now — and NOT its promise:
+    // the user cannot answer this one, the caller does.
     render(
       <TranscriptItem
         item={item('call_question', {
           callId: 'call-1',
+          callerNodeId: 'orch',
           calleeNodeId: 'helper',
           question: 'Which color?',
           options: ['Red', 'Blue'],
@@ -133,13 +138,20 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
       />,
     );
     const text = container.textContent ?? '';
-    // The sender frame names the asking callee — the bubble keeps only the
-    // question marker, the text, and the options.
-    expect(text).toContain('❓ question');
-    expect(text).not.toContain('helper');
-    expect(text).not.toContain('call-1');
     expect(text).toContain('Which color?');
-    expect(text).toContain('Red / Blue');
+    // Options are real, pickable-SHAPED rows rather than a prose list…
+    const picks = [
+      ...container.querySelectorAll<HTMLButtonElement>('[role="group"] button'),
+    ];
+    expect(picks.map((b) => b.textContent)).toEqual(['Red', 'Blue']);
+    // …and every one of them is inert, which is the whole difference.
+    expect(picks.every((b) => b.disabled)).toBe(true);
+    // Both agents are NAMED here, unlike the bubble it replaces: who owes the
+    // answer is the one thing this card has to say that the live one does not.
+    expect(text).toContain('Question for orch');
+    expect(text).toContain('from helper');
+    expect(text).toContain('orch answers this');
+    expect(text).not.toContain('call-1');
   });
 
   it('renders an answered call_answer with the answer text', () => {

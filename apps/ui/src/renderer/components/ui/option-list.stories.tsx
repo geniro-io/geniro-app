@@ -80,3 +80,22 @@ export const Disabled: Story = {
     />
   ),
 };
+
+/**
+ * Unpressable, and drawn at FULL strength — a question somebody else answers,
+ * where the options are the whole point of the row and the reader is not the
+ * one who can pick. Compare with `Disabled` above: same inertness, readable
+ * text.
+ */
+export const Inert: Story = {
+  render: () => (
+    <OptionList
+      options={OPTIONS}
+      selected={[]}
+      arity="one"
+      inert
+      label="Storage engine (the caller answers this)"
+      onPick={() => {}}
+    />
+  ),
+};

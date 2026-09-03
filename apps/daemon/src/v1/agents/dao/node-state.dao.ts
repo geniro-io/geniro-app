@@ -5,6 +5,17 @@ import { BaseDao } from '@packages/mikroorm';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import type { AgentKind, NodeStatus } from '../../runs/runs.types';
 
+/**
+ * A figure worth storing: a real number above zero.
+ *
+ * Zero is rejected as hard as null, and for the reason the renderer's own fold
+ * states — a turn that reported `0` measured nothing, and both halves of the
+ * ring read it as a denominator or a numerator that cannot be right.
+ */
+function positive(value: number | null): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 @Injectable()
 export class NodeStateDao extends BaseDao<NodeState> {
   constructor(em: EntityManager) {
@@ -114,6 +125,84 @@ export class NodeStateDao extends BaseDao<NodeState> {
       );
     }
     await em.flush();
+  }
+
+  /**
+   * Record this node's latest context reading — the per-node twin of
+   * `RunDao.rememberContext`, and it follows that method's rules exactly.
+   *
+   * A bare `nativeUpdate` rather than `updateById`/`findOne`+flush: this fires
+   * once per main-thread model response, so it must not read the row, hydrate
+   * an entity and flush it — nothing here needs the row's other columns, and
+   * loading them would put a whole node-state entity through the identity map
+   * several times a minute.
+   *
+   * Neither figure is ever cleared by a reading that OMITS it: a
+   * `context_progress` carries a count with no window and a `turn_complete`
+   * carries the window, so writing the absent half as null would have each
+   * erase what the other had just recorded. A non-positive count is not a
+   * measurement and is ignored for the same reason it is on the live plane.
+   *
+   * It writes nothing when no row exists yet, unlike `saveSessionId` beside it:
+   * a reading is about a turn, and a turn always has its `createPending` row by
+   * the time one arrives — creating one HERE would invent a node with a status
+   * nobody chose. A `nativeUpdate` against a non-existent `(runId, nodeId)`
+   * matches nothing and writes nothing, which preserves that guard without a
+   * read.
+   */
+  async rememberContext(
+    runId: string,
+    nodeId: string,
+    contextTokens: number | null,
+    contextWindowTokens: number | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const data: Partial<NodeState> = {};
+    if (positive(contextTokens)) {
+      data.contextTokens = contextTokens;
+    }
+    if (positive(contextWindowTokens)) {
+      data.contextWindowTokens = contextWindowTokens;
+    }
+    if (Object.keys(data).length === 0) {
+      return;
+    }
+    await this.getRepo(txEm).nativeUpdate({ runId, nodeId }, data);
+  }
+
+  /**
+   * Advance how far this node's conversation has been PRICED — the watermark
+   * behind the cursor spend accumulator.
+   *
+   * A bare `nativeUpdate` on {@link rememberContext}'s rules: the poll writes
+   * one of these per conversation it counted, and nothing here needs the row's
+   * other columns.
+   *
+   * It only ever moves FORWARD. The poll advances it to the newest event it
+   * actually folded, so a window that returned nothing new leaves it alone; the
+   * guard makes that hold even if a caller passed an older mark, because a
+   * watermark that went backwards would count a stretch of events twice.
+   */
+  async rememberCursorSpendThrough(
+    runId: string,
+    nodeId: string,
+    throughMs: number,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (!positive(throughMs)) {
+      return;
+    }
+    await this.getRepo(txEm).nativeUpdate(
+      {
+        runId,
+        nodeId,
+        $or: [
+          { cursorSpendThroughMs: null },
+          { cursorSpendThroughMs: { $lt: throughMs } },
+        ],
+      },
+      { cursorSpendThroughMs: throughMs },
+    );
   }
 
   /**

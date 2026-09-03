@@ -118,6 +118,7 @@ export class NotificationsGateway
   private busSubscription?: Subscription;
   private deltaSubscription?: Subscription;
   private statusSubscription?: Subscription;
+  private deletedSubscription?: Subscription;
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
   /**
@@ -190,6 +191,35 @@ export class NotificationsGateway
       error: (err: unknown) =>
         this.logger.error(`run status bus errored: ${String(err)}`),
     });
+    // A DESTROYED run goes to every client, and it is the one announcement
+    // whose absence a client cannot recover from on its own.
+    //
+    // `bus.allDeleted()` had three subscribers and all of them were inside the
+    // daemon, so the fact never crossed the wire at all: whichever client
+    // pressed Delete dropped the row itself, and every OTHER client kept a row
+    // for a run that no longer existed — with no event able to correct it,
+    // since `run_status` only ever describes runs that are still there. The
+    // ghost then answered a click with `404 RUN_NOT_FOUND`, which is how a user
+    // came to have a row they could neither open nor delete. REPORTED as "I
+    // cant delete thread from app", against a run whose `runs`, `items` and
+    // `node_state` rows had all been gone for minutes.
+    //
+    // No room, on `run_status`'s reasoning exactly: a client joins only the run
+    // it is showing, and the row that has to disappear is in every client's
+    // sidebar. Isolated like its neighbours.
+    this.deletedSubscription = this.bus.allDeleted().subscribe({
+      next: (runId) => {
+        try {
+          server.emit('run_deleted', { runId });
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast run_deleted for ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`run deleted bus errored: ${String(err)}`),
+    });
     // A recorded turn goes to EVERY client, like `run_status` and for the
     // mirror-image reason: the page that cares is Stats, which belongs to no
     // run's room — it is about all of them at once. It is a handful of bytes
@@ -239,6 +269,7 @@ export class NotificationsGateway
     this.busSubscription?.unsubscribe();
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
+    this.deletedSubscription?.unsubscribe();
     this.debugSubscription?.unsubscribe();
     this.usageSubscription?.unsubscribe();
   }

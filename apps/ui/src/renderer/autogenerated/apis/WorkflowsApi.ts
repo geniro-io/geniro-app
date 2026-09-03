@@ -62,6 +62,10 @@ export interface WorkflowsApiListWorkflowRunNodesRequest {
     runId: string;
 }
 
+export interface WorkflowsApiListWorkflowRunsRequest {
+    scope?: ListWorkflowRunsScopeEnum;
+}
+
 export interface WorkflowsApiSaveWorkflowRequest {
     slug: string;
     saveWorkflowDto: SaveWorkflowDto;
@@ -454,8 +458,12 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listWorkflowRunsRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
+    async listWorkflowRunsRaw(requestParameters: WorkflowsApiListWorkflowRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
         const queryParameters: any = {};
+
+        if (requestParameters['scope'] != null) {
+            queryParameters['scope'] = requestParameters['scope'];
+        }
 
         const headerParameters: runtime.HTTPHeaders = {};
 
@@ -483,8 +491,8 @@ export class WorkflowsApi extends runtime.BaseAPI {
     /**
      * 
      */
-    async listWorkflowRuns(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
-        const response = await this.listWorkflowRunsRaw(initOverrides);
+    async listWorkflowRuns(requestParameters: WorkflowsApiListWorkflowRunsRequest = {}, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
+        const response = await this.listWorkflowRunsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -636,3 +644,13 @@ export class WorkflowsApi extends runtime.BaseAPI {
     }
 
 }
+
+/**
+ * @export
+ */
+export const ListWorkflowRunsScopeEnum = {
+    Active: 'active',
+    All: 'all',
+    Archived: 'archived'
+} as const;
+export type ListWorkflowRunsScopeEnum = typeof ListWorkflowRunsScopeEnum[keyof typeof ListWorkflowRunsScopeEnum];

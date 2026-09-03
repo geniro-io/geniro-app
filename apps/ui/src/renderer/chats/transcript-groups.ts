@@ -9,7 +9,7 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
-import { CHAT_LIVE_KEY, type LiveState } from './live-text';
+import { CHAT_LIVE_KEY, type LiveState, ownerOfKey } from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
   type BackgroundOutcome,
@@ -114,6 +114,48 @@ function isGeniroToolName(name: string, runId: string): boolean {
   }
   return GENIRO_TOOL_NAMES.some(
     (tool) => name === `${GENIRO_TOOL_PREFIX}${tool}`,
+  );
+}
+
+/**
+ * Whether a tool RESULT is one of geniro's own call envelopes.
+ *
+ * TWIN PARSER: `CallEnvelope` in
+ * `apps/daemon/src/v1/graphs/graphs.types.ts` is what produces this shape, and
+ * `McpServerService` is what serializes it into the tool result. There is no
+ * generated type spanning the seam — an item payload is `z.unknown()` on the
+ * wire by design — so a field renamed there must be renamed here.
+ *
+ * It exists for the ORPHAN case alone: a result whose own call is inside the
+ * loaded window is already hidden by id, which is both cheaper and exact. This
+ * is the fallback for the window boundary, and it matches on the envelope's
+ * OWN discriminators — a `status` this app defines plus a `call_id` — rather
+ * than on any prose, so an agent that merely writes about a call cannot trip
+ * it: a tool result is a payload we serialized, not something a model wrote.
+ */
+function isCallEnvelopeResult(payload: unknown): boolean {
+  // The SHARED reader, so this and the row that would have drawn the result
+  // are looking at the same string.
+  const text = toolResultText(recordOf(payload)?.result).trim();
+  if (!text.startsWith('{')) {
+    return false;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  const envelope = recordOf(parsed);
+  const status = envelope?.status;
+  if (typeof status !== 'string') {
+    return false;
+  }
+  // Every arm of the union carries a call id — at the root (`pending`,
+  // `question`) or inside `result` (`ok`), which is why both are read.
+  return (
+    typeof envelope?.call_id === 'string' ||
+    typeof recordOf(envelope?.result)?.call_id === 'string'
   );
 }
 
@@ -1092,6 +1134,163 @@ function subagentRef(id: string): string {
  * One recursion, shared by both block kinds: a shallow count and a deep count
  * of the same "N tools" label meant different things per card.
  */
+/**
+ * The last thing the CALLEE said in a call block — what a COLLAPSED one shows
+ * as its current state.
+ *
+ * ASKED FOR alongside the fold: "we always should see last message there, like
+ * its current state". A shut card whose header names only `Manager → QA` says
+ * that a call happened and nothing about where it has got to, which for a call
+ * still running is the one thing a reader wants without opening it.
+ *
+ * The RESULT wins when there is one, because it lands after every row in
+ * {@link CallBlockEntry.entries} and is the callee's final answer — the block
+ * pulls it out of those entries for exactly that reason. Otherwise the newest
+ * assistant message, found by walking backwards and descending into nested
+ * entries the way {@link countTools} does, since a callee's rows are routinely
+ * folded into a turn block.
+ *
+ * Null when the callee has not spoken yet, and never the caller's own ask: that
+ * is what the block was ASKED, not where it has got to, and the header already
+ * names both ends of the call. A block with no summary is one whose header's
+ * spinner is the whole of the answer.
+ */
+export function callBlockSummary(block: CallBlockEntry): string | null {
+  return block.result ?? lastSpokenIn(block.entries);
+}
+
+function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]!;
+    if (entry.type === 'item') {
+      // `kind` alone, exactly as the block's own result extraction reads it: a
+      // call block holds the CALLEE's rows, and the caller's ask is pulled out
+      // to `message` before any of this — so there is no user turn in here for
+      // a role check to exclude, and requiring one would drop every row on a
+      // transport that leaves the column null.
+      if (entry.item.kind === 'message') {
+        const text = payloadString(entry.item.payload, 'text');
+        if (text !== null && text.trim().length > 0) {
+          return text;
+        }
+      }
+      continue;
+    }
+    if (entry.type === 'tools' || isCardEntry(entry)) {
+      continue;
+    }
+    const nested = lastSpokenIn(entry.entries);
+    if (nested !== null) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+/** What one call block's own turns have spent — the footer's two figures. */
+export interface CallBlockUsage {
+  /** Input + output, on the agent card's own rule — never the cache reads. */
+  tokens: number | null;
+  costUsd: number | null;
+}
+
+/**
+ * What the callee has SPENT inside this block, summed from its own
+ * `turn_complete` rows.
+ *
+ * ASKED FOR on the block footer beside the tool count: "for footer lets write
+ * also tokens and money". The figures were in the block already — every
+ * `turn_complete` carries them — and were readable only by opening that row.
+ *
+ * The token figure is INPUT + OUTPUT, the same reading the agents panel's own
+ * spend line takes, so the two surfaces cannot state different numbers about
+ * one agent's work. Cache reads are left out there for a measured reason and
+ * the same one holds here.
+ *
+ * Null means UNMEASURED, never zero: a call whose turn has not ended yet has
+ * reported nothing — there is no live token or cost channel on either CLI, so
+ * the figures appear when the turn lands — and cursor-agent reports no cost at
+ * all, which is why the two halves are independent.
+ */
+export function callBlockUsage(block: CallBlockEntry): CallBlockUsage {
+  const usage: CallBlockUsage = { tokens: null, costUsd: null };
+  addCallUsage(block.entries, usage);
+  return usage;
+}
+
+function addCallUsage(
+  entries: readonly TranscriptEntry[],
+  into: CallBlockUsage,
+): void {
+  for (const entry of entries) {
+    if (entry.type === 'item') {
+      if (entry.item.kind !== 'turn_complete') {
+        continue;
+      }
+      const usage = recordOf(recordOf(entry.item.payload)?.usage);
+      if (usage === undefined) {
+        continue;
+      }
+      const tokens = addFigure(
+        addFigure(into.tokens, usage.inputTokens),
+        usage.outputTokens,
+      );
+      into.tokens = tokens;
+      into.costUsd = addFigure(into.costUsd, usage.costUsd);
+      continue;
+    }
+    if (entry.type === 'tools' || isCardEntry(entry)) {
+      continue;
+    }
+    addCallUsage(entry.entries, into);
+  }
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Add a reported figure to a running total, where null means UNMEASURED. */
+function addFigure(total: number | null, next: unknown): number | null {
+  if (typeof next !== 'number' || !Number.isFinite(next) || next < 0) {
+    return total;
+  }
+  return (total ?? 0) + next;
+}
+
+/**
+ * The callee's task list as it stands INSIDE this call block — what the shut
+ * card's own tasks chip lists.
+ *
+ * The LAST card wins, on `TaskListCard`'s own rule: a list is announced many
+ * times over a turn and every card but the newest is a step on the way there.
+ * Empty when the callee keeps none, which is what withholds the chip.
+ */
+export function callBlockTasks(block: CallBlockEntry): AgentTaskRow[] {
+  return lastTaskListIn(block.entries) ?? [];
+}
+
+function lastTaskListIn(
+  entries: readonly TranscriptEntry[],
+): AgentTaskRow[] | null {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]!;
+    if (entry.type === 'task-list') {
+      return entry.tasks;
+    }
+    if (entry.type === 'item' || entry.type === 'tools' || isCardEntry(entry)) {
+      continue;
+    }
+    const nested = lastTaskListIn(entry.entries);
+    if (nested !== null) {
+      return nested;
+    }
+  }
+  return null;
+}
+
 export function countTools(entries: readonly TranscriptEntry[]): number {
   return entries.reduce((sum, entry) => {
     if (entry.type === 'tools') {
@@ -1137,7 +1336,7 @@ interface SubagentLaunch {
  * Read one string field off a tool call's `input` object.
  *
  * TWIN PARSER: the keys read through this — `subagent_type`, `description`,
- * `prompt` — are claude's own Task-tool argument schema, which reaches the
+ * `prompt`, `model` — are claude's own Task-tool argument schema, which reaches the
  * renderer inside a `tool_call` payload's `input` and so carries no generated
  * type (`apps/daemon/src/v1/agents/utils/event-to-item.ts` forwards
  * `event.input` verbatim; the shape originates in
@@ -1153,6 +1352,28 @@ function inputString(call: ChatItem | undefined, key: string): string | null {
   }
   const value = (input as Record<string, unknown>)[key];
   return typeof value === 'string' && value !== '' ? value : null;
+}
+
+/**
+ * What model the LAUNCHING call asked this delegate to run on — the stand-in
+ * until its CLI says which one actually did.
+ *
+ * The declaration OUTRANKS this, which inverts the rule its three neighbours
+ * follow (`kind`, `label` and `prompt` all prefer the call). The two sources
+ * are not the same fact here: the call carries the caller's own word for a
+ * model — an ALIAS like `sonnet` — while the declaration carries what the CLI
+ * resolved it to (`claude-sonnet-5`), which is the one a reader can look up.
+ * That declaration only arrives when the launching call RETURNS, so a delegate
+ * is otherwise unattributed for the whole time it runs, which is precisely
+ * when a column of a dozen of them is being read.
+ *
+ * `inherit` is dropped rather than shown: it is the schema's way of naming no
+ * model at all, and printing it would answer "which model" with a word about
+ * where the answer comes from.
+ */
+function requestedModel(call: ChatItem | undefined): string | null {
+  const model = inputString(call, 'model');
+  return model === 'inherit' ? null : model;
 }
 
 /**
@@ -1302,7 +1523,8 @@ export function buildSubagentBlocks(
       label:
         inputString(launch?.call, 'description') ?? declared?.label ?? null,
       prompt: inputString(launch?.call, 'prompt') ?? declared?.prompt ?? null,
-      model: declared?.model ?? null,
+      // The one field where the DECLARATION wins — see {@link requestedModel}.
+      model: declared?.model ?? requestedModel(launch?.call),
       durationMs: declared?.durationMs ?? null,
       tokens: declared?.tokens ?? null,
       toolUses: declared?.toolUses ?? null,
@@ -1846,6 +2068,22 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         pair.result = item;
         continue;
       }
+      // An ORPHAN — its `tool_call` is not in this window — and if that call was
+      // one of GENIRO'S OWN, hiding it is still owed. `hiddenCallIds` is filled
+      // as the calls go past, so it can only ever know about calls the window
+      // holds: measured on a real run, the `await_agent` sat at seq 899 and its
+      // result at 1099, with the window starting near 926, so the result
+      // arrived with nothing to suppress it and the raw envelope was printed
+      // into the transcript under a `RESULT` caption. REPORTED as "I see raw
+      // tool result", over `{"status":"ok","result":{"call_id":"call-3",…}}`.
+      //
+      // The result row cannot be matched by NAME — the CLI writes `name: null`
+      // on it (verified on that row) — so the envelope itself is the only
+      // signal present, and it is geniro's OWN shape rather than any CLI's
+      // prose: see {@link isCallEnvelopeResult}.
+      if (isCallEnvelopeResult(item.payload)) {
+        continue;
+      }
       entries.push({ type: 'item', item });
       continue;
     }
@@ -2161,9 +2399,23 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     // loose into the call block, invisible to the panel and to the run badge —
     // and `collectSubagentBlocks`' recursion into call blocks could never find
     // anything, making its "at any depth" claim false.
-    entries: buildWorkflowCards(
-      buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
-      visibleInner,
+    //
+    // `buildTurnBlocks` LAST, exactly as `Chats.tsx` ends the main flow with
+    // it, and its absence here is why a callee's prose read differently from
+    // every other agent's: a message that folds into a turn block is drawn as
+    // markdown in the flow, and one that does not goes through
+    // `MessageBubble` and wears a bordered card of its own. So the callee's
+    // sentences sat in grey boxes inside a card that already frames them,
+    // where the same agent's words in a 1:1 chat sit bare — reported as
+    // "каждое его сообщение все еще в каком-то странном сером блоке… дизайн
+    // должен быть такой же, как у обычного треда". Under the block's
+    // `NestedThreadContext` those turn blocks render frameless, so what comes
+    // out is the ordinary thread's own shape.
+    entries: buildTurnBlocks(
+      buildWorkflowCards(
+        buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+        visibleInner,
+      ),
     ),
   };
 }
@@ -2606,7 +2858,10 @@ export const LIVE_TEXT_ITEM_PREFIX = 'live:';
 
 /** A live entry's owning node id, from the per-agent map's key. */
 function nodeIdOf(key: string): string | null {
-  return key === CHAT_LIVE_KEY ? null : key;
+  // Through the DECOMPOSER, not the raw key: a callee turn's key is
+  // `<node>::<callId>`, and every caller here looks a NODE up by it — so the
+  // raw key matched nothing on exactly the threads a call opens.
+  return key === CHAT_LIVE_KEY ? null : ownerOfKey(key);
 }
 
 /**
@@ -2639,6 +2894,12 @@ export function withLiveText(
     return blocks as TranscriptEntry[];
   }
   const out = [...blocks];
+  /**
+   * Callees whose call block is still open — their live rows belong INSIDE it,
+   * and their silence is already narrated by it. Read once, so the placement
+   * below and the working fallback cannot disagree about which nodes those are.
+   */
+  const openCallees = openCallCallees(blocks);
   /** Agents already given a row, so the working fallback does not double up. */
   const spokenFor = new Set<string>();
   for (const [key, state] of liveText) {
@@ -2686,10 +2947,19 @@ export function withLiveText(
             payload: { text: state.text },
           },
     );
-    attach(out, entry);
+    attach(out, entry, openCallees);
   }
   for (const key of workingAgents) {
     if (spokenFor.has(key)) {
+      continue;
+    }
+    // A callee working inside an open call block is NOT silent: the block says
+    // `<callee> is thinking...` and wears a running mark, one line further down
+    // the same card. The fallback row here would be a SECOND place that agent
+    // appears — an empty block at the root of the transcript, outside the call
+    // that is the only reason it is running — which is what was reported.
+    const workingNode = nodeIdOf(key);
+    if (workingNode !== null && openCallees.has(workingNode)) {
       continue;
     }
     // Measured from the last row this agent put on screen, NEVER from the row's
@@ -2697,6 +2967,10 @@ export function withLiveText(
     // than `out`: the loop above may already have attached a live row, whose
     // `createdAt` is empty by construction.
     const since = lastMainThreadRowAt(blocks, nodeIdOf(key));
+    // A caller blocked on its own call SAYS so. The node id rather than a
+    // label, because the display name lives in the `nodes` map the row's
+    // renderer holds and this fold does not.
+    const waitingOn = openCallOfCaller(blocks, nodeIdOf(key));
     attach(
       out,
       liveEntry(key, {
@@ -2705,8 +2979,17 @@ export function withLiveText(
         payload: {
           live: 'working',
           ...(since === null ? {} : { workingSince: since }),
+          ...(waitingOn === null
+            ? {}
+            : {
+                waitingCallId: waitingOn.callId,
+                ...(waitingOn.calleeNodeId === null
+                  ? {}
+                  : { waitingOnNodeId: waitingOn.calleeNodeId }),
+              }),
         },
       }),
+      openCallees,
     );
   }
   return out;
@@ -2763,6 +3046,118 @@ function lastMainThreadRowAt(
   return latest;
 }
 
+/**
+ * Call statuses whose sub-turn is still in flight, so the block is an OPEN
+ * enclosure: whatever the callee produces now belongs inside it.
+ */
+const OPEN_CALL_STATUSES = new Set<CallBlockEntry['status']>([
+  'pending',
+  'running',
+]);
+
+/**
+ * The callee nodes whose call block is still open, at any depth.
+ *
+ * It recurses because a call block is folded into its CALLER's turn block
+ * (`ownerOf` attributes it to `callerNodeId`), so it is never a top-level entry
+ * in a transcript the caller has said anything in — which is every one of them,
+ * the block's own `call_started` row being the caller's.
+ */
+/**
+ * The OPEN call this node is the CALLER of — what it is blocked on right now.
+ *
+ * The mirror of {@link openCallCallees}, which answers the same question from
+ * the callee's side, and it exists so the caller's live row can NAME its wait.
+ * A caller sitting in `await_agent` produces nothing for as long as its callee
+ * runs — measured at 334s on one real turn — and a bare `Working…` over a clock
+ * counting five silent minutes is indistinguishable from a hang, which is what
+ * got reported. The information was already on screen (the call block, and the
+ * callee's own rows streaming inside it); nothing connected the two.
+ *
+ * The FIRST open call, not a list: the row has space for one phrase, and a
+ * caller with several outstanding is answered by its own call blocks rather
+ * than by a sentence trying to name them all.
+ */
+function openCallOfCaller(
+  entries: readonly TranscriptEntry[],
+  callerNodeId: string | null,
+): CallBlockEntry | null {
+  for (const entry of entries) {
+    if (entry.type === 'call-block') {
+      if (
+        entry.callerNodeId === callerNodeId &&
+        OPEN_CALL_STATUSES.has(entry.status)
+      ) {
+        return entry;
+      }
+      continue;
+    }
+    if (entry.type === 'turn-block') {
+      const found = openCallOfCaller(entry.entries, callerNodeId);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return null;
+}
+
+function openCallCallees(
+  entries: readonly TranscriptEntry[],
+  found: Set<string> = new Set(),
+): Set<string> {
+  for (const entry of entries) {
+    if (entry.type === 'call-block') {
+      if (entry.calleeNodeId !== null && OPEN_CALL_STATUSES.has(entry.status)) {
+        found.add(entry.calleeNodeId);
+      }
+      continue;
+    }
+    if (entry.type === 'turn-block') {
+      openCallCallees(entry.entries, found);
+    }
+  }
+  return found;
+}
+
+/**
+ * Append a live row to the open call block this node is the callee of.
+ *
+ * Newest first, so a node called twice in one turn writes into the call still
+ * running rather than into an earlier one that happens to share its status.
+ * Only the arrays on the path to the block are copied — the block, and the turn
+ * blocks enclosing it — which is what keeps every other block's identity, and
+ * therefore its memo, stable across a delta (see `durableEntries` in
+ * `Chats.tsx`).
+ */
+function placeInOpenCall(
+  list: TranscriptEntry[],
+  nodeId: string,
+  entry: ItemEntry,
+): boolean {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const candidate = list[i]!;
+    if (candidate.type === 'call-block') {
+      if (
+        candidate.calleeNodeId === nodeId &&
+        OPEN_CALL_STATUSES.has(candidate.status)
+      ) {
+        list[i] = { ...candidate, entries: [...candidate.entries, entry] };
+        return true;
+      }
+      continue;
+    }
+    if (candidate.type === 'turn-block') {
+      const inner = [...candidate.entries];
+      if (placeInOpenCall(inner, nodeId, entry)) {
+        list[i] = { ...candidate, entries: inner };
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /** One synthetic row, shaped like the durable item it renders through. */
 function liveEntry(
   key: string,
@@ -2815,7 +3210,11 @@ function liveEntry(
  * end. That is also what makes the row's position stable across the
  * live→durable seam: both land after the same divider.
  */
-function attach(out: TranscriptEntry[], entry: ItemEntry): void {
+function attach(
+  out: TranscriptEntry[],
+  entry: ItemEntry,
+  openCallees: ReadonlySet<string> = new Set(),
+): void {
   const nodeId = entry.item.nodeId;
   // Matched on the thread as well as the node, exactly as `ownerOf` does. A
   // live row is the MAIN thread's — the daemon drops a sub-agent's deltas from
@@ -2823,6 +3222,23 @@ function attach(out: TranscriptEntry[], entry: ItemEntry): void {
   // block whenever one happened to be last, and rendered under that block's
   // `sub-agent` label as the delegate's own words.
   const subagentId = subagentIdOf(entry.item);
+  // A CALLEE writes inside the block its caller opened, and nowhere else. Its
+  // durable rows are claimed into that block by callId, so a live row placed
+  // out here does not merely sit in the wrong place — it puts the callee on
+  // screen TWICE, as an all-but-empty block of its own beside the call it is
+  // answering, and every word then jumps into the card the moment it goes
+  // durable. The block is an enclosure rather than a boundary, so unlike the
+  // turn-block search below this one is not restricted to the LAST entry: a
+  // fan-out has several calls open at once, and each one's block stays open
+  // until its own sub-turn settles.
+  if (
+    nodeId !== null &&
+    subagentId === null &&
+    openCallees.has(nodeId) &&
+    placeInOpenCall(out, nodeId, entry)
+  ) {
+    return;
+  }
   const last = out[out.length - 1];
   if (
     last?.type === 'turn-block' &&

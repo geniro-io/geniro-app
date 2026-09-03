@@ -238,20 +238,21 @@ class FakeRunDao {
     return cleared;
   }
 
-  /** The cutoffs `archivedChatIdsBefore` was asked about, newest call last. */
+  /** The cutoffs `archivedRunsBefore` was asked about, newest call last. */
   readonly sweepCutoffs: Date[] = [];
 
   /**
-   * Mirrors the real query's scoping — archived only, chats only, oldest first.
+   * Mirrors the real query's scoping — archived only, BOTH kinds, oldest first.
    * The predicate itself is pinned against real SQL in `run.dao.spec.ts`; what
    * this exists for is the CUTOFF, which is the service's own arithmetic.
    */
-  async archivedChatIdsBefore(cutoff: Date): Promise<string[]> {
+  async archivedRunsBefore(
+    cutoff: Date,
+  ): Promise<{ id: string; workflowId: string | null }[]> {
     this.sweepCutoffs.push(cutoff);
     return [...this.runs.values()]
       .filter(
         (run) =>
-          run.workflowId === null &&
           run.archivedAt !== null &&
           run.archivedAt.getTime() <= cutoff.getTime(),
       )
@@ -259,7 +260,7 @@ class FakeRunDao {
         (a, b) =>
           (a.archivedAt?.getTime() ?? 0) - (b.archivedAt?.getTime() ?? 0),
       )
-      .map((run) => run.id);
+      .map((run) => ({ id: run.id, workflowId: run.workflowId }));
   }
 }
 
@@ -1822,25 +1823,29 @@ describe('ChatService', () => {
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
     });
 
-    it('closes the card when the AGENT gives up on its own call, mid-turn', async () => {
-      // The turn is still running and the user has answered nothing — what
-      // ended is the CALLER's patience: an MCP client puts its own deadline on
-      // a `tools/call` (cursor-agent's is 60s, measured) and cancels. Before
-      // this the card stayed on screen with live buttons, so an agent that
-      // re-asked left the user two identical questions and only one of them
-      // connected to anything.
+    it('KEEPS the card when the agent gives up on its own call, and the retry adopts it', async () => {
+      // The turn is still running and the user is mid-answer — what ended is
+      // the CALLER's patience: an MCP client puts a hard deadline on a
+      // `tools/call` (cursor-agent's is 60s, and it passes no options to the
+      // SDK, so nothing can move it). Closing the card there was the first
+      // answer, and it made the deadline the USER's: two questions could not be
+      // answered inside a minute, and the second was lost. REPORTED as "я
+      // ответил первую половину, а вторую я просто не успел".
       const { service, cursor, userQuestions, approvals, itemDao } = setup();
       const run = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
       });
       await service.sendMessage(run.id, 'hello');
+      const QUESTIONS = [
+        { question: 'How deep?', options: [{ label: 'Standard' }] },
+      ];
 
       const cancel = new AbortController();
-      const asked = userQuestions.ask(
+      const first = userQuestions.ask(
         run.id,
         SINGLE_AGENT_NODE,
-        [{ question: 'How deep?', options: [{ label: 'Standard' }] }],
+        QUESTIONS,
         null,
         cancel.signal,
       );
@@ -1850,33 +1855,88 @@ describe('ChatService', () => {
 
       cancel.abort();
 
-      expect(await asked).toEqual({
+      // The CALL is released — its client has gone, and holding the promise
+      // would leave the turn's own bookkeeping waiting on nothing.
+      expect(await first).toEqual({
         status: 'unavailable',
-        reason: 'the agent stopped waiting for an answer',
+        reason: 'the agent stopped waiting for this answer',
       });
       await drain();
-      // The card is CLOSED in the transcript — the same `unanswerable` row the
-      // settle-time sweep writes, which is what the renderer already reads.
+      // …but the CARD stands: nothing is written, the registry entry is intact,
+      // and the badge still says the run is waiting on the user.
+      expect(itemDao.items.some((item) => item.kind === 'unanswerable')).toBe(
+        false,
+      );
+      expect(approvals.awaitingFor(run.id)).not.toBeNull();
+
+      // The retry re-sends the same words, and ADOPTS the card rather than
+      // raising a second one — which is the older defect this path was written
+      // for, and what a naive retry produces.
+      const second = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        QUESTIONS,
+        null,
+      );
+      await drain();
+      expect(
+        itemDao.items.filter((item) => item.kind === 'approval_request'),
+      ).toHaveLength(1);
+      expect(approvals.listByRun(run.id)).toHaveLength(1);
+
+      // Answering that one card reaches the call now in flight.
+      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
+        true,
+      );
+      expect(await second).toEqual({ status: 'answered', answer: 'Standard' });
+      await settle(cursor);
+    });
+
+    it('holds an answer given while the agent had nothing in flight', async () => {
+      // The exact window the report describes: the client's deadline lapsed
+      // while the user was still typing. The answer is theirs and it is not
+      // thrown away — it waits for the retry and is handed over at once.
+      const { service, cursor, userQuestions, approvals, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      await service.sendMessage(run.id, 'hello');
+      const QUESTIONS = [
+        { question: 'How deep?', options: [{ label: 'Standard' }] },
+      ];
+
+      const cancel = new AbortController();
+      const abandoned = userQuestions.ask(
+        run.id,
+        SINGLE_AGENT_NODE,
+        QUESTIONS,
+        null,
+        cancel.signal,
+      );
+      await drain();
+      const requestId = approvals.listByRun(run.id)[0]?.requestId;
+      cancel.abort();
+      await abandoned;
+
+      // Answered with NO call waiting for it.
+      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
+        true,
+      );
+      await drain();
+      // Recorded in the transcript like any other verdict — the user answered,
+      // and the card is closed on screen.
       expect(
         itemDao.items.some(
           (item) =>
-            item.kind === 'unanswerable' && item.payload.includes(requestId!),
+            item.kind === 'approval_verdict' &&
+            item.payload.includes('Standard'),
         ),
       ).toBe(true);
-      // …and no `approval_verdict`: the user never answered, so recording one
-      // would put words in their mouth.
-      expect(itemDao.items.some((i) => i.kind === 'approval_verdict')).toBe(
-        false,
-      );
-      // The registry entry is gone with it, so the badge stops saying the run
-      // is parked on a question and a late verdict is refused rather than
-      // delivered into nothing.
-      expect(approvals.awaitingFor(run.id)).toBeNull();
-      expect(approvals.resolve(run.id, requestId!, true, 'Standard')).toBe(
-        false,
-      );
-      // The turn itself is untouched — only that one call was abandoned.
-      expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(true);
+
+      expect(
+        await userQuestions.ask(run.id, SINGLE_AGENT_NODE, QUESTIONS, null),
+      ).toEqual({ status: 'answered', answer: 'Standard' });
       await settle(cursor);
     });
 
@@ -2130,6 +2190,52 @@ describe('ChatService', () => {
       );
     });
 
+    it('shelves a WORKFLOW run too — the archive is not a chat feature', async () => {
+      // REPORTED against a completed `Dev Team Manifest` row, whose only row
+      // action was Delete: shelving is a property of the run ROW, and the
+      // sidebar that reads it lists both kinds together.
+      const { service, runDao } = setup();
+      const run = await runDao.create({
+        workflowId: 'wf-1',
+        status: 'completed',
+      });
+
+      const archived = await service.archive(run.id);
+
+      expect(archived.archivedAt).not.toBeNull();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+      expect((await service.unarchive(run.id)).archivedAt).toBeNull();
+      expect((await runDao.getById(run.id))?.archivedAt).toBeNull();
+    });
+
+    it('stops a RUNNING workflow run through the registry both engines share', async () => {
+      // Its cancel cannot go through `ChatService.cancel`, which is kind-guarded
+      // — and must still happen, or a shelved run goes on spending out of
+      // sight. The registry key is the one both engines converge on.
+      const { service, runDao, registry } = setup();
+      const run = await runDao.create({
+        workflowId: 'wf-1',
+        status: 'running',
+      });
+      registry.tryClaim(run.id);
+      const cancelled = vi.fn();
+      registry.register(run.id, {
+        // Deliberately NEVER settles: the registry drops its entry when `done`
+        // does, so an already-resolved promise would leave nothing registered
+        // to cancel by the time the archive gets there.
+        done: new Promise<void>(() => undefined),
+        cancel: cancelled,
+        respondApproval: () => false,
+        sendUserMessage: () => false,
+        setApprovalMode: () => false,
+      });
+
+      await service.archive(run.id);
+
+      expect(cancelled).toHaveBeenCalled();
+      expect((await runDao.getById(run.id))?.archivedAt).not.toBeNull();
+    });
+
     it('`all` is the one scope that hides neither side', async () => {
       const { service } = setup();
       const shelved = await service.createChat({
@@ -2349,15 +2455,6 @@ describe('ChatService', () => {
       // And unarchiving is genuinely the way back, not just a row move.
       await service.unarchive(run.id);
       await expect(service.sendMessage(run.id, 'go')).resolves.toBeDefined();
-    });
-
-    it('refuses a workflow run on both routes', async () => {
-      const { service, runDao } = setup();
-      const wf = await runDao.create({ workflowId: 'wf-1' });
-      // The kind guard's own message, not a bare throw — a TypeError would
-      // satisfy `rejects.toThrow()` and tell us nothing.
-      await expect(service.archive(wf.id)).rejects.toThrow(/chat/i);
-      await expect(service.unarchive(wf.id)).rejects.toThrow(/chat/i);
     });
 
     it('404s for a run that does not exist', async () => {
@@ -5037,6 +5134,30 @@ describe('ChatService — sweeping the archive is the same one-way door', () => 
     expect(await ctx.runDao.getById(old.id)).toBeNull();
     expect(await ctx.runDao.getById(fresh.id)).not.toBeNull();
     expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([fresh.id]);
+  });
+
+  it('sweeps an archived WORKFLOW run, which the chat delete cannot touch', async () => {
+    // The other half of making workflow runs archivable: without it the
+    // retention window silently covered only chats, and a shelved workflow run
+    // was kept for the life of the install. It cannot go through `delete`,
+    // which is kind-guarded — the teardown underneath both is what runs.
+    const ctx = setup();
+    const run = await ctx.runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+      archivedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+    });
+    await ctx.itemDao.create({
+      runId: run.id,
+      seq: 0,
+      kind: 'message',
+      payload: JSON.stringify({ text: 'hi' }),
+    });
+
+    expect(await ctx.service.sweepArchived(30)).toEqual({ deleted: 1 });
+
+    expect(await ctx.runDao.getById(run.id)).toBeNull();
+    expect(ctx.itemDao.items.map((item) => item.runId)).toEqual([]);
   });
 
   it('steps over a chat it cannot tear down and still reaches the rest', async () => {

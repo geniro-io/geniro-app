@@ -74,7 +74,13 @@ import {
   hostQuestionResultText,
   readHostQuestions,
 } from '../../agents/utils/host-question';
-import { CALL_MODES, type CallEnvelope, type CallMode } from '../graphs.types';
+import {
+  CALL_MODES,
+  type CallEnvelope,
+  type CallMode,
+  MAX_AWAIT_TIMEOUT_MS,
+  MIN_AWAIT_TIMEOUT_MS,
+} from '../graphs.types';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import { closeQuietly } from '../utils/close-quietly';
 import { CallBroker } from './call-broker.service';
@@ -151,13 +157,25 @@ export class McpServerService {
     // response stream directly.
     reply.hijack();
     const res = reply.raw;
+    // Trips when this response's socket closes — the ONE signal that says a
+    // reply can no longer be delivered. `whileCancellable` beside it answers a
+    // different question: that one is the client's own
+    // `notifications/cancelled`, which a client that simply dropped the
+    // connection never gets to send. A claude CLI aborting its own fetch after
+    // ~338s is exactly that case, and it is why `await_agent` needs this
+    // rather than the cancellation map.
+    const gone = new AbortController();
     try {
-      const server = this.buildServer(runId, nodeId);
+      const server = this.buildServer(runId, nodeId, gone.signal);
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
       res.on('close', () => {
+        // BEFORE the teardown: a handler still blocked on a callee has to
+        // learn that its reader has gone while it can still decline to consume
+        // what it was waiting for.
+        gone.abort();
         closeQuietly(transport);
         closeQuietly(server);
       });
@@ -250,7 +268,15 @@ export class McpServerService {
   }
 
   /** One fresh, stateless SDK server scoped to (run, caller node). */
-  private buildServer(runId: string, nodeId: string): Server {
+  private buildServer(
+    runId: string,
+    nodeId: string,
+    /**
+     * Trips when the HTTP request being served goes away. Optional so a caller
+     * that builds a server outside a request (a test) needs no controller.
+     */
+    gone?: AbortSignal,
+  ): Server {
     const server = new Server(
       { name: 'geniro-daemon', version: this.runtime.version },
       { capabilities: { tools: {} } },
@@ -340,13 +366,24 @@ export class McpServerService {
             description:
               'Collect the result envelope of one of YOUR earlier async call_agent calls (or of a sync call that paused on a question). ' +
               'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when the callee pauses to ask; ' +
-              'the call stays collectable after you answer via answer_agent.',
+              'the call stays collectable after you answer via answer_agent. ' +
+              'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
+              '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again.',
             inputSchema: {
               type: 'object',
               properties: {
                 call_id: {
                   type: 'string',
                   description: 'The call_id an async call_agent returned.',
+                },
+                timeout_ms: {
+                  type: 'integer',
+                  minimum: MIN_AWAIT_TIMEOUT_MS,
+                  maximum: MAX_AWAIT_TIMEOUT_MS,
+                  description:
+                    `How long to wait before answering {"status":"pending"} instead, ${MIN_AWAIT_TIMEOUT_MS}-${MAX_AWAIT_TIMEOUT_MS}ms. ` +
+                    'Omit to block until the callee is done — but note an unbounded wait past a few minutes can be cut off by the transport, ' +
+                    'so prefer a window plus a second await for work you expect to be slow.',
                 },
               },
               required: ['call_id'],
@@ -385,7 +422,10 @@ export class McpServerService {
             'Use it when a choice is genuinely theirs to make — an ambiguous requirement, a decision between real alternatives, ' +
             'anything where guessing wrong would waste the work. Do NOT use it for questions you can answer from the code, ' +
             'and never to check in on something already decided. ' +
-            'The answer comes back as text; when it cannot be put to them the result says so and you continue in your reply instead.',
+            'The answer comes back as text; when it cannot be put to them the result says so and you continue in your reply instead. ' +
+            'If the call times out, the card is STILL on screen and the person may still be answering it: call this tool again with the ' +
+            'IDENTICAL title and questions to keep waiting — that re-attaches to the same card and returns their answer as soon as it ' +
+            'arrives, including one given while you were not waiting. Changing a word raises a second card and asks them twice.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1159,9 +1199,15 @@ export class McpServerService {
       } else if (name === 'await_agent') {
         envelope =
           validateAwaitAgentArgs(args) ??
-          (await this.broker.awaitAgent(runId, nodeId, {
-            call_id: args.call_id as string,
-          }));
+          (await this.broker.awaitAgent(
+            runId,
+            nodeId,
+            {
+              call_id: args.call_id as string,
+              timeout_ms: args.timeout_ms as number | undefined,
+            },
+            gone,
+          ));
       } else if (name === 'answer_agent') {
         envelope =
           validateAnswerAgentArgs(args) ??
@@ -1213,6 +1259,22 @@ function validateAwaitAgentArgs(
 ): CallEnvelope | null {
   if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
     return invalidArgs("'call_id' must be a non-empty string");
+  }
+  if (args.timeout_ms !== undefined) {
+    // Integer-checked rather than merely numeric: `setTimeout` takes a
+    // fractional or non-finite delay without complaint and fires immediately,
+    // so a NaN — which is what a model's "5 seconds" parses to — would answer
+    // `pending` on every call and read as a callee that never progresses.
+    if (
+      typeof args.timeout_ms !== 'number' ||
+      !Number.isInteger(args.timeout_ms) ||
+      args.timeout_ms < MIN_AWAIT_TIMEOUT_MS ||
+      args.timeout_ms > MAX_AWAIT_TIMEOUT_MS
+    ) {
+      return invalidArgs(
+        `'timeout_ms' must be a whole number of milliseconds between ${MIN_AWAIT_TIMEOUT_MS} and ${MAX_AWAIT_TIMEOUT_MS}`,
+      );
+    }
   }
   return null;
 }

@@ -108,6 +108,22 @@ export function runToWire(
    * workflow node's row) keep saying nothing by saying nothing.
    */
   shellsOpen = 0,
+  /**
+   * How many background SUB-AGENTS this run still has out, from the live turn
+   * state — see `ChatService.delegatesOut`.
+   *
+   * The delegate twin of {@link shellsOpen}, on every one of its reasons and
+   * with the same limitation answered the same way: derived from the OPEN
+   * thread's transcript it was knowable for one chat and no other, so a
+   * fan-out badged itself `working` while selected and `completed` the moment
+   * the user looked at another thread.
+   *
+   * It asserts nothing about the turn either, and that is the whole difference
+   * from {@link holdingFor}: a delegate whose CLI never reports an ending does
+   * not hold a turn open — nothing would ever release it — so the turn settles
+   * and this says what is still out underneath.
+   */
+  subagentsOut = 0,
 ): RunWire {
   return {
     id: run.id,
@@ -115,6 +131,7 @@ export function runToWire(
     awaiting,
     holdingFor,
     shellsOpen,
+    subagentsOut,
     title: run.title,
     agentKind: run.agentKind,
     workflowId: run.workflowId,

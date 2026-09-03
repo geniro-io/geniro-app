@@ -202,6 +202,14 @@ export interface ChatRunState {
    * and kept current by the announce, so every row reads the same fact.
    */
   shellsOut: ReadonlySet<string>;
+  /**
+   * The runs holding a background SUB-AGENT that has not reported — the
+   * delegate twin of {@link ChatRunState.shellsOut}, seeded and kept current
+   * the same way and for a sharper version of the same reason: one shipped CLI
+   * never announces a delegate's ending at all, so the transcript of the open
+   * thread could not answer this even for the chat being looked at.
+   */
+  delegatesOut: ReadonlySet<string>;
   settleSummaries: ReadonlyMap<string, string | null>;
   quietSettles: ReadonlySet<string>;
   /**
@@ -446,6 +454,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * previous value anything has to be compared against.
    */
   const [shellsOut, setShellsOut] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  /** The delegate twin — see {@link ChatRunState.delegatesOut}. */
+  const [delegatesOut, setDelegatesOut] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
   /**
@@ -862,6 +874,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         // the row is the only place the fact exists for that window.
         setShellsOut(
           new Set(all.filter((r) => r.shellsOpen > 0).map((r) => r.id)),
+        );
+        // Same seed, and it matters more here: a background delegate outlives
+        // its turn by construction and its CLI may never speak of it again, so
+        // for a window opened afterwards the row is not merely the best source
+        // but the only one there will ever be.
+        setDelegatesOut(
+          new Set(all.filter((r) => r.subagentsOut > 0).map((r) => r.id)),
         );
       })
       .catch((err: unknown) => {
@@ -1470,6 +1489,24 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
           return next;
         });
       }
+      // The delegate twin, on the identical terms: an explicit count moves it
+      // and a status transition never does, since a turn settling is exactly
+      // when a background sub-agent is still out.
+      if (event.subagentsOut !== undefined) {
+        const out = event.subagentsOut > 0;
+        setDelegatesOut((prev) => {
+          if (out === prev.has(event.runId)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          if (out) {
+            next.add(event.runId);
+          } else {
+            next.delete(event.runId);
+          }
+          return next;
+        });
+      }
       // The run row's own context reading, carried by every status broadcast
       // rather than only by the live deltas of the room this client happens to
       // be in. Without it a thread that worked while the user was on another
@@ -1620,6 +1657,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activities,
     holding,
     shellsOut,
+    delegatesOut,
     settleSummaries,
     quietSettles,
     deadRequestKeys,

@@ -189,6 +189,14 @@ export class ClaudeAdapter extends AgentAdapter {
        * --permission-prompt-tool stdio` offers this tool, and its request
        * arrives as `can_use_tool` with `requires_user_interaction: true`.
        */
+      shells: {
+        // Null because this CLI REPORTS its detachments: a backgrounded command
+        // arrives as a `background_work` bracket and its ending arrives on the
+        // same channel (`task_updated` / `task_notification`, measured 2026-08-24
+        // on 2.1.237 against a 45-second `sleep`). Asking the OS as well would
+        // open every one of them a second time.
+        unreportedDetachReason: null,
+      },
       questionToolName: 'AskUserQuestion',
       /**
        * True: the tool is wired only when the turn HAS a permission-prompt

@@ -255,6 +255,24 @@ export class CursorAcpAdapter extends AgentAdapter {
        * {@link CURSOR_ASK_QUESTION_METHOD} — which is why the driver gates on
        * a payload it can actually read and otherwise declines as before.
        */
+      shells: {
+        // MEASURED on 2026.08.31-4057e58, driven through this daemon with the
+        // raw ACP frames captured: asked for `sleep 300` in the background, it
+        // answered the tool call `status: "completed"` with
+        // `rawOutput: {exitCode: 0, stdout: "", stderr: ""}` three seconds in,
+        // while the process ran its full four minutes. Nothing else on the wire
+        // mentions it — the bundle carries the same seven `cursor/*` extension
+        // methods and no background one — it writes nothing to disk about it,
+        // and although its own ACP SDK ships the `terminal/*` client methods
+        // this CLI never calls them (no caller of `createTerminal`, no read of
+        // a `terminal` client capability anywhere in the bundle), so the client
+        // cannot host the process either. The process table is what is left,
+        // and it is enough: the command runs under the CLI child geniro
+        // spawned.
+        unreportedDetachReason:
+          'cursor-agent reports a backgrounded command as finished, so whether ' +
+          'it is still running is read from the process table instead',
+      },
       questionToolName: CURSOR_ASK_QUESTION_METHOD,
       /**
        * False, unlike claude. The question arrives as a JSON-RPC request the

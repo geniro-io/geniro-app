@@ -140,7 +140,32 @@ export function liveTextKey(
   nodeId: string | null,
   ownerKey: string | null = null,
 ): string {
-  return ownerKey ?? nodeId ?? CHAT_LIVE_KEY;
+  // NO NODE ID means the 1:1 chat, whatever owner key rides with it — and one
+  // always does: the daemon publishes `SINGLE_AGENT_NODE` ('agent'), the
+  // pseudo-node a chat's own rows are filed under, as the owner of its live
+  // plane. Reading that owner key as the map key is how this twin drifted from
+  // its producer: the sentinel here was renamed from that very word to a
+  // NUL-prefixed one (see {@link CHAT_LIVE_KEY}), and nothing on the daemon
+  // side changed, so a chat's deltas landed under `agent` while every reader
+  // that has no event to derive a key from — `workingAgents`,
+  // `awaitingAnswer`, the context meter's live source — went on asking for the
+  // sentinel. Nothing failed to compile, which is what the TWIN PARSER block
+  // above warns about.
+  //
+  // REPORTED as a chat showing `Thinking… · 2s` and `Working… · 15s` at the
+  // same time, and reproduced in the running app: `withLiveText` suppresses the
+  // working fallback for an agent that already has a live row, by KEY, and the
+  // two keys could never match. The context ring's live source was the quieter
+  // half of the same drift.
+  //
+  // The discriminator is exact rather than a guess: a workflow node's delta
+  // always carries its node id (`GraphExecutorService` passes `node.id`), so a
+  // node literally named `agent` — the collision the sentinel exists for —
+  // still keys as itself.
+  if (nodeId === null) {
+    return CHAT_LIVE_KEY;
+  }
+  return ownerKey ?? nodeId;
 }
 
 /**

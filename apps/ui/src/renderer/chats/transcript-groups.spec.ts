@@ -14,6 +14,7 @@ import {
   pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
   subagentBlockStatus,
+  subagentSpokeSince,
   toolCallSummary,
   type ToolGroupEntry,
   toolGroupOperations,
@@ -1982,18 +1983,16 @@ describe('buildSubagentBlocks', () => {
     expect(subagentBlockStatus(block)).toBe('completed');
   });
 
-  it('says UNKNOWN, and goes on saying it, once a declared-open delegate has gone quiet', () => {
-    // The oscillation, and the whole of it: `endedByRun` used to be the only
-    // thing that could end a declared-open delegate, and it reads the RUN row —
-    // which goes back to unsettled the instant the next turn opens. So one
-    // unchanged cursor delegate read `cancelled` after its turn, `running`
-    // again the moment the user typed anything, and `cancelled` again when that
-    // turn ended. Reported with a screenshot of each of the three.
+  it('keeps a declared-open delegate RUNNING once its turn has ended', () => {
+    // The turn ending is a fact about the AGENT, never about the delegates it
+    // left running. Reading it as one dropped a cursor fan-out of nine
+    // reviewers out of every "what is working" surface the second the agent
+    // stopped speaking — the composer shelf's `Sub-agents` chip counts
+    // `running` alone — while all nine were still at work.
     //
-    // The word is `unknown` rather than either of them because both are claims
-    // nothing supports: the CLI said the work outlives its launching call and
-    // then never said how it ended, and the process it runs on is kept between
-    // turns, so it may well still be going.
+    // It is also what retires the reported oscillation rather than merely
+    // muting it: the answer no longer moves when a turn opens or closes,
+    // because it no longer reads the turn.
     const entries = fold([
       call('Task', 'task-bg', { description: 'Review dimension: bugs' }),
       result('task-bg', 'Task started in the background'),
@@ -2005,11 +2004,57 @@ describe('buildSubagentBlocks', () => {
     expect(block.closed).toBe(true);
     // Settled run…
     expect(subagentBlockStatus(block, Date.parse('2026-09-01T11:00:00Z'))).toBe(
-      'unknown',
+      'running',
     );
-    // …and a LATER turn running (no settle) must give the SAME answer. This is
-    // the assertion that fails on a reading driven by the run row alone.
-    expect(subagentBlockStatus(block)).toBe('unknown');
+    // …and a LATER turn running (no settle) must give the SAME answer.
+    expect(subagentBlockStatus(block)).toBe('running');
+  });
+
+  it('ends that delegate on the outcome the daemon states, and only on it', () => {
+    // The other half, and the reason the arm above is safe rather than a latch:
+    // `ChatService.closeStrandedDelegates` writes this row when the agent
+    // session closes — the moment a cursor delegate, which runs inside that
+    // very process, has demonstrably stopped — and once more at boot for the
+    // closes a SIGKILLed daemon never wrote. Without a spec here, "declared
+    // open is running" would pass just as well as a reading that can never end.
+    const entries = fold([
+      call('Task', 'task-bg', { description: 'Review dimension: bugs' }),
+      result('task-bg', 'Task started in the background'),
+      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      item('turn_complete', {}),
+      item('subagent_info', {
+        id: 'task-bg',
+        backgroundOpen: false,
+        backgroundOutcome: 'stopped',
+      }),
+    ]);
+
+    const block = onlyBlock(entries);
+    // Whatever the run row says, and on both readings — the ending was STATED.
+    expect(subagentBlockStatus(block)).toBe('stopped');
+    expect(subagentBlockStatus(block, Date.parse('2026-09-01T11:00:00Z'))).toBe(
+      'stopped',
+    );
+  });
+
+  it('separates a delegate WRITING rows from one merely declared out', () => {
+    // What decides the badge's wording: an audible delegate is the run
+    // `running`, a silent one is `held` — the same reading a background
+    // command gets, because in both cases the agent itself has stopped. The
+    // predicate no longer decides anything about the WORK, which is what the
+    // two specs above pin.
+    const settledAt = Date.parse('2026-09-01T11:00:00Z');
+    const quiet = onlyBlock(
+      fold([
+        call('Task', 'task-bg', { description: 'Review dimension: bugs' }),
+        result('task-bg', 'Task started in the background'),
+        item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
+      ]),
+    );
+
+    expect(subagentSpokeSince(quiet, settledAt)).toBe(false);
+    // A run that has not settled is all live, so everything in it is audible.
+    expect(subagentSpokeSince(quiet, null)).toBe(true);
   });
 
   it('goes back to running when that delegate produces a row after the turn ended', () => {
@@ -2034,37 +2079,6 @@ describe('buildSubagentBlocks', () => {
     const block = onlyBlock(entries);
     expect(block.closed).toBe(false);
     expect(subagentBlockStatus(block)).toBe('running');
-  });
-
-  it('takes the spinner off a background delegate that never reported, once the RUN settles', () => {
-    // The latch: an open `background_work` unit used to outrank everything, so
-    // a delegate whose CLI died before reporting kept the block — and with it
-    // the run badge, and with THAT the turn-end notification — running for
-    // good. An unsettled unit under a settled run is unreported work, not
-    // running work: the daemon holds the turn open precisely so the report can
-    // arrive, and settles anyway when it never does.
-    const entries = fold([
-      call('Task', 'task-bg', {
-        description: 'Stress-test the two approaches',
-      }),
-      result('task-bg', 'Task started in the background'),
-      item('subagent_info', { id: 'task-bg', backgroundOpen: true }),
-    ]);
-
-    const block = onlyBlock(entries);
-    expect(subagentBlockStatus(block)).toBe('running');
-    // UNKNOWN, and it has been two other things before it. It asserted
-    // `completed` first — the fall-through to `returned`, the launching call
-    // coming back — which is an outcome nobody reported: the CLI said the work
-    // outlives that call and then never said how it ended. It then asserted
-    // `stopped`, which was true while geniro terminated the CLI's group at the
-    // turn's exit grace and is not any more, the process being kept between
-    // turns. What survives both corrections is the thing this pins: whatever
-    // the answer is, it is NOT `running`, because nothing here is producing
-    // rows and a spinner over it latches the run badge on for good.
-    expect(subagentBlockStatus(block, Date.parse('2026-08-18T10:00:00Z'))).toBe(
-      'unknown',
-    );
   });
 
   it('keeps it running while it is still producing rows after that settle', () => {

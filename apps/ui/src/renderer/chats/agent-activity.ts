@@ -249,10 +249,8 @@ export function subagentThreadsByAgent(
       kind: 'subagent',
       label: subagentTitle(block),
       // `stopped` is the RUN vocabulary's `cancelled` — the same translation
-      // `block-shell.tsx`'s own table makes — while `unknown` is already a
-      // member of that vocabulary and passes through as itself. Both are spelled
-      // rather than defaulted, so a new derivation state cannot arrive here
-      // wearing a spinner.
+      // `block-shell.tsx`'s own table makes. Spelled rather than defaulted, so
+      // a new derivation state cannot arrive here wearing a spinner.
       status:
         status === 'completed'
           ? 'completed'
@@ -260,9 +258,7 @@ export function subagentThreadsByAgent(
             ? 'failed'
             : status === 'stopped'
               ? 'cancelled'
-              : status === 'unknown'
-                ? 'unknown'
-                : 'running',
+              : 'running',
       sessionId: null,
     });
     byAgent.set(key, threads);

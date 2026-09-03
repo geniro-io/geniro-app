@@ -957,12 +957,43 @@ function lastRowAtOf(list: readonly TranscriptEntry[]): number | null {
  * the transcript does not support.
  *
  * `runSettledAt` is WHEN the run settled — see {@link RunSettleAt}, and
- * {@link RunSettledContext} for why the moment and not merely the fact.
+ * {@link RunSettledContext} for why the moment and not merely the fact. It
+ * decides the fate of a delegate NOTHING was ever declared about; a delegate
+ * the CLI declared BACKGROUND is decided by what was declared, and the run's
+ * own ending says nothing about it.
  */
+/**
+ * Whether a delegate has produced a row SINCE the run settled — "is it
+ * audible", not "is it over".
+ *
+ * The two questions were one predicate until the daemon took over stating a
+ * delegate's ending: silence past the settle used to mean the work was
+ * unreportable and the block was downgraded for it. It no longer decides
+ * anything about the WORK — a declared-open delegate is working until an
+ * outcome says otherwise ({@link subagentBlockStatus}) — and what it decides
+ * instead is the BADGE's wording: a delegate writing rows is the run `running`,
+ * while one merely declared out is `held`, the same reading a background
+ * command gets. A run that has not settled is all live, so everything is
+ * audible; a settle nobody can place makes nothing audible, which is the
+ * conservative half of {@link RunSettleAt} in its new job.
+ */
+export function subagentSpokeSince(
+  block: SubagentBlockEntry,
+  runSettledAt: RunSettleAt = null,
+): boolean {
+  if (runSettledAt === null) {
+    return true;
+  }
+  if (runSettledAt === 'unknown') {
+    return false;
+  }
+  return block.lastRowAt !== null && block.lastRowAt > runSettledAt;
+}
+
 export function subagentBlockStatus(
   block: SubagentBlockEntry,
   runSettledAt: RunSettleAt = null,
-): 'running' | 'unknown' | BackgroundOutcome {
+): 'running' | BackgroundOutcome {
   if (block.failed) {
     return 'failed';
   }
@@ -986,40 +1017,6 @@ export function subagentBlockStatus(
     (runSettledAt === 'unknown' ||
       block.lastRowAt === null ||
       block.lastRowAt <= runSettledAt);
-  // Ahead of `returned`, and ONLY when the CLI has actually said so: a delegate
-  // nobody is waiting for has its launching call answered immediately, so the
-  // return says the delegation was accepted rather than that the work is over.
-  // Ranked below `failed` because a delegate that errored is finished whatever
-  // its lifecycle channel last announced.
-  //
-  // And ranked below the RUN settling, which it did not used to be. An open
-  // `background_work` unit is evidence of a delegate running only while the CLI
-  // is still able to report on it: the daemon holds the turn open precisely so
-  // that report can arrive, and it settles anyway when the unit never reports —
-  // a released hold, or a process that died with the delegate still out. So an
-  // unsettled unit under a settled run is UNREPORTED work, not running work,
-  // and reading it as running latched the badge on for good: measured on this
-  // tree with a CLI that printed `task_started` and exited, the daemon row read
-  // `completed` while the header, the sidebar row and the block all read
-  // `running` — with the process gone, forever. That latch is also what
-  // swallowed the turn-end notification, since the run never crossed into a
-  // settled state for the rules to see.
-  // `closed` joins `endedByRun` here, and it is the PERMANENT half of the pair:
-  // this delegate's own turn has ended, which no later turn can undo. Reading
-  // the run row alone is the reported oscillation — it goes back to unsettled
-  // the moment the NEXT turn opens, so one unchanged cursor delegate read
-  // `cancelled` after its turn, `running` again the second the user typed
-  // anything, and `cancelled` again when that turn ended. Three states of one
-  // badge, none of them about the delegate; REPORTED with a screenshot of each.
-  //
-  // What the app knows past that point is nothing, which is what the `unknown`
-  // arm below says. It is deliberately NOT a claim that the delegate died: with
-  // the CLI's process now kept between a run's turns for both agents, a
-  // delegate left out really can go on working — it simply never says so again
-  // on this wire.
-  if (block.backgroundOpen === true && !endedByRun && !block.closed) {
-    return 'running';
-  }
   // The CLOSING half of that same channel, and reading only the opening half is
   // what made a long conversation sprout delegates that run forever. A block is
   // admitted by the delegate's OWN rows, while `returned` comes from the
@@ -1048,28 +1045,36 @@ export function subagentBlockStatus(
   if (block.backgroundOpen === false) {
     return 'completed';
   }
-  // Declared still out, never closed, and its own turn is over — so this is the
-  // end of what can be said about it, and saying that is the answer.
+  // DECLARED STILL OUT, and nothing has said otherwise — so it is working, and
+  // the run settling is not evidence against that.
   //
-  // The two alternatives are each a claim nothing supports. `completed` is what
-  // `returned` would give it below, and it is wrong by construction: a
-  // backgrounded delegate's launching call is answered within the second, so
-  // its return says the delegation was accepted (REPORTED as ten reviewers each
-  // reading `took 0s · completed` while every one of them was working).
-  // `stopped` is what the tail gave it, and it USED to be true — geniro
-  // terminated the CLI's group shortly after the turn settled, so whatever was
-  // out really had been cut off. That is no longer so: the process is kept
-  // between turns, and a delegate on it may well still be running. What has not
-  // changed is that cursor-agent announces a background delegate's ending
-  // nowhere (measured across 70s of listening past the turn's own end), so
-  // there is no third signal to wait for.
+  // This used to read the turn's own ending: `endedByRun`/`closed` downgraded
+  // such a delegate to `unknown` the instant its turn settled, which dropped it
+  // out of every "what is working" surface — the composer shelf's `Sub-agents`
+  // chip counts `running` alone. REPORTED against a cursor fan-out of nine
+  // reviewers that vanished from the shelf the second the agent stopped
+  // speaking, with all nine still at work. The turn ending is a fact about the
+  // AGENT, never about the delegates it left running; the doc block below the
+  // old arm said as much in its own last sentence and then acted on the turn
+  // anyway.
+  //
+  // What makes the plain reading safe now is that the DAEMON always states the
+  // ending. A cursor delegate lives inside the ACP process that launched it, so
+  // when that session closes the delegate has demonstrably stopped, and
+  // `ChatService.closeStrandedDelegates` writes `backgroundOutcome: 'stopped'`
+  // for each one still out — at the close, and once more at boot for the closes
+  // a SIGKILLed daemon never wrote. So "declared out" can no longer outlive the
+  // work: it is answered above, by a stated outcome, rather than guessed at
+  // here. That is also what retires the old `unknown` arm, and with it the
+  // reported oscillation it was written for — a delegate's status no longer
+  // moves when a turn opens or closes, because it no longer reads the turn.
   if (block.backgroundOpen === true) {
-    return 'unknown';
+    return 'running';
   }
   // `returned` is the launching call coming back, which for a delegate the CLI
   // declared still out means nothing — hence the arm above, which takes those
   // before this one is reached.
-  if (block.returned && block.backgroundOpen !== true) {
+  if (block.returned) {
     return 'completed';
   }
   return block.closed || endedByRun ? 'stopped' : 'running';

@@ -1927,6 +1927,17 @@ export interface RunStatusEvent {
    */
   shellsOpen?: number;
   /**
+   * How many background SUB-AGENTS this run still has out, or `undefined` when
+   * this event says nothing about it.
+   *
+   * Three states on {@link shellsOpen}'s exact terms, and a DISPLAY fact like
+   * it: such a delegate does not hold a turn open either, so nothing acts on
+   * this and the composer must not read it to decide whether a message queues.
+   * It exists so a row can say "the agent has finished and the sub-agents it
+   * launched are still out" whether or not that thread is the one open.
+   */
+  subagentsOut?: number;
+  /**
    * When this run's FETCHED spend last CHANGED — absent on every announce that
    * did not change it, which is all but one producer.
    *
@@ -2484,6 +2495,26 @@ export const RunWireSchema = z.object({
     .min(0)
     .describe(
       'Detached commands this run still has running; 0 when none are out',
+    ),
+  /**
+   * Background SUB-AGENTS this run still has out.
+   *
+   * On the snapshot for every reason {@link shellsOpen} is, and it exists
+   * because one shipped CLI never reports a delegate's ending at all: cursor
+   * declares the launch and says nothing again, so the transcript alone cannot
+   * end one and every surface that folded it out of the open thread's items
+   * could only answer about the chat being looked at.
+   *
+   * Like a shell, it says nothing about whether the turn is still going — such
+   * a delegate deliberately does not hold one open, because nothing would ever
+   * release the hold.
+   */
+  subagentsOut: z
+    .number()
+    .int()
+    .min(0)
+    .describe(
+      'Background sub-agents this run still has out; 0 when none are out',
     ),
   title: z.string().nullable(),
   agentKind: AgentKindSchema.nullable(),

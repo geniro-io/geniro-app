@@ -198,6 +198,7 @@ import {
   type SubagentBlockEntry,
   subagentBlockStatus,
   subagentNamed,
+  subagentSpokeSince,
   subagentTitle,
   withLiveText,
   workflowCardsOf,
@@ -850,6 +851,7 @@ export function Chats({
     activities,
     holding,
     shellsOut,
+    delegatesOut,
     settleSummaries,
     quietSettles,
     deadRequestKeys,
@@ -4595,10 +4597,24 @@ export function Chats({
     () => (runRowStopped ? settleMomentOf(activeRun, items) : null),
     [runRowStopped, activeRun, items],
   );
+  /**
+   * A delegate of this run that is AUDIBLE — still writing rows.
+   *
+   * Narrowed from "is any delegate out", and the split is the whole of it: a
+   * delegate writing rows is the run `running` (that is work happening,
+   * whatever the stale row says), while one the CLI merely declared out and has
+   * said nothing about since is `held`, which the run ROW answers for every
+   * chat at once (see `subagentsOut` below). Cursor's background delegates are
+   * permanently the second kind — their steps never reach this wire at all —
+   * so collapsing the two put a spinner and the word `running` over an agent
+   * that had finished speaking, and swallowed its turn-end notification with it.
+   */
   const subagentRunning = useMemo(
     () =>
       collectSubagentBlocks(durableEntries).some(
-        (block) => subagentBlockStatus(block, runStoppedAt) === 'running',
+        (block) =>
+          subagentBlockStatus(block, runStoppedAt) === 'running' &&
+          subagentSpokeSince(block, runStoppedAt),
       ),
     [durableEntries, runStoppedAt],
   );
@@ -4644,9 +4660,22 @@ export function Chats({
             // fact the unfocused rows read, which is the whole of the
             // blinking fix. See {@link rowRunStatus}.
             shellsRunning: shellsOut.has(activeRun.id),
+            // Row-carried like the shells beside it, and for the identical
+            // reason: derived from THIS thread's transcript it would be
+            // knowable for the open chat and no other, so the badge would
+            // change when the user looked away.
+            subagentsOut: delegatesOut.has(activeRun.id),
           })
         : 'pending',
-    [activeRun, streaming, awaitingAnswer, subagentRunning, holding, shellsOut],
+    [
+      activeRun,
+      streaming,
+      awaitingAnswer,
+      subagentRunning,
+      holding,
+      shellsOut,
+      delegatesOut,
+    ],
   );
   /**
    * The settle moment the transcript reads — WHEN this run stopped, or null
@@ -5793,6 +5822,7 @@ export function Chats({
         // Row-carried like the hold below, which is the whole point of it
         // being on the wire — see this callback's own doc.
         shellsRunning: shellsOut.has(run.id),
+        subagentsOut: delegatesOut.has(run.id),
         // Row-carried for every run, not just the focused one: seeded from the
         // run list's own `holdingFor` and then kept current by the live
         // announce, which is what makes it right for a thread the user is not

@@ -164,6 +164,13 @@ bootstrapper.addExtension(
       await app.get(ChatService).reconcileOrphanedRuns();
       await app.get(GraphExecutorService).reconcileOrphanedRuns();
 
+      // Close the background sub-agents a prior daemon left declared out. Their
+      // ordinary writer is the agent session closing, which runs in-process, so
+      // a SIGKILL leaves them open forever — a settled chat that goes on
+      // reporting delegates at work. No session can exist this early, so every
+      // open delegate on disk is stranded by construction.
+      await app.get(ChatService).reconcileStrandedDelegates();
+
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already
       // named", so without this every run made before it keeps saying which

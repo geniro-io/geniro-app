@@ -108,6 +108,7 @@ function apiReturning(
     setMcpServerEnabledDto: {
       agent: CliKind;
       cwd: string;
+      configDir?: string;
       server: string;
       enabled: boolean;
     };
@@ -545,7 +546,7 @@ describe('useAgentMcp — the toggle', () => {
     await settle();
 
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -563,6 +564,59 @@ describe('useAgentMcp — the toggle', () => {
       // same budget.
       expect.objectContaining({ signal: expect.anything() }),
     );
+  });
+
+  it('names the profile the row was listed under, and lands the answer on it', async () => {
+    // Two failures with one cause, so both are asserted. The write used to
+    // carry no profile at all, which had the daemon edit the CLI's DEFAULT
+    // config while the rows on screen came from this one; and the answer was
+    // pinned to the default-profile scope, so the card the switch was pressed
+    // on kept showing the state the user had just left.
+    const profileScope: AgentMcpScope = {
+      agent: 'claude',
+      configDir: '/profiles/work',
+    };
+    const write = vi.fn(() =>
+      Promise.resolve({
+        servers: [row('sentry', true)],
+        unavailableReason: null,
+      }),
+    );
+    const get = mount(
+      apiReturning(
+        () =>
+          Promise.resolve({
+            servers: [row('sentry', false)],
+            unavailableReason: null,
+          }),
+        write,
+      ),
+      [profileScope],
+      '/proj',
+    );
+    await settle();
+
+    act(() => {
+      get().setEnabled(profileScope, 'sentry', false);
+    });
+    await settle();
+
+    expect(write).toHaveBeenCalledWith(
+      {
+        setMcpServerEnabledDto: {
+          agent: 'claude',
+          cwd: '/proj',
+          configDir: '/profiles/work',
+          server: 'sentry',
+          enabled: false,
+        },
+      },
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+    expect(
+      get().byScope.get(scopeKey('claude', '/profiles/work'))?.servers[0]
+        ?.disabled,
+    ).toBe(true);
   });
 
   it('renders the listing the daemon returned, not the one it asked for', async () => {
@@ -591,7 +645,7 @@ describe('useAgentMcp — the toggle', () => {
     );
 
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -631,7 +685,11 @@ describe('useAgentMcp — the toggle', () => {
     await settle();
 
     act(() => {
-      ui.get().setEnabled('claude', 'sentry', false);
+      ui.get().setEnabled(
+        { agent: 'claude', configDir: null },
+        'sentry',
+        false,
+      );
     });
     // Away and back while the write is still out: folder B's read never
     // answers, and returning to A starts a second read of A.
@@ -675,7 +733,7 @@ describe('useAgentMcp — the toggle', () => {
     await settle();
 
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -695,14 +753,14 @@ describe('useAgentMcp — the toggle', () => {
     );
     await settle();
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
     expect(get().toggleError).not.toBeNull();
 
     fail = false;
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -720,7 +778,7 @@ describe('useAgentMcp — the toggle', () => {
     );
     await settle();
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -741,7 +799,7 @@ describe('useAgentMcp — the toggle', () => {
     await settle();
 
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     await settle();
 
@@ -764,7 +822,11 @@ describe('useAgentMcp — the toggle', () => {
     ui.show([claudeScope], '/proj-a');
     await settle();
     act(() => {
-      ui.get().setEnabled('claude', 'sentry', false);
+      ui.get().setEnabled(
+        { agent: 'claude', configDir: null },
+        'sentry',
+        false,
+      );
     });
     ui.show([claudeScope], '/proj-b');
     await settle();
@@ -798,7 +860,7 @@ describe('useAgentMcp — the toggle', () => {
     expect(get().loading).toBe(false);
 
     act(() => {
-      get().setEnabled('claude', 'sentry', false);
+      get().setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     expect(get().loading).toBe(true);
 
@@ -925,7 +987,7 @@ describe('useAgentMcp — the read waits until something is showing it', () => {
     expect(latest.loading).toBe(false);
 
     act(() => {
-      latest.setEnabled('claude', 'sentry', false);
+      latest.setEnabled({ agent: 'claude', configDir: null }, 'sentry', false);
     });
     expect(latest.loading).toBe(true);
 

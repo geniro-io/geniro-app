@@ -106,6 +106,25 @@ function keyOf(
 }
 
 /**
+ * The prefix every key for one (agent, folder, PROFILE) shares, whatever binary
+ * version produced it.
+ *
+ * The narrower twin of {@link keyPrefixOf}, and the TOGGLE's own. A profile
+ * carries its own disabled list, so a switch flipped under one must not restate
+ * itself in another profile's cached reading: that entry describes a file this
+ * write never touched, and asserting it there is the same confidently-wrong
+ * answer the key's own dimensions exist to prevent. Here rather than at the
+ * call site for the reason its twin gives.
+ */
+function keyProfilePrefixOf(
+  agent: AgentKind,
+  cwd: string,
+  configDir: string | null,
+): string {
+  return `${keyPrefixOf(agent, cwd)}${configDir ?? ''}\u0000`;
+}
+
+/**
  * The prefix every key for one (agent, folder) shares, whatever profile or
  * binary version produced it.
  *
@@ -661,8 +680,16 @@ export class AgentMcpService {
     cwd: string,
     server: string,
     enabled: boolean,
+    options: { configDir?: string | null } = {},
   ): Promise<AgentMcpListingWire> {
     const projectDir = resolveValidCwd(cwd);
+    // Validated exactly as {@link list} validates it, and for the same reason:
+    // a profile is part of the QUESTION, and here also part of the answer — it
+    // decides which file the write lands in.
+    const profile =
+      options.configDir === undefined || options.configDir === null
+        ? null
+        : resolveValidConfigDir(options.configDir);
     const adapter = this.adapters.for(agent);
     // Its OWN field, not the listing's: a CLI that can be listed but not
     // switched (or the reverse) would otherwise be given a reason that answers
@@ -674,10 +701,13 @@ export class AgentMcpService {
         `${agent} cannot be told which MCP servers to load: ${toggleUnavailable}`,
       );
     }
-    // No profile on this route: the toggle DTO names none, so the write and
-    // this read describe the CLI's default account — the state this route has
-    // always acted on.
-    const facts = await adapter.readMcpFolderFacts(projectDir, null);
+    // The SAME profile the write below lands in. It was hardcoded null while
+    // the toggle DTO named no profile, which made this route read the default
+    // account's locked-off list and then edit that account's file — so under a
+    // custom config directory the switch moved on screen, changed nothing for
+    // the profile the panel was showing, and rewrote the default profile's
+    // disabled list instead.
+    const facts = await adapter.readMcpFolderFacts(projectDir, profile);
     if (enabled && facts.lockedOff.includes(server)) {
       throw new BadRequestException(
         'MCP_SERVER_DISABLED_BY_USER',
@@ -686,6 +716,12 @@ export class AgentMcpService {
     }
     try {
       await adapter.setMcpServerEnabled(projectDir, server, enabled, {
+        // Which profile's state to write. An adapter whose mechanism is a FILE
+        // resolves the path from it; one whose mechanism is a subcommand run in
+        // the folder has no per-profile state to aim at and ignores it, exactly
+        // as its `readMcpFolderFacts` ignores the same argument — so the read
+        // and the write stay describing one thing on both CLIs.
+        configDir: profile,
         // Registered like the listing's child, for the same reason: an adapter
         // whose mechanism is a subcommand rather than a file spawns a process,
         // and every child this daemon starts must be reapable on shutdown.
@@ -745,7 +781,7 @@ export class AgentMcpService {
         await Promise.resolve()
           .then(() =>
             adapter.readMcpServerHealth(
-              { cwd: projectDir, server },
+              { cwd: projectDir, server, configDir: profile },
               {
                 onSpawn: (child, spawnInfo) =>
                   this.processes.register(
@@ -766,11 +802,14 @@ export class AgentMcpService {
             return null;
           })
       : null;
-    this.patchCachedStatus(agent, projectDir, server, enabled, probed);
+    this.patchCachedStatus(agent, projectDir, profile, server, enabled, probed);
     // BLOCKING, unlike the panel's read: this route's entire answer is the
     // listing that resulted from the write, so handing back empty rows with
     // `pending` would leave the caller nothing to render the toggle against.
-    const read = await this.readServers(agent, projectDir, { blocking: true });
+    const read = await this.readServers(agent, projectDir, {
+      blocking: true,
+      configDir: profile,
+    });
     // Re-read rather than reusing `facts`: the write above changed exactly the
     // half `facts` reports, so the pre-write copy would render the state the
     // user just left.
@@ -778,7 +817,7 @@ export class AgentMcpService {
       read.adapter,
       agent,
       read.projectDir,
-      null,
+      profile,
       read.result,
       // This read BLOCKED, so its emptiness is settled: filling it from the
       // config here would put rows back that the CLI has just reported gone.
@@ -929,6 +968,15 @@ export class AgentMcpService {
   private patchCachedStatus(
     agent: AgentKind,
     cwd: string,
+    /**
+     * The profile the write landed in. Scoped rather than folder-wide, unlike
+     * {@link patchCachedHealth}: this restates the DISABLED flag, which a
+     * profile owns its own copy of, so painting it across every profile's
+     * cached reading would assert a change in files this write never opened.
+     * The renderer re-reads the folder's other profiles after a toggle, which
+     * is what corrects a CLI whose disabled state really is folder-wide.
+     */
+    configDir: string | null,
     server: string,
     enabled: boolean,
     /**
@@ -938,7 +986,7 @@ export class AgentMcpService {
      */
     probed: AgentMcpServerHealth | null,
   ): void {
-    const prefix = keyPrefixOf(agent, cwd);
+    const prefix = keyProfilePrefixOf(agent, cwd, configDir);
     const health: AgentMcpServerHealth = enabled
       ? (probed ?? { status: 'unknown', detail: null })
       : { status: 'disabled', detail: null };

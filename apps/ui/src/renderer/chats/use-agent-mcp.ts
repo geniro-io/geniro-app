@@ -79,7 +79,14 @@ export interface AgentMcpState {
    */
   recheck: (scope: AgentMcpScope, server: string) => Promise<void>;
   /**
-   * Switch one server on or off for one CLI kind in the run's folder.
+   * Switch one server on or off for one SCOPE — a CLI and the profile the row
+   * was listed under — in the run's folder.
+   *
+   * A scope rather than a bare CLI kind, matching {@link recheck} beside it,
+   * because the profile decides which file the daemon writes: with only the
+   * kind to go on, a switch pressed on a card running under a config directory
+   * edited the CLI's DEFAULT profile instead and changed nothing for the rows
+   * on screen.
    *
    * Deliberately NOT optimistic. The daemon refuses a toggle it cannot honour
    * — a non-project server, or one the user disabled in their own settings —
@@ -94,7 +101,7 @@ export interface AgentMcpState {
    * ever becomes visible (a first read after the TTL lapses re-dials, and
    * that one is not sub-second).
    */
-  setEnabled: (kind: CliKind, server: string, enabled: boolean) => void;
+  setEnabled: (scope: AgentMcpScope, server: string, enabled: boolean) => void;
   /** The last toggle failure, or null. Cleared by dismissing or by a new try. */
   toggleError: string | null;
   dismissToggleError: () => void;
@@ -371,7 +378,7 @@ export function useAgentMcp(
   );
 
   const setEnabled = useCallback(
-    (kind: CliKind, server: string, enabled: boolean) => {
+    (scope: AgentMcpScope, server: string, enabled: boolean) => {
       if (cwd === null) {
         return;
       }
@@ -381,7 +388,18 @@ export function useAgentMcp(
       void agentsApi
         .setAgentMcpServerEnabled(
           {
-            setMcpServerEnabledDto: { agent: kind, cwd, server, enabled },
+            setMcpServerEnabledDto: {
+              agent: scope.agent as AgentKind,
+              cwd,
+              server,
+              enabled,
+              // The profile the row was LISTED under, so the daemon writes the
+              // file the panel took its rows from. Omitted rather than sent as
+              // null for the CLI's own default, on the read path's own rule.
+              ...(scope.configDir === null
+                ? {}
+                : { configDir: scope.configDir }),
+            },
           },
           // Its handler recomposes the listing, which re-dials on a lapsed
           // cache — so this write reaches the same slow path the read does.
@@ -396,12 +414,13 @@ export function useAgentMcp(
             if (prev.scope !== readScope) {
               return prev;
             }
-            // Applied ONLY to the default-profile scope of that CLI, because that
-            // is the one the write's answer describes: the toggle route takes
-            // no plugin directory, so its recomposed listing is the folder's
-            // servers alone. Painting it onto a scope that carries a plugin
-            // would drop exactly the servers that plugin contributes.
-            const key = mcpScopeKey({ agent: kind, configDir: null });
+            // The scope the write was ADDRESSED to, which is the one its
+            // recomposed listing describes. It was pinned to the default-profile
+            // scope while the toggle route took no config directory and so could
+            // only ever answer for that profile — which meant a switch pressed
+            // on a profile's card painted its answer onto the DEFAULT's rows and
+            // left the profile's own showing the state the user had just left.
+            const key = mcpScopeKey(scope);
             if (!prev.byScope.has(key)) {
               return prev;
             }
@@ -409,15 +428,22 @@ export function useAgentMcp(
             byScope.set(key, listing);
             return { scope: prev.scope, byScope };
           });
-          // Any OTHER scope of that CLI now carries a stale `disabled` flag —
-          // the store is per (agent, folder), so one toggle applies to all of
-          // them. A plain re-read corrects them off the daemon's cache.
+          // Any OTHER profile of that CLI may now carry a stale `disabled`
+          // flag: whether the switched state is per-profile or folder-wide is
+          // the CLI's own business (claude keeps it inside the config
+          // directory, cursor's subcommand acts on the folder), and the daemon
+          // now patches only the profile it actually wrote. A plain re-read is
+          // what settles the rest, off the daemon's own cache.
           //
           // Only when such a scope EXISTS. With the single scope every chat
           // and most workflows have, the write's own answer is already the
           // whole truth, and re-reading would spend a round trip to replace it
           // with a value that cannot differ.
-          if (scopes.some((s) => s.agent === kind && s.configDir !== null)) {
+          if (
+            scopes.some(
+              (s) => s.agent === scope.agent && s.configDir !== scope.configDir,
+            )
+          ) {
             setRereadToken((token) => token + 1);
           }
         })

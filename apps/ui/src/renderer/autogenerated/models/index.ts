@@ -2858,6 +2858,12 @@ export interface SetMcpServerEnabledDto {
      * @type {string}
      * @memberof SetMcpServerEnabledDto
      */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof SetMcpServerEnabledDto
+     */
     server: string;
     /**
      * 

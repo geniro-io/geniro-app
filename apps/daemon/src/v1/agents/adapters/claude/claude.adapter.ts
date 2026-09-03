@@ -1149,9 +1149,17 @@ export class ClaudeAdapter extends AgentAdapter {
     cwd: string,
     server: string,
     enabled: boolean,
+    options: AgentCommandOptions = {},
   ): Promise<void> {
+    // The PROFILE's own root when the caller names one — `modelCacheDir`, the
+    // same resolver `readMcpFolderFacts` reads this file through, so the write
+    // lands in the file the panel's rows came from. It was the home dir
+    // unconditionally, which made the toggle a silent no-op under a custom
+    // config directory: the panel listed the profile's servers and the switch
+    // edited `~/.claude.json`, so the profile was unchanged and the DEFAULT
+    // account's disabled list was rewritten instead.
     const file = join(
-      this.claudeOptions.homeDir ?? homedir(),
+      this.modelCacheDir(options.configDir ?? null),
       CLAUDE_MODEL_CACHE_FILE,
     );
     const release = await lock(file, {

@@ -707,10 +707,14 @@ export abstract class AgentAdapter {
    * means a switch flipped here is the same switch the user sees in their own
    * terminal.
    *
-   * `options` is here for the implementations that reach the CLI rather than a
-   * file: it carries `onSpawn`, so the caller registers the child for shutdown
-   * exactly as it does for {@link listMcpServers}. An implementation that only
-   * edits a file ignores it.
+   * `options` carries both halves of that split. `onSpawn` is for the
+   * implementations that reach the CLI rather than a file, so the caller
+   * registers the child for shutdown exactly as it does for
+   * {@link listMcpServers}; `configDir` is for the implementations that reach a
+   * FILE, naming the profile whose state to write — the same profile
+   * {@link readMcpFolderFacts} was read under, so a switch lands in the file the
+   * panel took its rows from. Each implementation ignores the half its own
+   * mechanism has no use for.
    */
   setMcpServerEnabled(
     _cwd: string,

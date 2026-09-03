@@ -12,6 +12,12 @@ import { buildChildEnv } from './child-env';
 import { trackDetachedChild } from './child-journal';
 import { createGroupTerminator } from './kill-tree';
 import { NdjsonBuffer } from './ndjson-buffer';
+import {
+  descendantsOf,
+  isCommandRunning,
+  listProcesses,
+  type ProcessRow,
+} from './process-descendants';
 
 /**
  * The slice of a child process this module depends on. Narrower than node's
@@ -198,6 +204,24 @@ export interface CliSessionOptions {
   mapper: (obj: unknown) => AgentEvent[];
   spawn?: SpawnFn;
   logger?: SessionLogger;
+  /**
+   * Whether this CLI backgrounds a command and then reports it FINISHED, so
+   * the only truthful source for "is it still running" is the process table.
+   *
+   * Supplied by the adapter from its own config, never decided here — this
+   * module names no CLI. See `sweepDetachedShells` for the measurement it
+   * exists for, and `AdapterConfig.shells` for where the fact is written down.
+   *
+   * Off by default: a CLI that reports its own detachments is already served by
+   * the `background_work` bracket, and asking the OS about it as well would
+   * open every command twice.
+   */
+  detectDetachedShells?: boolean;
+  /**
+   * How the process table is read, for the sweep above. A TEST SEAM on the
+   * `spawn` option's terms — production passes nothing and gets the real `ps`.
+   */
+  listProcesses?: () => Promise<ProcessRow[]>;
   /**
    * The tool name this CLI asks the USER an open-ended question with, or null
    * when it has none. Supplied by the adapter from its own config — this module
@@ -452,6 +476,19 @@ const EXIT_SETTLE_GRACE_MS = 2000;
  * `CliTurnOptions.buildInterruptPayload`.
  */
 const TURN_END_EXIT_GRACE_MS = 2000;
+
+/**
+ * How often the process table is re-read while a command the CLI called
+ * finished is still running — see `sweepDetachedShells`.
+ *
+ * A poll only exists while something IS out, so this is the cadence of a
+ * genuinely rare state rather than a background cost every session pays. Five
+ * seconds is chosen against what the reading is FOR: a row in a panel saying
+ * what is running, where being five seconds stale is invisible, while `ps`
+ * itself is a spawn and a few milliseconds of work that should not be repeated
+ * every second for a `pnpm dev` somebody will leave up for an hour.
+ */
+const DETACHED_SHELL_POLL_MS = 5000;
 
 /**
  * How long a run-scoped turn may go completely SILENT before the turn is
@@ -733,6 +770,29 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const settledShells = new Set<string>();
   /**
+   * The commands this session's CLI has RUN, by the id of the call that ran
+   * each — the raw material for {@link sweepDetachedShells}, and gathered only
+   * for a CLI that needs it (`CliTurnOptions.detectDetachedShells`).
+   *
+   * `returned` is the whole point of the pair: a call the CLI has not answered
+   * yet is an ordinary foreground command, and the transcript already draws it
+   * as running on the strength of that missing answer. The sweep is only ever
+   * interested in the opposite — a call the CLI said was FINISHED.
+   */
+  const executeCalls = new Map<
+    string,
+    { command: string; returned: boolean }
+  >();
+  /**
+   * Calls the OS confirmed were still running after their CLI called them done.
+   *
+   * Session-scoped like {@link settledShells}, because that is how long such a
+   * command lives: it outlives its turn by construction, and the process ending
+   * is what finally closes it.
+   */
+  const osDetachedShells = new Set<string>();
+  let detachedShellTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
    * A terminal event that arrived with NO turn open while {@link openWork} was
    * still outstanding, held until the work reports.
    *
@@ -880,6 +940,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (current === turn) {
       current = null;
     }
+    // ONE process-table read per settle, which is where a backgrounded command
+    // becomes worth naming: while the turn ran, the agent was working and the
+    // badge said so, and every command it had answered for was believed
+    // finished. Un-awaited on purpose — a readout must never delay the turn's
+    // own ending — and cheap in the ordinary case, where nothing has outlived
+    // the turn and the sweep returns before it spawns anything.
+    void sweepDetachedShells();
     // Asked to stop — see {@link cancelledTurnMayStillEmit}.
     //
     // Keyed on the cancel alone, NOT on the broader "did not end by itself".
@@ -1499,6 +1566,153 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   };
 
   /**
+   * Note a command the CLI ran, and later that the CLI answered for it.
+   *
+   * Reads the SHARED tool vocabulary (`toolKind: 'execute'`) rather than any
+   * CLI's tool names, on the rule that field was added for: the two shipped
+   * CLIs call their shell tool `Bash` and `` `sleep 300` `` respectively, and
+   * recognising either name here would be an agent branch in an agent-agnostic
+   * module.
+   *
+   * The COMMAND is read off the call's own arguments, which is the only place
+   * it exists; a call that discloses none is skipped, since there would be
+   * nothing to look for in the process table.
+   */
+  const rememberExecuteCall = (event: AgentEvent): void => {
+    if (!opts.detectDetachedShells) {
+      return;
+    }
+    if (event.type === 'tool_result') {
+      const known = executeCalls.get(event.id);
+      if (known) {
+        known.returned = true;
+      }
+      return;
+    }
+    if (event.type !== 'tool_call' || event.kind !== 'execute') {
+      return;
+    }
+    const input = event.input;
+    const command =
+      typeof input === 'object' && input !== null
+        ? (input as { command?: unknown }).command
+        : null;
+    if (typeof command === 'string' && command.trim() !== '') {
+      executeCalls.set(event.id, { command, returned: false });
+    }
+  };
+
+  /**
+   * Ask the OPERATING SYSTEM which of this turn's finished commands are still
+   * running, and open a shell row for each — the only truthful answer for a CLI
+   * that backgrounds a command and reports it complete.
+   *
+   * MEASURED on cursor-agent 2026.08.31-4057e58, driven through this daemon
+   * with the raw ACP frames captured: asked to run `sleep 300` in the
+   * background, it answered the tool call
+   * `status: "completed", rawOutput: {exitCode: 0, stdout: "", stderr: ""}`
+   * three seconds in — while the process went on running for its full four
+   * minutes. There is no marker anywhere on that wire (the bundle carries the
+   * same seven `cursor/*` extension methods and no background one), it writes
+   * nothing to disk about it, and it never calls the ACP terminal methods its
+   * own SDK ships, so the client cannot host the process either. Every channel
+   * the CLI could have spoken on was checked; it says the opposite of the truth
+   * on the only one it uses.
+   *
+   * What is left is the process table, and it is enough because the command is
+   * OURS: it runs under the CLI child this module spawned — measured
+   * `sleep 300 → /bin/zsh → cursor-agent → the daemon` — so a descendant still
+   * running it is direct evidence, not an inference about another program's
+   * intentions.
+   *
+   * It looks only at calls the CLI has ANSWERED. An unanswered one is an
+   * ordinary foreground command that the transcript already shows as running,
+   * and announcing those would list every command twice.
+   *
+   * The result is fed back through {@link announceShellWork} as an ordinary
+   * `background_work` bracket, so a shell found this way is the same row, the
+   * same count and the same chip as one the CLI reported itself — there is no
+   * second kind of shell anywhere downstream.
+   */
+  const sweepDetachedShells = async (): Promise<void> => {
+    if (!opts.detectDetachedShells) {
+      return;
+    }
+    const pending = [...executeCalls].filter(
+      ([id, call]) => call.returned && !osDetachedShells.has(id),
+    );
+    if (pending.length === 0 && osDetachedShells.size === 0) {
+      return;
+    }
+    const rootPid = child?.pid;
+    if (rootPid === undefined) {
+      return;
+    }
+    const alive = descendantsOf(
+      await (opts.listProcesses ?? listProcesses)(),
+      rootPid,
+    );
+    for (const [id, call] of pending) {
+      if (!isCommandRunning(alive, call.command)) {
+        // Answered and gone — the ordinary case, and the reason this map is
+        // pruned here rather than growing for the life of the session.
+        executeCalls.delete(id);
+        continue;
+      }
+      osDetachedShells.add(id);
+      announceShellWork({
+        type: 'background_work',
+        id,
+        phase: 'started',
+        // The launching call's own id IS the work id here. Unlike a CLI's
+        // bracket there is no separate work id to carry, and using the call's
+        // makes the row joinable to the transcript exactly as a reported one is.
+        unit: 'other',
+        toolCallId: id,
+      });
+    }
+    for (const id of [...osDetachedShells]) {
+      const call = executeCalls.get(id);
+      if (call !== undefined && isCommandRunning(alive, call.command)) {
+        continue;
+      }
+      osDetachedShells.delete(id);
+      executeCalls.delete(id);
+      announceShellWork({
+        type: 'background_work',
+        id,
+        phase: 'settled',
+        unit: 'other',
+        toolCallId: null,
+      });
+    }
+    armDetachedShellPoll();
+  };
+
+  /**
+   * Keep asking while anything is out, and stop the moment nothing is.
+   *
+   * A poll rather than an event because there is no event: the CLI has already
+   * said its piece about these commands and will not mention them again. It is
+   * bounded by the SET being non-empty, so an ordinary session — every command
+   * finishing when the CLI said it did — never runs one.
+   *
+   * Chained timeouts rather than an interval, so a slow `ps` on a loaded
+   * machine cannot overlap itself, and `unref`'d so a forgotten timer can never
+   * be the thing keeping the daemon alive.
+   */
+  const armDetachedShellPoll = (): void => {
+    if (detachedShellTimer !== null || osDetachedShells.size === 0) {
+      return;
+    }
+    detachedShellTimer = setTimeout(() => {
+      detachedShellTimer = null;
+      void sweepDetachedShells();
+    }, DETACHED_SHELL_POLL_MS);
+    detachedShellTimer.unref?.();
+  };
+
+  /**
    * Account for one unit of background work, wherever it arrived.
    *
    * The one place `openWork` moves, called from inside a turn and from
@@ -1581,6 +1795,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (event.type === 'approval_request') {
       approvalSeenAt.set(event.id, Date.now());
     }
+    // Recorded HERE, at the one door every event passes through, and BEFORE the
+    // turn/orphan split: a command run by a CLI carrying on between turns is as
+    // detachable as one run inside a turn, and the sweep's whole subject is
+    // work that outlives the turn that started it.
+    rememberExecuteCall(event);
     const turn = current;
     if (!turn) {
       handleOrphanEvent(event);
@@ -1832,6 +2051,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     //
     // Before `releaseOffTurnHold`, so these rows precede the terminal event
     // they were outstanding at.
+    // The poll goes with them: its whole subject is commands running under
+    // this process, and there is no process.
+    if (detachedShellTimer !== null) {
+      clearTimeout(detachedShellTimer);
+      detachedShellTimer = null;
+    }
+    osDetachedShells.clear();
+    executeCalls.clear();
     for (const id of [...shellWork.keys()]) {
       announceShellWork({
         type: 'background_work',

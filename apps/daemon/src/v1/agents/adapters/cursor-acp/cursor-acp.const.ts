@@ -836,10 +836,23 @@ export const CURSOR_TODOS_METHOD = 'cursor/update_todos';
 // still never arrive, but its PERMISSION REQUESTS do, on the parent's session,
 // after the parent's turn has ended.
 //
-// STILL UNKNOWN, and the reason a background block ends as `stopped` rather than
-// completed: nothing announces such a delegate's ENDING. No second
-// `cursor/task`, no further `tool_call_update`, nothing across 70s of listening
-// past the turn's own end.
+// STILL UNKNOWN, and RE-CONFIRMED on 2026.08.31-4057e58: nothing announces such
+// a delegate's ENDING. No second `cursor/task`, no further `tool_call_update`,
+// nothing across 70s of listening past the turn's own end on 2026.08.11 — and
+// nothing on a real nine-reviewer fan-out through this daemon on the newer
+// build either, over the twelve minutes its process went on living after the
+// turn settled. The bundle still carries the same seven `cursor/*` extension
+// methods, none of which reports a delegate finishing.
+//
+// So the ending is STATED BY THE DAEMON instead, and that is not a guess: a
+// delegate of this CLI runs inside the ACP process that launched it — its own
+// permission requests arrive on the parent's session, and killing that group
+// two seconds after the turn left one unable to finish writing its file — so
+// when the session closes, whatever was out has stopped.
+// `ChatService.closeStrandedDelegates` writes `backgroundOutcome: 'stopped'`
+// for each at that moment, and once more at boot for the closes a SIGKILLed
+// daemon never got to write. Nothing downstream reads a TURN's ending as a
+// delegate's any more, which is what let a fan-out stay visible while it works.
 //
 // RE-CHECK IF: a release starts sending `rawInput` with the args populated on the
 // opening frame (then the marker can give way to reading them directly); a

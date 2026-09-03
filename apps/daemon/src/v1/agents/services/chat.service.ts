@@ -84,6 +84,7 @@ import {
   readModelParameters,
   writeModelParameters,
 } from '../utils/model-parameters';
+import { openDelegateIds } from '../utils/open-delegates';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -388,6 +389,31 @@ export class ChatService implements OnModuleInit {
    * and a counter would go negative or latch on the double.
    */
   private readonly shellRuns = new Map<string, Set<string>>();
+
+  /**
+   * Runs holding background SUB-AGENTS that have not reported back, by the id
+   * of the call that launched each.
+   *
+   * The delegate twin of {@link shellRuns}, and it exists for the same reason
+   * stated one step more sharply: a shell at least ANNOUNCES its end, while one
+   * shipped CLI never announces a delegate's at all. Re-measured on cursor-agent
+   * 2026.08.31-4057e58 — nine reviewers declared out, no close on any channel
+   * across the twelve minutes its process went on living — so the transcript
+   * can never end one by itself, and every surface that folded this out of the
+   * OPEN thread's items could only ever answer about the chat being looked at.
+   *
+   * It asserts nothing about the turn, exactly like a shell and unlike
+   * {@link heldRuns}: such a delegate must not hold a turn open, because there
+   * is no report coming to release the hold — it would run to the silence
+   * deadline over an agent that finished speaking minutes ago.
+   *
+   * IN MEMORY, and that is consistent rather than a gap: the set is emptied by
+   * writing each delegate's ending into the transcript
+   * ({@link closeStrandedDelegates}), and a daemon that died without doing so
+   * has its next boot do it instead — so a restart finds both this map and the
+   * transcript agreeing that nothing is out.
+   */
+  private readonly delegatesOut = new Map<string, Set<string>>();
 
   constructor(
     private readonly em: EntityManager,
@@ -1576,6 +1602,10 @@ export class ChatService implements OnModuleInit {
       // map is that a detached command is still out after the turn ended. A
       // deleted run is the only state in which nothing can be waiting on it.
       this.shellRuns.delete(runId);
+      // The delegate twin, on the identical rule: a background sub-agent
+      // outlives its turn by construction, so only a deleted run — which
+      // nothing can be waiting on — may drop it.
+      this.delegatesOut.delete(runId);
       // Same rule, same one place: nothing can read a deleted run's context.
       this.contexts.forget(runId);
     }
@@ -2258,6 +2288,15 @@ export class ChatService implements OnModuleInit {
     interrupted = false,
   ): Promise<void> {
     this.clearDelegateLease(runId);
+    // AHEAD of the early return below, which is about the off-turn BADGE and
+    // asks a question this does not share: a run that never took an off-turn
+    // stretch has no badge to hand back and returns here, and that is the very
+    // shape the strand appears in — the agent said its piece, the turn settled
+    // `completed`, and its delegates were still out. Skipped only for a run
+    // being deleted, whose transcript is going away with it.
+    if (!this.deleting.has(runId)) {
+      await this.closeStrandedDelegates(runId);
+    }
     const restoreTo = this.offTurnRuns.get(runId);
     if (
       restoreTo === undefined ||
@@ -2310,6 +2349,134 @@ export class ChatService implements OnModuleInit {
         `run ${runId} interrupted-session note failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     });
+  }
+
+  /**
+   * State the ending for every delegate this run still has out, because the
+   * process that owed it is gone.
+   *
+   * The ONE thing geniro can honestly say about a background delegate whose CLI
+   * never announces an ending — see `utils/open-delegates.ts` for the two
+   * measurements this rests on: cursor-agent reports no such ending on any
+   * channel, and its delegates run inside the ACP process that launched them.
+   * So a session closing is not a guess about the work, it is the work being
+   * over, and it is the SAME rule `spawn-cli` already follows for shells: the
+   * daemon writes a close for every unit still open when the CLI process dies.
+   * Delegates were simply the half of that rule nobody had written.
+   *
+   * `stopped` rather than `completed`, on the vocabulary's own terms: the
+   * delegate did not report back, so claiming it finished its work would be an
+   * outcome nothing measured. Written through `mapEventToItem` like every other
+   * row, so the payload keeps ONE writer and a closing row a client folds is
+   * byte-identical to one a CLI produced.
+   */
+  private async closeStrandedDelegates(runId: string): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const rows = await this.itemDao.subagentInfoRows(runId, em);
+      const stranded = openDelegateIds(
+        rows.map((row) => parsePayload(row.payload)),
+      );
+      for (const id of stranded) {
+        const mapped = mapEventToItem({
+          type: 'subagent_info',
+          id,
+          label: null,
+          kind: null,
+          prompt: null,
+          model: null,
+          durationMs: null,
+          tokens: null,
+          toolUses: null,
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheCreationTokens: null,
+          costUsd: null,
+          stepsUnavailableReason: null,
+          backgroundOpen: false,
+          backgroundOutcome: 'stopped',
+        });
+        if (mapped === null) {
+          continue;
+        }
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          mapped.kind,
+          mapped.role,
+          mapped.payload,
+        );
+      }
+      if (stranded.length > 0) {
+        // The rows above are persisted directly rather than raised as agent
+        // events, so `recordDelegateBracket` never sees them — the badge count
+        // is retired here, once, instead of per row.
+        this.delegatesOut.delete(runId);
+        this.announceDelegatesOut(runId);
+        this.logger.log(
+          `run ${runId}: closed ${stranded.length} sub-agent(s) left out by its agent session`,
+        );
+      }
+    } catch (err: unknown) {
+      // Best-effort, like every other note on this path: the process is already
+      // gone, and failing to record that must not also fail the badge restore
+      // that follows.
+      this.logger.error(
+        `run ${runId} failed to close its stranded sub-agents: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * The boot half of {@link closeStrandedDelegates}: close what a daemon that
+   * died never got to.
+   *
+   * A session close is the ordinary writer, and it runs in-process — so a
+   * SIGKILL, a crash or a machine restart leaves those rows unwritten and the
+   * delegates declared out forever, which reads on screen as a finished chat
+   * with nine sub-agents eternally working. No session can exist at boot, so
+   * every open delegate in the database is by construction stranded and this
+   * needs no liveness test of its own.
+   *
+   * Called from `main.ts` after the schema sync, beside the other boot
+   * reconciles and for the same reason: an `OnApplicationBootstrap` hook fires
+   * before the additive `schema.update` and would query tables a fresh install
+   * does not have yet.
+   */
+  async reconcileStrandedDelegates(): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const byRun = new Map<string, unknown[]>();
+      for (const row of await this.itemDao.allSubagentInfoRows(em)) {
+        const payloads = byRun.get(row.runId);
+        if (payloads) {
+          payloads.push(parsePayload(row.payload));
+        } else {
+          byRun.set(row.runId, [parsePayload(row.payload)]);
+        }
+      }
+      let repaired = 0;
+      for (const [runId, payloads] of byRun) {
+        if (openDelegateIds(payloads).length === 0) {
+          continue;
+        }
+        await this.closeStrandedDelegates(runId);
+        repaired += 1;
+      }
+      if (repaired > 0) {
+        this.logger.warn(
+          `closed the stranded sub-agents of ${repaired} run(s) on boot`,
+        );
+      }
+    } catch (err: unknown) {
+      // Never block boot — a fresh database whose schema sync has not created
+      // the table yet has nothing to reconcile.
+      this.logger.error(
+        `boot reconcile of stranded sub-agents failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -2367,7 +2534,25 @@ export class ChatService implements OnModuleInit {
     }
     if (event.backgroundOpen) {
       this.closedDelegates.get(runId)?.delete(event.id);
+      const out = this.delegatesOut.get(runId);
+      if (out) {
+        out.add(event.id);
+      } else {
+        this.delegatesOut.set(runId, new Set([event.id]));
+      }
+      this.announceDelegatesOut(runId);
       return;
+    }
+    // The badge count first, and only when this close actually RETIRED one: a
+    // CLI free to report an ending twice (claude does, 7ms apart on its two
+    // terminal channels) would otherwise broadcast the same figure to every
+    // window a second time.
+    const out = this.delegatesOut.get(runId);
+    if (out?.delete(event.id)) {
+      if (out.size === 0) {
+        this.delegatesOut.delete(runId);
+      }
+      this.announceDelegatesOut(runId);
     }
     const closed = this.closedDelegates.get(runId);
     if (closed) {
@@ -2375,6 +2560,20 @@ export class ChatService implements OnModuleInit {
       return;
     }
     this.closedDelegates.set(runId, new Set([event.id]));
+  }
+
+  /**
+   * Tell every window how many background sub-agents this run still has out.
+   *
+   * A `status: null` announce, like {@link announceShellsOpen} beside it: this
+   * says what the run is HOLDING, never whether it is still going.
+   */
+  private announceDelegatesOut(runId: string): void {
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      subagentsOut: this.delegatesOut.get(runId)?.size ?? 0,
+    });
   }
 
   /**
@@ -4407,6 +4606,28 @@ export class ChatService implements OnModuleInit {
           // on EVERY settle path (the finalizer runs for a failure and a cancel
           // too), or a run that was held when it died would keep telling every
           // window that opens afterwards that its agent is idle and waiting.
+          //
+          // ANNOUNCED, not merely deleted, and that is the other half of the
+          // same sentence. The map is what a later `GET /v1/chats` reads, so
+          // deleting it fixed the SNAPSHOT and left every window already open
+          // to learn the release from an event that was never sent — the hold
+          // is only ever announced on its two transitions, so a client's copy
+          // latches until something else happens to refetch the list.
+          // REPORTED with a screenshot: a chat reading `⌛ working · waiting on
+          // background work` while the daemon answered `holdingFor: 0`,
+          // `shellsOpen: 0` for it, with no sub-agent and no command anywhere
+          // on screen to account for the phrase. It also costs more than a
+          // word: `held` is not settled, so the stale reading suppressed that
+          // chat's turn-end notification and told the composer the agent was
+          // idle.
+          //
+          // Only when there WAS a hold, on `recordShellBracket`'s rule: a
+          // settle is the commonest event in the app, and a `holdingFor: 0` on
+          // every one of them is a broadcast to every window restating what it
+          // already believes.
+          if (this.heldRuns.has(runId)) {
+            this.announceRunHold(runId, 0, null);
+          }
           this.heldRuns.delete(runId);
           if (eventHandlingFailed) {
             const message = 'run event persistence failed';
@@ -4783,6 +5004,7 @@ export class ChatService implements OnModuleInit {
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),
       this.shellRuns.get(run.id)?.size ?? 0,
+      this.delegatesOut.get(run.id)?.size ?? 0,
     );
   }
 

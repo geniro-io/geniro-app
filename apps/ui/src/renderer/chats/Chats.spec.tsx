@@ -206,6 +206,7 @@ const run1: ChatRun = {
   awaiting: null,
   holdingFor: 0,
   shellsOpen: 0,
+  subagentsOut: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,
@@ -1878,6 +1879,7 @@ describe('Chats sidebar badges stay honest for runs you are not watching', () =>
         awaiting: null,
         holdingFor: 0,
         shellsOpen: 0,
+        subagentsOut: 0,
       });
     });
     expect(secondRow().textContent).not.toContain('needs more info');
@@ -3266,6 +3268,7 @@ describe('Chats workflow runs', () => {
     awaiting: null,
     holdingFor: 0,
     shellsOpen: 0,
+    subagentsOut: 0,
     title: 'Review team',
     agentKind: null,
     workflowId: 'review-team',
@@ -3882,6 +3885,7 @@ describe('Chats — handing a conversation to the user', () => {
       awaiting: null,
       holdingFor: 0,
       shellsOpen: 0,
+      subagentsOut: 0,
       title: 'Review team',
       agentKind: null,
       workflowId: 'review-team',
@@ -5567,6 +5571,7 @@ describe('Chats queued messages', () => {
         activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
         shellsOpen: 0,
+        subagentsOut: 0,
       });
     });
     // The composer stops warning about a queue it is no longer going to use.
@@ -5799,6 +5804,7 @@ describe('Chats queued messages', () => {
         activity: 'waiting on 2 sub-agents',
         holdingFor: 2,
         shellsOpen: 0,
+        subagentsOut: 0,
       });
     });
 
@@ -5831,6 +5837,7 @@ describe('Chats queued messages', () => {
         activity: 'waiting on 1 sub-agent',
         holdingFor: 1,
         shellsOpen: 0,
+        subagentsOut: 0,
       });
     });
     await act(async () => {
@@ -5840,6 +5847,7 @@ describe('Chats queued messages', () => {
         activity: 'running Bash',
         holdingFor: 0,
         shellsOpen: 0,
+        subagentsOut: 0,
       });
     });
 
@@ -8046,6 +8054,7 @@ describe('Chats sidebar list', () => {
         awaiting: null,
         holdingFor: 0,
         shellsOpen: 0,
+        subagentsOut: 0,
         title: 'Big team',
         agentKind: null,
         workflowId: 'big-team',
@@ -8242,6 +8251,7 @@ describe('Chats sidebar list', () => {
         awaiting: null,
         holdingFor: 0,
         shellsOpen: 0,
+        subagentsOut: 0,
         title: 'Big team',
         agentKind: null,
         workflowId: 'big-team',
@@ -10421,16 +10431,33 @@ describe('Chats — background sub-agents', () => {
     expect(block?.textContent).not.toContain('reading the diff now');
   });
 
-  it('settles the badge — and NOTIFIES — for a delegate that never reported', async () => {
-    // The latch this pins, measured on a real build with a CLI that printed
-    // `task_started` and exited: the daemon row read `completed` while the
-    // header, the sidebar row and the block all read `running`, with no process
-    // left to change any of them. The badge was the visible half; the
-    // notification was the reported one — the rules watch that same reading, so
-    // a run that never crosses into a settled state is never announced, which
-    // is "on chats finishing im not receiving it".
+  it('says HELD — and still NOTIFIES — while a declared-open delegate is out', async () => {
+    // Two defects that pull in opposite directions, and this is where they
+    // meet. The delegate must stay VISIBLE: a cursor fan-out is nine reviewers
+    // the CLI declares out and never speaks about again, and reading the turn's
+    // end as theirs dropped every one of them off the composer shelf the second
+    // the agent stopped talking. But the badge must not say `running` over an
+    // agent that has finished, and the turn-end notification must still fire —
+    // the rules watch that same reading, so a run that never crosses into a
+    // settled state is never announced, which is the reported "on chats
+    // finishing im not receiving it".
+    //
+    // So a SILENT declared-open delegate answers `held` on the badge (the same
+    // reading a background command gets) and is withheld from the notification
+    // reading entirely. The delegate is ended by the daemon, not by this
+    // transcript: `ChatService.closeStrandedDelegates` states `stopped` for
+    // each one still out when the agent session closes — the moment a cursor
+    // delegate, living inside that process, demonstrably has.
     const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
-    api.listChats.mockResolvedValue([{ ...run1, status: 'running' }]);
+    // `subagentsOut` on the ROW, which is the design point as much as the
+    // setup: the count is the daemon's, carried by every run alike, so an
+    // unfocused row reads it too. Folded out of this thread's transcript it
+    // would be knowable for the open chat and no other, and the badge would
+    // change when the user looked away — the defect the shell count next to it
+    // was moved onto the row to fix.
+    api.listChats.mockResolvedValue([
+      { ...run1, status: 'running', subagentsOut: 1 },
+    ]);
     api.listRunItems.mockResolvedValue([
       msg(0, 'user', 'find the bug'),
       taskCall(1, SPOKE_BEFORE),
@@ -10447,7 +10474,10 @@ describe('Chats — background sub-agents', () => {
       emitItem({ ...terminal(3), createdAt: SETTLED_AT });
     });
 
-    expect(sidebarRow(container)).toContain('completed');
+    // `working` is the word `held` wears — never `running`, which would put a
+    // spinner over an agent that has stopped.
+    expect(sidebarRow(container)).toContain('working');
+    expect(sidebarRow(container)).not.toContain('running');
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ runId: 'r1', kind: 'turn-end' }),
     );

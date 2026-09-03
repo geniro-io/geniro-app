@@ -445,6 +445,53 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /**
+   * One run's `subagent_info` rows in seq order — the durable record of which
+   * delegates it declared out and which it has since closed.
+   *
+   * Read from the transcript rather than kept in memory, and that is the whole
+   * reason this exists as a query: the set has to survive a daemon restart,
+   * since a SIGKILLed daemon never wrote the closes and its next boot is the
+   * only thing left that can (see `utils/open-delegates.ts`). One durable
+   * source then serves both the session-close path and the boot sweep, instead
+   * of an in-memory tally that is right for one of them and empty for the other.
+   */
+  async subagentInfoRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: 'subagent_info' },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * EVERY run's `subagent_info` rows, grouped by run and in seq order — the
+   * boot sweep's one read.
+   *
+   * Unbounded by run on purpose: the sweep has to find the runs it must repair,
+   * and which those are is exactly what the fold decides. It is served by the
+   * `kind` index and stays small next to a transcript — 2,365 rows across 27
+   * runs on a 400MB profile with months of history in it, read once per launch.
+   */
+  async allSubagentInfoRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: 'subagent_info' },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

@@ -1,7 +1,6 @@
 import {
   Ban,
   CircleCheck,
-  CircleDashed,
   CircleX,
   Clock,
   Hourglass,
@@ -40,8 +39,7 @@ export type RunStatusKind =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'skipped'
-  | 'unknown';
+  | 'skipped';
 
 /**
  * The one status → icon/tone/label mapping, so a run's or agent's state reads
@@ -105,29 +103,6 @@ export const RUN_STATUS_META: Record<
     className: 'text-muted-foreground',
     label: 'skipped',
   },
-  // The one state that is a statement about THIS APP rather than about the
-  // work: the CLI said a delegate was still out and then never said anything
-  // else about it, so nothing here knows how it ended — or whether it has.
-  //
-  // It exists because the two answers available without it are each wrong half
-  // the time, and the app was giving both in turn. A cursor delegate is
-  // declared open and never closed (that CLI announces a background ending
-  // nowhere), so the only other input was whether the RUN row happened to be
-  // settled — which flips with every new turn. REPORTED with a screenshot of
-  // each of the three readings of one unchanged delegate: `cancelled` after
-  // its turn, a spinner the moment the user typed again, `cancelled` again
-  // when that turn ended. Saying so is the honest third answer; it is not
-  // `running` (nothing is producing rows) and not `cancelled` (nobody stopped
-  // it, and the process it was launched from is still alive).
-  //
-  // Muted and NOT a spinner, on the same reasoning as `cancelled` beside it:
-  // this is a settled-looking readout for work nobody is waiting on, and the
-  // dashed circle is what separates "we do not know" from "it was stopped".
-  unknown: {
-    icon: CircleDashed,
-    className: 'text-muted-foreground',
-    label: 'unknown',
-  },
 };
 
 /**
@@ -162,6 +137,7 @@ export function displayRunStatus({
   subagentRunning = false,
   heldForBackgroundWork = false,
   shellsRunning = false,
+  subagentsOut = false,
 }: {
   /** The status on the run row, as the daemon last reported it. */
   status: RunStatusKind;
@@ -237,6 +213,25 @@ export function displayRunStatus({
    * opposite of what the row beneath it says.
    */
   heldForBackgroundWork?: boolean;
+  /**
+   * At least one sub-agent of this run is DECLARED still out while producing
+   * nothing — the CLI said it was working in the background and has not said
+   * another word about it.
+   *
+   * The same kind of fact as {@link shellsRunning} and ranked with it, which is
+   * why it is a separate input from {@link subagentRunning} rather than more of
+   * it: the agent has stopped speaking, so a spinner over the run would claim
+   * work IT is doing, while `held` says exactly what is true — something it
+   * started is still out. A delegate that is producing rows stays
+   * `subagentRunning` and outranks this.
+   *
+   * Like `shellsRunning`, it is deliberately withheld from the reading the
+   * turn-end notification and the unseen mark are fired on: the banner reports
+   * the TURN ending, which a delegate running on does not undo. Without that
+   * split a cursor fan-out — nine reviewers left out by design — would silence
+   * the notification for the whole of the chat's remaining session.
+   */
+  subagentsOut?: boolean;
 }): RunStatusKind {
   if (awaitingAnswer) {
     return 'needs-input';
@@ -284,7 +279,7 @@ export function displayRunStatus({
   // `completed` ALONE, spelled out rather than asked of `isSettledRunStatus`:
   // failed and cancelled already returned above, and `skipped` is a workflow
   // node nothing ever ran, which has no commands of its own to be waiting on.
-  if (shellsRunning && status === 'completed') {
+  if ((shellsRunning || subagentsOut) && status === 'completed') {
     return 'held';
   }
   return status;

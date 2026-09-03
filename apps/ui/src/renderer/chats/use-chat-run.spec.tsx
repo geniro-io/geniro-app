@@ -27,6 +27,7 @@ const run1: ChatRun = {
   awaiting: null,
   holdingFor: 0,
   shellsOpen: 0,
+  subagentsOut: 0,
   title: 'My chat',
   agentKind: 'claude',
   workflowId: null,

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { type FakeChild, fakeSpawn } from '../__tests__/fake-child';
+import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
 import {
   HELD_TERMINAL_GRACE_MS,
@@ -2925,5 +2925,153 @@ describe('asking a live session something out of band', () => {
     line(child, { done: true });
     await handle?.done;
     expect(events.map((e) => e.type)).toEqual(['turn_complete']);
+  });
+});
+
+describe('runCliSession — a CLI that reports a backgrounded command finished', () => {
+  const emit = (child: FakeChild, obj: unknown): void => {
+    child.stdout.emitData(`${JSON.stringify(obj)}\n`);
+  };
+
+  /**
+   * The measured cursor shape: an `execute` tool call, then an answer saying it
+   * completed — while the command runs on. See `sweepDetachedShells` for the
+   * capture this is built from.
+   */
+  const shellMapper = (obj: unknown): AgentEvent[] => {
+    const row = obj as {
+      run?: string;
+      id?: string;
+      answered?: string;
+      done?: boolean;
+    };
+    if (typeof row.run === 'string') {
+      return [
+        {
+          type: 'tool_call',
+          id: row.id ?? 'call-1',
+          name: `\`${row.run}\``,
+          input: { command: row.run },
+          kind: 'execute',
+        },
+      ];
+    }
+    if (typeof row.answered === 'string') {
+      return [
+        {
+          type: 'tool_result',
+          id: row.answered,
+          name: null,
+          result: { exitCode: 0, stdout: '', stderr: '' },
+          isError: false,
+        },
+      ];
+    }
+    return row.done === true ? [COMPLETE] : [];
+  };
+
+  function openShellSession(
+    processes: () => Promise<{ pid: number; ppid: number; args: string }[]>,
+  ) {
+    const { spawn, child } = fakeSpawn(new FakeChild(999));
+    const events: AgentEvent[] = [];
+    const offTurn: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'cursor-agent',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: shellMapper,
+      spawn,
+      detectDetachedShells: true,
+      listProcesses: processes,
+      onBetweenTurnEvent: (event) => offTurn.push(event),
+    });
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    return { session, child, events, offTurn, handle };
+  }
+
+  it('opens a shell row for a command the OS says is still running', async () => {
+    // The whole defect in one test: the CLI answered `exitCode: 0` and the
+    // process is alive, so believing the CLI loses the command entirely — no
+    // row, no count, no chip, and a chat that looks idle while it works.
+    const { child, events, offTurn } = openShellSession(async () => [
+      { pid: 500, ppid: 999, args: '/bin/zsh -c … -- sleep 300' },
+      { pid: 501, ppid: 500, args: 'sleep 300' },
+    ]);
+    emit(child, { run: 'sleep 300', id: 'call-1' });
+    emit(child, { answered: 'call-1' });
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    const opened = [...events, ...offTurn].filter(
+      (e) => e.type === 'shell_open',
+    );
+    expect(opened).toHaveLength(1);
+    expect(opened[0]).toMatchObject({ workId: 'call-1', toolCallId: 'call-1' });
+  });
+
+  it('says nothing about a command that really did finish', async () => {
+    // The other half. Without it, "open a row for every execute call" passes
+    // the test above just as well — and would list every `ls` a turn ran as a
+    // background command that never ends.
+    const { child, events, offTurn } = openShellSession(async () => [
+      { pid: 500, ppid: 999, args: 'something unrelated' },
+    ]);
+    emit(child, { run: 'ls -la', id: 'call-1' });
+    emit(child, { answered: 'call-1' });
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect([...events, ...offTurn].some((e) => e.type === 'shell_open')).toBe(
+      false,
+    );
+  });
+
+  it('leaves an UNANSWERED call alone', async () => {
+    // A call the CLI has not answered is an ordinary foreground command, and
+    // the transcript already draws it as running on the strength of that
+    // missing answer. Opening a shell row for it too would list it twice.
+    const { child, events, offTurn } = openShellSession(async () => [
+      { pid: 501, ppid: 999, args: 'sleep 300' },
+    ]);
+    emit(child, { run: 'sleep 300', id: 'call-1' });
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect([...events, ...offTurn].some((e) => e.type === 'shell_open')).toBe(
+      false,
+    );
+  });
+
+  it('asks nothing at all when the CLI reports its own detachments', async () => {
+    // The flag is the adapter's fact, and a CLI that brackets its background
+    // work is already served by that bracket — asking the OS as well would open
+    // every command a second time. Pinned on the LISTING never being called,
+    // which is the only observable that distinguishes "off" from "found
+    // nothing".
+    const listing = vi.fn(async () => []);
+    const { spawn, child } = fakeSpawn(new FakeChild(999));
+    const events: AgentEvent[] = [];
+    const session = runCliSession({
+      command: 'claude',
+      args: [],
+      cwd: '/proj',
+      stdinLifetime: 'session',
+      mapper: shellMapper,
+      spawn,
+      listProcesses: listing,
+    });
+    session.startTurn({ onEvent: (e) => events.push(e) });
+    emit(child, { run: 'sleep 300', id: 'call-1' });
+    emit(child, { answered: 'call-1' });
+    emit(child, { done: true });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(listing).not.toHaveBeenCalled();
   });
 });

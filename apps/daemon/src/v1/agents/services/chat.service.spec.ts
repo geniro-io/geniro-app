@@ -304,6 +304,18 @@ class FakeItemDao {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
   }
+  async subagentInfoRows(runId: string): Promise<Pick<Item, 'payload'>[]> {
+    return this.items
+      .filter((i) => i.runId === runId && i.kind === 'subagent_info')
+      .sort((a, b) => a.seq - b.seq)
+      .map((i) => ({ payload: i.payload }));
+  }
+  async allSubagentInfoRows(): Promise<Pick<Item, 'runId' | 'payload'>[]> {
+    return this.items
+      .filter((i) => i.kind === 'subagent_info')
+      .sort((a, b) => a.runId.localeCompare(b.runId) || a.seq - b.seq)
+      .map((i) => ({ runId: i.runId, payload: i.payload }));
+  }
   // Mirrors the real DAO (pinned by item.dao.spec.ts): per run, ONLY the
   // highest-seq `message` item is consulted — a text-less or malformed head
   // yields no preview (no fallback to earlier messages, no throw).
@@ -5976,6 +5988,128 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     ).toBe(true);
   });
 
+  it('states the ending for a delegate the CLI left declared out', async () => {
+    // The one thing geniro can honestly say about a background sub-agent whose
+    // CLI never announces an ending. Re-measured on cursor-agent
+    // 2026.08.31-4057e58: nine reviewers declared out, no close on any channel
+    // across the twelve minutes its process went on living. But such a delegate
+    // runs INSIDE that process, so a session closing is not a guess about the
+    // work — it is the work being over.
+    //
+    // Without this row nothing downstream can ever end the delegate: the
+    // renderer deliberately no longer reads the turn's own ending as the
+    // delegate's, so it would report a fan-out as working for the life of the
+    // transcript.
+    const { service, claude, itemDao, sessions, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'subagent_info',
+      id: 'task-a',
+      label: 'Review: bugs dimension',
+      kind: null,
+      prompt: null,
+      model: null,
+      durationMs: null,
+      tokens: null,
+      toolUses: null,
+      inputTokens: null,
+      outputTokens: null,
+      cacheReadTokens: null,
+      cacheCreationTokens: null,
+      costUsd: null,
+      stepsUnavailableReason: null,
+      backgroundOpen: true,
+      backgroundOutcome: null,
+    });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+    // The turn is over and the delegate is still out — which is the state the
+    // badge count has to survive, so it is asserted before the close.
+    expect(statuses.some((s) => s.subagentsOut === 1)).toBe(true);
+    statuses.length = 0;
+
+    sessions.close(run.id);
+    await drain();
+
+    const closes = itemDao.items.filter(
+      (item) =>
+        item.kind === 'subagent_info' &&
+        item.payload.includes('"backgroundOutcome":"stopped"'),
+    );
+    expect(closes).toHaveLength(1);
+    expect(closes[0]?.payload).toContain('"id":"task-a"');
+    // `stopped` and not `completed`: the delegate never reported, so claiming
+    // it finished its work would be an outcome nothing measured.
+    expect(closes[0]?.payload).toContain('"backgroundOpen":false');
+    // And the count every row reads goes with it, in the same breath.
+    expect(statuses.at(-1)?.subagentsOut).toBe(0);
+  });
+
+  it('leaves a delegate the CLI already closed alone', async () => {
+    // The other half: without it, "write a close for every delegate ever
+    // announced" would pass the test above just as well, and every claude
+    // delegate — whose CLI does report its ending — would get a second,
+    // contradicting row saying it was stopped.
+    const { service, claude, itemDao, sessions } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    for (const backgroundOpen of [true, false]) {
+      claude.emit({
+        type: 'subagent_info',
+        id: 'task-a',
+        label: null,
+        kind: null,
+        prompt: null,
+        model: null,
+        durationMs: null,
+        tokens: null,
+        toolUses: null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        costUsd: null,
+        stepsUnavailableReason: null,
+        backgroundOpen,
+        backgroundOutcome: null,
+      });
+    }
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    sessions.close(run.id);
+    await drain();
+
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'subagent_info' &&
+          item.payload.includes('"backgroundOutcome":"stopped"'),
+      ),
+    ).toBe(false);
+  });
+
   it('says nothing when the close merely reaped a session that had gone quiet', async () => {
     // The other half, and what keeps the row from becoming noise: every chat's
     // session is closed eventually — by the idle window, by a daemon that is
@@ -6802,6 +6936,74 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     });
     claude.finish();
     await drain();
+  });
+
+  it('ANNOUNCES the release when a held turn settles without one', async () => {
+    // The hold is only ever announced on its two transitions, so a window
+    // already open learns it is over from this event or from nothing at all.
+    // The settle path used to clear the map in silence, which fixed the
+    // SNAPSHOT (`GET /v1/chats` answers `holdingFor: 0`) and latched every live
+    // client on `held` for good. REPORTED with a screenshot: a chat reading
+    // `⌛ working · waiting on background work` while the daemon answered
+    // `holdingFor: 0`, `shellsOpen: 0` for that very run — no sub-agent and no
+    // command anywhere on screen to account for the phrase.
+    //
+    // It costs more than a word: `held` is not a settled status, so the stale
+    // reading also swallowed that chat's turn-end notification and told the
+    // composer its agent was idle.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({ type: 'turn_held', open: 1 });
+    await drain();
+    expect(statuses.at(-1)?.holdingFor).toBe(1);
+
+    // The CLI never closes the unit — the deadline gives up on it, or the
+    // process dies — so the turn settles with the hold still standing. That is
+    // the only path that reaches the silent delete.
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const release = statuses.filter((s) => s.holdingFor === 0);
+    expect(release).toHaveLength(1);
+    // Cleared rather than left standing: the phrase said what the run was
+    // waiting for, and it is no longer waiting for anything.
+    expect(release[0]?.activity).toBeNull();
+  });
+
+  it('says nothing about a hold when a turn that had none settles', async () => {
+    // The other half: a settle is the commonest event in the app, so a
+    // `holdingFor: 0` on every one of them would be a broadcast to every window
+    // restating what it already believes. Without this, "announce on every
+    // settle" passes the test above just as well.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    expect(statuses.some((s) => s.holdingFor !== undefined)).toBe(false);
   });
 
   it('counts a DETACHED command on the run, and clears it when it reports', async () => {

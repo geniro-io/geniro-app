@@ -2933,6 +2933,25 @@ export interface AdapterConfig {
    * and a permission check — no service, executor or util may spell a tool name
    * itself.
    */
+  /**
+   * What this CLI does with a command it puts in the BACKGROUND.
+   *
+   * `unreportedDetachReason` is null when the CLI says so itself — claude
+   * brackets such a command on its own `background_work` channel and reports
+   * its ending there, which is the whole mechanism `announceShellWork` is built
+   * on. A NON-null reason says the opposite and names what was measured: the
+   * CLI backgrounds the command and then reports it FINISHED, so believing it
+   * loses the command entirely, and the daemon falls back to asking the
+   * operating system (`utils/process-descendants.ts`, driven by
+   * `sweepDetachedShells`).
+   *
+   * A REASON rather than a boolean, on the rule every capability here follows:
+   * the next reader has to be able to tell "this CLI is honest" from "we
+   * measured it lying, here is what we saw", and a bare `true` says neither.
+   */
+  readonly shells: {
+    readonly unreportedDetachReason: string | null;
+  };
   readonly questionToolName: string | null;
   /**
    * Whether keeping this CLI's question channel open forces an unattended turn

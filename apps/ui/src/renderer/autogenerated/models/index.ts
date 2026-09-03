@@ -2453,6 +2453,12 @@ export interface RunDto {
      */
     shellsOpen: number;
     /**
+     * Background sub-agents this run still has out; 0 when none are out
+     * @type {number}
+     * @memberof RunDto
+     */
+    subagentsOut: number;
+    /**
      * 
      * @type {string}
      * @memberof RunDto

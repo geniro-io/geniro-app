@@ -2029,6 +2029,10 @@ export abstract class AgentAdapter {
         spawn: this.options.spawn,
         logger: this.options.logger,
         questionToolName: this.getConfig().questionToolName,
+        // A CONFIG fact, read here so no consumer of this base ever asks which
+        // CLI it is talking to — the rule every field beside it follows.
+        detectDetachedShells:
+          this.getConfig().shells.unreportedDetachReason !== null,
         // Passed straight through: what to answer between turns depends on the
         // run's approval posture, which the CALLER holds — an adapter deciding
         // it here would be a third copy of approval semantics that already

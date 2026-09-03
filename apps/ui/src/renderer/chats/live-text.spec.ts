@@ -5,6 +5,7 @@ import {
   CHAT_LIVE_KEY,
   type LiveState,
   type LiveTextEvent,
+  liveTextKey,
   OWNER_KEY_SEPARATOR,
   ownerOfKey,
   parseLiveText,
@@ -226,5 +227,38 @@ describe('the owner-key twin', () => {
 
     expect(both.get('a::call-1')?.text).toBe('one');
     expect(both.get('a::call-2')?.text).toBe('two');
+  });
+});
+
+describe('liveTextKey', () => {
+  it("keys a 1:1 chat's delta by the sentinel, not by the owner key it carries", () => {
+    // The drift this exists to stop: the daemon publishes `SINGLE_AGENT_NODE`
+    // ('agent') as a chat's owner key, and the sentinel here was renamed away
+    // from that very word. Every reader that has no event to derive a key from
+    // — `workingAgents`, `awaitingAnswer`, the context meter's live source —
+    // asks for the sentinel, so the two could never match. REPORTED as a chat
+    // showing `Thinking…` and `Working…` at once, which is the working
+    // fallback failing to see that the agent already had a live row.
+    expect(liveTextKey(null, 'agent')).toBe(CHAT_LIVE_KEY);
+    expect(liveTextKey(null, null)).toBe(CHAT_LIVE_KEY);
+  });
+
+  it('leaves a workflow node named `agent` as itself', () => {
+    // The collision the sentinel was introduced for, and the reason the
+    // discriminator is the NODE ID rather than the owner key's value: a node's
+    // delta always carries its id, a chat's never does.
+    expect(liveTextKey('agent', 'agent')).toBe('agent');
+    expect(liveTextKey('agent', partialOwnerKey('agent', 'call-1'))).toBe(
+      `agent${OWNER_KEY_SEPARATOR}call-1`,
+    );
+  });
+
+  it('round-trips through the inverse for every shape', () => {
+    // `ownerOfKey` is what turns a key back into a node, and a key the
+    // inverse cannot read is one whose live row lands in a phantom block.
+    expect(ownerOfKey(liveTextKey('node-a', 'node-a'))).toBe('node-a');
+    expect(
+      ownerOfKey(liveTextKey('node-a', partialOwnerKey('node-a', 'c1'))),
+    ).toBe('node-a');
   });
 });

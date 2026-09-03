@@ -226,6 +226,17 @@ export interface RunStatusEvent {
    */
   shellsOpen?: number;
   /**
+   * How many background SUB-AGENTS this run still has out, or `undefined` when
+   * this event says nothing about it.
+   *
+   * The delegate twin of {@link shellsOpen}, on its exact terms — three states,
+   * a display fact nothing acts on, and riding this channel so an unfocused row
+   * can read it. Its own reason is stronger: one shipped CLI never announces a
+   * delegate's ending at all, so the transcript could not answer this even for
+   * the thread the user has open.
+   */
+  subagentsOut?: number;
+  /**
    * When this run's FETCHED spend last CHANGED — the signal to ask for its
    * totals again, carrying no figure of its own.
    *
@@ -373,6 +384,7 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     awaiting,
     holdingFor,
     shellsOpen,
+    subagentsOut,
     spendUpdatedAt,
     pullRequests,
     taskList,
@@ -440,6 +452,11 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // `pnpm dev` was still running.
     ...(typeof shellsOpen === 'number' && Number.isFinite(shellsOpen)
       ? { shellsOpen: Math.max(0, Math.trunc(shellsOpen)) }
+      : {}),
+    // The delegate twin, read identically: silence says nothing, and clearing
+    // on it would take the badge down while a fan-out was still out.
+    ...(typeof subagentsOut === 'number' && Number.isFinite(subagentsOut)
+      ? { subagentsOut: Math.max(0, Math.trunc(subagentsOut)) }
       : {}),
     // A MARKER rather than a reading: only its presence and its being newer
     // than the last one matter, so nothing here clamps or interprets the value

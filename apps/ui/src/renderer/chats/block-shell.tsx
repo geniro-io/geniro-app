@@ -16,7 +16,7 @@ import {
  * own terms. It is a model, never a word on screen: {@link RUN_STATUS_OF}
  * translates it before anything is drawn.
  */
-export type BlockStatus = 'running' | 'done' | 'error' | 'stopped' | 'unknown';
+export type BlockStatus = 'running' | 'done' | 'error' | 'stopped';
 
 /** The pill's tint per translated status — presentation, not vocabulary. */
 const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
@@ -24,10 +24,6 @@ const STATUS_BADGE_CLASS: Record<BlockStatus, string> = {
   done: 'bg-success/15 text-success',
   error: 'bg-destructive/10 text-destructive',
   stopped: 'bg-muted text-muted-foreground',
-  // Same muted pill as `stopped`, because both are readouts nobody is waiting
-  // on — the WORD is what separates them, and inventing a tone of its own for
-  // "we cannot say" would rank it against states that are actually known.
-  unknown: 'bg-muted text-muted-foreground',
 };
 
 /**
@@ -44,9 +40,6 @@ const RUN_STATUS_OF: Record<BlockStatus, RunStatusKind> = {
   done: 'completed',
   error: 'failed',
   stopped: 'cancelled',
-  // NOT `cancelled`: nobody stopped this, and the CLI it was launched from is
-  // still alive. See `RUN_STATUS_META.unknown`.
-  unknown: 'unknown',
 };
 
 /**

@@ -43,10 +43,19 @@ export class ListMcpServersQueryDto extends createZodDto(
  * trailing positional, the identical argv shape `cli-auth.dto.ts`'s
  * `mcpLoginQuerySchema.server` guards against a leading-dash flag injection —
  * one schema so the two routes cannot drift apart on the same guard again.
+ *
+ * `configDir` names the same profile {@link listMcpServersQuerySchema} does,
+ * and it is here because the WRITE has to land in the file the READ was taken
+ * from. Without it this route read a profile's servers and then edited the
+ * CLI's default config: under a custom config directory the switch moved on
+ * screen, changed nothing for that profile, and silently rewrote the default
+ * profile's disabled list instead — the silent no-op
+ * {@link AgentMcpService.setEnabled} exists to refuse.
  */
 export const setMcpServerEnabledSchema = z.object({
   agent: AgentKindSchema,
   cwd: z.string().min(1),
+  configDir: z.string().min(1).optional(),
   server: cliPositionalArgSchema,
   /** True to load the server on the next turn, false to leave it out. */
   enabled: z.boolean(),

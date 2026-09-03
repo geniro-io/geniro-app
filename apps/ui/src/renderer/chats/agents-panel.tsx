@@ -46,7 +46,7 @@ import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
 import type { WorkflowEntry } from './transcript-groups';
-import { mcpScopeKey } from './use-agent-mcp';
+import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
 import { WorkflowPanelRow } from './workflow-block';
 
 /**
@@ -639,7 +639,11 @@ export function AgentsPanel({
    * Switch one server on or off for one CLI kind. Absent renders every row
    * read-only — the panel never invents a write path it was not given.
    */
-  onSetMcpEnabled?: (kind: CliKind, server: string, enabled: boolean) => void;
+  onSetMcpEnabled?: (
+    scope: AgentMcpScope,
+    server: string,
+    enabled: boolean,
+  ) => void;
   /**
    * Sign one CLI in to one MCP server. Absent hides the action, on the same
    * rule as {@link onSetMcpEnabled}.
@@ -998,10 +1002,15 @@ export function AgentsPanel({
               // Bound here so the toggle closure below carries a NARROWED kind
               // rather than a non-null assertion on a field re-read at call time.
               const mcpKind = agent.agent;
-              const mcpScope =
+              // The scope this card's rows are LISTED under, kept as the object
+              // rather than only its key: the MCP toggle is addressed to it, so
+              // the write lands in the same profile the rows came from.
+              const mcpScopeOf =
                 mcpKind === null
                   ? null
-                  : mcpScopeKey({ agent: mcpKind, configDir: agent.configDir });
+                  : { agent: mcpKind, configDir: agent.configDir };
+              const mcpScope =
+                mcpScopeOf === null ? null : mcpScopeKey(mcpScopeOf);
               // This CLI's handoff answer, resolved once for the card and its
               // thread rows. Null only when there is nothing to say — a workflow
               // agent whose kind is unknown, or a capability report still in
@@ -1159,7 +1168,10 @@ export function AgentsPanel({
                           onResolve={onResolveHandoff}
                         />
                       ) : null}
-                      {mcpByScope && mcpKind !== null && mcpScope !== null ? (
+                      {mcpByScope &&
+                      mcpKind !== null &&
+                      mcpScope !== null &&
+                      mcpScopeOf !== null ? (
                         <McpDialogButton
                           title={`MCP servers — ${agent.name}`}
                           open={openMcp === agent.id}
@@ -1170,7 +1182,7 @@ export function AgentsPanel({
                           onSetEnabled={
                             onSetMcpEnabled
                               ? (server, enabled) =>
-                                  onSetMcpEnabled(mcpKind, server, enabled)
+                                  onSetMcpEnabled(mcpScopeOf, server, enabled)
                               : undefined
                           }
                           onSignIn={

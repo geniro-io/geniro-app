@@ -2056,6 +2056,21 @@ export interface AgentCommandOptions {
    */
   cwd?: string;
   /**
+   * The agent config directory this command is about — the profile whose state
+   * it should read or write. Absent means the CLI's own default profile.
+   *
+   * Only meaningful to a command whose ANSWER or EFFECT is profile-scoped, and
+   * the honest reading of "ignored" differs per CLI rather than per caller:
+   * claude keeps its disabled-server list inside the config directory, so its
+   * toggle resolves the file from this; cursor's toggle is a subcommand run in
+   * the folder, and its `readMcpFolderFacts` likewise takes no profile — so
+   * ignoring it there leaves that CLI's read and write describing the same
+   * state, which is the property that matters. An adapter that ignores it while
+   * its READ honours it is the silent no-op {@link AgentMcpService.setEnabled}
+   * exists to refuse.
+   */
+  configDir?: string | null;
+  /**
    * Run the child as its own process-group leader, and reap the whole group on
    * every abnormal exit.
    *

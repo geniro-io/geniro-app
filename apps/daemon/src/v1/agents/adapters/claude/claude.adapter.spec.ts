@@ -2287,6 +2287,34 @@ describe('ClaudeAdapter MCP toggle (the CLI’s own disable list)', () => {
     });
   });
 
+  it('writes the PROFILE’s config when one is named, and leaves home untouched', async () => {
+    // The READ half resolves this file through the profile's own root
+    // (`modelCacheDir`, shared with `readMcpFolderFacts`), so a write that
+    // ignored `configDir` edited a different account's config than the one the
+    // panel had listed: the switch moved on screen, the profile it was pressed
+    // on was unchanged, and the DEFAULT profile's disabled list was rewritten
+    // instead. Both assertions are load-bearing — landing in the profile is
+    // only half the fix if home is edited as well.
+    const homeDir = home({ projects: { '/proj': { history: ['home'] } } });
+    const profile = home({ projects: { '/proj': { history: ['profile'] } } });
+
+    await new ClaudeAdapter({ homeDir }).setMcpServerEnabled(
+      '/proj',
+      'sentry',
+      false,
+      { configDir: profile },
+    );
+
+    expect(read(profile)).toEqual({
+      projects: {
+        '/proj': { history: ['profile'], disabledMcpServers: ['sentry'] },
+      },
+    });
+    expect(read(homeDir)).toEqual({
+      projects: { '/proj': { history: ['home'] } },
+    });
+  });
+
   it('preserves every other key of the config and of the project entry', async () => {
     // This file holds the user's whole CLI state. A rewrite that dropped a key
     // would be silent data loss in a file they never asked us to touch.

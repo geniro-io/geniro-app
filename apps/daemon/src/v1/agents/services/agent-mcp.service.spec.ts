@@ -1372,6 +1372,33 @@ describe('AgentMcpService.setEnabled', () => {
     expect(listing.servers[0]?.disabled).toBe(true);
   });
 
+  it('reads and writes the PROFILE the caller named, not the CLI’s default', async () => {
+    // BOTH halves of one write, which is why both are asserted: the
+    // locked-off check and the write itself have to describe the profile the
+    // panel listed. This route hardcoded `null` on the read and passed no
+    // profile at all to the write, so under a config directory it consulted
+    // one account's config and edited that account's file while the rows on
+    // screen came from another — the toggle moved and changed nothing.
+    const cwd = realDir();
+    const profile = realDir();
+    const { service, readMcpFolderFacts, setMcpServerEnabled } = harness(
+      () => Promise.resolve([server('proj')]),
+      { facts: nothingOff },
+    );
+
+    await service.setEnabled(AgentKind.Claude, cwd, 'proj', false, {
+      configDir: profile,
+    });
+
+    expect(readMcpFolderFacts).toHaveBeenCalledWith(cwd, profile);
+    expect(setMcpServerEnabled).toHaveBeenCalledWith(
+      cwd,
+      'proj',
+      false,
+      expect.objectContaining({ configDir: profile }),
+    );
+  });
+
   it('reports the switch that landed even when the rows come from a harvest', async () => {
     // Every other case here runs on an EMPTY harvest, so they all take the
     // ask-the-adapter path. With one present the short-circuit sits above that
@@ -1612,8 +1639,13 @@ describe('AgentMcpService.setEnabled', () => {
       // Sign in button for, and it is the majority state of a real listing.
       expect(back.servers[0]?.status).toBe('needs_auth');
       expect(back.servers[0]?.disabled).toBe(false);
+      // `configDir` rides the dial for the same reason it rides the write: the
+      // ON direction re-reads a server's health, and reading it under a
+      // different profile than the one just written would report about servers
+      // this toggle never touched. Null here is the default profile, which is
+      // what this case runs under.
       expect(readMcpServerHealth).toHaveBeenCalledWith(
-        { cwd, server: 'a' },
+        { cwd, server: 'a', configDir: null },
         expect.objectContaining({ onSpawn: expect.any(Function) }),
       );
     });

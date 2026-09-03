@@ -1434,7 +1434,11 @@ describe('AgentsPanel — MCP toggle', () => {
       switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
     });
 
-    expect(onSetMcpEnabled).toHaveBeenCalledWith('claude', 'sentry', true);
+    expect(onSetMcpEnabled).toHaveBeenCalledWith(
+      { agent: 'claude', configDir: null },
+      'sentry',
+      true,
+    );
   });
 
   it('asks to DISABLE a server that is currently on', () => {
@@ -1454,7 +1458,58 @@ describe('AgentsPanel — MCP toggle', () => {
       switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
     });
 
-    expect(onSetMcpEnabled).toHaveBeenCalledWith('claude', 'sentry', false);
+    expect(onSetMcpEnabled).toHaveBeenCalledWith(
+      { agent: 'claude', configDir: null },
+      'sentry',
+      false,
+    );
+  });
+
+  it('carries the CARD’s own profile, so the write reaches the rows on screen', () => {
+    // The panel keys each card's listing by (CLI, config directory); this is
+    // the WRITE half of that same key. It used to hand over the CLI kind
+    // alone, so a switch pressed on a profile's card was written against that
+    // CLI's DEFAULT profile — a different account's config from the one the
+    // rows the user was looking at had been listed under.
+    const onSetMcpEnabled = vi.fn();
+    const profiled: AgentDisplay[] = [
+      {
+        id: 'orchestrator',
+        name: 'Orchestrator',
+        agent: 'claude',
+        configDir: '/profiles/work',
+        status: 'running',
+        activeTurns: 1,
+        contextTokens: 45_200,
+        contextWindowTokens: 1_000_000,
+        spentUsd: 0.236,
+        threads: [{ ...mainThread, status: 'running' }],
+      },
+    ];
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={profiled}
+        mcpByScope={
+          new Map([
+            [scope('claude', '/profiles/work'), listingOf({ name: 'sentry' })],
+          ])
+        }
+        onSetMcpEnabled={onSetMcpEnabled}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    openMcpList(el);
+
+    act(() => {
+      switchesIn(cardFor(el, 'Orchestrator'))[0]?.click();
+    });
+
+    expect(onSetMcpEnabled).toHaveBeenCalledWith(
+      { agent: 'claude', configDir: '/profiles/work' },
+      'sentry',
+      false,
+    );
   });
 
   it('renders every row read-only when no write path was given', () => {

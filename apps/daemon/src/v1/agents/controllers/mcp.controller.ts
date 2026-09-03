@@ -65,6 +65,7 @@ export class McpController {
       body.cwd,
       body.server,
       body.enabled,
+      { configDir: body.configDir ?? null },
     );
   }
 }

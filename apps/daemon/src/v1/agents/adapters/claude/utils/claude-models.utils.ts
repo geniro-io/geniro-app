@@ -18,6 +18,15 @@ import {
  * holds the models BEYOND the tier aliases (Fable, org-specific models), which
  * is exactly what a hardcoded list can never know.
  *
+ * A `disabled` entry is NOT one of them and is dropped: the CLI files
+ * placeholders in this same list to EXPLAIN a model the install cannot run,
+ * and their `value` names nothing `--model` accepts. Measured 2026-09-03 on
+ * 2.1.251, whose cache held
+ * `{value: 'cc-update-required-1', label: 'Fable 5.1 (disabled)',
+ * description: 'Update to 2.1.255+ to use Fable 5.1', disabled: true}` — so the
+ * picker offered a row whose id was a sentinel, and choosing it (as a user did)
+ * sent `--model cc-update-required-1` to every turn of that chat.
+ *
  * That file is internal and unversioned, so every field is checked rather than
  * trusted: a shape change degrades to the built-in aliases instead of throwing
  * or listing junk. Absent/unreadable/not-yet-populated all return [].
@@ -42,8 +51,18 @@ export function readClaudeModelCache(homeDir = homedir()): AgentModel[] {
     if (!entry || typeof entry !== 'object') {
       return [];
     }
-    const { value, label } = entry as { value?: unknown; label?: unknown };
+    const { value, label, disabled } = entry as {
+      value?: unknown;
+      label?: unknown;
+      disabled?: unknown;
+    };
     if (typeof value !== 'string' || value.length === 0) {
+      return [];
+    }
+    // Strictly `true`, never truthiness: this drops a row the user can see, so
+    // an unfamiliar shape must keep listing the model rather than hide one the
+    // CLI would have accepted.
+    if (disabled === true) {
       return [];
     }
     return [

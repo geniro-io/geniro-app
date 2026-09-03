@@ -44,6 +44,51 @@ describe('readClaudeModelCache', () => {
     ]);
   });
 
+  it('drops an entry the CLI marked disabled', () => {
+    // Verbatim from a real 2.1.251 profile (2026-09-03). The CLI files
+    // placeholders in this list to EXPLAIN a model the install cannot run:
+    // `cc-update-required-1` is a sentinel, not a model id, and offering it
+    // sent `--model cc-update-required-1` on every turn of the chat that
+    // picked it.
+    const home = withClaudeJson(
+      JSON.stringify({
+        additionalModelOptionsCache: [
+          { value: 'claude-fable-5[1m]', label: 'Fable' },
+          {
+            value: 'cc-update-required-1',
+            label: 'Fable 5.1 (disabled)',
+            description: 'Update to 2.1.255+ to use Fable 5.1',
+            disabled: true,
+          },
+        ],
+      }),
+    );
+
+    expect(readClaudeModelCache(home)).toEqual([
+      { id: 'claude-fable-5[1m]', label: 'Fable', source: 'cli' },
+    ]);
+  });
+
+  it('keeps a model whose `disabled` is anything but true', () => {
+    // The drop hides a row the user can see, so an unfamiliar shape must fall
+    // the safe way — listing a model the CLI would have accepted.
+    const home = withClaudeJson(
+      JSON.stringify({
+        additionalModelOptionsCache: [
+          { value: 'a-1', label: 'A', disabled: false },
+          { value: 'b-1', label: 'B', disabled: 'true' },
+          { value: 'c-1', label: 'C' },
+        ],
+      }),
+    );
+
+    expect(readClaudeModelCache(home).map((model) => model.id)).toEqual([
+      'a-1',
+      'b-1',
+      'c-1',
+    ]);
+  });
+
   it('falls back to the id when an entry carries no label', () => {
     const home = withClaudeJson(
       JSON.stringify({ additionalModelOptionsCache: [{ value: 'x-1' }] }),

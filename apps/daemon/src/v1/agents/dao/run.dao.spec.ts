@@ -76,7 +76,8 @@ describe('RunDao (in-memory sqlite)', () => {
         archivedAt: new Date(9_000),
       });
       // An archived WORKFLOW run is still out of scope: this route is the
-      // chat listing, and workflow runs have no archive.
+      // chat listing, and the workflow half of the sidebar has its own
+      // (`listWorkflowRuns`, which takes the same scope).
       await dao.create({
         workflowId: 'wf-1',
         createdAt: new Date(3_000),
@@ -107,8 +108,8 @@ describe('RunDao (in-memory sqlite)', () => {
     });
   });
 
-  describe('archivedChatIdsBefore', () => {
-    it('answers the archived chats shelved at or before the cutoff, oldest first', async () => {
+  describe('archivedRunsBefore', () => {
+    it('answers the archived runs shelved at or before the cutoff, oldest first', async () => {
       // Oldest FIRST here, unlike every listing above, and the order is what a
       // sweep interrupted part-way depends on: it has removed the rows furthest
       // past the window, so the next one resumes instead of re-walking them.
@@ -120,11 +121,9 @@ describe('RunDao (in-memory sqlite)', () => {
       // Past it by a millisecond, and safe.
       await dao.create({ archivedAt: new Date(5_001) });
 
-      expect(await dao.archivedChatIdsBefore(new Date(5_000))).toEqual([
-        older.id,
-        old.id,
-        onCutoff.id,
-      ]);
+      expect(
+        (await dao.archivedRunsBefore(new Date(5_000))).map((run) => run.id),
+      ).toEqual([older.id, old.id, onCutoff.id]);
     });
 
     it('never answers a chat that is not archived at all', async () => {
@@ -134,15 +133,23 @@ describe('RunDao (in-memory sqlite)', () => {
       // than restating the `$lte`.
       await dao.create({ createdAt: new Date(1_000) });
 
-      expect(await dao.archivedChatIdsBefore(new Date(9_999))).toEqual([]);
+      expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([]);
     });
 
-    it('never answers a workflow run, however long it has been archived', async () => {
-      // A workflow run has no archive and its own teardown; sweeping one
-      // through the chat path would skip the graph executor's.
-      await dao.create({ workflowId: 'wf-1', archivedAt: new Date(1_000) });
+    it('answers a WORKFLOW run too, and says which it is', async () => {
+      // It answered chats alone until workflow runs became archivable, which
+      // left the retention window covering half the shelf and saying nothing.
+      // The kind rides along because the sweep picks a teardown by it.
+      const wf = await dao.create({
+        workflowId: 'wf-1',
+        archivedAt: new Date(1_000),
+      });
+      const chat = await dao.create({ archivedAt: new Date(2_000) });
 
-      expect(await dao.archivedChatIdsBefore(new Date(9_999))).toEqual([]);
+      expect(await dao.archivedRunsBefore(new Date(9_999))).toEqual([
+        { id: wf.id, workflowId: 'wf-1' },
+        { id: chat.id, workflowId: null },
+      ]);
     });
   });
 
@@ -172,9 +179,34 @@ describe('RunDao (in-memory sqlite)', () => {
       });
       await dao.create({ createdAt: new Date(3_000) }); // chat run
 
-      const runs = await dao.listWorkflowRuns();
+      const runs = await dao.listWorkflowRuns('active');
 
       expect(runs.map((run) => run.id)).toEqual([newer.id, older.id]);
+    });
+
+    it('answers the scope exactly as the chat listing does', async () => {
+      // The two halves feed ONE sidebar, so `active` must hide a shelved
+      // workflow run, `archived` must show only it, and `all` must hold both.
+      const active = await dao.create({
+        workflowId: 'wf-1',
+        createdAt: new Date(1_000),
+      });
+      const archived = await dao.create({
+        workflowId: 'wf-2',
+        createdAt: new Date(2_000),
+        archivedAt: new Date(9_000),
+      });
+
+      expect((await dao.listWorkflowRuns('active')).map((r) => r.id)).toEqual([
+        active.id,
+      ]);
+      expect((await dao.listWorkflowRuns('archived')).map((r) => r.id)).toEqual(
+        [archived.id],
+      );
+      expect((await dao.listWorkflowRuns('all')).map((r) => r.id)).toEqual([
+        archived.id,
+        active.id,
+      ]);
     });
   });
 

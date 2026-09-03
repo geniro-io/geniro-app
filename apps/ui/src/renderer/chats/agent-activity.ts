@@ -32,8 +32,37 @@ export interface AgentActivity {
   contextTokens: number | null;
   /** That turn's model window as the CLI reported it; null if it reported none. */
   contextWindowTokens: number | null;
+  /**
+   * The MODEL that turn ran on, as the CLI named it — never what the graph or
+   * the run row ASKED for.
+   *
+   * The two differ routinely and the difference is the point: a node that names
+   * no model runs on the CLI's own current one, and a model the CLI does not
+   * offer is refused per turn with the turn running on something else. So this
+   * is what the agent is, and the declared value is only what it was told.
+   */
+  contextModel: string | null;
   /** Cumulative cost across all of the agent's settled turns. */
   spentUsd: number | null;
+  /**
+   * What the agent has SPENT in tokens, summed over its settled turns — the
+   * figure that stands beside {@link spentUsd}.
+   *
+   * Three counters rather than one, because the app already treats them as
+   * three: the Stats page leads with tokens in and out and reports cache
+   * separately with a hit rate. A single sum would be dominated by cache reads
+   * — measured on one Engineer turn, 48.3B of them against 117.6k of real
+   * input and output — so every agent would read the same enormous number and
+   * say nothing about the work.
+   *
+   * Null until a turn reports one: a reported absence is not a zero, the rule
+   * every figure on this row follows.
+   */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Cache reads and creations together — what the two figures above cost to
+   * put in front of the model, kept apart from them for the reason above. */
+  cacheTokens: number | null;
   /**
    * The agent's call threads — one per `call_agent` conversation targeting it,
    * derived from the caller's call_started/call_result items (which carry the
@@ -76,6 +105,15 @@ export interface AgentDisplay {
   /** The CLI driving it; null for a node no longer in the workflow. */
   agent: CliKind | null;
   /**
+   * The MODEL this agent is on — what its turns have actually RUN on where a
+   * turn has reported one, else what it was configured with.
+   *
+   * Null when neither is known: a node that names no model and has not run yet
+   * genuinely has no answer, and printing the CLI's default would be a guess
+   * about a vocabulary this app does not own.
+   */
+  model: string | null;
+  /**
    * The agent config directory this node's turns run under, or null.
    *
    * Carried on the DISPLAY row because a profile carries its own MCP servers:
@@ -95,6 +133,10 @@ export interface AgentDisplay {
    */
   contextWindowTokens: number | null;
   spentUsd: number | null;
+  /** What it has spent in tokens — see {@link AgentActivity.inputTokens}. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheTokens: number | null;
   /** Every conversation the agent has run — the panel's expandable list. */
   threads: AgentThread[];
 }
@@ -124,6 +166,19 @@ export interface AgentThread {
    * always null for a sub-agent, which never had one.
    */
   sessionId: string | null;
+  /**
+   * This CONVERSATION's own context reading, when the live plane has one.
+   *
+   * On the thread rather than on the card, because a context window belongs to
+   * a conversation and a node can hold several at once: the daemon used to key
+   * the reading by NODE, so a caller running two of the same callee had both
+   * writing to one entry — the panel counted "2 active · 2 threads" honestly
+   * above a single ring flickering between two unrelated windows. Null for a
+   * thread nothing has reported, and for a sub-agent, which has no window of
+   * its own.
+   */
+  contextTokens?: number | null;
+  contextWindowTokens?: number | null;
 }
 
 /**
@@ -222,10 +277,23 @@ export function subagentThreadsByAgent(
  * carries — never a second one for the same fact. It used to answer `idle`
  * here and `pending` the moment any status item existed, so one unchanged node
  * changed word on the strength of a row nobody had looked at.
+ *
+ * `parked` OUTRANKS a live turn, which is the same order — and the same rank 1
+ * — {@link displayRunStatus} gives a run with a card open. A parked node's turn
+ * IS in flight, so `activeTurns > 0` is true and the card read `running`:
+ * reported against a workflow whose header and sidebar row both said
+ * `needs more info` while the node card beside them span a spinner. Nothing
+ * moves until the user answers, and the one surface naming which AGENT is
+ * waiting was the one claiming it was working.
  */
 export function displayStatus(
   activity: AgentActivity | undefined,
+  /** This agent has an unanswered card open — nothing advances until it is. */
+  parked = false,
 ): RunStatusKind {
+  if (parked) {
+    return 'needs-input';
+  }
   if (!activity) {
     return 'pending';
   }
@@ -264,7 +332,11 @@ export function computeAgentActivity(
         lastStatus: null,
         contextTokens: null,
         contextWindowTokens: null,
+        contextModel: null,
         spentUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheTokens: null,
         callThreads: [],
       };
       byAgent.set(key, existing);
@@ -387,6 +459,27 @@ export function computeAgentActivity(
       if (typeof window === 'number' && window > 0) {
         agent.contextWindowTokens = window;
       }
+      // Remembered on the same rule as the window it travels with, and for the
+      // same reason: the two are read from ONE `modelUsage` entry, so a turn
+      // that reported neither has said nothing about which model this agent is
+      // on — it has not switched to an unnamed one. Overwriting with that
+      // silence would blank the name for the rest of the run.
+      const model = usage.contextModel;
+      if (typeof model === 'string' && model.length > 0) {
+        agent.contextModel = model;
+      }
+      // ADDED, never remembered like the two readings above: a window is the
+      // state of one conversation while these are a running total, so a turn
+      // that reported none contributes nothing rather than replacing the sum.
+      // Each counter is independent — a CLI that reports output and no input
+      // (both shipped ones do, on a cached turn) must still count what it did
+      // report, and null + 4 is 4 rather than a null that swallows it.
+      agent.inputTokens = addTokens(agent.inputTokens, usage.inputTokens);
+      agent.outputTokens = addTokens(agent.outputTokens, usage.outputTokens);
+      agent.cacheTokens = addTokens(
+        addTokens(agent.cacheTokens, usage.cacheReadTokens),
+        usage.cacheCreationTokens,
+      );
       if (typeof usage.costUsd === 'number') {
         agent.spentUsd = (agent.spentUsd ?? 0) + usage.costUsd;
       }
@@ -407,6 +500,21 @@ export function computeAgentActivity(
  * than gaining another suffix — a `T` of tokens is not a scale this app has a
  * reason to be ready for, and an unfamiliar suffix costs more than a long number.
  */
+/**
+ * Add one turn's counter to a running total, where null means UNMEASURED.
+ *
+ * `null + n` is `n` rather than null: a turn that reported nothing must not
+ * erase what earlier turns did report, and a total that stays null until every
+ * turn has answered would be blank on any CLI that reports a field
+ * intermittently — which both shipped ones do.
+ */
+function addTokens(total: number | null, next: unknown): number | null {
+  if (typeof next !== 'number' || !Number.isFinite(next) || next < 0) {
+    return total;
+  }
+  return (total ?? 0) + next;
+}
+
 export function formatTokens(count: number): string {
   if (count >= 1_000_000_000) {
     return `${(count / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`;

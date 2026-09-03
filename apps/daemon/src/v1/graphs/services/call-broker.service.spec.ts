@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ItemKind } from '../../runs/runs.types';
 import { errorOf } from '../__tests__/call-envelope';
 import type {
@@ -225,6 +226,168 @@ describe('CallBroker', () => {
     expect(errorOf(again)).toContain('UNKNOWN_CALL');
   });
 
+  it('an ABANDONED collection consumes nothing — the retry still gets the result', async () => {
+    // MEASURED on the reporter's own run: the claude CLI aborted its own
+    // `await_agent` fetch after 338s, the callee finished 28s later ($7.03 of
+    // work), the broker consumed the entry into that dead request — writing
+    // `await_collected` — and the retry was told UNKNOWN_CALL. The turn was
+    // then unreachable for the rest of the run and the caller re-issued the
+    // whole call from scratch.
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const abandoned = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1' },
+      gone.signal,
+    );
+    gone.abort(); // the request's socket closes while the callee works on
+    expect(errorOf(await abandoned)).toContain('AWAIT_ABANDONED');
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'async done',
+      error: null,
+      sessionId: null,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    // Nothing was collected, so nothing was written — the entry is intact.
+    expect(items.map((i) => i.kind)).toEqual(['call_started', 'call_result']);
+    const retry = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(retry).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'async done' },
+    });
+    expect(items.map((i) => i.kind)).toContain('await_collected');
+  });
+
+  it('a timed-out collection answers pending and consumes nothing — the caller comes back for it', async () => {
+    // The whole point of the argument: a caller that does not want to block for
+    // the callee's full run can stop waiting and go do something else, and the
+    // work is still there when it returns. `pending` rather than an error,
+    // because nothing went wrong — an error arm here is what would have a model
+    // abandon or re-issue a call that is running perfectly well.
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 1,
+      }),
+    ).toEqual({ status: 'pending', call_id: 'call-1', agent: 'helper' });
+    // Nothing consumed: no receipt, and the entry is still the caller's.
+    expect(items.map((i) => i.kind)).toEqual(['call_started']);
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'the build passed',
+      error: null,
+      sessionId: null,
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' }),
+    ).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'the build passed' },
+    });
+    expect(items.map((i) => i.kind)).toContain('await_collected');
+  });
+
+  it('a window the callee finishes inside returns the RESULT, not pending', async () => {
+    // The other half of the same argument, and the one a deadline written as a
+    // plain race would break: the timer must not win over an outcome that is
+    // already there, or every bounded await would report `pending` about a
+    // callee that had answered.
+    const { broker } = harness();
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    expect(
+      await broker.awaitAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        timeout_ms: 60_000,
+      }),
+    ).toEqual({
+      status: 'ok',
+      result: { call_id: 'call-1', agent: 'helper', text: 'done by helper' },
+    });
+  });
+
+  it('an ABANDONED request outranks its own deadline', async () => {
+    // Both races can be won in the same tick, and they mean opposite things:
+    // `pending` is an answer to somebody, and there is nobody left to give it
+    // to. Reporting it into a dead socket would also be the one shape that
+    // looks, from the outside, exactly like the abandonment bug being back.
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const abandoned = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1', timeout_ms: 1 },
+      gone.signal,
+    );
+    gone.abort();
+    expect(errorOf(await abandoned)).toContain('AWAIT_ABANDONED');
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      sessionId: null,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(items.map((i) => i.kind)).not.toContain('await_collected');
+  });
+
+  it('a collection abandoned AFTER the callee settled still leaves it collectable', async () => {
+    // The race the fix is really about: the outcome and the abort land in the
+    // same tick, so a check written only at entry would sail past it and
+    // consume anyway.
+    const { broker, items, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const gone = new AbortController();
+    const abandoned = broker.awaitAgent(
+      'run-1',
+      'orch',
+      { call_id: 'call-1' },
+      gone.signal,
+    );
+    gone.abort();
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'async done',
+      error: null,
+      sessionId: null,
+    });
+    await abandoned;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(items.map((i) => i.kind)).not.toContain('await_collected');
+    expect(
+      (await broker.awaitAgent('run-1', 'orch', { call_id: 'call-1' })).status,
+    ).toBe('ok');
+  });
+
   it('two concurrent await_agent waiters on one async call still collect exactly once', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
@@ -411,6 +574,23 @@ describe('CallBroker', () => {
     expect(errorOf(goneAwait)).toContain('RUN_NOT_ACTIVE');
   });
 
+  it('drops a run\u2019s state when the RUN is destroyed, off the bus', () => {
+    // The executor unregisters on its own delete; this covers the purge it
+    // never sees — the retention sweep, which destroys an archived workflow run
+    // from the module BELOW this one and can only announce it. Without the
+    // subscription a swept run left its capability, its uncollected results and
+    // any parked question's timer behind for the life of the daemon.
+    const bus = new AgentEventBus();
+    const broker = new CallBroker(bus);
+    broker.onModuleInit();
+    broker.registerRun('run-1', harness().capability);
+    expect(broker.hasRun('run-1')).toBe(true);
+
+    bus.publishRunDeleted('run-1');
+
+    expect(broker.hasRun('run-1')).toBe(false);
+  });
+
   it('listCallees exposes the wiring the tool description advertises', () => {
     const { broker } = harness();
     expect(broker.listCallees('run-1', 'orch').map((c) => c.id)).toEqual([
@@ -531,6 +711,47 @@ describe('CallBroker — parked questions (M4)', () => {
       sessionId: null,
     });
     expect((await second).status).toBe('ok');
+  });
+
+  it('a question the caller only learns about LATE gets its full window from then', async () => {
+    // The TTL used to run from the PARK. A caller whose collection had already
+    // been abandoned was never told, so the clock timed a caller that could
+    // not answer and the call failed with "the caller never answered the
+    // question" — reported over a real run whose caller had asked and been cut
+    // off by its own client. The window now starts at the delivery that is
+    // actually observed.
+    const { broker, deferred } = harness({ launch: 'defer' });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const failed = park(broker, {
+      ttlMs: 60,
+      fail: () =>
+        deferred[0]!.resolve({
+          status: 'cancelled',
+          finalText: null,
+          error: 'run cancelled',
+          sessionId: null,
+        }),
+    });
+    // Most of the original window passes with nobody collecting.
+    await new Promise((resolve) => setTimeout(resolve, 45));
+    const question = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(question.status).toBe('question');
+    // Past the ORIGINAL deadline, and the question is still answerable —
+    // without the re-arm it has already been failed by here.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(failed.failed.count).toBe(0);
+    expect(
+      broker.answerAgent('run-1', 'orch', {
+        call_id: 'call-1',
+        answer: 'Red',
+      }).status,
+    ).toBe('ok');
   });
 
   it('an unanswered question times out: the callee turn is failed and the call settles as QUESTION_TIMEOUT', async () => {
@@ -847,5 +1068,79 @@ describe('CallBroker — thread continuation', () => {
     });
     expect(envelope.status).toBe('error');
     expect(errorOf(envelope)).toContain('THREAD_UNAVAILABLE');
+  });
+});
+
+/**
+ * F22: `untilAbandoned` and `untilDeadline` (the two private wrappers
+ * `awaitAgent` composes around `waitForOutcome`) used to forward only the
+ * fulfillment arm of the promise they wrap (`promise.then(onFulfilled)`,
+ * no rejection handler). A rejecting inner promise therefore left the
+ * wrapper's own returned promise pending FOREVER instead of propagating the
+ * failure — `awaitAgent` would hang rather than let the rejection reach the
+ * MCP dispatcher's ordinary error mapping.
+ *
+ * These specs call the two wrappers directly (via a narrow structural cast —
+ * neither method reads `this`) rather than staging a call/callee scenario
+ * that reaches a rejection: in production `call.settled` always carries a
+ * `.catch` (see `callAgent`), so this is a defensive contract the wrappers
+ * must honor even though nothing on the ordinary call path exercises it
+ * today.
+ */
+interface UntilWrappers {
+  untilAbandoned<T>(
+    signal: AbortSignal | undefined,
+    promise: Promise<T>,
+  ): Promise<T | symbol>;
+  untilDeadline<T>(
+    timeoutMs: number | undefined,
+    promise: Promise<T>,
+  ): Promise<T | symbol>;
+}
+
+function untilWrappersOf(broker: CallBroker): UntilWrappers {
+  return broker as unknown as UntilWrappers;
+}
+
+describe('CallBroker — untilAbandoned / untilDeadline reject propagation', () => {
+  it('untilAbandoned rejects instead of hanging when the wrapped promise rejects', async () => {
+    const { untilAbandoned } = untilWrappersOf(new CallBroker());
+    // Never aborts — this exercises the reject arm of the settle race, not
+    // the abort arm.
+    const controller = new AbortController();
+    const failure = new Error('callee turn blew up');
+    await expect(
+      untilAbandoned(controller.signal, Promise.reject(failure)),
+    ).rejects.toBe(failure);
+  }, 2000);
+
+  it('untilAbandoned still resolves normally when the wrapped promise resolves', async () => {
+    const { untilAbandoned } = untilWrappersOf(new CallBroker());
+    const controller = new AbortController();
+    const outcome = { status: 'ok' as const };
+    await expect(
+      untilAbandoned(controller.signal, Promise.resolve(outcome)),
+    ).resolves.toBe(outcome);
+  });
+
+  it('untilDeadline rejects instead of hanging when the wrapped promise rejects', async () => {
+    const { untilDeadline } = untilWrappersOf(new CallBroker());
+    const failure = new Error('callee turn blew up');
+    // A deadline far outside this test's own timeout: on the unfixed wrapper
+    // the promise never settles within that window (no reject arm, and the
+    // timer would not fire first either), so the assertion below fails by
+    // timing out rather than by resolving to the wrong thing — still a red
+    // test either way.
+    await expect(untilDeadline(60_000, Promise.reject(failure))).rejects.toBe(
+      failure,
+    );
+  }, 2000);
+
+  it('untilDeadline still resolves normally when the wrapped promise resolves', async () => {
+    const { untilDeadline } = untilWrappersOf(new CallBroker());
+    const outcome = { status: 'ok' as const };
+    await expect(untilDeadline(60_000, Promise.resolve(outcome))).resolves.toBe(
+      outcome,
+    );
   });
 });

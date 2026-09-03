@@ -3,7 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RunDeltaEvent } from '../chat.types';
 import { FakeContextWindowStore } from './__tests__/fake-context-window-store';
 import type { AgentEventBus } from './agent-events.bus';
-import { PartialStreamService } from './partial-stream.service';
+import {
+  OWNER_KEY_SEPARATOR,
+  ownerOfKey,
+  partialOwnerKey,
+  PartialStreamService,
+} from './partial-stream.service';
 
 const RUN = 'run-1';
 const OWNER = 'agent';
@@ -577,5 +582,32 @@ describe('PartialStreamService — a CLI that DISCLOSES what it is thinking', ()
 
     expect(last().thinkingText).toBeNull();
     expect(last().thinkingStretch).toBeNull();
+  });
+});
+
+describe('the owner key — this side of the twin', () => {
+  // TWIN PARSER: `apps/ui/src/renderer/chats/live-text.ts` re-implements all
+  // three of these. This is the AUTHORITATIVE side — the daemon composes the
+  // key the `agent_delta` event is published under — and it had no test of its
+  // own while the mirror had five, so a drift here would misattribute every
+  // live-plane owner with nothing failing to compile.
+
+  it('composes a node’s own turn as the bare node id', () => {
+    expect(partialOwnerKey('reviewer', null)).toBe('reviewer');
+  });
+
+  it('composes a CALL thread with the separator', () => {
+    expect(partialOwnerKey('reviewer', 'call-1')).toBe('reviewer::call-1');
+  });
+
+  it('reads the node back out of either shape', () => {
+    expect(ownerOfKey(partialOwnerKey('reviewer', null))).toBe('reviewer');
+    expect(ownerOfKey(partialOwnerKey('reviewer', 'call-1'))).toBe('reviewer');
+  });
+
+  it('splits at the FIRST separator, so a call id may contain one', () => {
+    expect(
+      ownerOfKey(partialOwnerKey('reviewer', `a${OWNER_KEY_SEPARATOR}b`)),
+    ).toBe('reviewer');
   });
 });

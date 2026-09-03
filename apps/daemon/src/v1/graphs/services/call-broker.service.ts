@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 
+import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type {
   CalleeTurnOutcome,
   CallEnvelope,
@@ -32,9 +33,38 @@ const MAX_CALL_TURNS_PER_RUN = 50;
  */
 const QUESTION_TTL_MS = 5 * 60_000;
 
+/**
+ * A collection whose REQUEST went away before the callee settled.
+ *
+ * A sentinel rather than an error envelope, because the difference has to
+ * survive the return: an envelope would be indistinguishable from an outcome
+ * the caller is owed, and it is precisely the "nobody is there to receive
+ * this" reading that must stop the entry being consumed.
+ */
+const ABANDONED = Symbol('await-abandoned');
+
+/**
+ * A collection whose own `timeout_ms` elapsed with the callee still working.
+ *
+ * A sentinel for {@link ABANDONED}'s reason — the difference between "still
+ * running" and an outcome must survive the return, and it is what stops the
+ * entry being consumed. The two are kept APART rather than folded into one
+ * "did not collect" because they mean opposite things to the caller: an
+ * abandonment says nobody was there to receive the answer, while this says the
+ * caller deliberately stopped waiting and means to come back.
+ */
+const TIMED_OUT = Symbol('await-timed-out');
+
 interface AsyncCallEntry {
   /** The caller that started the call — only it may collect the result. */
   owner: string;
+  /**
+   * The callee this call went to, so a {@link TIMED_OUT} collection can NAME it
+   * without reaching into `activeCalls` — which a settled-but-uncollected call
+   * has already left, and where a lookup would therefore have to fall back to a
+   * blank agent on exactly the arm whose whole content is "who is still busy".
+   */
+  calleeId: string;
   settled: Promise<CallEnvelope>;
 }
 
@@ -43,6 +73,13 @@ interface ParkedQuestion {
   question: string;
   options: string[];
   timer: NodeJS.Timeout;
+  /**
+   * The window this question was parked with, kept so a re-arm uses the SAME
+   * one — the executor's capture seam may name its own, and re-arming with the
+   * module constant instead would silently give a test-scale TTL a
+   * five-minute one.
+   */
+  ttlMs: number;
   deliver(answer: string): boolean;
   fail(): void;
 }
@@ -103,8 +140,38 @@ interface RunCallState {
  * round-trip.
  */
 @Injectable()
-export class CallBroker {
+export class CallBroker implements OnModuleInit {
   private readonly runs = new Map<string, RunCallState>();
+
+  /**
+   * `@Optional()` on the bus, exactly as `AgentEventBus` itself takes its
+   * registry: a dozen specs build a bare `new CallBroker()` to drive call
+   * semantics, and none of them is about run deletion. Without one the
+   * subscription below simply never happens — which is the pre-existing
+   * behaviour rather than a degraded one.
+   */
+  constructor(@Optional() private readonly bus?: AgentEventBus) {}
+
+  /**
+   * Drop a run's call state when the run itself is DESTROYED.
+   *
+   * The executor already unregisters on its own delete, so this is the second
+   * belt — and the one that covers a purge it never sees. The retention sweep
+   * destroys an archived run through `ChatService`, which sits in the module
+   * BELOW this one and cannot call into it; announcing the deletion downward is
+   * the inversion `AgentEventBus.publishRunDeleted` exists for, and it says so
+   * at its own definition. Without this, a swept workflow run left its capability,
+   * its uncollected async results and any parked question's timer behind for the
+   * life of the daemon.
+   *
+   * Idempotent, which is what makes two callers safe: `unregisterRun` on a run
+   * it has never heard of clears nothing and throws nothing.
+   */
+  onModuleInit(): void {
+    this.bus?.allDeleted().subscribe((runId) => {
+      this.unregisterRun(runId);
+    });
+  }
 
   /** The executor announces a run whose workflow carries call edges. */
   registerRun(runId: string, capability: RunCallCapability): void {
@@ -291,6 +358,7 @@ export class CallBroker {
     if (mode === 'async') {
       state.pendingAsync.set(callId, {
         owner: callerNodeId,
+        calleeId: callee.id,
         settled: call.settled,
       });
     }
@@ -313,7 +381,26 @@ export class CallBroker {
   async awaitAgent(
     runId: string,
     callerNodeId: string,
-    args: { call_id: string },
+    args: {
+      call_id: string;
+      /**
+       * How long to block before answering `pending` instead — absent means
+       * block until the callee settles, which is what every caller got before
+       * this existed.
+       *
+       * Taken as given: the BOUNDS are the MCP layer's, where a model's
+       * arguments are validated and an out-of-range one becomes INVALID_ARGS.
+       * Here it is a plain number, so a spec can name a millisecond window and
+       * drive the whole path in no wall-clock time.
+       */
+      timeout_ms?: number;
+    },
+    /**
+     * Trips when the HTTP request this collection is answering has gone away —
+     * see {@link ABANDONED}. Absent = a caller that cannot be abandoned (a
+     * test, an in-process caller).
+     */
+    signal?: AbortSignal,
   ): Promise<CallEnvelope> {
     const state = this.runs.get(runId);
     if (!state) {
@@ -329,12 +416,45 @@ export class CallBroker {
         error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
       };
     }
-    const envelope = await this.waitForOutcome(
-      state,
-      args.call_id,
-      entry.settled,
+    const envelope = await this.untilAbandoned(
+      signal,
+      this.untilDeadline(
+        args.timeout_ms,
+        this.waitForOutcome(state, args.call_id, entry.settled),
+      ),
     );
+    // The request is GONE — its socket closed while this collection was
+    // blocked. Consuming here is what cost a caller a whole callee turn: the
+    // entry is deleted, `await_collected` is written, and the envelope is
+    // handed to a reply nobody will read, so the retry is told UNKNOWN_CALL
+    // and the work is unreachable for the rest of the run.
+    if (envelope === ABANDONED) {
+      return {
+        status: 'error',
+        error: `AWAIT_ABANDONED: the request collecting '${args.call_id}' ended before the callee did — the result is still collectable`,
+      };
+    }
+    // The caller asked to stop waiting, so it is told exactly that and NOTHING
+    // is consumed: the entry stays, no `await_collected` row is written, and
+    // the next await picks up where this one left off. Identical mechanics to
+    // the abandonment above — the two differ only in what the caller is told,
+    // because only one of them was the caller's own decision.
+    if (envelope === TIMED_OUT) {
+      return {
+        status: 'pending',
+        call_id: args.call_id,
+        agent: entry.calleeId,
+      };
+    }
     if (envelope.status === 'question') {
+      // The TTL counts from the moment the caller can actually SEE the
+      // question, not from the park. A question raised into a collection that
+      // had already been abandoned reached nobody, and the clock was then
+      // timing a caller that was never told — which is the whole of
+      // "QUESTION_TIMEOUT: the caller never answered the question" on a run
+      // whose caller had asked and been cut off. This is the one delivery that
+      // is observed rather than assumed.
+      this.rearmQuestionTtl(runId, args.call_id);
       return envelope;
     }
     // A concurrent waiter may have collected while this one was blocked —
@@ -429,15 +549,14 @@ export class CallBroker {
     if (!state || !call || call.parked) {
       return false;
     }
-    const timer = setTimeout(
-      () => this.expireQuestion(runId, callId),
-      input.ttlMs ?? QUESTION_TTL_MS,
-    );
+    const ttlMs = input.ttlMs ?? QUESTION_TTL_MS;
+    const timer = setTimeout(() => this.expireQuestion(runId, callId), ttlMs);
     timer.unref?.();
     call.parked = {
       question: input.question,
       options: input.options,
       timer,
+      ttlMs,
       deliver: input.deliver,
       fail: input.fail,
     };
@@ -471,6 +590,7 @@ export class CallBroker {
     if (!state.pendingAsync.has(callId)) {
       state.pendingAsync.set(callId, {
         owner: call.owner,
+        calleeId: call.calleeId,
         settled: call.settled,
       });
     }
@@ -561,6 +681,107 @@ export class CallBroker {
       };
       call.questionWaiters.push(once);
       void call.settled.then(once);
+    });
+  }
+
+  /**
+   * Restart a parked question's TTL, because the caller has only NOW been
+   * handed it.
+   *
+   * A no-op for a call that is no longer parked (answered, failed, gone), so a
+   * late collection cannot resurrect a clock on a question that is over.
+   */
+  private rearmQuestionTtl(runId: string, callId: string): void {
+    const parked = this.runs.get(runId)?.activeCalls.get(callId)?.parked;
+    if (!parked) {
+      return;
+    }
+    clearTimeout(parked.timer);
+    parked.timer = setTimeout(
+      () => this.expireQuestion(runId, callId),
+      parked.ttlMs,
+    );
+    parked.timer.unref?.();
+  }
+
+  /**
+   * Resolve with `promise`, or with {@link ABANDONED} the moment `signal`
+   * trips — whichever happens first. A rejection from `promise` REJECTS the
+   * returned promise too (never left pending) — `awaitAgent`'s caller needs
+   * that to reach the MCP dispatcher's ordinary error mapping instead of
+   * hanging forever.
+   *
+   * The point is the CALLER's side of the race rather than the callee's:
+   * nothing here cancels the callee, which goes on working and settles into
+   * its own entry exactly as before. All this decides is whether the
+   * collection that was waiting is still there to be given the answer.
+   */
+  private untilAbandoned<TOutcome>(
+    signal: AbortSignal | undefined,
+    promise: Promise<TOutcome>,
+  ): Promise<TOutcome | typeof ABANDONED> {
+    if (!signal) {
+      return promise;
+    }
+    if (signal.aborted) {
+      return Promise.resolve(ABANDONED);
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => resolve(ABANDONED);
+      signal.addEventListener('abort', onAbort, { once: true });
+      // Both arms must remove the listener before settling — a rejection
+      // left it attached, which is otherwise harmless (the promise is
+      // already settled) but keeps the signal referencing this closure.
+      void promise.then(
+        (envelope) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(envelope);
+        },
+        (error: unknown) => {
+          signal.removeEventListener('abort', onAbort);
+          reject(error);
+        },
+      );
+    });
+  }
+
+  /**
+   * Resolve with `promise`, or with {@link TIMED_OUT} after `timeoutMs` —
+   * whichever happens first. No window means no race at all, which is the
+   * unbounded wait every caller had before. A rejection from `promise`
+   * REJECTS the returned promise too, on the same terms as
+   * {@link untilAbandoned}.
+   *
+   * Nothing here touches the callee, exactly as {@link untilAbandoned} does
+   * not: this decides only how long THIS collection stands there. It nests
+   * INSIDE the abandonment race rather than beside it because the two answers
+   * are not peers — a socket that closed means the answer cannot be delivered
+   * at all, which outranks the caller having wanted a shorter wait, and a
+   * flat three-way race would let a deadline that fired in the same tick
+   * report `pending` into a reply nobody will read.
+   */
+  private untilDeadline<TOutcome>(
+    timeoutMs: number | undefined,
+    promise: Promise<TOutcome>,
+  ): Promise<TOutcome | typeof TIMED_OUT> {
+    if (timeoutMs === undefined) {
+      return promise;
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+      // A deadline is a convenience for the caller, never a reason to keep the
+      // daemon alive — the callee's own turn is what holds the run open.
+      timer.unref?.();
+      void promise.then(
+        (outcome) => {
+          clearTimeout(timer);
+          resolve(outcome);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
     });
   }
 

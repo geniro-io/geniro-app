@@ -837,6 +837,80 @@ describe('mapClaudeMessage — sub-agent origin', () => {
     ]);
   });
 
+  it('names the model a delegate is RUNNING, from the first line it speaks on', () => {
+    // Every other channel reports a delegate's model when the work is OVER
+    // (the launching call's `resolvedModel`), so a running one was unattributed
+    // for exactly as long as it ran. Verified on disk against a real delegate's
+    // own transcript: its first assistant row carries `message.model`.
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: AGENT_TOOL_USE_ID,
+        message: {
+          model: 'claude-opus-5',
+          content: [{ type: 'text', text: 'looking' }],
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    const declaration = events.find(
+      (event) => event.type === 'subagent_info',
+    ) as { id: string; model: string | null } | undefined;
+    expect(declaration).toMatchObject({
+      id: AGENT_TOOL_USE_ID,
+      model: 'claude-opus-5',
+    });
+    // ABOUT a delegate, not produced BY one: it names the launching call in its
+    // own `id`, so stamping the origin as well would file the declaration as
+    // one of the delegate's own rows.
+    expect(declaration).not.toHaveProperty('parentToolUseId');
+    // Every other field null, so it cannot blank what a richer announcement
+    // gave under the merge rule.
+    expect(declaration).toMatchObject({ label: null, prompt: null });
+  });
+
+  it('announces that model ONCE, not on every line the delegate writes', () => {
+    // A delegate writes an assistant line per response, and each names its
+    // model. Announcing every one persists dozens of identical declaration
+    // rows per delegate — for a fan-out of twelve, hundreds a turn.
+    const ledger = new ClaudeSessionCostLedger();
+    const line = {
+      type: 'assistant',
+      parent_tool_use_id: AGENT_TOOL_USE_ID,
+      message: {
+        model: 'claude-opus-5',
+        content: [{ type: 'text', text: 'still looking' }],
+      },
+    };
+
+    const first = mapClaudeMessage(line, ledger);
+    const second = mapClaudeMessage(line, ledger);
+
+    expect(first.filter((e) => e.type === 'subagent_info')).toHaveLength(1);
+    expect(second.filter((e) => e.type === 'subagent_info')).toHaveLength(0);
+    // …and the delegate's own words still come through on both.
+    expect(second.filter((e) => e.type === 'text')).toHaveLength(1);
+  });
+
+  it('says nothing about a sub-agent for a MAIN-THREAD line that names a model', () => {
+    // The main thread's model is `turn_model`, off `system/init`. A
+    // `subagent_info` here would invent a delegate keyed by nothing.
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: {
+          model: 'claude-opus-5',
+          content: [{ type: 'text', text: 'done.' }],
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events.filter((e) => e.type === 'subagent_info')).toHaveLength(0);
+  });
+
   it('leaves a main-thread line unmarked, rather than stamping a null', () => {
     // `parent_tool_use_id: null` is what the CLI sends for the ordinary case,
     // and it must not become a key on every row in the database.

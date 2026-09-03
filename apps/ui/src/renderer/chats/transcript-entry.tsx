@@ -47,11 +47,19 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
   nodes,
   chatAgentName,
   soloAgent = false,
+  soloNodeId = null,
 }: {
   entry: TranscriptEntry;
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   /** Sender name for a 1:1 chat's agent items (they carry no nodeId). */
   chatAgentName?: string | null;
+  /**
+   * ONE node whose rows need no identity — a workflow's root agent, the one
+   * its trigger feeds (`workflow-root.ts`). The same exemption
+   * {@link soloAgent} makes for a 1:1 chat, granted per NODE rather than per
+   * run, because the other agents of the same run still need their frames.
+   */
+  soloNodeId?: string | null;
   /**
    * The run has exactly one agent, so the agent side needs no identity: its
    * rows render bare instead of in a {@link SenderRow}. The USER's own
@@ -76,7 +84,19 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
    * captioned wrongly rather than merely plainly.
    */
   const nested = useContext(NestedThreadContext);
-  const solo = soloAgent || nested;
+  // Read off the ENTRY rather than handed down as a decided boolean: the
+  // caller renders ONE list holding every node's work, so the exemption has to
+  // be answered per row.
+  const ownNodeId =
+    entry.type === 'turn-block'
+      ? entry.nodeId
+      : entry.type === 'item'
+        ? entry.item.nodeId
+        : null;
+  const solo =
+    soloAgent ||
+    nested ||
+    (soloNodeId !== null && ownNodeId !== null && ownNodeId === soloNodeId);
   const nameOf = (id: string | null): string | null =>
     id === null ? null : (nodes?.get(id)?.name ?? id);
   const agentName = (id: string | null): string =>
@@ -163,6 +183,13 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
       </SenderRow>
     );
   }
+  if (solo) {
+    // The one agent needs no identity — its rows sit bare in the flow. Ahead
+    // of the question row below, which is the callee's: inside a call block the
+    // header has already named it, so a frame there is the enclosure's own
+    // identity restated one line down.
+    return content;
+  }
   if (item.kind === 'call_question') {
     // The question comes FROM the callee (parked for its caller).
     const calleeId = payloadString(item.payload, 'calleeNodeId');
@@ -174,10 +201,6 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
         {content}
       </SenderRow>
     );
-  }
-  if (solo) {
-    // The one agent needs no identity — its rows sit bare in the flow.
-    return content;
   }
   return (
     <SenderRow

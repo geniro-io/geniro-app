@@ -109,6 +109,7 @@ export function cursorUsageRequestBody(input: {
  */
 export function foldCursorUsagePage(
   payload: unknown,
+  since?: ReadonlyMap<string, number>,
 ): Map<string, CursorConversationSpend> {
   const out = new Map<string, CursorConversationSpend>();
   const body = asRecord(payload);
@@ -133,19 +134,57 @@ export function foldCursorUsagePage(
       continue;
     }
     // The timestamp is an epoch-millis STRING on this wire, like the bounds.
-    const atMs = Number(asString(event['timestamp']) ?? '');
+    //
+    // Parsed in two steps rather than as `Number(asString(x) ?? '')`, because
+    // `Number('')` is 0 and not NaN — written that way `Number.isFinite` can
+    // never reject an absent timestamp, so the guard reads as one thing and
+    // tests another. Both spellings happen to fold identically (a 0 loses
+    // `atMs > watermark` to any real watermark, and `latestAtMs` maxes to 0
+    // either way); what the honest form buys is that `readableAt` means what it
+    // says at the ONE place it is load-bearing — the caller's decision about
+    // whether this fold produced a watermark at all.
+    const rawAtMs = asString(event['timestamp']);
+    const atMs = rawAtMs === null ? Number.NaN : Number(rawAtMs);
+    const readableAt = Number.isFinite(atMs) && atMs > 0;
+    const watermark = since?.get(conversationId) ?? 0;
+    // Already counted into this conversation's running total on an earlier
+    // poll. The window deliberately overlaps the last one so a late-billed
+    // event is not missed, and this is what stops that overlap being counted
+    // twice now that the write ACCUMULATES instead of replacing.
+    //
+    // An event whose timestamp does not read cannot be placed against the
+    // watermark at all, so it counts only while there is no watermark to place
+    // it against — on the conversation's first pricing. Counting it every poll
+    // would inflate the total for good, and this module's stated bias is that a
+    // thread under-reporting is the safe direction for a figure a user checks
+    // against their own bill. The caller closes the other half of that: a
+    // conversation whose counted events yielded no readable timestamp is
+    // watermarked at the poll's own end rather than left unmarked.
+    if (watermark > 0 && !(readableAt && atMs > watermark)) {
+      continue;
+    }
     const known = out.get(conversationId);
     out.set(conversationId, {
       conversationId,
       costCents: (known?.costCents ?? 0) + cents,
       events: (known?.events ?? 0) + 1,
-      latestAtMs: Math.max(
-        known?.latestAtMs ?? 0,
-        Number.isFinite(atMs) ? atMs : 0,
-      ),
+      latestAtMs: Math.max(known?.latestAtMs ?? 0, readableAt ? atMs : 0),
     });
   }
   return out;
+}
+
+/**
+ * How many events one page carried, before any of them were folded.
+ *
+ * The paging loop counts with this rather than with the fold's event totals:
+ * the fold drops what an earlier poll already counted, so on an overlapping
+ * window its totals no longer sum towards {@link cursorUsageTotalCount} and the
+ * loop would walk every page it is allowed before giving up.
+ */
+export function cursorUsagePageLength(payload: unknown): number {
+  const events = asRecord(payload)?.['usageEventsDisplay'];
+  return Array.isArray(events) ? events.length : 0;
 }
 
 /** How many events the account holds in the window, for the paging loop. */

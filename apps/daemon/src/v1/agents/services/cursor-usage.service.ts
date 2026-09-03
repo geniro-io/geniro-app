@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
+import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -15,12 +16,14 @@ import {
   CURSOR_USAGE_MAX_PAGES,
   CURSOR_USAGE_METHOD,
   type CursorConversationSpend,
+  cursorUsagePageLength,
   cursorUsageRequestBody,
   cursorUsageTotalCount,
   foldCursorUsagePage,
   mergeCursorSpend,
 } from '../utils/cursor-usage';
 import { asNumber, asRecord } from '../utils/json-util';
+import { AgentEventBus } from './agent-events.bus';
 
 const run = promisify(execFile);
 
@@ -46,12 +49,31 @@ const KEYCHAIN_ACCOUNT = 'cursor-user';
 const MIN_POLL_INTERVAL_MS = 10 * 60_000;
 
 /**
+ * The floor while a cursor conversation is actually PRODUCING.
+ *
+ * Ten minutes is the right cadence for an ambient trigger — somebody opened a
+ * thread, so its figure may as well be current. It is the wrong one for the
+ * thread being watched: Cursor bills per REQUEST rather than at the turn's end,
+ * so the figure genuinely moves while a turn is in flight, and at the ambient
+ * cadence a run could be minutes old and still priced at nothing.
+ *
+ * It is bounded by the work rather than by a timer: the tick comes from items
+ * a CURSOR run persisted, so an idle machine polls nothing at all and a claude
+ * user polls nothing ever. The worst case is one request a minute while a
+ * cursor agent is working, against turns that cost dollars each — proportionate,
+ * and still far inside the hourly guidance {@link MIN_POLL_INTERVAL_MS} cites.
+ */
+const LIVE_POLL_INTERVAL_MS = 60_000;
+
+/**
  * How far back a poll looks past the last one it completed.
  *
  * An event is written when Cursor bills it, which is not the instant the turn
  * ended, so a window that started exactly where the last one stopped would drop
- * whatever landed late. Re-reading an overlapping hour costs one page and the
- * fold is a REPLACEMENT per conversation, so a re-read event cannot double-count.
+ * whatever landed late. Re-reading an overlapping hour costs one page, and the
+ * per-conversation watermark on `node_state` is what keeps a re-read event from
+ * being counted twice now that {@link CursorUsageService.writeSpend}
+ * accumulates — see that method for why it no longer replaces.
  */
 const POLL_OVERLAP_MS = 60 * 60_000;
 
@@ -69,6 +91,25 @@ const FIRST_POLL_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
 const KEYCHAIN_TIMEOUT_MS = 5_000;
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/** One cursor conversation, the run that holds it, and how far it is priced. */
+interface CursorConversationTarget {
+  run: Run;
+  /** The `node_state` row carrying this conversation's session id. */
+  nodeId: string;
+  /** Its watermark, or 0 when the conversation has never been priced. */
+  throughMs: number;
+}
+
+/** What one poll found that one run has newly spent. */
+interface CursorRunDelta {
+  run: Run;
+  cents: number;
+  events: number;
+  /** Whether any of this run's conversations already carries a watermark. */
+  priced: boolean;
+  marks: { nodeId: string; throughMs: number }[];
+}
+
 /**
  * What each cursor CONVERSATION has cost, fetched in one batched poll and
  * written onto the runs that hold those conversations.
@@ -79,11 +120,13 @@ const REQUEST_TIMEOUT_MS = 20_000;
  *
  * Three properties shape it:
  *
- * - It is **batched and floored**. Every caller goes through {@link refresh},
- *   which does nothing at all inside {@link MIN_POLL_INTERVAL_MS} of the last
- *   attempt and never runs two polls at once. One poll updates every cursor
- *   conversation, so there is no per-thread or per-message request anywhere in
- *   this file.
+ * - It is **batched and floored**, on TWO floors. An ambient caller goes through
+ *   {@link refresh} and does nothing inside {@link MIN_POLL_INTERVAL_MS} of the
+ *   last attempt; while a cursor run is producing items the floor is the shorter
+ *   {@link LIVE_POLL_INTERVAL_MS}, because Cursor bills per request and the
+ *   figure moves mid-turn. Neither ever runs two polls at once, and one poll
+ *   updates every cursor conversation — so there is no per-thread or
+ *   per-message request anywhere in this file, at either cadence.
  * - It **fails closed and silent**, exactly as `main/github-prs.ts` does for the
  *   same shape of call: no CLI installed, no Keychain item, a denied prompt, a
  *   signed-out account, no network — every one of them ends as "no cost
@@ -93,7 +136,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
  *   requests, and dropped; nothing here stores it and no log line can carry it.
  */
 @Injectable()
-export class CursorUsageService {
+export class CursorUsageService implements OnModuleInit {
   private readonly logger = new Logger(CursorUsageService.name);
 
   /** When the last poll ATTEMPT started — the floor is on attempts, not wins. */
@@ -102,12 +145,78 @@ export class CursorUsageService {
   private lastSuccessMs: number | null = null;
   /** The poll in flight, so concurrent callers join it rather than duplicate it. */
   private inFlight: Promise<void> | null = null;
+  /**
+   * Which runs are cursor runs, so the live tick below costs one indexed read
+   * per run and not one per item.
+   *
+   * A run's agent kind is fixed at creation, so this can never go stale in the
+   * direction that matters; an entry is dropped when its run is destroyed. It is
+   * a cache of a FACT rather than of an answer, which is why nothing expires it.
+   */
+  private readonly cursorRuns = new Map<string, boolean>();
 
   constructor(
     private readonly runDao: RunDao,
     private readonly nodeStates: NodeStateDao,
     private readonly em: EntityManager,
+    private readonly bus: AgentEventBus,
   ) {}
+
+  /**
+   * Follow the work, which is the only thing that moves these figures.
+   *
+   * A subscriber rather than a call from the turn path, on
+   * `PullRequestCaptureService`'s reasoning exactly: the bus is where both
+   * execution paths converge, and nothing in a turn should have to remember to
+   * do this. Every item, not the turn-ending ones — Cursor bills per request, so
+   * a twenty-minute turn accrues cost throughout and its END is far too late to
+   * be the only trigger.
+   *
+   * The floor is checked BEFORE the run is looked up, so an item on a busy
+   * conversation costs one comparison; the lookup that follows is at most one
+   * per run for the life of the daemon.
+   */
+  onModuleInit(): void {
+    this.bus.all().subscribe((event) => {
+      void this.noteItem(event.runId);
+    });
+    // A destroyed run can never produce another item, so this is housekeeping
+    // rather than correctness — but the map would otherwise hold ids for rows
+    // that no longer exist for as long as the daemon runs.
+    this.bus.allDeleted().subscribe((runId) => {
+      this.cursorRuns.delete(runId);
+    });
+  }
+
+  private async noteItem(runId: string): Promise<void> {
+    if (Date.now() - this.lastAttemptAtMs < LIVE_POLL_INTERVAL_MS) {
+      return;
+    }
+    if (!(await this.isCursorRun(runId))) {
+      return;
+    }
+    await this.refreshWithin(LIVE_POLL_INTERVAL_MS);
+  }
+
+  private async isCursorRun(runId: string): Promise<boolean> {
+    const known = this.cursorRuns.get(runId);
+    if (known !== undefined) {
+      return known;
+    }
+    try {
+      const run = await this.runDao.getById(runId, this.em.fork());
+      // A run that could not be read is NOT filed: the next item asks again,
+      // where caching the miss would exempt that conversation for good.
+      if (run === null) {
+        return false;
+      }
+      const isCursor = run.agentKind === AgentKind.CursorAgent;
+      this.cursorRuns.set(runId, isCursor);
+      return isCursor;
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * Bring every cursor run's cost up to date, if enough time has passed.
@@ -117,8 +226,13 @@ export class CursorUsageService {
    * cannot start a second concurrent poll.
    */
   async refresh(force = false): Promise<void> {
+    return this.refreshWithin(force ? 0 : MIN_POLL_INTERVAL_MS);
+  }
+
+  /** The one gate: a floor on attempts, and never two polls at once. */
+  private async refreshWithin(floorMs: number): Promise<void> {
     const now = Date.now();
-    if (!force && now - this.lastAttemptAtMs < MIN_POLL_INTERVAL_MS) {
+    if (now - this.lastAttemptAtMs < floorMs) {
       return;
     }
     if (this.inFlight) {
@@ -154,11 +268,15 @@ export class CursorUsageService {
         this.lastSuccessMs === null
           ? now - FIRST_POLL_LOOKBACK_MS
           : this.lastSuccessMs - POLL_OVERLAP_MS;
-      const spend = await this.fetchSpend(token, identity, startMs, now);
+      const since = new Map<string, number>();
+      for (const [conversationId, target] of conversations) {
+        since.set(conversationId, target.throughMs);
+      }
+      const spend = await this.fetchSpend(token, identity, startMs, now, since);
       if (spend === null) {
         return;
       }
-      await this.writeSpend(conversations, spend, em);
+      await this.writeSpend(conversations, spend, em, now);
       this.lastSuccessMs = now;
     } catch (error) {
       // Swallowed on the `github-prs` rule: a thread missing its price is a far
@@ -172,16 +290,18 @@ export class CursorUsageService {
   }
 
   /**
-   * Which run holds which cursor conversation.
+   * Which run holds which cursor conversation, and how far each has been
+   * priced.
    *
    * The join is the ACP session id `node_state` already records, which is the
    * same value Cursor calls `conversationId` — so nothing new has to be stored
-   * to make the attribution exact.
+   * to make the attribution exact. The node id rides along because the
+   * watermark lives on that same row.
    */
   private async conversationsByRun(
     em: EntityManager,
-  ): Promise<Map<string, string>> {
-    const byConversation = new Map<string, string>();
+  ): Promise<Map<string, CursorConversationTarget>> {
+    const byConversation = new Map<string, CursorConversationTarget>();
     const runs = await this.runDao.getAll(
       { agentKind: AgentKind.CursorAgent },
       undefined,
@@ -194,7 +314,11 @@ export class CursorUsageService {
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
         const sessionId = state.agentSessionId;
         if (sessionId !== null && sessionId !== '') {
-          byConversation.set(sessionId, row.id);
+          byConversation.set(sessionId, {
+            run: row,
+            nodeId: state.nodeId,
+            throughMs: state.cursorSpendThroughMs ?? 0,
+          });
         }
       }
     }
@@ -204,8 +328,13 @@ export class CursorUsageService {
   /**
    * The team and user ids the events are scoped by, from the CLI's OWN identity
    * block. Read rather than invented, and absent identity is a clean decline.
+   *
+   * `protected`, like {@link readToken} below, purely so a spec can stand in for
+   * this MACHINE — the two of them are the whole of what a poll needs from it,
+   * and a test that reached the real ones would read the author's own Keychain
+   * on macOS and decline on CI. Nothing in the app overrides either.
    */
-  private async readIdentity(): Promise<{
+  protected async readIdentity(): Promise<{
     teamId: number;
     userId: number;
   } | null> {
@@ -230,7 +359,7 @@ export class CursorUsageService {
    * `gh` calls do, one step closer in. A denial, a missing item or a machine
    * that is not macOS all answer null, which the caller reads as "no cost".
    */
-  private async readToken(): Promise<string | null> {
+  protected async readToken(): Promise<string | null> {
     if (process.platform !== 'darwin') {
       return null;
     }
@@ -254,12 +383,16 @@ export class CursorUsageService {
     }
   }
 
-  /** Walk the window's pages and fold them into one per-conversation total. */
+  /**
+   * Walk the window's pages and fold them into one per-conversation total of
+   * what is NEW since each conversation was last priced.
+   */
   private async fetchSpend(
     token: string,
     identity: { teamId: number; userId: number },
     startMs: number,
     endMs: number,
+    since: ReadonlyMap<string, number>,
   ): Promise<Map<string, CursorConversationSpend> | null> {
     const spend = new Map<string, CursorConversationSpend>();
     let seen = 0;
@@ -288,11 +421,15 @@ export class CursorUsageService {
         return null;
       }
       const payload: unknown = await reply.json();
-      const pageFold = foldCursorUsagePage(payload);
-      mergeCursorSpend(spend, pageFold);
+      mergeCursorSpend(spend, foldCursorUsagePage(payload, since));
       const total = cursorUsageTotalCount(payload);
-      seen += [...pageFold.values()].reduce((n, one) => n + one.events, 0);
-      if (total === null || seen >= total || pageFold.size === 0) {
+      // Counted against the page's OWN length rather than the fold's: the fold
+      // drops events an earlier poll already counted, so paging on the fold
+      // would walk every page an overlapping window is allowed while never
+      // reaching a total it can no longer sum to.
+      const pageLength = cursorUsagePageLength(payload);
+      seen += pageLength;
+      if (total === null || seen >= total || pageLength === 0) {
         break;
       }
     }
@@ -300,32 +437,135 @@ export class CursorUsageService {
   }
 
   /**
-   * Write each conversation's total onto the run that holds it.
+   * Add what is NEW to each run's total, advance the watermarks, and TELL every
+   * window what changed.
    *
-   * REPLACES rather than adds, which is what makes the overlapping window safe:
-   * the fold is over the whole window every time, so an event re-read on the
-   * next poll cannot be counted twice. A run whose conversation the window did
-   * not mention is left exactly as it was — silence about a period says nothing
-   * about a total already recorded for it.
+   * It ACCUMULATES rather than replaces, and the watermark is what makes the
+   * overlapping window safe: {@link foldCursorUsagePage} drops every event a
+   * previous poll already counted, so a re-read event cannot be counted twice.
+   *
+   * Replacing was the older shape, and it silently truncated. The window is
+   * `lastSuccessMs - POLL_OVERLAP_MS` wide — about an hour, and about
+   * sixty-one minutes once the live tick is running — so a conversation billed
+   * for longer than that had its recorded total overwritten with only the
+   * recent slice, and its displayed cost visibly ticked DOWNWARD on the very
+   * screen this poll exists to keep current.
+   *
+   * A run whose conversations the window did not mention is left exactly as it
+   * was: silence about a period says nothing about a total already recorded.
+   *
+   * Summed PER RUN before the write, because the map is keyed by conversation
+   * and a run can hold more than one.
+   *
+   * A run carrying a total but NO watermark on any of its conversations is
+   * re-baselined rather than added to — its total was written by the replacing
+   * build, so adding this window to it would count that window twice. Reading
+   * the base as zero is exactly that one-time replace, after which the
+   * watermarks make every later poll incremental.
+   *
+   * The watermarks advance BEFORE the run row is written, which is the safe
+   * order of the two: nothing here is transactional, so a failure between them
+   * either drops a slice that was counted (this order) or counts one slice
+   * twice (the other). A thread reporting slightly less than it spent is the
+   * direction this whole module already errs in, because the figure is one a
+   * user checks against their own bill.
+   *
+   * The ANNOUNCE is what makes any of this visible while a thread is open. The
+   * poll is the only thing that learns a cursor price, the header only re-asks
+   * when a turn settles, and the two never lined up — so the figure this write
+   * produced was first shown by whatever refetched NEXT, typically the following
+   * turn or a reopen. It is a `run_status` for the same reason
+   * `PullRequestCaptureService` announces on one: a fact settled a moment after
+   * the client last asked, on a broadcast every window already receives.
+   * `status: null` on the same rule as every announce beside it — this says what
+   * the run has SPENT and nothing about whether it is still going. Only for a
+   * run whose figure actually MOVED: a poll covers every cursor conversation the
+   * machine holds, so announcing them all would put an event per thread on the
+   * wire every minute to say that nothing had changed.
    */
   private async writeSpend(
-    conversations: ReadonlyMap<string, string>,
+    conversations: ReadonlyMap<string, CursorConversationTarget>,
     spend: ReadonlyMap<string, CursorConversationSpend>,
     em: EntityManager,
+    at: number,
   ): Promise<void> {
-    for (const [conversationId, runId] of conversations) {
+    const byRun = new Map<string, CursorRunDelta>();
+    for (const [conversationId, target] of conversations) {
+      const entry = byRun.get(target.run.id) ?? {
+        run: target.run,
+        cents: 0,
+        events: 0,
+        priced: false,
+        marks: [],
+      };
+      // Any watermark at all means this run's total is already an accumulator
+      // rather than one window's snapshot.
+      entry.priced = entry.priced || target.throughMs > 0;
       const one = spend.get(conversationId);
-      if (one === undefined || one.events === 0) {
+      if (one !== undefined && one.events > 0) {
+        entry.cents += one.costCents;
+        entry.events += one.events;
+        // A conversation whose counted events carried no readable timestamp is
+        // watermarked at the POLL's own end rather than left unmarked. Unmarked
+        // it is re-counted on every later poll — the run's `priced` flag is
+        // already true from any sibling conversation that DID mark — and the
+        // total then climbs without bound. What marking at `now` risks is
+        // skipping a late-billed event inside this window; what not marking
+        // guarantees is a figure that never stops growing, and on a total a
+        // user checks against their own bill, over-reporting is the failure
+        // this module refuses.
+        entry.marks.push({
+          nodeId: target.nodeId,
+          throughMs: one.latestAtMs > 0 ? one.latestAtMs : at,
+        });
+      }
+      byRun.set(target.run.id, entry);
+    }
+    for (const { run, cents, events, priced, marks } of byRun.values()) {
+      if (events === 0) {
+        continue;
+      }
+      const recordedCents = run.cursorCostCents ?? 0;
+      const recordedEvents = run.cursorCostEvents ?? 0;
+      const nextCents = priced
+        ? recordedCents + cents
+        : // The one-time re-baseline: the recorded figure came from the
+          // replacing build, so it is one window's snapshot and this window's
+          // fold is another. Adding them double-counts wherever they overlap;
+          // replacing outright can SHRINK the total, which is the very defect
+          // the accumulator exists to fix, happening once more on upgrade.
+          // The larger of the two does neither — it can only under-report a
+          // disjoint stretch, the direction this module already errs in.
+          Math.max(recordedCents, cents);
+      const nextEvents = priced
+        ? recordedEvents + events
+        : Math.max(recordedEvents, events);
+      for (const mark of marks) {
+        await this.nodeStates.rememberCursorSpendThrough(
+          run.id,
+          mark.nodeId,
+          mark.throughMs,
+          em,
+        );
+      }
+      if (
+        run.cursorCostCents === nextCents &&
+        run.cursorCostEvents === nextEvents
+      ) {
         continue;
       }
       await this.runDao.updateById(
-        runId,
-        {
-          cursorCostCents: one.costCents,
-          cursorCostEvents: one.events,
-        },
+        run.id,
+        { cursorCostCents: nextCents, cursorCostEvents: nextEvents },
         em,
       );
+      run.cursorCostCents = nextCents;
+      run.cursorCostEvents = nextEvents;
+      this.bus.publishRunStatus({
+        runId: run.id,
+        status: null,
+        spendUpdatedAt: at,
+      });
     }
   }
 }

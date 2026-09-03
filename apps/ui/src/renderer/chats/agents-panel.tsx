@@ -31,6 +31,8 @@ import {
   type AgentDisplay,
   type AgentThread,
   CHAT_AGENT_KEY,
+  formatTokens,
+  formatUsd,
 } from './agent-activity';
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
@@ -335,6 +337,22 @@ function ThreadRow({
           {thread.label}
         </span>
       )}
+      {/*
+        This CONVERSATION's own window. On the row rather than on the card
+        because a node can hold several calls at once and each has its own
+        window — the card's single ring could only ever show whichever wrote
+        last. `runId` is null: that argument opens the full breakdown, which is
+        a question put to the run's ONE live process and cannot answer for a
+        particular call thread.
+      */}
+      <ContextMeter
+        runId={null}
+        contextTokens={thread.contextTokens ?? null}
+        contextWindowTokens={thread.contextWindowTokens ?? null}
+        spentUsd={null}
+        live={thread.status === 'running'}
+        className="size-5 shrink-0 justify-center"
+      />
       {canOpen ? (
         <OpenInCliButton
           agent={agent}
@@ -346,6 +364,65 @@ function ThreadRow({
         />
       ) : null}
     </li>
+  );
+}
+
+/**
+ * What one agent has SPENT — its tokens and its price, under the model.
+ *
+ * ASKED FOR as "I should see spent tokens and price for each agent in the
+ * list". The cost already existed on this card and was reachable only by
+ * hovering the context ring, whose accessible name carries it; the tokens
+ * existed nowhere at all. On a fan-out that is the one comparison a reader is
+ * making — which agent this run's money is going to — and it was the one thing
+ * the column could not answer.
+ *
+ * The visible figure is INPUT + OUTPUT: what the agent was asked and what it
+ * wrote. Cache reads are deliberately not folded in, and the measurement is
+ * why — one Engineer turn on the reporter's own run carried 48.3B of them
+ * against 117.6k of real input and output, so a single sum would print the same
+ * enormous number on every card and say nothing about the work. They are not
+ * dropped either: the hover spells all three, which is where a reader who wants
+ * the billing story goes.
+ *
+ * Drawn only when something ANSWERS it, on the rule every figure here follows —
+ * an agent that has taken no turn shows no line rather than `0 tokens · $0.00`,
+ * which claims a measurement nobody took. The two halves are independent:
+ * cursor-agent reports no cost at all (probed), so its cards show the tokens
+ * alone rather than nothing.
+ */
+function AgentSpend({
+  agent,
+}: {
+  agent: AgentDisplay;
+}): React.JSX.Element | null {
+  const worked =
+    agent.inputTokens === null && agent.outputTokens === null
+      ? null
+      : (agent.inputTokens ?? 0) + (agent.outputTokens ?? 0);
+  if (worked === null && agent.spentUsd === null) {
+    return null;
+  }
+  const parts = [
+    worked === null ? null : `${formatTokens(worked)} tokens`,
+    agent.spentUsd === null ? null : formatUsd(agent.spentUsd),
+  ].filter((part): part is string => part !== null);
+  const breakdown = [
+    agent.inputTokens === null ? null : `${formatTokens(agent.inputTokens)} in`,
+    agent.outputTokens === null
+      ? null
+      : `${formatTokens(agent.outputTokens)} out`,
+    agent.cacheTokens === null
+      ? null
+      : `${formatTokens(agent.cacheTokens)} cached`,
+  ].filter((part): part is string => part !== null);
+  return (
+    <span
+      data-slot="agent-spend"
+      title={breakdown.join(' \u00b7 ')}
+      className="truncate text-[11px] tabular-nums text-muted-foreground">
+      {parts.join(' \u00b7 ')}
+    </span>
   );
 }
 
@@ -1088,6 +1165,29 @@ export function AgentsPanel({
                         <Badge variant="muted">{agent.agent}</Badge>
                       ) : null}
                     </span>
+                    {/* WHICH MODEL, under the name — asked for as "for each
+                        agent in right sidebar under its name we should have its
+                        model". Its own line rather than a second badge beside
+                        the CLI one: a model alias is the longest string on this
+                        card (`claude-opus-5`, `gpt-5.5-codex`) and in a 280px
+                        panel it would have taken the name's width, which is the
+                        one thing here that has to stay readable.
+
+                        Drawn only when something ANSWERS it. A node that names
+                        no model and has not run yet is on whatever the CLI
+                        currently defaults to, and printing that guess — or a
+                        placeholder standing in for it — would state a fact
+                        nothing measured. */}
+                    {agent.model === null ? null : (
+                      <span
+                        data-slot="agent-model"
+                        title={agent.model}
+                        className="truncate text-[11px] text-muted-foreground">
+                        {agent.model}
+                      </span>
+                    )}
+                    {/* What it has COST, under the model — see the component. */}
+                    <AgentSpend agent={agent} />
                   </div>
                   {/* Line 2 — WHAT it is doing, and what you can do about it:
                     status, how full its context is, and its two controls.
@@ -1129,7 +1229,14 @@ export function AgentsPanel({
                     thing this line is for — what the agent is DOING. Inside the
                     list they are a caption over the rows they count.
                   */}
-                    <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                    <span
+                      // Named because it is the CARD's own reading, and a
+                      // thread row inside the same card draws a meter of its
+                      // own — without a hook the two are told apart only by
+                      // document order, which is what a spec would then be
+                      // pinning instead of the figure.
+                      data-slot="agent-card-context"
+                      className="ml-auto flex shrink-0 items-center gap-0.5">
                       <ContextMeter
                         // Only the chat agent's own card: see `metricsRunId`.
                         runId={

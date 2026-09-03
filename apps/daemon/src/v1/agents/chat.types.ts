@@ -177,6 +177,38 @@ export type HostQuestionOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * One question CARD that is on screen, tracked for as long as the TURN runs
+ * rather than for as long as the agent's call does.
+ *
+ * The two are not the same span, and that is the whole reason this exists: an
+ * MCP client puts a hard deadline on `tools/call` — cursor-agent's is 60
+ * seconds, and it passes no options to the SDK's `callTool`, so neither a
+ * config field nor progress notifications can move it (measured on 2026-09-02
+ * against run `e727f7fe`: a card raised at 20:03:11 was abandoned at 20:04:11,
+ * and another at 19:57:29 at 19:58:29 — 60.0s each, to the second). A person
+ * answering two questions routinely takes longer than that, which is what got
+ * REPORTED: "я ответил первую половину, а вторую половину я просто не успел".
+ *
+ * So the card outlives the call. A re-ask with the same words ADOPTS this
+ * record instead of raising a second card (which is the older report the abort
+ * handling was written for), and an answer given while no call is in flight is
+ * HELD here until the retry collects it.
+ */
+export interface StandingHostQuestion {
+  /** The `approval_request` this card was written as. */
+  requestId: string;
+  /**
+   * Resolver of the agent call currently blocked on this card, or null when
+   * none is — the client gave up and its retry has not arrived yet.
+   */
+  waiting: ((outcome: HostQuestionOutcome) => void) | null;
+  /** An answer given while nobody was waiting, kept for the next ask. */
+  held: HostQuestionOutcome | null;
+  /** Answered or swept: nothing more can reach this card. */
+  closed: boolean;
+}
+
+/**
  * TWIN PARSER: apps/ui/src/renderer/chats/findings-payload.ts — the reader over
  * the `report_findings` item payload this tool produces.
  *
@@ -1895,6 +1927,25 @@ export interface RunStatusEvent {
    */
   shellsOpen?: number;
   /**
+   * When this run's FETCHED spend last CHANGED — absent on every announce that
+   * did not change it, which is all but one producer.
+   *
+   * It carries no figure, and that is deliberate: the totals have their own
+   * route, summed on the daemon over the whole transcript, and a second copy
+   * riding a broadcast is how two surfaces come to disagree about one thread's
+   * price. This says only "ask again", which is the one thing the client could
+   * not know.
+   *
+   * It exists for cursor, the one CLI whose cost is neither on its wire nor on
+   * this machine — `CursorUsageService` fetches it, on a cadence of its own that
+   * no client can see. Nothing announced the result, so a price landed on screen
+   * only when something else happened to refetch the totals: the next turn's
+   * settle, or reopening the chat. REPORTED as "i still dont see any costs for
+   * cursor chat", against a running conversation whose first billable event
+   * Cursor had already recorded.
+   */
+  spendUpdatedAt?: number;
+  /**
    * The run's new status, or null when this event only says what the run is
    * DOING and asserts nothing about whether it is still going.
    *
@@ -2134,6 +2185,19 @@ export interface RunDeltaEvent {
   runId: string;
   /** Owning graph node; null for a 1:1 chat's single agent. */
   nodeId: string | null;
+  /**
+   * Which CONVERSATION of that node this is — the node's id for its own turn,
+   * `<nodeId>::<callId>` for one of its call threads, and the sentinel for a
+   * 1:1 chat's single agent.
+   *
+   * On the wire because a node can hold several conversations at once and each
+   * has its own window: keyed by `nodeId`, a caller running two of the same
+   * callee had both turns' readings land in one client-side entry, last writer
+   * winning, so the panel counted "2 active · 2 threads" honestly above a
+   * single ring flickering between two unrelated windows. `nodeId` stays beside
+   * it — that is who is working, and this is which of their threads.
+   */
+  ownerKey: string;
   text: string;
   /**
    * Reasoning tokens spent in the CURRENT stretch, or null when the agent is
@@ -2276,6 +2340,12 @@ export const RunGroupWireSchema = z.object({
     .nullable()
     .describe(
       'Canonical project folder whose new chats file themselves here — a run started in it, or anywhere inside it, matches; null for a group filled by hand',
+    ),
+  autoWorkflowId: z
+    .string()
+    .nullable()
+    .describe(
+      'Workflow slug whose runs file themselves here, whatever folder they run in; outranks the folder rule. Null for a group that claims no workflow',
     ),
 });
 export type RunGroupWire = z.infer<typeof RunGroupWireSchema>;

@@ -84,6 +84,10 @@ const workflowApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   getWorkflow: vi.fn(),
   listWorkflowRuns: vi.fn(),
+  // The per-node context readings a workflow run's rings fall back to
+  // (`use-node-context.ts`). Every workflow case reaches it, so it is reset to
+  // an empty list beside the others below rather than stubbed per test.
+  listWorkflowRunNodes: vi.fn(),
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
@@ -233,6 +237,7 @@ function makeClient(): {
   fireVerdictAck: (ack: VerdictAck) => void;
   emitLiveText: (event: LiveTextEvent) => void;
   emitRunStatus: (event: RunStatusEvent) => void;
+  emitRunDeleted: (runId: string) => void;
   joinRun: ReturnType<typeof vi.fn>;
 } {
   let itemListener: ((item: ChatItem) => void) | null = null;
@@ -240,7 +245,15 @@ function makeClient(): {
   let disconnectListener: (() => void) | null = null;
   let verdictAckListener: ((ack: VerdictAck) => void) | null = null;
   let liveTextListener: ((event: LiveTextEvent) => void) | null = null;
-  let runStatusListener: ((event: RunStatusEvent) => void) | null = null;
+  /**
+   * A SET, unlike its one-listener neighbours: the real client fans a
+   * `run_status` out to every subscriber, and this screen has more than one —
+   * `use-chat-run` for the badge and `use-chat-totals` for the fetched spend.
+   * Holding a single listener let whichever subscribed last silence the other,
+   * which is a defect of the double and never of the client.
+   */
+  const runStatusListeners = new Set<(event: RunStatusEvent) => void>();
+  let runDeletedListener: ((runId: string) => void) | null = null;
   const joinRun = vi.fn(async () => {});
   const client = {
     onItem: (l: (item: ChatItem) => void) => {
@@ -268,9 +281,15 @@ function makeClient(): {
       };
     },
     onRunStatus: (l: (event: RunStatusEvent) => void) => {
-      runStatusListener = l;
+      runStatusListeners.add(l);
       return () => {
-        runStatusListener = null;
+        runStatusListeners.delete(l);
+      };
+    },
+    onRunDeleted: (l: (runId: string) => void) => {
+      runDeletedListener = l;
+      return () => {
+        runDeletedListener = null;
       };
     },
     onVerdictAck: (l: (ack: VerdictAck) => void) => {
@@ -290,7 +309,12 @@ function makeClient(): {
     fireReconnect: () => reconnectListener?.(),
     fireVerdictAck: (ack) => verdictAckListener?.(ack),
     emitLiveText: (event) => liveTextListener?.(event),
-    emitRunStatus: (event) => runStatusListener?.(event),
+    emitRunStatus: (event) => {
+      for (const listener of [...runStatusListeners]) {
+        listener(event);
+      }
+    },
+    emitRunDeleted: (runId: string) => runDeletedListener?.(runId),
     joinRun,
   };
 }
@@ -611,6 +635,7 @@ beforeEach(() => {
       outputTokens: null,
       cacheReadTokens: null,
       cacheCreationTokens: null,
+      ownerKey: null,
       thinkingTokens: null,
       workedMs: null,
     },
@@ -625,6 +650,7 @@ beforeEach(() => {
       outputTokens: null,
       cacheReadTokens: null,
       cacheCreationTokens: null,
+      ownerKey: null,
       thinkingTokens: null,
       workedMs: null,
     },
@@ -669,6 +695,7 @@ beforeEach(() => {
     workflow: { name: 'Review team', nodes: [], edges: [] },
   });
   workflowApi.listWorkflowRuns.mockReset().mockResolvedValue([]);
+  workflowApi.listWorkflowRunNodes.mockReset().mockResolvedValue([]);
   workflowApi.startWorkflowRun.mockReset();
   workflowApi.cancelWorkflowRun
     .mockReset()
@@ -1250,6 +1277,7 @@ describe('Chats transcript auto-scroll', () => {
         outputTokens: null,
         cacheReadTokens: null,
         cacheCreationTokens: null,
+        ownerKey: null,
         thinkingTokens: null,
         workedMs: null,
       },
@@ -1493,6 +1521,7 @@ describe('Chats transcript auto-scroll', () => {
         runId: 'r1',
         nodeId: null,
         text: 'streaming words',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2376,6 +2405,7 @@ describe('Chats reconnect seam', () => {
           runId: 'r1',
           nodeId: null,
           text: 'a',
+          ownerKey: null,
           thinkingTokens: null,
           ...LIVE_DELTA_REST,
         });
@@ -2390,6 +2420,7 @@ describe('Chats reconnect seam', () => {
             runId: 'r1',
             nodeId: null,
             text: `a${'b'.repeat(i + 1)}`,
+            ownerKey: null,
             thinkingTokens: null,
             ...LIVE_DELTA_REST,
           });
@@ -2416,6 +2447,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: 'The sea',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2428,6 +2460,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: 'The sea is wide.',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2449,6 +2482,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: 'The sea is wide.',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2460,6 +2494,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: '',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2485,6 +2520,7 @@ describe('Chats reconnect seam', () => {
         nodeId: null,
         text: '',
         ...LIVE_DELTA_REST,
+        ownerKey: null,
         thinkingTokens: 300,
         thinkingSince: Date.now(),
         thinkingStretch: 1,
@@ -2520,6 +2556,7 @@ describe('Chats reconnect seam', () => {
           runId: 'r1',
           nodeId: null,
           text,
+          ownerKey: null,
           thinkingTokens: null,
           ...LIVE_DELTA_REST,
         });
@@ -2547,6 +2584,7 @@ describe('Chats reconnect seam', () => {
         nodeId: null,
         text: '',
         ...LIVE_DELTA_REST,
+        ownerKey: null,
         thinkingTokens: 300,
         thinkingSince: started - 40_000,
         thinkingStretch: 1,
@@ -2562,6 +2600,7 @@ describe('Chats reconnect seam', () => {
         nodeId: null,
         text: '',
         ...LIVE_DELTA_REST,
+        ownerKey: null,
         thinkingTokens: 15,
         thinkingSince: started - 2_000,
         thinkingStretch: 2,
@@ -2598,6 +2637,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: '',
+        ownerKey: null,
         thinkingTokens: 300,
         ...LIVE_DELTA_REST,
       });
@@ -2607,6 +2647,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: 'The sea',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2627,6 +2668,7 @@ describe('Chats reconnect seam', () => {
         runId: 'other-run',
         nodeId: null,
         text: 'not yours',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -2647,6 +2689,7 @@ describe('Chats reconnect seam', () => {
         runId: 'r1',
         nodeId: null,
         text: 'half a thou',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
       });
@@ -3295,6 +3338,55 @@ describe('Chats workflow runs', () => {
     expect(sidebarRow()).not.toContain('running');
   });
 
+  it('gives a CALLEE node’s card the context of the call it is running', async () => {
+    // REPORTED as "I dont see QA context": a callee node has no DAG-scheduled
+    // turn of its own, so every reading it produces is published under that
+    // CALL's owner key (`partialOwnerKey`) and the node's own key never
+    // receives one — leaving the card's ring empty for the whole turn while
+    // the thread row beside it showed the figure.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-5',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'capture the visuals',
+        },
+      });
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'helper',
+        text: 'working',
+        // The per-CALL key, which is what the daemon publishes under.
+        ownerKey: 'helper::call-5',
+        thinkingTokens: null,
+        ...LIVE_DELTA_REST,
+        contextTokens: 47_200,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    const card = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="agent-cards"] li',
+      ),
+    ].find((row) => row.textContent?.includes('helper'));
+    expect(card).toBeDefined();
+    // The CARD's own reading, not the thread row's below it — that one has
+    // always had the figure, and reading either would pin nothing.
+    expect(
+      card!
+        .querySelector('[data-slot="agent-card-context"] button')
+        ?.getAttribute('aria-label'),
+    ).toContain('47.2k of 200k');
+  });
+
   it('a callee sub-turn streams into ONE communication card — no separate "started" row, no interleaved text', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
     const { client, emitItem } = makeClient();
@@ -3329,6 +3421,14 @@ describe('Chats workflow runs', () => {
     const transcript = container.querySelector('section')!;
     expect(transcript.textContent).not.toContain('helper started');
     expect(block?.textContent).toContain('orch → helper');
+    // Shut to start, so the callee's newest words are its state line — and
+    // the ask is behind the fold with the rest of the body.
+    expect(
+      block?.querySelector('[data-slot="block-summary"]')?.textContent,
+    ).toBe('the diff summary');
+    await act(async () => {
+      block?.querySelector<HTMLButtonElement>('button[aria-expanded]')?.click();
+    });
     expect(block?.textContent).toContain('summarize the diff');
     expect(block?.textContent).toContain('the diff summary');
     // The callee text lives ONLY in the card (one occurrence in the section).
@@ -6935,10 +7035,23 @@ describe('Chats run composer chips', () => {
       container.querySelector('[data-slot="thread-identity"] button')
         ?.textContent,
     ).toContain('proj');
-    const labels = chips(container).map((b) => b.textContent);
-    expect(labels.some((l) => l?.includes('Start · manual trigger'))).toBe(
-      true,
+    const trigger = chips(container).find((chip) =>
+      chip.textContent?.includes('Start · manual trigger'),
     );
+    expect(trigger).toBeDefined();
+    // And it is INSIDE the card, in the slot a chat's model chip holds —
+    // REPORTED as "we should not have it there. It should be in textarea, in
+    // same place where model suppose to be", against a lone chip on a band
+    // between the shelf and the card. Document order is what "above the card"
+    // versus "below the text" is made of, and it is the only half of the
+    // arrangement jsdom can see — it computes no layout.
+    const textarea = container.querySelector(
+      '[aria-label="Message the agent"]',
+    )!;
+    expect(
+      textarea.compareDocumentPosition(trigger!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       [...container.querySelectorAll<HTMLButtonElement>('button')].filter(
         (b) => b.disabled && b.className.includes('rounded-lg'),
@@ -7160,24 +7273,40 @@ describe('Chats sidebar list', () => {
     expect(container.textContent).not.toContain('Shelved chat');
   });
 
-  it('does not list workflow runs in the archive', async () => {
-    // Archive is a CHAT feature — a workflow row there would offer Unarchive
-    // and permanent Delete for a run that has no archive to come back from.
-    workflowApi.listWorkflowRuns.mockResolvedValue([
-      { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
-    ]);
+  it('sends the SAME scope to both halves of the listing', async () => {
+    // The two are one sidebar, so a shelved workflow run belongs in the archive
+    // beside the chats — it used to be excluded outright, back when a workflow
+    // run had no archive to come back from.
+    workflowApi.listWorkflowRuns.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [
+                {
+                  ...run1,
+                  id: 'wf-run-1',
+                  title: 'Call Demo',
+                  workflowId: 'call-demo',
+                  archivedAt: 'then',
+                },
+              ]
+            : [],
+        ),
+    );
     api.listChats.mockImplementation(
       (params?: { scope?: string }): Promise<ChatRun[]> =>
         Promise.resolve(params?.scope === 'archived' ? [] : [run1]),
     );
     const { client } = makeClient();
     const container = await mount(client);
-    expect(container.textContent).toContain('Call Demo');
+    expect(container.textContent).not.toContain('Call Demo');
 
     await pickScope(container, 'Archived only');
 
-    expect(container.textContent).not.toContain('Call Demo');
-    expect(container.textContent).toContain('Nothing archived yet');
+    expect(workflowApi.listWorkflowRuns).toHaveBeenCalledWith({
+      scope: 'archived',
+    });
+    expect(container.textContent).toContain('Call Demo');
   });
 
   it('`Show all` lists both sides at once, each row with its OWN actions', async () => {
@@ -7302,17 +7431,20 @@ describe('Chats sidebar list', () => {
     expect(rowAction(container, 'Archive My chat')).toBeNull();
   });
 
-  it('keeps Delete — and offers no Archive — on a WORKFLOW row', async () => {
-    // Chats-only scope, stated as a deliberate asymmetry rather than left to
-    // be discovered: a workflow run has no archive.
+  it('offers Archive on a WORKFLOW row, and moves its Delete behind the shelf', async () => {
+    // REPORTED against a completed `Dev Team Manifest` row whose only action
+    // was Delete: shelving is a property of the run row, and the run whose
+    // history is most worth keeping had no way off the desk but destroying it.
+    // The delete follows the chats' rule the moment there is a shelf to put it
+    // behind — it is still reachable from the archive (pinned below).
     workflowApi.listWorkflowRuns.mockResolvedValue([
       { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
     ]);
     const { client } = makeClient();
     const container = await mount(client);
 
-    expect(rowAction(container, 'Delete Call Demo')).not.toBeNull();
-    expect(rowAction(container, 'Archive Call Demo')).toBeNull();
+    expect(rowAction(container, 'Archive Call Demo')).not.toBeNull();
+    expect(rowAction(container, 'Delete Call Demo')).toBeNull();
   });
 
   it('asks before archiving a SETTLED chat, without calling it destructive', async () => {
@@ -7673,16 +7805,104 @@ describe('Chats sidebar list', () => {
     ).toBeUndefined();
   });
 
+  it('drops the row when ANOTHER client deletes the run', async () => {
+    // The daemon broadcasts a deletion to every client rather than to the run's
+    // room, because a client only ever joins the run it is showing while the
+    // row that has to disappear is in every sidebar. Without it nothing here
+    // could learn the fact at all — `run_status` only ever describes runs that
+    // still exist — so a row for a destroyed run survived until the next full
+    // re-list. Reported as "I cant delete thread from app".
+    const { client, emitRunDeleted } = makeClient();
+    const container = await mountArchived(client);
+    expect(
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('My chat')),
+    ).toBeDefined();
+
+    await act(async () => {
+      emitRunDeleted('r1');
+    });
+    expect(
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('My chat')),
+    ).toBeUndefined();
+    // Nothing was asked of the daemon: the run is already gone.
+    expect(api.deleteChat).not.toHaveBeenCalled();
+  });
+
+  it('treats deleting an already-deleted run as SUCCESS, not an error', async () => {
+    // The user asked for the run to be gone and it is gone, so reporting a
+    // failure hands them an error for having got what they wanted — and leaves
+    // the ghost row exactly where it was, which is how one came to be neither
+    // openable nor deletable. Still needed with the broadcast above, for the
+    // window between the delete landing and the announce arriving.
+    api.deleteChat.mockRejectedValue(
+      new Error(
+        'daemon DELETE /v1/chats/r1 failed (404): {"statusCode":404,"code":"RUN_NOT_FOUND","message":"run r1 not found"}',
+      ),
+    );
+    const { client } = makeClient();
+    const container = await mountArchived(client);
+
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Delete My chat"]',
+        )!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const dialog = container.querySelector('[role="dialog"]')!;
+    await act(async () => {
+      [...dialog.querySelectorAll('button')]
+        .find((b) => b.textContent === 'Delete')!
+        .click();
+    });
+
+    // The dialog closed and the row went, with no error shown.
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          'aside li[draggable="true"]',
+        ),
+      ].find((el) => el.textContent?.includes('My chat')),
+    ).toBeUndefined();
+  });
+
   it('deletes a WORKFLOW row through the workflow route, not the chat one', async () => {
     // The reported defect: the sidebar lists workflow runs beside chats, but
     // every row's delete went to the chat route — which REFUSES a workflow run
     // (its executor owns teardown the chat path knows nothing about), so those
     // rows could not be deleted at all.
-    workflowApi.listWorkflowRuns.mockResolvedValue([
-      { ...run1, id: 'wf-run-1', title: 'Call Demo', workflowId: 'call-demo' },
-    ]);
+    //
+    // From the ARCHIVE, which is where the one-way door lives for both kinds of
+    // row now — a workflow row on the desk offers Archive and no Delete.
+    api.listChats.mockResolvedValue([]);
+    workflowApi.listWorkflowRuns.mockImplementation(
+      (params?: { scope?: string }): Promise<ChatRun[]> =>
+        Promise.resolve(
+          params?.scope === 'archived'
+            ? [
+                {
+                  ...run1,
+                  id: 'wf-run-1',
+                  title: 'Call Demo',
+                  workflowId: 'call-demo',
+                  archivedAt: 'then',
+                },
+              ]
+            : [],
+        ),
+    );
     const { client } = makeClient();
     const container = await mount(client);
+    await pickScope(container, 'Archived only');
 
     await act(async () => {
       container
@@ -7975,6 +8195,7 @@ describe('Chats sidebar list', () => {
         runId: 'w1',
         nodeId: 'w-b',
         text: '',
+        ownerKey: null,
         thinkingTokens: null,
         thinkingText: null,
         thinkingSince: null,
@@ -8005,6 +8226,92 @@ describe('Chats sidebar list', () => {
     ).toBeNull();
     expect(
       container.querySelector('button[aria-label="Open side panel"]'),
+    ).toBeNull();
+  });
+
+  it('draws a workflow node’s ring from the DAEMON row, and yields to a live delta', async () => {
+    // The RANK F4 exists for. `node_state` carries every reading the CLI
+    // reported, so it is the only source a reloaded window — or a node parked
+    // in `await_agent`, which emits nothing for minutes — can draw a ring from.
+    // It sits BELOW the live delta and ABOVE the transcript's settled turn, and
+    // that ordering is the part a future edit can silently reverse.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        awaiting: null,
+        holdingFor: 0,
+        shellsOpen: 0,
+        title: 'Big team',
+        agentKind: null,
+        workflowId: 'big-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'big-team',
+      workflow: {
+        name: 'Big team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'w-a',
+            kind: 'agent',
+            name: 'Worker A',
+            agent: 'claude',
+            approval: 'auto',
+          },
+        ],
+        edges: [],
+      },
+    });
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'w-a',
+        status: 'running',
+        contextTokens: 90_000,
+        contextWindowTokens: 1_000_000,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    const { client, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Big team');
+
+    const panel = container.querySelector('aside[aria-label="Run agents"]')!;
+    // No live delta and no settled turn in the transcript — without the row
+    // this node would draw no ring at all, which is the reported blank.
+    expect(
+      panel.querySelector('button[aria-label="Context 9% full — 90k of 1M"]'),
+    ).not.toBeNull();
+
+    // A live delta is a LATER moment than the row, so it wins.
+    await act(async () => {
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'w-a',
+        text: '',
+        ownerKey: null,
+        thinkingTokens: null,
+        thinkingText: null,
+        thinkingSince: null,
+        thinkingStretch: null,
+        contextTokens: 500_000,
+        contextWindowTokens: 1_000_000,
+      });
+    });
+    expect(
+      panel.querySelector('button[aria-label="Context 50% full — 500k of 1M"]'),
+    ).not.toBeNull();
+    expect(
+      panel.querySelector('button[aria-label="Context 9% full — 90k of 1M"]'),
     ).toBeNull();
   });
 
@@ -8395,6 +8702,7 @@ describe('Chats — the composer’s context readout', () => {
         runId: 'r1',
         nodeId: null,
         text: 'working',
+        ownerKey: null,
         thinkingTokens: null,
         ...LIVE_DELTA_REST,
         contextTokens: 120_000,
@@ -9770,6 +10078,104 @@ describe('Chats — running shells', () => {
     ).toBeNull();
   });
 
+  it('labels the shelf\u2019s terminals by agent on a WORKFLOW, and not on a chat', async () => {
+    // The shelf flattens every agent's shells into ONE popover, so on a
+    // workflow its rows come from different agents with nothing saying which \u2014
+    // asked for as "we should have labels there then for each terminal - from
+    // which agent is it (in case if we are in workflow)". A 1:1 chat has one
+    // agent, so the same label there is a column repeating one word.
+    const openTerminals = async (container: HTMLElement): Promise<void> => {
+      // Clicking PINS the popover open; hovering is on a timer this test would
+      // otherwise have to fake.
+      await act(async () => {
+        container
+          .querySelector<HTMLElement>(
+            '[data-slot="running-shells"] [data-menu-trigger], [data-slot="running-shells"] button',
+          )!
+          .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    };
+
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([
+      msg(0, 'user', 'build it'),
+      bashCall(1, 'pnpm build'),
+    ]);
+    const chat = makeClient();
+    const chatContainer = await mount(chat.client);
+    await clickRun(chatContainer, 'My chat');
+    await openTerminals(chatContainer);
+    // The panel is genuinely OPEN \u2014 without this the assertion below would
+    // hold for a popover that never rendered, which is the false pin this
+    // whole test would otherwise be.
+    const shelfRows = [
+      ...chatContainer.querySelectorAll(
+        '[data-slot="running-shells"] [data-slot="shell-row"]',
+      ),
+    ];
+    expect(shelfRows).toHaveLength(1);
+    expect(shelfRows[0]!.textContent).toContain('pnpm build');
+    expect(shelfRows[0]!.querySelector('[data-slot="shell-agent"]')).toBeNull();
+
+    // …and the workflow, where the same popover holds two agents' commands.
+    api.listChats.mockResolvedValue([]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        ...run1,
+        id: 'w9',
+        title: 'Dev team',
+        workflowId: 'dev-team',
+        agentKind: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'dev-team',
+      workflow: {
+        name: 'Dev team',
+        nodes: [
+          {
+            id: 'mgr',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Manager',
+          },
+          {
+            id: 'eng',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            name: 'Engineer',
+          },
+        ],
+        edges: [],
+      },
+    });
+    api.listRunItems.mockResolvedValue([
+      { ...bashCall(1, 'pnpm build'), runId: 'w9', nodeId: 'eng' },
+      {
+        ...bashCall(2, 'gh pr list', 'sh-2'),
+        runId: 'w9',
+        nodeId: 'mgr',
+      },
+    ]);
+    const wf = makeClient();
+    const wfContainer = await mount(wf.client);
+    await clickRun(wfContainer, 'Dev team');
+    await openTerminals(wfContainer);
+
+    const wfRows = [
+      ...wfContainer.querySelectorAll(
+        '[data-slot="running-shells"] [data-slot="shell-row"]',
+      ),
+    ];
+    expect(
+      wfRows.map(
+        (r) => r.querySelector('[data-slot="shell-agent"]')?.textContent,
+      ),
+    ).toEqual(['Manager', 'Engineer']);
+  });
+
   it('keeps a detached command listed until something says it ended', async () => {
     // The other side of the same rule: the reply to a detached launch settles
     // nothing, so a command with no settle row is still running and still says
@@ -10258,6 +10664,7 @@ describe('Chats — the sidebar groups threads into folders', () => {
     position: 0,
     collapsed: false,
     autoCwd: null,
+    autoWorkflowId: null,
   };
 
   /** The group header row for a named group, or null. */

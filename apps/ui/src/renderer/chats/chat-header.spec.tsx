@@ -150,11 +150,13 @@ describe('ChatHeader — how long this turn has been running', () => {
         workedMs={0}
         turnCount={0}
         lastActivityAt="2026-08-04T00:00:00.000Z"
-        openTurn={{
-          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
-          parkedMs: 0,
-          openSince: [],
-        }}
+        openTurns={[
+          {
+            startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
       />,
     );
 
@@ -479,11 +481,13 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         {...baseProps}
         workedMs={600_000}
         turnCount={5}
-        openTurn={{
-          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
-          parkedMs: 0,
-          openSince: [],
-        }}
+        openTurns={[
+          {
+            startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
       />,
     );
 
@@ -506,11 +510,13 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         {...baseProps}
         workedMs={600_000}
         turnCount={5}
-        openTurn={{
-          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
-          parkedMs: 0,
-          openSince: [],
-        }}
+        openTurns={[
+          {
+            startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
       />,
     );
 
@@ -528,11 +534,13 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         status="needs-input"
         workedMs={600_000}
         turnCount={5}
-        openTurn={{
-          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
-          parkedMs: 0,
-          openSince: [Date.parse('2026-08-04T00:00:20.000Z')],
-        }}
+        openTurns={[
+          {
+            startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+            parkedMs: 0,
+            openSince: [Date.parse('2026-08-04T00:00:20.000Z')],
+          },
+        ]}
       />,
     );
 
@@ -556,7 +564,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         status="completed"
         workedMs={600_000}
         turnCount={5}
-        openTurn={null}
+        openTurns={[]}
       />,
     );
 
@@ -577,11 +585,13 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         {...baseProps}
         workedMs={0}
         turnCount={0}
-        openTurn={{
-          startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
-          parkedMs: 0,
-          openSince: [],
-        }}
+        openTurns={[
+          {
+            startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
       />,
     );
 

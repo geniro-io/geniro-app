@@ -445,6 +445,13 @@ export const NodeStateWireSchema = z.object({
   runId: z.string(),
   nodeId: z.string(),
   status: NodeStatusSchema,
+  /**
+   * The node's last context reading and the window it was measured against —
+   * what a client with no live plane draws its ring from. Null while the node
+   * has reported none.
+   */
+  contextTokens: z.number().nullable(),
+  contextWindowTokens: z.number().nullable(),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
   error: z.string().nullable(),
@@ -458,6 +465,23 @@ export type NodeStateWire = z.infer<typeof NodeStateWireSchema>;
 /** How a caller wants its call to behave (the call_agent `mode` argument). */
 export const CALL_MODES = ['sync', 'async', 'fire_and_forget'] as const;
 export type CallMode = (typeof CALL_MODES)[number];
+
+/**
+ * The bounds on `await_agent`'s own `timeout_ms` — a model's argument, so they
+ * are enforced where a model's arguments are (the MCP layer, as INVALID_ARGS)
+ * rather than inside the broker.
+ *
+ * The CEILING is the load-bearing one and it is a MEASUREMENT of the transport
+ * rather than a policy: a claude caller aborts its own HTTP fetch at ~338s
+ * (`McpServerService.handlePost`), and a window past that could never be
+ * observed — the socket closes first and the collection comes back
+ * AWAIT_ABANDONED instead of the `pending` the caller asked for. 300s leaves
+ * the margin. The floor is there so a `0` cannot be read as "block forever",
+ * which is the one misreading that would silently reinstate the wait this
+ * argument exists to bound.
+ */
+export const MIN_AWAIT_TIMEOUT_MS = 1_000;
+export const MAX_AWAIT_TIMEOUT_MS = 300_000;
 
 /** How one callee sub-turn ended, as the executor reports it to the broker. */
 export interface CalleeTurnOutcome {
@@ -485,6 +509,13 @@ export interface CalleeTurnOutcome {
  * `answer_agent(call_id, answer)`, then collect the final result with
  * `await_agent(call_id)` (a sync call that parks becomes await-collectable).
  * Left unanswered, the call fails with `QUESTION_TIMEOUT`.
+ *
+ * The `pending` arm: `await_agent` was given a `timeout_ms` and the callee was
+ * still working when it elapsed. It is NOT an outcome and NOT a failure — the
+ * call is untouched and stays collectable, so the caller may go and do
+ * something else and await again. It exists because the alternative shapes are
+ * both worse: an `error` reads to a model as the call having gone wrong, and an
+ * `ok` with no text reads as a callee that finished having said nothing.
  */
 export type CallEnvelope =
   | { status: 'ok'; result: unknown }
@@ -498,6 +529,12 @@ export type CallEnvelope =
       question: string;
       /** Option labels the callee offered (may be empty for free-form). */
       options: string[];
+    }
+  | {
+      status: 'pending';
+      call_id: string;
+      /** The callee node id still working on it. */
+      agent: string;
     };
 
 /**

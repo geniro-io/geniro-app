@@ -87,24 +87,27 @@ function subagentTaskProgress(
  * What is known about a delegate APART from what it said — the model it ran,
  * what it spent, and how long it took, as its CLI reports them.
  *
- * `spendStated` is the caller saying it has ALREADY printed the figures. The
- * block has: they sit on its header, where they are legible with the block
- * still shut, so repeating them under it is one reading printed twice a couple
- * of inches apart — the complaint this surface already has on record about its
+ * `factsStated` is the caller saying it has ALREADY printed them. The block
+ * has: they sit on its header, where they are legible with the block still
+ * shut, so repeating them under it is one reading printed twice a couple of
+ * inches apart — the complaint this surface already has on record about its
  * context meter. The detail DIALOG has no header of its own, so there they are
- * the only statement of the delegate's cost and are always drawn.
+ * the only statement of what this delegate ran on and what it cost, and are
+ * always drawn.
  */
 function SubagentFacts({
   block,
-  spendStated,
+  factsStated,
 }: {
   block: SubagentBlockEntry;
-  spendStated: boolean;
+  factsStated: boolean;
 }): React.JSX.Element | null {
-  const facts = [
-    ...(block.model === null ? [] : [block.model]),
-    ...(spendStated ? [] : subagentSpendParts(block)),
-  ];
+  const facts = factsStated
+    ? []
+    : [
+        ...(block.model === null ? [] : [block.model]),
+        ...subagentSpendParts(block),
+      ];
   if (facts.length === 0) {
     return null;
   }
@@ -317,13 +320,16 @@ export function SubagentThread({
   block,
   nodes,
   chatAgentName,
-  spendStated = false,
+  factsStated = false,
 }: {
   block: SubagentBlockEntry;
   nodes?: ReadonlyMap<string, TranscriptNodeMeta>;
   chatAgentName?: string | null;
-  /** The caller's own chrome already states the tokens and the duration. */
-  spendStated?: boolean;
+  /**
+   * The caller's own chrome already states the model, the tokens and the
+   * duration.
+   */
+  factsStated?: boolean;
 }): React.JSX.Element {
   const title = subagentTitle(block);
   // Read from the SAME source the header's own spinner uses, so the block
@@ -338,7 +344,7 @@ export function SubagentThread({
       {block.prompt ? (
         <BlockRequest label={`Task for ${title}`} text={block.prompt} />
       ) : null}
-      <SubagentFacts block={block} spendStated={spendStated} />
+      <SubagentFacts block={block} factsStated={factsStated} />
       {/* Above the (empty) thread rather than below the result: it explains why
           there is nothing between here and there, and a caveat placed after the
           result reads as a caveat ABOUT the result. */}
@@ -449,11 +455,26 @@ export const SubagentBlock = memo(function SubagentBlock({
                 each other, and adding the tokens and the duration would have
                 made it six, each of which is a place for a leading or doubled
                 middot to appear on some combination nobody thought to check. */}
-            <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+            {/* SHRINKABLE, and capped, which the title's own `flex-1 basis-0`
+                cannot do for itself: every other child of this row is
+                unshrinkable, so an unshrinkable fact run left `BlockTitle` the
+                only thing that could give way — and the name is the one thing
+                that tells two parallel delegates apart, so it was the first to
+                go. The run has grown to six facts, and past the cap it clips
+                its own tail (the task progress, which the card's
+                `overflow-hidden` was clipping anyway) instead of taking the
+                name with it. */}
+            <span className="flex min-w-0 max-w-[55%] shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
               {joinFacts([
                 block.kind && block.label ? (
                   <span key="kind">{block.kind}</span>
                 ) : null,
+                /* WHICH MODEL it ran, asked for by name against a column of a
+                   dozen verifiers that named their agent type and nothing
+                   else. On the header rather than only inside the block for
+                   the reason the figures are: it is closed by default, and a
+                   fact behind a click is one nobody reads while scanning. */
+                block.model ? <span key="model">{block.model}</span> : null,
                 toolCount > 0 ? (
                   <span key="tools">
                     {toolCount} tool{toolCount === 1 ? '' : 's'}
@@ -503,7 +524,7 @@ export const SubagentBlock = memo(function SubagentBlock({
           nodes={nodes}
           chatAgentName={chatAgentName}
           // The header above states them — see {@link SubagentFacts}.
-          spendStated
+          factsStated
         />
       </BlockShell>
     </div>

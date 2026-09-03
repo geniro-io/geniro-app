@@ -27,12 +27,15 @@ const shell = (over: Partial<ShellRun> = {}): ShellRun =>
     ...over,
   }) as ShellRun;
 
-function render(shells: ShellRun[]): HTMLElement {
+function render(
+  shells: ShellRun[],
+  agentNameOf?: ReadonlyMap<string, string>,
+): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
   act(() => {
-    root.render(<ShellRows shells={shells} />);
+    root.render(<ShellRows shells={shells} agentNameOf={agentNameOf} />);
   });
   return container;
 }
@@ -55,6 +58,34 @@ describe('ShellRows', () => {
     expect(row.textContent).toContain('sleep 400');
     expect(row.textContent).toContain('background');
     expect(row.textContent).toMatch(/\d+s/);
+  });
+
+  it('names the agent that started each command when the list mixes several', () => {
+    // The shelf flattens every agent's shells into ONE popover, so on a
+    // workflow the rows it holds come from different agents with nothing on
+    // them saying which — asked for as "we should have labels there then for
+    // each terminal - from which agent is it (in case if we are in workflow)".
+    const el = render(
+      [shell({ id: 'c1' }), shell({ id: 'c2', command: 'pnpm dev' })],
+      new Map([
+        ['c1', 'Engineer'],
+        ['c2', 'Manager'],
+      ]),
+    );
+    const rows = [...el.querySelectorAll('[data-slot="shell-row"]')];
+    expect(
+      rows.map(
+        (r) => r.querySelector('[data-slot="shell-agent"]')?.textContent,
+      ),
+    ).toEqual(['Engineer', 'Manager']);
+  });
+
+  it('draws NO agent label for a list that is already about one agent', () => {
+    // The agents panel's band sits inside one agent's card and a 1:1 chat has
+    // one agent, so the name would be the same word down every row — and this
+    // popover is 22rem, where a redundant column costs the command its width.
+    const el = render([shell()]);
+    expect(el.querySelector('[data-slot="shell-agent"]')).toBeNull();
   });
 
   it('says `background` in a WORD, never the `BG` it read as', () => {

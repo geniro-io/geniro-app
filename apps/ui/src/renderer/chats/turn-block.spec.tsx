@@ -52,7 +52,11 @@ afterEach(() => {
 });
 
 /** Render one agent turn — an assistant message plus a tool call. */
-function renderTurn(soloAgent: boolean, nodeId: string | null): void {
+function renderTurn(
+  soloAgent: boolean,
+  nodeId: string | null,
+  soloNodeId: string | null = null,
+): void {
   const entries = buildTurnBlocks(
     groupTranscript([
       item('message', { text: 'Working on it.' }, nodeId, 'assistant'),
@@ -73,6 +77,7 @@ function renderTurn(soloAgent: boolean, nodeId: string | null): void {
             nodes={NODES}
             chatAgentName="claude"
             soloAgent={soloAgent}
+            soloNodeId={soloNodeId}
           />
         ))}
       </>,
@@ -81,6 +86,35 @@ function renderTurn(soloAgent: boolean, nodeId: string | null): void {
 }
 
 describe('TurnBlock identity frame', () => {
+  it('drops the frame for the workflow ROOT node, and keeps it for every other', () => {
+    // A workflow's root agent is the one the user is talking TO — every other
+    // agent reaches the screen inside a card that names itself — so framing it
+    // asks the reader to tell one agent apart from nobody. Asked for as "make
+    // root agent without its block… same as if I run claude separately".
+    renderTurn(false, 'manager', 'manager');
+    expect(
+      container
+        .querySelector('[data-role="turn-block"]')
+        ?.getAttribute('data-solo'),
+    ).toBe('true');
+    expect(container.querySelector('[data-slot="avatar"]')).toBeNull();
+
+    // The SAME run's other agent keeps its identity: the exemption is granted
+    // per node, not per run, which is the whole reason it is not `soloAgent`.
+    act(() => root.unmount());
+    container.remove();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    renderTurn(false, 'poet', 'manager');
+    expect(
+      container
+        .querySelector('[data-role="turn-block"]')
+        ?.getAttribute('data-solo'),
+    ).toBeNull();
+    expect(container.querySelector('[data-slot="avatar"]')).not.toBeNull();
+  });
+
   it('drops the avatar, the card and the sender line for a solo agent', () => {
     // A 1:1 chat has one participant on the agent side — repeating its name
     // and avatar over every turn is noise, so the words sit bare in the flow.

@@ -242,6 +242,34 @@ describe('NotificationsGateway', () => {
     usage.publish({ ...event, runId: 'r2' });
     expect(emit).toHaveBeenCalledTimes(1);
   });
+
+  it('broadcasts a deleted run to EVERY client, and stops on destroy', () => {
+    const bus = new AgentEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      bus,
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+    );
+    const emit = vi.fn();
+    // `to` is the ROOM path; a deletion must never take it — every OTHER
+    // client's ghost row has to be corrected, not just the room of whoever
+    // pressed Delete.
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    const server = { emit, to } as unknown as Server;
+    gw.afterInit(server);
+
+    bus.publishRunDeleted('r1');
+
+    expect(emit).toHaveBeenCalledWith('run_deleted', { runId: 'r1' });
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    bus.publishRunDeleted('r2');
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('verdict round-trip', () => {

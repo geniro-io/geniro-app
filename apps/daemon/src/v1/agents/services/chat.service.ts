@@ -52,6 +52,7 @@ import {
   type RunWire,
   type SendMessageImage,
   SINGLE_AGENT_NODE,
+  type StandingHostQuestion,
 } from '../chat.types';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
@@ -89,6 +90,7 @@ import { resolveValidCwd } from '../utils/resolve-cwd';
 import { assertChatRun } from '../utils/run-kind';
 import { type RunStatusAnnounce, writeRunStatus } from '../utils/run-status';
 import { createSessionIdSaver } from '../utils/session-saver';
+import { StandingQuestions } from '../utils/standing-questions';
 import { unanswerablePayload, unansweredRequests } from '../utils/unanswerable';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -660,7 +662,7 @@ export class ChatService implements OnModuleInit {
     // creates, and against the CANONICAL cwd above rather than the one the
     // request spelled — a group's folder is canonical too, so a symlinked path
     // matches the rule the user actually set.
-    const groupId = await this.groups.resolveAutoGroupId(cwd);
+    const groupId = await this.groups.resolveAutoGroupId({ cwd });
     // BEFORE the run row exists. A CLI that has to bring the conversation
     // across can refuse (it was deleted, it is under another profile), and a
     // refusal must leave no half-made thread behind — the user gets the CLI's
@@ -1237,9 +1239,9 @@ export class ChatService implements OnModuleInit {
    * the one-way delete beside it is per-row. This is that delete, applied on a
    * clock the user sets.
    *
-   * **It is the SAME one-way door**, not a gentler one: `delete` per run, so a
-   * swept chat loses its rows, its attachments, its call tokens and its kept
-   * session exactly as a pressed delete does, and `usage_events` survives for
+   * **It is the SAME one-way door**, not a gentler one: the full teardown per
+   * run, so a swept run loses its rows, its attachments, its call tokens and
+   * its kept session exactly as a pressed delete does, and `usage_events` survives for
    * the reason it survives there — a lifetime spend total must not shrink
    * because a conversation was tidied away. There is no trash and none is
    * planned, which is why the POLICY lives with the user (the retention window
@@ -1262,11 +1264,11 @@ export class ChatService implements OnModuleInit {
   async sweepArchived(olderThanDays: number): Promise<{ deleted: number }> {
     const em = this.em.fork();
     const cutoff = new Date(Date.now() - olderThanDays * DAY_MS);
-    const ids = await this.runDao.archivedChatIdsBefore(cutoff, em);
+    const runs = await this.runDao.archivedRunsBefore(cutoff, em);
     let deleted = 0;
-    for (const runId of ids) {
+    for (const { id, workflowId } of runs) {
       try {
-        const result = await this.delete(runId);
+        const result = await this.purgeArchived(id, workflowId);
         if (result.deleted) {
           deleted += 1;
         }
@@ -1276,7 +1278,7 @@ export class ChatService implements OnModuleInit {
         // never reaches the rest — and the row it stopped on is the one nobody
         // is watching.
         this.logger.warn(
-          `could not sweep archived chat ${runId}: ${
+          `could not sweep archived run ${id}: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -1284,10 +1286,45 @@ export class ChatService implements OnModuleInit {
     }
     if (deleted > 0) {
       this.logger.log(
-        `deleted ${deleted} chat(s) archived more than ${olderThanDays} day(s) ago`,
+        `deleted ${deleted} archived run(s) shelved more than ${olderThanDays} day(s) ago`,
       );
     }
     return { deleted };
+  }
+
+  /**
+   * Destroy one shelved run, whichever engine owned it.
+   *
+   * A chat goes through {@link delete}, which is that kind's whole delete.
+   *
+   * A workflow run goes STRAIGHT to the shared teardown, and cannot go through
+   * `GraphExecutorService.deleteRun` for the module reason its cancel cannot
+   * either — `GraphsModule` imports `AgentsModule`. What that service adds over
+   * the teardown is two things, and both are answered here rather than skipped.
+   * Its call-broker cleanup now happens on the `runDeleted` broadcast the purge
+   * itself publishes, which is what that stream exists for (`CallBroker`
+   * subscribes). And its `deleting` claim guards a WALK crossing its own
+   * claim→register window — a race that needs a run about to start, while every
+   * run this method sees has been shelved for days and had its work cancelled
+   * when it was. The settle promise is the registry's, which both engines
+   * share.
+   *
+   * This is the sweep's path alone. `DELETE /v1/chats/:runId` stays kind-guarded:
+   * there the executor's route is right there to be used, and a run deleted
+   * through the wrong one would skip the claim for no reason.
+   */
+  private async purgeArchived(
+    runId: string,
+    workflowId: string | null,
+  ): Promise<{ deleted: boolean }> {
+    if (workflowId === null) {
+      return this.delete(runId);
+    }
+    return this.teardown.purge(
+      this.em.fork(),
+      runId,
+      this.registry.settled(runId),
+    );
   }
 
   async listChats(scope: ChatListScope = 'active'): Promise<RunWire[]> {
@@ -1350,7 +1387,18 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Shelve a chat out of the sidebar without destroying any part of it.
+   * Shelve a RUN out of the sidebar without destroying any part of it — a chat
+   * or a workflow run alike.
+   *
+   * Kind-BLIND, like {@link rename} and {@link setGroup} and unlike
+   * {@link cancel} and {@link delete}: `archivedAt` is a property of the run
+   * ROW, and the sidebar that reads it lists both kinds together. It was
+   * chat-only for a release, on the reading that the archive was a chat
+   * feature — which left a finished workflow run with Delete as its only row
+   * action, so the one kind of thread whose history is most worth keeping had
+   * no way off the desk but destroying it. REPORTED as exactly that, against a
+   * completed `Dev Team Manifest` row. Nothing about shelving is per-kind; only
+   * how a RUNNING one is stopped is, and that is {@link stopForArchive}.
    *
    * The reversible half of what used to be a single one-way Delete: everything
    * the run owns — transcript, attachments, node state, call tokens — is left
@@ -1368,7 +1416,13 @@ export class ChatService implements OnModuleInit {
    * chat whose turn is mid-claim AND one that never sent a message at all, and
    * `cancel()` would write the second a `cancelled` status and a
    * `turn_cancelled` row it never earned. The mid-claim case is answered by
-   * {@link archiving} instead, which is the only mechanism that can see it.
+   * {@link archiving} instead, which is the only mechanism that can see it —
+   * and it is read by the CHAT turn path alone, so a workflow walk crossing its
+   * own claim→register window can still register behind an archive. That window
+   * is milliseconds at a run's very start, and the cost is a shelved run that
+   * goes on working until it is cancelled by hand; closing it would mean this
+   * service reaching into the executor's claim, which the module direction
+   * forbids.
    *
    * The session is closed on EVERY archive, not only the running one. A kept
    * process is ~1GB of the machine's memory held so the next turn opens fast,
@@ -1377,16 +1431,20 @@ export class ChatService implements OnModuleInit {
    */
   async archive(runId: string): Promise<RunWire> {
     const em = this.em.fork();
-    // Kind-guarded like cancel and delete: workflow runs have no archive, so
-    // one reaching this route must 400 rather than be marked with a column
-    // nothing on their side of the sidebar reads.
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
     // Claimed BEFORE the cancel, exactly as `delete` claims — see {@link archiving}.
     this.archiving.add(runId);
     try {
       if (run.status === 'running') {
-        await this.cancel(runId);
+        await this.stopForArchive(run);
       }
+      // Keyed by RUN, so this reaches a chat's kept process and none of a
+      // workflow's, whose sessions are keyed `<runId>::node:<id>` by the
+      // executor and are closed by that engine's own teardown when the cancel
+      // above settles its aggregate handle.
       this.sessions.close(runId);
       const archivedAt = new Date();
       await this.runDao.updateById(runId, { archivedAt }, em);
@@ -1403,10 +1461,37 @@ export class ChatService implements OnModuleInit {
     }
   }
 
-  /** Put an archived chat back on the desk. Nothing else about it changed. */
+  /**
+   * Stop a run that is being shelved, whichever engine owns it.
+   *
+   * A chat goes through {@link cancel}, which also RECONCILES a row left
+   * `running` by a daemon that died mid-turn — nothing else writes a chat's
+   * status, so without it a shelved thread would keep a spinner for good.
+   *
+   * A workflow run gets the registry cancel alone, which is the whole of
+   * `GraphExecutorService.cancel` once its own kind guard has run: both engines
+   * converge on ONE registry key. It cannot call that service — `GraphsModule`
+   * imports `AgentsModule`, so the dependency points one way — and it does not
+   * need to, because cancelling the aggregate handle runs the executor's own
+   * teardown: the per-node sessions close and the run's call tokens are
+   * revoked. A workflow row left `running` by a crash is that engine's boot
+   * reconcile to fix, and it does.
+   */
+  private async stopForArchive(run: Run): Promise<void> {
+    if (run.workflowId === null) {
+      await this.cancel(run.id);
+      return;
+    }
+    this.registry.cancel(run.id);
+  }
+
+  /** Put an archived run back on the desk. Nothing else about it changed. */
   async unarchive(runId: string): Promise<RunWire> {
     const em = this.em.fork();
-    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
     await this.runDao.updateById(runId, { archivedAt: null }, em);
     run.archivedAt = null;
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
@@ -2860,17 +2945,28 @@ export class ChatService implements OnModuleInit {
         );
       }
       /**
-       * Every ask still parked, so the settle can answer them.
+       * The question CARDS this turn has on screen, keyed by what each ASKS,
+       * and every ask parked on one.
        *
-       * `ApprovalRegistry.sweepNode` DROPS a pending card without responding —
-       * correct for a CLI-raised question, whose asker dies with the process,
-       * and not for this one, where the promise is held by an MCP request that
-       * would otherwise wait for its own client timeout with the turn already
-       * gone.
+       * A card outlives the agent call that raised it — see
+       * {@link StandingHostQuestion} for the measurement that forces it — so a
+       * re-ask adopts the card already up rather than raising a second one, and
+       * an answer given between the two is held for the retry to collect. The
+       * map and its four transitions live in {@link StandingQuestions}, which
+       * holds no persistence, so the states two racing calls can put one card
+       * into are reachable without driving a whole turn.
+       *
+       * Its sweep is what `ApprovalRegistry.sweepNode` cannot do:
+       * that one DROPS a pending card without responding — correct for a
+       * CLI-raised question, whose asker dies with the process, and not for
+       * this one, where the promise is held by an MCP request that would
+       * otherwise wait for its own client timeout with the turn already gone.
+       *
+       * Per TURN, like the sets beside it: the agent's retry lands inside the
+       * same turn (measured — 14 seconds later on the reported run), and a map
+       * outliving the turn would offer a card the sweep has already closed.
        */
-      const outstandingAsks = new Set<
-        (outcome: HostQuestionOutcome) => boolean
-      >();
+      const standingQuestions = new StandingQuestions();
       /**
        * Its twin for {@link HOST_PATCH_TOOL}, and a SECOND set rather than a
        * widening of the one above.
@@ -2946,6 +3042,39 @@ export class ChatService implements OnModuleInit {
         signal.addEventListener('abort', close, { once: true });
       };
       /**
+       * The QUESTION channel's own cancel handling, and the one place it parts
+       * company with {@link abandonOnCancel} above.
+       *
+       * That one closes the card, which is right for a patch or a plan: those
+       * are decisions about work the agent is holding, and a caller that has
+       * given up is no longer holding it. A question is different — the person
+       * is mid-answer, and the deadline that just lapsed is 60 seconds long. So
+       * this DETACHES the call and leaves the card standing: the buttons still
+       * work, the badge still says the run is waiting on the user, and the
+       * answer is held for the agent's retry.
+       *
+       * The identity check is what keeps an OLD call's abort from detaching a
+       * NEWER one: by the time a client's deadline fires, its retry may already
+       * have adopted this record.
+       */
+      const detachAskOnCancel = (
+        signal: AbortSignal | undefined,
+        record: StandingHostQuestion,
+        resolve: (outcome: HostQuestionOutcome) => void,
+      ): void => {
+        if (signal === undefined) {
+          return;
+        }
+        const detach = (): void => {
+          standingQuestions.detach(record, resolve);
+        };
+        if (signal.aborted) {
+          detach();
+          return;
+        }
+        signal.addEventListener('abort', detach, { once: true });
+      };
+      /**
        * geniro's own question channel, for a CLI that hands its model none
        * (`AdapterConfig.hostQuestionToolReason`).
        *
@@ -2962,6 +3091,29 @@ export class ChatService implements OnModuleInit {
         title: string | null,
         signal?: AbortSignal,
       ): Promise<HostQuestionOutcome> => {
+        // What IDENTIFIES an ask: every word the card shows. A retry after the
+        // client's deadline re-sends exactly this — observed on the reported
+        // run, where the agent said "the question timed out — re-firing it" —
+        // so the same words are the same question and get the same card. Any
+        // rewording is a NEW question, which is the honest reading: the user is
+        // being asked something else.
+        const key = StandingQuestions.keyFor(title, questions);
+        const standing = standingQuestions.peek(key);
+        if (standing !== undefined) {
+          // The user answered while the agent had nothing in flight. Hand it
+          // over at once — this is the collection the retry came for.
+          const held = standingQuestions.collectHeld(key);
+          if (held !== null) {
+            return held;
+          }
+          // Still unanswered: ADOPT the card rather than raise a second one.
+          // Two cards for one question is the older defect this whole path was
+          // written for, and it is what a naive retry produces.
+          return await new Promise<HostQuestionOutcome>((resolve) => {
+            standingQuestions.adopt(standing, resolve);
+            detachAskOnCancel(signal, standing, resolve);
+          });
+        }
         const requestId = randomUUID();
         const input = {
           ...(title === null ? {} : { title }),
@@ -2987,14 +3139,7 @@ export class ChatService implements OnModuleInit {
           };
         }
         return await new Promise<HostQuestionOutcome>((resolve) => {
-          const settle = (outcome: HostQuestionOutcome): boolean => {
-            if (!outstandingAsks.delete(settle)) {
-              return false;
-            }
-            resolve(outcome);
-            return true;
-          };
-          outstandingAsks.add(settle);
+          const record = standingQuestions.open(key, requestId, resolve);
           this.approvals.track({
             runId,
             nodeId: SINGLE_AGENT_NODE,
@@ -3005,7 +3150,10 @@ export class ChatService implements OnModuleInit {
             // the user something, not a tool held at a permission gate.
             question: true,
             respond: (allow, answer) => {
-              const delivered = settle(
+              if (record.closed) {
+                return false;
+              }
+              const outcome: HostQuestionOutcome =
                 allow && answer !== undefined
                   ? { status: 'answered', answer }
                   : allow
@@ -3013,8 +3161,16 @@ export class ChatService implements OnModuleInit {
                       // produce this, and an empty answer is not the same as
                       // a refusal.
                       { status: 'answered', answer: '' }
-                    : { status: 'declined' },
-              );
+                    : { status: 'declined' };
+              // Reaches the agent when one is still on the line; otherwise the
+              // client's 60s deadline lapsed while the user was answering and
+              // the outcome is HELD for the retry, which is the whole point of
+              // the card outliving the call.
+              standingQuestions.deliver(key, record, outcome);
+              // Either way the verdict is recorded and reported delivered: a
+              // held answer reaches the agent a moment later, and the answer IS
+              // the tool's result, so there is no fold that could drop it.
+              const delivered = true;
               this.announceAwaiting(
                 runId,
                 runningToolActivity() ?? idleActivity(),
@@ -3042,10 +3198,7 @@ export class ChatService implements OnModuleInit {
               return delivered;
             },
           });
-          abandonOnCancel(signal, requestId, settle, {
-            status: 'unavailable',
-            reason: 'the agent stopped waiting for an answer',
-          });
+          detachAskOnCancel(signal, record, resolve);
           this.announceAwaiting(runId);
         });
       };
@@ -4192,12 +4345,10 @@ export class ChatService implements OnModuleInit {
           // has just been drained, so a report landing after this point would
           // reserve a seq against a turn that has finished writing.
           disposeHostTools();
-          for (const settle of [...outstandingAsks]) {
-            settle({
-              status: 'unavailable',
-              reason: 'the turn ended before the question was answered',
-            });
-          }
+          standingQuestions.sweep({
+            status: 'unavailable',
+            reason: 'the turn ended before the question was answered',
+          });
           for (const settle of [...outstandingPatches]) {
             settle({
               status: 'unavailable',

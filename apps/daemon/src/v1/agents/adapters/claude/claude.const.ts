@@ -463,7 +463,14 @@ export const CLAUDE_PROFILE_SETTINGS_FILE = 'settings.json';
 /** The CLI's own config file in `~`, which caches the account's model options. */
 export const CLAUDE_MODEL_CACHE_FILE = '.claude.json';
 
-/** The key inside it: `[{ value, label, description }]`. */
+/**
+ * The key inside it: `[{ value, label, description, disabled? }]`.
+ *
+ * `disabled` is the field that makes this list more than a model set — the CLI
+ * files placeholders here to EXPLAIN a model the install cannot run, whose
+ * `value` is a sentinel rather than an id. `readClaudeModelCache` drops them;
+ * its doc block carries the measured entry.
+ */
 export const CLAUDE_MODEL_CACHE_KEY = 'additionalModelOptionsCache';
 
 // ── The permission-mode probe ─────────────────────────────────────────────

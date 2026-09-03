@@ -9,12 +9,14 @@ import {
 
 import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
+import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
 import { pullBranch, readGitInfo, switchBranch } from './git-info';
 import { readPullRequests, readPullRequestsByRef } from './github-prs';
 import {
   branchNameSchema,
   chatExportSaveSchema,
+  cliKindSchema,
   gitDirSchema,
   notificationSchema,
   onboardingInputSchema,
@@ -115,6 +117,13 @@ export function registerIpc(
   });
 
   ipcMain.handle(IPC.detectClis, () => detectClis(readSettings()));
+
+  // Never rejects: every failure is reported IN the result, because the card
+  // has somewhere to say what the updater did and an IPC rejection reaches the
+  // renderer as an opaque `Error invoking remote method`.
+  ipcMain.handle(IPC.updateCli, (_event, kind: unknown) =>
+    runCliUpdate(cliKindSchema.parse(kind), readSettings()),
+  );
 
   ipcMain.handle(IPC.pickWorkflowImport, async () => {
     const result = await dialog.showOpenDialog({

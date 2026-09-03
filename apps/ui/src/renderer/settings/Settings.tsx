@@ -6,6 +6,7 @@ import {
   CLI_KINDS,
   type CliDetection,
   type CliKind,
+  type CliUpdateResult,
   type ConfigProfile,
   DAEMON_INSPECT_PORT,
   type FastAction,
@@ -205,6 +206,16 @@ export function Settings({
     [handle],
   );
   const [clis, setClis] = useState<CliDetection[] | null>(null);
+  /** The CLI whose own updater is running right now — at most one at a time. */
+  const [updatingCli, setUpdatingCli] = useState<CliKind | null>(null);
+  /**
+   * What the last update did, per CLI. Kept until the user asks for a fresh
+   * reading (`Re-check`), because the outcome is what the card reports and it
+   * outlives the press that produced it.
+   */
+  const [updateResults, setUpdateResults] = useState<
+    Partial<Record<CliKind, CliUpdateResult>>
+  >({});
   /**
    * The fast actions, read from settings.json here rather than handed down from
    * Chats, so this screen owns its own data and works whether or not a chat has
@@ -654,7 +665,32 @@ export function Settings({
 
   const refreshClis = useCallback(async (): Promise<void> => {
     setClis(null);
+    // The press asks for a fresh reading, and a kept outcome would sit on top
+    // of it: `Updated to 2.1.255` outranks the probe in the card, so leaving it
+    // standing would answer Re-check with the previous answer.
+    setUpdateResults({});
     setClis(await window.geniro.detectClis());
+  }, []);
+
+  /**
+   * Run one CLI's own updater, then re-probe so the card stops offering an
+   * update it has just installed.
+   *
+   * Never rejects — main reports every failure inside the result — so there is
+   * no catch arm and no path that leaves the spinner running. The re-probe
+   * comes AFTER the outcome is stored, which is the order the card is written
+   * against: the outcome outranks the check, so a fresh `Up to date` cannot
+   * erase the sentence naming what just happened.
+   */
+  const updateCli = useCallback(async (kind: CliKind): Promise<void> => {
+    setUpdatingCli(kind);
+    try {
+      const result = await window.geniro.updateCli(kind);
+      setUpdateResults((prev) => ({ ...prev, [kind]: result }));
+      setClis(await window.geniro.detectClis());
+    } finally {
+      setUpdatingCli(null);
+    }
   }, []);
 
   /**
@@ -669,7 +705,15 @@ export function Settings({
    *
    * Not scoped to the account buttons: a binary installed or a `PATH` edited
    * while the window was in the background changes detection too, and the probe
-   * is two `execFile`s with a 5s ceiling.
+   * is three `execFile`s with a 5s ceiling, run in parallel.
+   *
+   * Two of those three reach the network — the login probe validates a session
+   * and the update probe asks the CLI what the newest version is — so this
+   * fires a couple of round trips per focus. Deliberately UNcached: it costs
+   * only while the Settings screen is mounted (the listener leaves with it),
+   * the login probe has always worked this way, and a freshness floor over one
+   * of the three would make `Re-check` answer from a cache the user pressed it
+   * to escape.
    *
    * Deliberately does NOT clear `clis` first, unlike {@link refreshClis} — a
    * flash of "Checking…" on every window focus would be noise, and the stale
@@ -1094,6 +1138,12 @@ export function Settings({
                   signingIn={
                     login.starting?.server === null ? login.starting.kind : null
                   }
+                  // Needs no daemon, unlike the account controls above: this
+                  // runs the user's own binary through main, so it works on a
+                  // launch where the daemon has not answered yet.
+                  onUpdate={(kind) => void updateCli(kind)}
+                  updating={updatingCli}
+                  updateResults={updateResults}
                   profileScopedKinds={profileScopedKinds}
                   // Whatever is true of ONE CLI lives on that CLI's card. Both of
                   // these used to be sections of their own further down the page,

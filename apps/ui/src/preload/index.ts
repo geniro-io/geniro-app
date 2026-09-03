@@ -48,6 +48,10 @@ const api: GeniroApi = {
     >,
   detectClis: () =>
     ipcRenderer.invoke(IPC.detectClis) as ReturnType<GeniroApi['detectClis']>,
+  updateCli: (kind) =>
+    ipcRenderer.invoke(IPC.updateCli, kind) as ReturnType<
+      GeniroApi['updateCli']
+    >,
   completeOnboarding: (input) =>
     ipcRenderer.invoke(IPC.completeOnboarding, input) as ReturnType<
       GeniroApi['completeOnboarding']

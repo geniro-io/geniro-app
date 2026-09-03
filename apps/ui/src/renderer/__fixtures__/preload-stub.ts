@@ -4,6 +4,7 @@ import {
   type ChatExportSaveResult,
   CLI_KINDS,
   type CliDetection,
+  type CliUpdateResult,
   type DaemonHandle,
   DEFAULT_SETTINGS,
   type GeniroApi,
@@ -143,8 +144,26 @@ export function createPreloadStub(
           path: null,
           version: null,
           loggedIn: null,
+          update: {
+            available: null,
+            latestVersion: null,
+            checkUnavailableReason: null,
+          },
         })),
       );
+    },
+
+    updateCli: (kind): Promise<CliUpdateResult> => {
+      note('updateCli');
+      // The zero answer for a CLI this stub has already said is not installed —
+      // populated outcomes come through props, like everything else here.
+      return Promise.resolve({
+        kind,
+        ok: false,
+        previousVersion: null,
+        version: null,
+        output: null,
+      });
     },
 
     getUpdateState: () => {

@@ -7,25 +7,12 @@ import {
   type CliKind,
   type Settings,
 } from '../shared/contracts';
+import { probeUpdate, UNKNOWN_CLI_UPDATE } from './cli-update';
+import { probeVersion } from './cli-version';
 import { probeEnv } from './probe-env';
 import { resolveBinary } from './resolve-binary';
 
 const execFileAsync = promisify(execFile);
-
-async function probeVersion(
-  kind: CliKind,
-  path: string,
-): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(path, ['--version'], {
-      timeout: 5000,
-      env: probeEnv(kind),
-    });
-    return stdout.trim().split('\n')[0] ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * How to ask one CLI whether it is signed in, for the CLIs that can be asked.
@@ -132,15 +119,17 @@ export async function detectClis(settings: Settings): Promise<CliDetection[]> {
           path: null,
           version: null,
           loggedIn: null,
+          update: UNKNOWN_CLI_UPDATE,
         };
       }
-      // Both probes are independent reads of the same binary, so they run
-      // together rather than adding a second serial 5s worst case to startup.
-      const [version, loggedIn] = await Promise.all([
+      // All three probes are independent reads of the same binary, so they run
+      // together rather than adding another serial 5s worst case to startup.
+      const [version, loggedIn, update] = await Promise.all([
         probeVersion(kind, path),
         probeLogin(kind, path),
+        probeUpdate(kind, path),
       ]);
-      return { kind, found: version !== null, path, version, loggedIn };
+      return { kind, found: version !== null, path, version, loggedIn, update };
     }),
   );
 }

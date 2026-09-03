@@ -12,6 +12,9 @@ import { isAbsolute, join, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_SETTINGS, type Settings } from '../shared/contracts';
+// The production sentence, not a copy of it: a spec that spelled its own would
+// pass while the card said something else.
+import { CHECK_UNAVAILABLE } from './cli-update';
 import { CLAUDE_ONLY_KEYS, CURSOR_ONLY_KEYS } from './probe-env';
 
 const mocks = vi.hoisted(() => ({
@@ -150,6 +153,14 @@ describe('detectClis', () => {
       // First stdout line only, trimmed — trailing noise never leaks into it.
       version: '1.2.3 (Claude Code)',
       loggedIn: true,
+      // Nothing was ASKED about updates — claude has no check that stops short
+      // of installing — and the card is told why rather than left to render a
+      // blank, which would read as "there is no update".
+      update: {
+        available: null,
+        latestVersion: null,
+        checkUnavailableReason: CHECK_UNAVAILABLE.claude,
+      },
     });
     expect(mocks.execFile).toHaveBeenCalledWith(
       override,
@@ -164,10 +175,20 @@ describe('detectClis', () => {
       path: null,
       version: null,
       loggedIn: null,
+      // A CLI that is not installed is asked nothing, and claims nothing — not
+      // even the reason a found claude carries, which would be a second answer
+      // to a question the "not found on PATH" line already settled.
+      update: {
+        available: null,
+        latestVersion: null,
+        checkUnavailableReason: null,
+      },
     });
     // Two calls for the ONE found binary — version and sign-in status. It was
     // one before claude gained a `LOGIN_PROBES` entry, so this number is what
-    // catches the entry being dropped again.
+    // catches the entry being dropped again. It is still two now that detection
+    // also asks about updates, and that is the point: claude has no entry in
+    // `LATEST_PROBES`, so it spawns nothing for the answer it declares.
     expect(mocks.execFile).toHaveBeenCalledTimes(2);
   });
 
@@ -235,6 +256,14 @@ describe('detectClis', () => {
       path: claudePath,
       version: null,
       loggedIn: null,
+      // The update answer is independent of the version probe: it is a fact
+      // about the CLI rather than a reading taken from this binary, so a
+      // timed-out `--version` does not erase it.
+      update: {
+        available: null,
+        latestVersion: null,
+        checkUnavailableReason: CHECK_UNAVAILABLE.claude,
+      },
     });
   });
 

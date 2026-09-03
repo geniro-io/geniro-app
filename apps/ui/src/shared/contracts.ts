@@ -733,6 +733,54 @@ export type CliKind = 'claude' | 'cursor-agent';
 /** Every CLI kind, in onboarding display order. */
 export const CLI_KINDS: readonly CliKind[] = ['claude', 'cursor-agent'];
 
+/**
+ * Whether one AGENT CLI has a newer version of itself available.
+ *
+ * Not to be confused with `UpdateState` further down, which is geniro's OWN
+ * self-update. These are the user's binaries: they ship their own updaters,
+ * geniro neither hosts nor fetches anything for them, and pressing the control
+ * runs that CLI's own `update`. The two are near neighbours in this file and
+ * must stay two — one is about this app, the other about the tools it drives.
+ *
+ * Three states for `available`, on {@link CliDetection.loggedIn}'s reasoning:
+ * `true`/`false` are answers the CLI GAVE, and `null` means nobody knows —
+ * either the CLI has no check that stops short of installing (claude, measured;
+ * see `LATEST_PROBES`) or the probe failed. It is never derived by comparing
+ * two version strings: their ordering is the vendor's, and a wrong guess either
+ * nags about an update that does not exist or hides one that does.
+ */
+export interface CliUpdateState {
+  /** The CLI said a newer version exists. `null` = not known — never guessed. */
+  available: boolean | null;
+  /** The newest version the CLI named, when it named one. */
+  latestVersion: string | null;
+  /**
+   * Why this CLI cannot be ASKED what the latest version is; null when it can.
+   *
+   * A property of the CLI rather than a failure — claude's `update` checks and
+   * installs in one step — so it is SAID on the card instead of leaving the row
+   * to read as "no update exists", which is the one thing it does not mean.
+   */
+  checkUnavailableReason: string | null;
+}
+
+/** What running one CLI's own updater actually did. */
+export interface CliUpdateResult {
+  kind: CliKind;
+  /** The updater exited cleanly. */
+  ok: boolean;
+  /**
+   * `--version` as GENIRO read it either side of the run — its own measurement,
+   * not the updater's prose. Which is the point: the two CLIs word their output
+   * differently and are free to reword it, while "what does the binary answer
+   * now" is a fact this app can take for itself and cannot get wrong.
+   */
+  previousVersion: string | null;
+  version: string | null;
+  /** The updater's own last words — shown only when it failed. */
+  output: string | null;
+}
+
 /** Result of probing the host for a single CLI agent. */
 export interface CliDetection {
   kind: CliKind;
@@ -747,12 +795,17 @@ export interface CliDetection {
    *
    * Three states, and the third is why this is not a plain boolean: `true` /
    * `false` are answers the CLI gave, and `null` means nobody knows — either the
-   * CLI has no status command to ask (claude, whose credentials the daemon
-   * handles by other means) or the probe itself failed. A failed probe must NOT
-   * read as signed-out: the readiness chip would tell the user to sign in when
-   * they already are, and the sign-in it offers would fix nothing.
+   * CLI has no status command to ask, or the probe itself failed. A failed probe
+   * must NOT read as signed-out: the readiness chip would tell the user to sign
+   * in when they already are, and the sign-in it offers would fix nothing.
+   *
+   * (This once named claude as the CLI that cannot be asked. It can —
+   * `claude auth status --json`, probe-verified — and `LOGIN_PROBES` carries
+   * the correction and its cost.)
    */
   loggedIn: boolean | null;
+  /** Whether this CLI has a newer version of itself to install. */
+  update: CliUpdateState;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1017,6 +1070,15 @@ export interface GeniroApi {
   updateSettings(patch: Partial<Settings>): Promise<Settings>;
   /** Probe the host for each supported CLI agent. */
   detectClis(): Promise<CliDetection[]>;
+  /**
+   * Update one agent CLI by running ITS OWN updater, and report what changed.
+   *
+   * geniro downloads nothing here and hosts nothing: the binary updates itself,
+   * exactly as it would in the user's terminal. Slow by nature (claude's native
+   * build is ~200MB), so the caller shows a spinner and must not race a second
+   * press against it.
+   */
+  updateCli(kind: CliKind): Promise<CliUpdateResult>;
   /** Persist onboarding input and mark onboarding complete. */
   completeOnboarding(input: OnboardingInput): Promise<Settings>;
   /** Open a native picker for a workflow YAML to import; path or null. */
@@ -1223,6 +1285,7 @@ export const IPC = {
   getSettings: 'geniro:getSettings',
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',
+  updateCli: 'geniro:updateCli',
   completeOnboarding: 'geniro:completeOnboarding',
   pickWorkflowImport: 'geniro:pickWorkflowImport',
   pickWorkflowExport: 'geniro:pickWorkflowExport',

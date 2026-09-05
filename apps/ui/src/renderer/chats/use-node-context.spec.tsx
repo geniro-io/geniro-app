@@ -37,11 +37,20 @@ function drive(
   api: WorkflowsApi,
   initial: { runId: string | null; isWorkflow: boolean; nonce: number },
 ): {
-  seen: { readings: ReadonlyMap<string, NodeContextReading> };
+  seen: {
+    readings: ReadonlyMap<string, NodeContextReading>;
+    /**
+     * One entry per RENDER, so a test can read the frame before effects flush —
+     * `act` runs them before it returns, so the post-`set` value alone cannot
+     * tell a render-time guard from the effect that follows it.
+     */
+    renders: { runId: string | null; size: number }[];
+  };
   set: (next: Partial<typeof initial>) => Promise<void>;
 } {
   const seen = {
     readings: new Map() as ReadonlyMap<string, NodeContextReading>,
+    renders: [] as { runId: string | null; size: number }[],
   };
   let props = initial;
 
@@ -50,7 +59,9 @@ function drive(
     isWorkflow,
     nonce,
   }: typeof initial): React.JSX.Element {
-    seen.readings = useNodeContextReadings(runId, isWorkflow, api, nonce);
+    const readings = useNodeContextReadings(runId, isWorkflow, api, nonce);
+    seen.readings = readings;
+    seen.renders.push({ runId, size: readings.size });
     return <div />;
   }
 
@@ -185,6 +196,30 @@ describe('useNodeContextReadings', () => {
     await settle();
 
     expect(seen.readings.size).toBe(0);
+  });
+
+  it('shows nothing on the very render that changes the run', async () => {
+    // The window the effect cannot cover. It clears on entry — but it runs
+    // AFTER the render that changed `runId`, and two runs of one workflow share
+    // node ids, so that one render resolves every ring against the previous
+    // run's row. The case above asserts once `act` has flushed effects, so it
+    // holds with the render-time guard deleted; this one reads the render.
+    const listWorkflowRunNodes = vi
+      .fn<() => Promise<NodeStateDto[]>>()
+      .mockResolvedValueOnce([node('reviewer', 10_000, 200_000)])
+      .mockImplementationOnce(() => new Promise<NodeStateDto[]>(() => {}));
+    const { seen, set } = drive(
+      { listWorkflowRunNodes } as unknown as WorkflowsApi,
+      { runId: 'run-1', isWorkflow: true, nonce: 0 },
+    );
+    await settle();
+    expect(seen.readings.size).toBe(1);
+    const beforeSwitch = seen.renders.length;
+
+    await set({ runId: 'run-2' });
+
+    // The FIRST render under the new run, before its effect had run at all.
+    expect(seen.renders[beforeSwitch]).toEqual({ runId: 'run-2', size: 0 });
   });
 
   it('lets a superseded fetch resolve without repainting the new run', async () => {

@@ -1370,13 +1370,22 @@ export class GraphExecutorService {
             // the node the reader was asking about. Fire-and-forget for the
             // reason every other write on this path is: a failed bookkeeping
             // write must not fail the turn.
+            //
+            // A reading naming no window borrows the one the live plane holds
+            // for this owner, resolved HERE rather than inside the queued
+            // callback: the queue drains later, and a model change in between
+            // deletes that entry — so a deferred read would file null for a
+            // reading that had a window at the moment it was taken.
+            const windowTokens =
+              event.contextWindowTokens ??
+              this.partials.windowFor(runId, ownerKey);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
                   runId,
                   node.id,
                   event.contextTokens,
-                  event.contextWindowTokens ?? null,
+                  windowTokens,
                   em,
                 )
                 .catch(() => {}),
@@ -1414,14 +1423,19 @@ export class GraphExecutorService {
             // The result line is the ONLY one carrying the window, so it is
             // where a node's denominator becomes durable — the count beside it
             // is written too, since a turn that reported none mid-flight still
-            // states its total here.
+            // states its total here. A result line that names no window falls
+            // back to the live plane, resolved eagerly for the reason the
+            // reading above states.
+            const settledWindowTokens =
+              event.usage?.contextWindowTokens ??
+              this.partials.windowFor(runId, ownerKey);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
                   runId,
                   node.id,
                   event.usage?.contextTokens ?? null,
-                  event.usage?.contextWindowTokens ?? null,
+                  settledWindowTokens,
                   em,
                 )
                 .catch(() => {}),

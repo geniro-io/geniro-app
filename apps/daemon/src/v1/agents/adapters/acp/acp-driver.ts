@@ -329,9 +329,10 @@ export interface AcpSessionOptions {
    * How full this agent's window is, read OFF-PROTOCOL — absent for an agent
    * that reports it on the wire, or not at all.
    *
-   * ACP has no context accounting: an agent sends no `usage_update` and its
-   * prompt reply carries no window, so an ACP turn's meter had nothing to draw
-   * and the ring sat empty for the life of the chat. A CLI can still KEEP that
+   * No shipped ACP agent here has been observed accounting for its context on
+   * the wire — none sends the `usage_update` the protocol defines, and a prompt
+   * reply carries no window — so an ACP turn's meter has nothing of its own to
+   * draw and the ring would sit empty for the life of the chat. A CLI can KEEP that
    * accounting somewhere the adapter can read — cursor writes a full breakdown
    * per turn into its own session store — and this is the seam that brings it
    * onto the same plane every other agent's figures ride. The reading itself is
@@ -892,8 +893,13 @@ export class AcpTurnDriver {
         this.session.currentModeId = this.requestedModeId;
         return [];
       case 'set_model':
-        // Same contract as `set_mode` above: silence on acceptance, and a
-        // `notice` from `onErrorReply` on a refusal.
+        // Same contract as `set_mode` above: silence on acceptance, a `notice`
+        // from `onErrorReply` on a refusal — and recorded for the same reason,
+        // since this reply is the ONLY signal that the agent took the model.
+        // The offers check in `applyModel` cannot stand in for it: that reads
+        // the vocabulary the agent ENUMERATED, and a refusal is reachable past
+        // it, so a model that passed it can still be running on something else.
+        this.session.currentModelId = this.requestedModelId;
         return [];
       case 'set_model_parameter':
         // Silent too — but it may be the frame the prompt is waiting on.
@@ -1336,6 +1342,56 @@ export class AcpTurnDriver {
   }
 
   /**
+   * A frame this turn sent has gone unanswered past its deadline.
+   *
+   * The SAME shape a refusal takes (`onErrorReply`), and deliberately so: the
+   * setting did not apply either way, and what a turn must not do is sit behind
+   * a frame that is never going to land. So a notice says what was lost and the
+   * prompt is released — never a teardown, since the session is perfectly able
+   * to run this turn on whatever the agent kept, which is what it would have
+   * done had the frame never been sent at all.
+   */
+  onRequestDeadline(
+    id: JsonRpcId,
+    kind: PendingKind,
+    ms: number,
+  ): AgentEvent[] {
+    // Only a frame still HOLDING the prompt has anything to rescue, and the two
+    // conditions are not the same question. Every parameter goes out under the
+    // one `set_model_parameter` kind while only an `applyBeforePrompt` one is
+    // added to `promptBlockers` (see `applyModelParameters`), so most frames
+    // here never blocked anything; and a turn whose prompt has already gone out
+    // has run on regardless of what this reply would have said.
+    //
+    // Speaking anyway is worse than silence: an event emitted once the turn has
+    // settled reaches the off-turn handler, which reads a `notice` as the run
+    // WORKING again — and since nothing terminal follows it, the badge stays
+    // that way until the session closes.
+    if (!this.promptHeld || !this.promptBlockers.has(id)) {
+      return [];
+    }
+    const released = this.releasePrompt(id);
+    // A release whose prompt did not actually go out means the TURN is gone —
+    // the process was killed, or the pipe closed under it. Nothing here has a
+    // reader in that case, and both halves would be untrue: the notice would
+    // promise a turn that runs on, and the failed write's own error would
+    // report a send nobody is waiting for. The session outlives its turns and
+    // holds no settle signal, so this is what stands in for one — a prompt that
+    // still writes is the evidence the turn is there to be told.
+    if (released.some((event) => event.type === 'error')) {
+      return [];
+    }
+    return [
+      {
+        type: 'notice',
+        severity: 'warning',
+        message: `the agent did not answer '${kind}' within ${Math.round(ms / 1000)}s — this turn runs on its own settings`,
+      },
+      ...released,
+    ];
+  }
+
+  /**
    * One awaited parameter frame has been answered — send the prompt once the
    * last of them is in.
    *
@@ -1382,23 +1438,43 @@ export class AcpTurnDriver {
       parameters: [],
     };
     const wanted = selection.model?.trim();
-    // The agent's own statement first, so a turn that names no model — or one
-    // whose model is refused below — still announces what it is running as.
+    // The agent's own statement SEEDS the field, and only while it is still
+    // unset. Every later turn on a kept process is handed the STORED
+    // `session/new` reply, which names the model the session was CREATED with —
+    // so re-seeding from it once per turn would undo a switch an earlier turn
+    // had confirmed. Same rule `pickMode` states for the mode: the reply says
+    // where the session started, never where it is now.
     const announced = readAcpCurrentModelId(sessionResult);
-    if (announced !== null && announced !== '') {
+    if (
+      this.session.currentModelId === null &&
+      announced !== null &&
+      announced !== ''
+    ) {
       this.session.currentModelId = announced;
     }
-    if (wanted) {
-      this.session.currentModelId = wanted;
-    }
-    if (this.session.currentModelId !== null) {
-      events.push({ type: 'turn_model', model: this.session.currentModelId });
+    // The requested model is ANNOUNCED, never RECORDED. `currentModelId` holds
+    // what the agent CONFIRMED — the `set_model` acceptance arm in `onReply` is
+    // what moves it — while `turn_model` reports what this turn asked to run
+    // as. The two differ exactly while a switch is unconfirmed, and that
+    // difference is load-bearing downstream: it is what
+    // `PartialStreamService.rememberWindow`'s anti-poisoning guard compares.
+    // Writing `wanted` here would collapse both of that guard's operands onto
+    // this one field — cursor's context reading names no model, so a window's
+    // own label falls back to it too — leaving the guard comparing a value
+    // against itself, unable to fire, and filing a refused model's window under
+    // the requested one.
+    const runningAs = wanted ? wanted : this.session.currentModelId;
+    if (runningAs !== null && runningAs !== '') {
+      events.push({ type: 'turn_model', model: runningAs });
     }
     // Parameters are applied EVEN WHEN the model needs no change — they are a
     // separate axis, and a run that keeps the agent's current model while
     // choosing a different effort is the ordinary case for a chat left on
     // "default model". Both early returns below therefore fall through to them.
-    if (!wanted || readAcpCurrentModelId(sessionResult) === wanted) {
+    // Against what the session is ON now, not against the reply — which on any
+    // turn but the first describes a model an earlier turn may have switched
+    // away from, so comparing with it re-sends the frame every turn.
+    if (!wanted || this.session.currentModelId === wanted) {
       // The one path where the reply on hand DESCRIBES the model this turn will
       // run on — nothing is switching — so a parameter it does not offer can be
       // answered here instead of by a refusal from the agent.
@@ -2012,10 +2088,13 @@ export class AcpTurnDriver {
         this.usage.contextUsed ??
         this.contextReading?.usedTokens ??
         this.usage.inputTokens,
-      // ACP never reports the model's window size — `UsageUpdate` carries only
-      // occupancy — so a denominator can only come from the off-protocol
-      // reading. Absent that, the consumer shows the count with no denominator
-      // rather than this client claiming a window no agent stated.
+      // The denominator comes from the off-protocol reading because no shipped
+      // ACP agent here has been observed SENDING a window, not because the
+      // protocol has none: `usage_update` defines `size` as required beside
+      // `used`, and the arm below reads `used` alone — this file's own spec
+      // builds a frame carrying `size: 200_000` and pins it discarded. Absent a
+      // reading, the consumer shows the count with no denominator rather than
+      // this client claiming a window no agent stated.
       contextWindowTokens: this.contextReading?.windowTokens ?? null,
       // From the same reading as the window and never on its own: a model id
       // here is a label ON that denominator, so one without the other names
@@ -2556,13 +2635,27 @@ export class AcpTurnDriver {
         }
         return [];
       }
+      case 'current_mode_update': {
+        // The agent moving itself between modes, which is the ONLY channel that
+        // reports one: `set_mode`'s reply covers a change this client asked for
+        // and nothing else. Recorded because the mode outlives the turn —
+        // `pickMode` decides whether the next turn needs a frame at all by
+        // comparing against where the session actually IS, so a mode changed
+        // behind our back leaves it re-sending one that is already applied, or
+        // skipping one it needed. It draws no transcript row: this is session
+        // state, not something the agent said.
+        const mode = asString(update.currentModeId);
+        if (mode) {
+          this.session.currentModeId = mode;
+        }
+        return [];
+      }
       default:
         // user_message_chunk (our own prompt echoed back — an IMPORT reads
         // those out of a `session/load` replay in `acp-sessions.ts` instead, at
         // creation time, so they land BELOW the first message the user sends
-        // here), plan/plan_update, current_mode_update, config_option_update,
-        // session_info_update — all real ACP updates this transcript does not
-        // model.
+        // here), plan/plan_update, config_option_update, session_info_update —
+        // all real ACP updates this transcript does not model.
         return [];
     }
   }

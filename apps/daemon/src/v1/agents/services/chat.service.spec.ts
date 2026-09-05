@@ -3789,6 +3789,56 @@ describe('ChatService — approval modes (parity M1)', () => {
     await drain();
   });
 
+  it('files the RESOLVED window on the run row when the reading carries none', async () => {
+    // The truthful denominator. `turn_model` resolves a known window into the
+    // live plane and writes nothing durable, and every reading after it carries
+    // a count alone — so the row held a numerator nothing could divide, and a
+    // chat reopened after a restart drew no ring at all while the live delta
+    // beside it, reading the same map, showed the fraction.
+    const { service, claude, runDao, deltas } = setup();
+    const first = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(first.id, 'go');
+    claude.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 1_000,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5[1m]',
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    // A SECOND chat on that model: the window is knowable from the store, and
+    // no reading of this run's OWN has ever carried one — which is the case the
+    // row could not answer before.
+    const second = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await service.sendMessage(second.id, 'go');
+    claude.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.emit({ type: 'context_progress', contextTokens: 26_000 });
+    await drain();
+
+    expect(deltas.at(-1)?.contextWindowTokens).toBe(1_000_000);
+    expect(runDao.runs.get(second.id)).toMatchObject({
+      contextTokens: 26_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    claude.finish();
+    await drain();
+  });
+
   it('files every live reading on the RUN ROW, mid-turn', async () => {
     // The live plane is ephemeral, so a window that reloads, reconnects, or
     // opens the chat for the first time has only the run row to read — and

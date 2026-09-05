@@ -25,6 +25,34 @@ import {
 } from './acp-jsonrpc';
 
 /**
+ * How long each kind of frame's reply is waited for.
+ *
+ * PARTIAL on purpose, and the ABSENCES carry the reasoning. `prompt` is the
+ * turn itself, so bounding it would give up on an agent that is working —
+ * that is what `spawn-cli.ts`'s turn deadline already answers, measured
+ * against SILENCE rather than against length. `initialize` / `session` /
+ * `session_load` are the handshake: a reply that never comes leaves nothing to
+ * run the turn on, so expiring one would emit a notice and change nothing.
+ *
+ * What is left is the one kind that can HOLD a prompt
+ * (`AcpModelParameter.applyBeforePrompt`), where a reply that never arrives
+ * strands a prompt that was never sent — silently, a held turn emitting nothing
+ * at all, until the turn-level silence deadline gives up on it half an hour
+ * later. Expiring turns that into a notice plus a turn running on the agent's
+ * own settings, which is what a REFUSAL of the same frame already produces.
+ *
+ * `set_mode` and `set_model` are absent for the reason the handshake frames
+ * are: neither is ever added to `promptBlockers`, so neither can strand
+ * anything, and arming them would only buy a chance to narrate a turn that had
+ * already run on. Being listed here is not on its own permission to speak —
+ * every parameter travels under this one kind and most of them do not block
+ * either, so `AcpTurnDriver.onRequestDeadline` re-checks before it emits.
+ */
+const REQUEST_DEADLINE_MS: Partial<Record<PendingKind, number>> = {
+  set_model_parameter: 30_000,
+};
+
+/**
  * ONE `cursor-agent acp`-style process, and the turns run on it.
  *
  * This is the `TurnDriver` an ACP adapter returns, and it is the SESSION half
@@ -81,8 +109,11 @@ export class AcpSession implements TurnDriver {
   resumed = false;
   /**
    * The model the SESSION is running as, as the AGENT stated it — read from the
-   * session reply's `models.currentModelId`, and replaced by the id a turn
-   * successfully switches to.
+   * session reply's `models.currentModelId`, and replaced by the id the agent
+   * CONFIRMS on a `set_model` reply. Never by the id a turn merely requested:
+   * `turn_model` announces that one, and `PartialStreamService.rememberWindow`'s
+   * anti-poisoning guard compares the two, so collapsing them onto this field
+   * would leave it comparing a value against itself.
    *
    * Session-scoped because that is what it describes: ACP carries no model
    * announcement of its own, so this is the only thing a `turn_model` event can
@@ -130,7 +161,9 @@ export class AcpSession implements TurnDriver {
   defaultModeId: string | null = null;
   /**
    * The mode the session is in NOW — {@link defaultModeId} until a turn's
-   * `session/set_mode` is accepted.
+   * `session/set_mode` is accepted, or until the AGENT moves itself and says so
+   * on a `current_mode_update`, which is the only channel reporting a change
+   * this client did not ask for.
    *
    * The pair exists because a mode outlives the turn that set it, which one
    * process per turn hid completely: a chat run under `plan` and then switched
@@ -205,6 +238,11 @@ export class AcpSession implements TurnDriver {
     JsonRpcId,
     { kind: PendingKind; turn: AcpTurnDriver }
   >();
+  /**
+   * The deadline timers {@link armDeadline} started, keyed like
+   * {@link pending} — a separate map because only some kinds carry one.
+   */
+  private readonly deadlines = new Map<JsonRpcId, NodeJS.Timeout>();
   /** The turn running right now. Replaced wholesale by {@link openTurn}. */
   private turn: AcpTurnDriver;
 
@@ -373,7 +411,40 @@ export class AcpSession implements TurnDriver {
       });
       return null;
     }
+    // Only a frame that actually went out is waited for — the branch above
+    // returns before this, so a write that failed arms nothing.
+    this.armDeadline(id, kind);
     return id;
+  }
+
+  /**
+   * Give up on one frame's reply once {@link REQUEST_DEADLINE_MS} has passed.
+   *
+   * `unref`ed, so a timer still armed can never hold the process open past the
+   * work it belongs to. A kind the map does not name is waited for indefinitely,
+   * exactly as before.
+   */
+  private armDeadline(id: JsonRpcId, kind: PendingKind): void {
+    const ms = REQUEST_DEADLINE_MS[kind];
+    if (ms === undefined) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      // Dropped first, so the `takePending` below finds nothing left to clear.
+      this.deadlines.delete(id);
+      // Which also applies the stale-turn guard: a frame whose turn has since
+      // ended is logged and dropped rather than narrated into the turn that
+      // replaced it, on the same terms a late REPLY is.
+      const entry = this.takePending(id);
+      if (entry === null) {
+        return;
+      }
+      for (const event of entry.turn.onRequestDeadline(id, entry.kind, ms)) {
+        this.emit(event);
+      }
+    }, ms);
+    timer.unref();
+    this.deadlines.set(id, timer);
   }
 
   /** Answer one agent→client request. */
@@ -425,6 +496,11 @@ export class AcpSession implements TurnDriver {
       return null;
     }
     this.pending.delete(id);
+    const timer = this.deadlines.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.deadlines.delete(id);
+    }
     if (entry.turn !== this.turn) {
       this.options.logger?.warn(
         `acp: dropped the reply to request ${String(id)} (${entry.kind}) — the turn that sent it has already ended`,

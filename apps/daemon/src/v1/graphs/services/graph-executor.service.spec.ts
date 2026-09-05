@@ -3985,6 +3985,107 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
   });
 
+  it('files the RESOLVED window on a node whose own readings carried none', async () => {
+    // The truthful denominator for a node. `turn_model` resolves a known window
+    // into the live plane and writes nothing durable, and `context_progress`
+    // routinely carries a count alone — so `node_state` kept a numerator nothing
+    // could divide, and the ring a cold client draws from that row stayed blank
+    // while the live delta beside it, reading the same map, showed a fraction.
+    const { service, claude, nodeDao } = setup();
+    await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5[1m]',
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    // A SECOND run on that model: the window is knowable from the store, and no
+    // reading of this run's own node ever carries one.
+    claude.starts.length = 0;
+    const second = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'again',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'context_progress',
+      contextTokens: 26_000,
+    });
+    await drain();
+
+    expect(nodeDao.row(second.id, 'a')).toMatchObject({
+      contextTokens: 26_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    // A THIRD run, for the OTHER durable site: the RESULT line, naming no
+    // window of its own. It needs a run of its own to discriminate — on the
+    // second the row already carries one, so the same assertion there would
+    // hold with that site's fallback reverted.
+    claude.starts.length = 0;
+    const third = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'once more',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 30_000,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(nodeDao.row(third.id, 'a')).toMatchObject({
+      contextTokens: 30_000,
+      contextWindowTokens: 1_000_000,
+    });
+  });
+
   it('keys the LIVE reading per CALL, so two calls on one node cannot overwrite each other', async () => {
     // The panel counted "2 active · 2 threads" honestly above a single ring,
     // because the owner key was the NODE: a caller running two of the same

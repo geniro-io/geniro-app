@@ -372,6 +372,72 @@ describe('CallBlock', () => {
     expect(shut.textContent).toContain('Waves rise and retreat');
   });
 
+  it('draws the CALLEE’s own context ring on the shut card', async () => {
+    // Each side of a call holds its own window, so this is the one figure about
+    // the call the caller's own ring cannot state.
+    const { groupTranscript } = await import('./transcript-groups');
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', mode: 'async' },
+        'orch',
+      ),
+      item(
+        'turn_complete',
+        {
+          callId: 'call-1',
+          usage: { contextTokens: 42_000, contextWindowTokens: 200_000 },
+        },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]')!;
+    const ring = shut.querySelector('[data-slot="call-summary-context"]');
+    expect(ring).not.toBeNull();
+    // The reading is the ring's ACCESSIBLE NAME — its SVG is aria-hidden, so
+    // this is the whole of what a reader who cannot see the arc gets, and the
+    // only observable carrying the figures.
+    const label = ring!
+      .querySelector('[aria-label]')
+      ?.getAttribute('aria-label');
+    expect(label).toContain('42k');
+    expect(label).toContain('200k');
+  });
+
+  it('draws NO context ring for a callee that has reported nothing', async () => {
+    // The band's gate widened to admit the ring; a call with no reading must
+    // not open a band that would otherwise have stayed shut.
+    const { groupTranscript } = await import('./transcript-groups');
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', mode: 'async' },
+        'orch',
+      ),
+      item('turn_complete', { callId: 'call-1', usage: null }, 'poet'),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    expect(
+      container.querySelector('[data-slot="call-summary-context"]'),
+    ).toBeNull();
+  });
+
   it('offers the callee’s TASK LIST from the shut card', async () => {
     // ASKED FOR as "also current tasks icon with popover". A checklist answers
     // "how far through is it" without reading anything, and the fold had put

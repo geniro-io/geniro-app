@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -36,7 +37,8 @@ export const DELETE_SETTLE_TIMEOUT_MS = 5_000;
  *
  * Every store the run touched is then cleared, because none of them cascade:
  * `Item.runId` is a plain string column with no FK, `node_state` is keyed by
- * `(runId, nodeId)`, attachments are files on disk, and live CLI sessions,
+ * `(runId, nodeId)`, `call_context` by `(runId, callId)`, attachments are files
+ * on disk, and live CLI sessions,
  * partial streams, seq allocations and call tokens all live in in-memory
  * registries. A delete that dropped only the `runs` row would leave every one
  * of those behind, invisible and unreachable.
@@ -53,6 +55,7 @@ export class RunTeardownService {
   constructor(
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
+    private readonly callContextDao: CallContextDao,
     private readonly runDao: RunDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
@@ -108,6 +111,8 @@ export class RunTeardownService {
       { runId },
       em,
     );
+    const callContexts =
+      await this.callContextDao.hardDeleteIncludingSoftDeleted({ runId }, em);
     await this.runDao.hardDeleteIncludingSoftDeleted({ id: runId }, em);
     this.attachments.removeRun(runId);
 
@@ -116,7 +121,7 @@ export class RunTeardownService {
     this.bus.publishRunDeleted(runId);
 
     this.logger.log(
-      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), attachments dropped`,
+      `deleted run ${runId}: ${items} item(s), ${nodeStates} node state(s), ${callContexts} call context(s), attachments dropped`,
     );
     return { deleted: true };
   }

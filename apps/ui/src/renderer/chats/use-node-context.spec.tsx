@@ -19,13 +19,19 @@ afterEach(() => {
   });
 });
 
-function node(nodeId: string, tokens: number | null, window: number | null) {
+function node(
+  nodeId: string,
+  tokens: number | null,
+  window: number | null,
+  calls: NodeStateDto['calls'] = [],
+) {
   return {
     runId: 'run-1',
     nodeId,
     status: 'running',
     contextTokens: tokens,
     contextWindowTokens: window,
+    calls,
     startedAt: null,
     endedAt: null,
     error: null,
@@ -91,6 +97,36 @@ async function settle(): Promise<void> {
 }
 
 describe('useNodeContextReadings', () => {
+  it('carries the PER-CALL readings through, not only the node’s own', async () => {
+    // The reader hop of the wire field. The node figures collapse to whichever
+    // call wrote last, so a node called twice needs both rows here or the
+    // sidebar's per-call rings have no durable source to fall back on.
+    const listWorkflowRunNodes = vi.fn(async () => [
+      node('reviewer', 91_000, 200_000, [
+        {
+          callId: 'call-1',
+          contextTokens: 10_000,
+          contextWindowTokens: 200_000,
+        },
+        {
+          callId: 'call-2',
+          contextTokens: 91_000,
+          contextWindowTokens: 200_000,
+        },
+      ]),
+    ]);
+    const { seen } = drive(
+      { listWorkflowRunNodes } as unknown as WorkflowsApi,
+      { runId: 'run-1', isWorkflow: true, nonce: 0 },
+    );
+    await settle();
+
+    expect(seen.readings.get('reviewer')?.calls).toEqual([
+      { callId: 'call-1', contextTokens: 10_000, contextWindowTokens: 200_000 },
+      { callId: 'call-2', contextTokens: 91_000, contextWindowTokens: 200_000 },
+    ]);
+  });
+
   it('reads the daemon’s per-node rows when a workflow run opens', async () => {
     const listWorkflowRunNodes = vi.fn(async () => [
       node('reviewer', 42_000, 200_000),
@@ -110,12 +146,14 @@ describe('useNodeContextReadings', () => {
     expect(seen.readings.get('reviewer')).toEqual({
       contextTokens: 42_000,
       contextWindowTokens: 200_000,
+      calls: [],
     });
     // A node that has never reported is carried as nulls rather than dropped —
     // the caller's own chain is what decides to fall through it.
     expect(seen.readings.get('poet')).toEqual({
       contextTokens: null,
       contextWindowTokens: null,
+      calls: [],
     });
   });
 

@@ -6,6 +6,7 @@ import {
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { CallTokenRegistry } from '../../../auth/call-token.registry';
+import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -16,6 +17,7 @@ import type { ItemSeqAllocator } from '../../agents/services/item-seq.allocator'
 import type { PartialStreamService } from '../../agents/services/partial-stream.service';
 import type { ProcessRegistry } from '../../agents/services/process-registry';
 import { RunTeardownService } from '../../agents/services/run-teardown.service';
+import { CallContext } from '../../runs/entity/call-context.entity';
 import { Item } from '../../runs/entity/item.entity';
 import { NodeState } from '../../runs/entity/node-state.entity';
 import { Run } from '../../runs/entity/run.entity';
@@ -39,13 +41,14 @@ describe('usage ledger retention across a run delete', () => {
   let itemDao: ItemDao;
   let runDao: RunDao;
   let nodeStateDao: NodeStateDao;
+  let callContextDao: CallContextDao;
   let usageDao: UsageEventDao;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Run, Item, NodeState, UsageEvent],
+        entities: [Run, Item, NodeState, CallContext, UsageEvent],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -65,10 +68,12 @@ describe('usage ledger retention across a run delete', () => {
     itemDao = new ItemDao(em);
     runDao = new RunDao(em);
     nodeStateDao = new NodeStateDao(em);
+    callContextDao = new CallContextDao(em);
     usageDao = new UsageEventDao(em);
     teardown = new RunTeardownService(
       itemDao,
       nodeStateDao,
+      callContextDao,
       runDao,
       new AgentEventBus(),
       // The in-memory planes a delete also clears. Stubbed because none of them

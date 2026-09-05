@@ -150,7 +150,11 @@ import {
   isWorkingRunStatus,
   type RunStatusKind,
 } from './run-status';
-import { isScrolledToBottom, nextFollowState } from './scroll-follow';
+import {
+  isScrolledToBottom,
+  nextFollowState,
+  shouldLoadOlder,
+} from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { SessionPicker } from './session-picker';
 import type {
@@ -247,17 +251,6 @@ import { rootAgentOf } from './workflow-root';
  * a send is in flight, so an index captured at render time addresses a
  * different message by the time the user clicks.
  */
-/**
- * How far up the loaded window a reader has to be before the page BEFORE it is
- * fetched — 0.3 of the scrollable range, i.e. 70% of the way to the top.
- *
- * REPORTED as "где-то на 70% подгружать все остальные сообщения". A fraction
- * rather than a pixel distance: the window is a thousand rows whose heights
- * range from a one-line tool row to a screenful of diff, so the same pixel
- * budget is half a screen on one thread and thirty on another.
- */
-const OLDER_PAGE_AT = 0.3;
-
 /**
  * The panel's pull-request list for a run that has no folder, or none read yet.
  * Module scope so its identity is stable — a fresh `[]` per render would be a
@@ -1918,10 +1911,15 @@ export function Chats({
     // control starts hidden rather than flashing on until the first scroll.
     setAboveTail(false);
     const onScroll = (): void => {
+      // Read ONCE, up front: both decisions below are about the direction this
+      // scroll moved, and the ref is overwritten a few lines down. Passing the
+      // ref itself to the second reader hands it `scrollTop === previous`,
+      // which reads as "did not move" and silently disables the guard.
+      const previousScrollTop = lastScrollTopRef.current;
       followingRef.current = nextFollowState(
         followingRef.current,
         scroller,
-        lastScrollTopRef.current,
+        previousScrollTop,
       );
       lastScrollTopRef.current = scroller.scrollTop;
       // Deliberately NOT `!followingRef.current`: the follow is sticky through
@@ -1929,17 +1927,15 @@ export function Chats({
       // when the tail runs away from them — the button is about where the
       // viewport IS, not about what the transcript intends to do next.
       setAboveTail(!isScrolledToBottom(scroller));
-      // …and PAGE, once the reader is most of the way up. A chat opens on its
-      // newest 1,000 items (see `HISTORY_PAGE`), so the rest is fetched only if
-      // somebody actually goes looking for it.
-      //
-      // The threshold is a fraction rather than a pixel count on purpose: what
-      // matters is how much of the loaded window is still ahead of the reader,
-      // and that window is a thousand rows of wildly different heights.
+      // …and PAGE, once the reader is most of the way up AND still heading
+      // that way. A chat opens on its newest 1,000 items (see `HISTORY_PAGE`),
+      // so the rest is fetched only if somebody actually goes looking for it —
+      // which a viewport travelling DOWN is not doing. See `shouldLoadOlder`
+      // for the threshold, and for what reading position alone did to the
+      // "Latest" button.
       if (
         loadOlderRef.current !== null &&
-        scroller.scrollTop <=
-          (scroller.scrollHeight - scroller.clientHeight) * OLDER_PAGE_AT
+        shouldLoadOlder(scroller, previousScrollTop)
       ) {
         // Hold the reader's place. Prepending a page inserts rows ABOVE the
         // viewport, which pushes everything they were reading down by exactly
@@ -1984,6 +1980,23 @@ export function Chats({
           });
     const repoint = (): void => {
       observer?.disconnect();
+      // The scroller's OWN box first, and it is not redundant beside its
+      // children: the tail can be pushed off-screen by the VIEWPORT shrinking
+      // just as easily as by the content growing, and that half had no watcher
+      // at all. Everything below this box in the column takes its height from
+      // content — the composer growing as a message is typed, the attachment
+      // strip appearing, an approval card opening, the fast-action bar — and
+      // each of them shortens the transcript by exactly that much.
+      //
+      // Nothing else notices. No child resizes, so the child observations do
+      // not fire; `scrollTop` does not move, so no `scroll` event is emitted;
+      // and the commit-time effect is keyed on items and live text, neither of
+      // which changed. The distance to the bottom simply grows and the newest
+      // message slides out of view under the composer, with `aboveTail` still
+      // reading false so the "Latest" button does not even offer a way back.
+      // The next streamed token hides it again by re-following — which is what
+      // made it "sometimes".
+      observer?.observe(scroller);
       for (const child of Array.from(scroller.children)) {
         observer?.observe(child);
       }
@@ -4895,28 +4908,41 @@ export function Chats({
       ];
     }
     /**
-     * One node's call threads, each carrying its OWN context reading — read off
-     * the per-call owner key the daemon publishes it under (`partialOwnerKey`).
+     * One node's call threads, each carrying its OWN context reading — the live
+     * one off the per-call owner key the daemon publishes it under
+     * (`partialOwnerKey`), and below it the daemon's durable `call_context` row.
+     *
+     * The durable half is what makes these rings survive: the live plane is
+     * dropped the moment a run settles and never exists at all for a window
+     * that reloaded, so a per-call ring drawn from it alone shows nothing
+     * outside a running turn.
      */
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
-    ): AgentThread[] =>
-      threadsOf(nodeActivity).map((thread) => {
+    ): AgentThread[] => {
+      const durableCalls = nodeReadings.get(nodeId)?.calls;
+      return threadsOf(nodeActivity).map((thread) => {
         if (thread.kind !== 'call') {
           return thread;
         }
         const live = liveText.get(partialOwnerKey(nodeId, thread.id));
+        const row = durableCalls?.find((call) => call.callId === thread.id);
         return {
           ...thread,
-          contextTokens: live?.contextTokens ?? null,
-          contextWindowTokens: live?.contextWindowTokens ?? null,
+          contextTokens: live?.contextTokens ?? row?.contextTokens ?? null,
+          contextWindowTokens:
+            live?.contextWindowTokens ?? row?.contextWindowTokens ?? null,
         };
       });
+    };
     /**
-     * WHICH reading a node's CARD states — a SOURCE rather than two fields,
-     * because a count from one turn over a window from another is a percentage
-     * of nothing, so both figures come from whichever of these answers first.
+     * WHICH reading a node's CARD states — resolved as ONE source per rank, so
+     * a count from one turn is not drawn over a window from another. The count
+     * and the window can still come from different PLANES within one call
+     * thread (`callThreadsOf` prefers live per figure), which is safe because a
+     * window is a property of the model and does not move between that call's
+     * turns.
      *
      * The node's own key is a DAG-scheduled turn, and LIVE beats durable for
      * the reason the 1:1 branch above gives: a delta reports the node's context
@@ -4947,11 +4973,34 @@ export function Chats({
       if ((own?.contextTokens ?? null) !== null) {
         return own!;
       }
+      // Asked of the live plane DIRECTLY rather than of the thread's own
+      // figure, which now falls back to the durable row: without that the two
+      // ranks below collapse into one, and a stale-but-newer call thread would
+      // outrank the one actually streaming.
       const liveThread = [...callThreads]
         .reverse()
-        .find((thread) => (thread.contextTokens ?? null) !== null);
+        .find(
+          (thread) =>
+            (liveText.get(partialOwnerKey(nodeId, thread.id))?.contextTokens ??
+              null) !== null,
+        );
       if (liveThread !== undefined) {
         return liveThread;
+      }
+      // Then the newest call thread carrying a DURABLE reading — but only for a
+      // node that runs nothing BUT calls. `node_state` is written on every
+      // reading while `call_context` is written only under a call, so for a node
+      // whose own DAG turn ran after its last call the row below holds the newer
+      // figure and this rank would hand back a staler one. `threadsOf` emits a
+      // `main` thread exactly when that turn happened, which is the test.
+      const ownTurn = callThreads.some((thread) => thread.kind === 'main');
+      const durableThread = ownTurn
+        ? undefined
+        : [...callThreads]
+            .reverse()
+            .find((thread) => (thread.contextTokens ?? null) !== null);
+      if (durableThread !== undefined) {
+        return durableThread;
       }
       // The daemon's own `node_state` row, which outranks the transcript for
       // the reason the run row outranks it on a chat: it moves with every
@@ -5027,6 +5076,12 @@ export function Chats({
     // without it the meter could only move when a durable item landed, which is
     // the "context never grows" complaint this panel exists to answer. There is
     // no react-hooks eslint plugin in this repo to catch the omission.
+    //
+    // `nodeReadings` for the same reason and a sharper case: it publishes a new
+    // Map only when its own fetch resolves, and a settled workflow run reopened
+    // — or a reconnect whose replay is empty — moves nothing else afterwards,
+    // so without it the durable rings stay blank on exactly the reload they
+    // exist for.
   }, [
     activeRun,
     activeRunStatus,
@@ -5035,6 +5090,7 @@ export function Chats({
     streaming,
     wfNodes,
     liveText,
+    nodeReadings,
     subagentThreads,
   ]);
 
@@ -5042,9 +5098,13 @@ export function Chats({
    * What the composer's ring shows — this chat's own context, and never
    * another's.
    *
-   * A CHAT only: a workflow run's nodes each hold a window of their own, so
-   * `agents[0]` there is one node among several and the ring is withheld
-   * exactly as it was.
+   * A workflow run has no single context of its own — its nodes each hold a
+   * window — so the ring draws its ROOT agent's, which is the one the user
+   * prompted and the one the run is about. `agents[0]` is not that node: it is
+   * whichever happens to be first. A graph with no single root (none,
+   * or several) leaves it withheld, as does a workflow whose definition has not
+   * arrived yet — `wfNodes.rootId` is null in all three, and a run-level figure
+   * invented for them would be a number about nothing.
    *
    * Three sources, freshest first. The live delta is this turn's latest
    * REQUEST, the RUN ROW is the last reading the daemon filed (one per
@@ -5072,8 +5132,20 @@ export function Chats({
    * under a name that had already changed.
    */
   const chatContext = useMemo(() => {
-    if (activeRun === null || activeRun.workflowId) {
+    if (activeRun === null) {
       return { tokens: null, window: null };
+    }
+    if (activeRun.workflowId) {
+      // Already resolved through `cardContextOf`'s own four-tier chain, so the
+      // root's ring here and its card in the panel cannot disagree.
+      const root =
+        wfNodes.rootId === null
+          ? undefined
+          : agents.find((agent) => agent.id === wfNodes.rootId);
+      return {
+        tokens: root?.contextTokens ?? null,
+        window: root?.contextWindowTokens ?? null,
+      };
     }
     const live = liveText.get(CHAT_LIVE_KEY);
     const tokens =
@@ -5103,7 +5175,14 @@ export function Chats({
     return recalled === null
       ? { tokens: null, window }
       : { tokens: recalled.tokens, window: recalled.window };
-  }, [activeRun, agents, items.length, liveText, recallContextReading]);
+  }, [
+    activeRun,
+    agents,
+    items.length,
+    liveText,
+    recallContextReading,
+    wfNodes.rootId,
+  ]);
   /**
    * Why the ring has no figure, when the reason is worth drawing — see
    * `ContextMeter`'s `awaitingReading`.
@@ -7514,12 +7593,33 @@ export function Chats({
                         nodes each carry their own model, effort and approval in
                         the graph), so the chip costs the row nothing and the
                         band above the card goes away entirely. */
-                              <Chip>
-                                <Zap />
-                                <span className="max-w-52 truncate">
-                                  {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                                </span>
-                              </Chip>
+                              <>
+                                <Chip>
+                                  <Zap />
+                                  <span className="max-w-52 truncate">
+                                    {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                                  </span>
+                                </Chip>
+                                {/* The run-level ring, drawn from the ROOT
+                          agent — the node the user prompted. `chatContext`
+                          resolves it and answers nulls where the graph names no
+                          single root, so this draws nothing rather than a
+                          figure about no particular node.
+
+                          `runId` is null: that prop opens the full breakdown,
+                          which is a question put to ONE live process, and a
+                          workflow run holds one per node. */}
+                                {chatContext.tokens === null ? null : (
+                                  <ContextMeter
+                                    className="ml-1.5"
+                                    runId={null}
+                                    contextTokens={chatContext.tokens}
+                                    contextWindowTokens={chatContext.window}
+                                    live={isWorkingRunStatus(activeRunStatus)}
+                                    side="top"
+                                  />
+                                )}
+                              </>
                             ) : null}
                           </ComposerBottomRow>
                         </ComposerCard>

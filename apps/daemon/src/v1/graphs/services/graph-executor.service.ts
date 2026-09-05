@@ -20,6 +20,7 @@ import {
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
 } from '../../agents/chat.types';
+import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -330,6 +331,7 @@ export class GraphExecutorService {
     private readonly pullRequests: PullRequestCaptureService,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
+    private readonly callContextDao: CallContextDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
@@ -587,12 +589,25 @@ export class GraphExecutorService {
     const em = this.em.fork();
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
+    // Grouped by the node that ran each call, so a reconnecting client gets one
+    // ring per call thread beside the node's own collapsed figure.
+    const callsByNode = new Map<string, NodeStateWire['calls']>();
+    for (const call of await this.callContextDao.listByRun(runId, em)) {
+      const forNode = callsByNode.get(call.nodeId) ?? [];
+      forNode.push({
+        callId: call.callId,
+        contextTokens: call.contextTokens,
+        contextWindowTokens: call.contextWindowTokens,
+      });
+      callsByNode.set(call.nodeId, forNode);
+    }
     return rows.map((row) => ({
       runId: row.runId,
       nodeId: row.nodeId,
       status: row.status,
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
+      calls: callsByNode.get(row.nodeId) ?? [],
       startedAt: row.startedAt,
       endedAt: row.endedAt,
       error: row.error,
@@ -1390,6 +1405,23 @@ export class GraphExecutorService {
                 )
                 .catch(() => {}),
             );
+            // And again per CALL, where there is one: a DAG-launched node
+            // carries no `callContext` and no call identity to key a row on, so
+            // it writes the node row above and nothing here.
+            if (callContext) {
+              enqueue(() =>
+                this.callContextDao
+                  .rememberContext(
+                    runId,
+                    callContext.callId,
+                    node.id,
+                    event.contextTokens,
+                    windowTokens,
+                    em,
+                  )
+                  .catch(() => {}),
+              );
+            }
             return;
           }
           if (event.type === 'turn_model') {
@@ -1440,6 +1472,20 @@ export class GraphExecutorService {
                 )
                 .catch(() => {}),
             );
+            if (callContext) {
+              enqueue(() =>
+                this.callContextDao
+                  .rememberContext(
+                    runId,
+                    callContext.callId,
+                    node.id,
+                    event.usage?.contextTokens ?? null,
+                    settledWindowTokens,
+                    em,
+                  )
+                  .catch(() => {}),
+              );
+            }
           }
           const terminal = terminalStatus(event);
           if (

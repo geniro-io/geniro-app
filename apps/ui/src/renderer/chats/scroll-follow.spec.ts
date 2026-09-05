@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { isScrolledToBottom, nextFollowState } from './scroll-follow';
+import {
+  isScrolledToBottom,
+  nextFollowState,
+  shouldLoadOlder,
+} from './scroll-follow';
 
 /** A 400px-tall viewport over 1000px of transcript: 600px of scroll range. */
 function scroller(scrollTop: number): {
@@ -78,5 +82,50 @@ describe('nextFollowState', () => {
     expect(nextFollowState(false, at(300), 300)).toBe(false);
     expect(nextFollowState(false, at(360), 300)).toBe(false);
     expect(nextFollowState(false, at(500), 460)).toBe(true);
+  });
+});
+
+describe('shouldLoadOlder', () => {
+  /** 1000px of scroll range, so the 0.3 threshold sits at scrollTop 300. */
+  const at = (scrollTop: number) => ({
+    scrollTop,
+    scrollHeight: 1400,
+    clientHeight: 400,
+  });
+
+  it('pages while the reader is scrolling UP through the top of the window', () => {
+    expect(shouldLoadOlder(at(250), 400)).toBe(true);
+    expect(shouldLoadOlder(at(0), 120)).toBe(true);
+  });
+
+  it('pages for a reader who has come to rest up there', () => {
+    // Momentum ends and the frames stop; `scrollTop` equals the previous one.
+    // Still looking at history, so the next page is still wanted.
+    expect(shouldLoadOlder(at(200), 200)).toBe(true);
+  });
+
+  it('does not page below the threshold, however the viewport got there', () => {
+    expect(shouldLoadOlder(at(301), 900)).toBe(false);
+    expect(shouldLoadOlder(at(1000), 1000)).toBe(false);
+  });
+
+  // THE regression this function exists for. Pressing "Latest" from the top of
+  // a long thread animates the viewport all the way down, and the early frames
+  // of that animation are still inside the threshold. Paging there made the
+  // caller hold the reader's place with a `scrollTop` write, which terminates a
+  // smooth scroll — so the jump died a few frames in and snapped back, once per
+  // press. Direction is the whole fix: these frames are heading for the newest
+  // message, which is the opposite of going looking for history.
+  it('does not page during the frames of a jump DOWN to the latest message', () => {
+    expect(shouldLoadOlder(at(40), 0)).toBe(false);
+    expect(shouldLoadOlder(at(180), 40)).toBe(false);
+    expect(shouldLoadOlder(at(299), 180)).toBe(false);
+  });
+
+  it('does not cascade off the place-holding write that follows a page', () => {
+    // Prepending rows pushes the reader down by the height that arrived, and
+    // the caller restores it with `scrollTop += `. That emits a `scroll` of its
+    // own, moving DOWN — which must not immediately ask for the page after it.
+    expect(shouldLoadOlder(at(260), 60)).toBe(false);
   });
 });

@@ -60,3 +60,49 @@ export function nextFollowState(
   }
   return following;
 }
+
+/**
+ * How far up the loaded window a reader has to be before the page BEFORE it is
+ * fetched — 0.3 of the scrollable range, i.e. 70% of the way to the top.
+ *
+ * REPORTED as "где-то на 70% подгружать все остальные сообщения". A fraction
+ * rather than a pixel distance: the window is a thousand rows whose heights
+ * range from a one-line tool row to a screenful of diff, so the same pixel
+ * budget is half a screen on one thread and thirty on another.
+ */
+const OLDER_PAGE_AT = 0.3;
+
+/**
+ * Whether this scroll should fetch the page of history before the loaded one.
+ *
+ * Being high up the window is NOT sufficient, and the missing half is a
+ * direction: history is paged in because the reader went LOOKING for it, and a
+ * viewport travelling toward the newest message is doing the exact opposite.
+ *
+ * Reading position alone is what broke the "Latest" button. {@link
+ * jumpToBottom} animates, so a press from the top of a long thread fires
+ * `scroll` for every frame of the journey down — and the early frames are still
+ * inside the threshold below. The pager fired, a page landed, and the caller
+ * held the reader's place with `scroller.scrollTop += …`; a `scrollTop` write
+ * TERMINATES a smooth scroll, so the animation died a few frames in and the
+ * viewport snapped back to where it started. Pressing again repeated it, once
+ * per page, until enough history had loaded to clear the threshold — which is
+ * the report: the button does nothing, sometimes.
+ *
+ * Direction is taken from the same signal {@link nextFollowState} reads, so the
+ * two cannot disagree about which way the viewport went. It also settles the
+ * cascade for free: the place-holding write itself moves `scrollTop` DOWN, so
+ * the `scroll` it emits can no longer ask for the next page in turn.
+ */
+export function shouldLoadOlder(
+  scroller: { scrollTop: number; scrollHeight: number; clientHeight: number },
+  previousScrollTop: number,
+): boolean {
+  if (scroller.scrollTop > previousScrollTop) {
+    return false;
+  }
+  return (
+    scroller.scrollTop <=
+    (scroller.scrollHeight - scroller.clientHeight) * OLDER_PAGE_AT
+  );
+}

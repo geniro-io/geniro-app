@@ -16,6 +16,7 @@ import {
   BlockTitle,
   BlockToolFooter,
 } from './block-shell';
+import { ContextMeter } from './context-meter';
 import { liveRowKind } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
@@ -23,6 +24,7 @@ import type { AgentTaskRow } from './task-payload';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
+  callBlockContext,
   type CallBlockEntry,
   callBlockSummary,
   callBlockTasks,
@@ -176,6 +178,7 @@ export const CallBlock = memo(function CallBlock({
   const status = blockStatusOf(block.status);
   const toolCount = countTools(block.entries);
   const usage = callBlockUsage(block);
+  const context = callBlockContext(block);
   const tasks = callBlockTasks(block);
   const failed = block.status === 'failed';
   // The callee's live row draws its own spinner and its own clock, so the
@@ -201,7 +204,8 @@ export const CallBlock = memo(function CallBlock({
     pending ||
     tasks.length > 0 ||
     usage.tokens !== null ||
-    usage.costUsd !== null;
+    usage.costUsd !== null ||
+    context.contextTokens !== null;
   return (
     <div data-role="call-block" className="w-full">
       <BlockShell
@@ -236,6 +240,20 @@ export const CallBlock = memo(function CallBlock({
                 live={status === 'running'}
                 callee={callee}
               />
+              {/* HOW FULL the callee's own window is — the one figure about
+                this call that the caller's ring cannot state, each side of a
+                call holding a window of its own. `runId` is deliberately null:
+                that prop opens the run-wide breakdown, which is a question the
+                run's one live process cannot answer for a particular call. */}
+              {context.contextTokens === null ? null : (
+                <span data-slot="call-summary-context" className="shrink-0">
+                  <ContextMeter
+                    runId={null}
+                    contextTokens={context.contextTokens}
+                    contextWindowTokens={context.contextWindowTokens}
+                  />
+                </span>
+              )}
               {usage.tokens === null ? null : (
                 <span
                   data-slot="call-summary-tokens"

@@ -109,13 +109,15 @@ describe('shouldLoadOlder', () => {
     expect(shouldLoadOlder(at(1000), 1000)).toBe(false);
   });
 
-  // THE regression this function exists for. Pressing "Latest" from the top of
-  // a long thread animates the viewport all the way down, and the early frames
-  // of that animation are still inside the threshold. Paging there made the
-  // caller hold the reader's place with a `scrollTop` write, which terminates a
-  // smooth scroll — so the jump died a few frames in and snapped back, once per
-  // press. Direction is the whole fix: these frames are heading for the newest
-  // message, which is the opposite of going looking for history.
+  // THE regression this function exists for. Pressing "Latest" animates the
+  // viewport down, and the early frames of that animation are still inside the
+  // threshold — so the pager fired mid-flight and the caller then held the
+  // reader's place with a `scrollTop` write, which terminates a smooth scroll.
+  // Measured in the running app on a 9,000-item thread: 147,312px of transcript
+  // fetched during ONE press, and the animation replaced by a teleport. It did
+  // not strand the reader — the press re-arms the follow, so the growth it
+  // caused re-followed the tail — so what this guard buys is the fetch and the
+  // animation, not the destination.
   it('does not page during the frames of a jump DOWN to the latest message', () => {
     expect(shouldLoadOlder(at(40), 0)).toBe(false);
     expect(shouldLoadOlder(at(180), 40)).toBe(false);

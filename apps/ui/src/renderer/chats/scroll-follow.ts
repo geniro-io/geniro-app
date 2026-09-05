@@ -79,15 +79,26 @@ const OLDER_PAGE_AT = 0.3;
  * direction: history is paged in because the reader went LOOKING for it, and a
  * viewport travelling toward the newest message is doing the exact opposite.
  *
- * Reading position alone is what broke the "Latest" button. {@link
- * jumpToBottom} animates, so a press from the top of a long thread fires
- * `scroll` for every frame of the journey down — and the early frames are still
- * inside the threshold below. The pager fired, a page landed, and the caller
- * held the reader's place with `scroller.scrollTop += …`; a `scrollTop` write
- * TERMINATES a smooth scroll, so the animation died a few frames in and the
- * viewport snapped back to where it started. Pressing again repeated it, once
- * per page, until enough history had loaded to clear the threshold — which is
- * the report: the button does nothing, sometimes.
+ * Position alone made pressing "Latest" pay for history nobody asked for.
+ * {@link jumpToBottom} animates, so a press from inside the zone below fires
+ * `scroll` for every frame of the journey down, and the early frames are still
+ * under the threshold — so the pager fired mid-flight, and the caller then held
+ * the reader's place with `scroller.scrollTop += …`, a write that TERMINATES a
+ * smooth scroll.
+ *
+ * MEASURED in the running app against a 9,000-item thread, one press: 147,312px
+ * of transcript — two full pages, ~2,000 items off the daemon — loaded during a
+ * single animation, and the scroll stopped being a scroll (the guarded build
+ * animates 93k → 28k → 9k → 1.7k → 0 over about a second; the unguarded one
+ * reports 0 at the first sample, having teleported).
+ *
+ * What it did NOT do is strand the reader, and that is worth writing down
+ * because it is the obvious thing to assume: the press sets `following` back on
+ * (see the caller), so the growth it triggers re-follows the tail and the
+ * viewport still ends at the bottom. The cost is the fetch and the animation,
+ * not the destination — this guard is not what fixes a "Latest" that appears to
+ * do nothing. Losing the tail to a SHRINKING viewport is that bug, and it lives
+ * in the ResizeObserver's watch set rather than here.
  *
  * Direction is taken from the same signal {@link nextFollowState} reads, so the
  * two cannot disagree about which way the viewport went. It also settles the

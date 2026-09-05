@@ -143,6 +143,8 @@ export function runToWire(
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,
+    workedMs: run.workedMs,
+    toolCalls: run.toolCalls,
     configDir: run.configDir,
     configDirPin,
     groupId: run.groupId,

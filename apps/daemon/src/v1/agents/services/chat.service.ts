@@ -3021,6 +3021,19 @@ export class ChatService implements OnModuleInit {
         postTokens: number | null;
       } | null = null;
       /**
+       * Tool calls this turn has made on the MAIN thread — counted here because
+       * no CLI reports a total, and the durable row is what keeps the figure
+       * from describing only the transcript a client happens to hold.
+       *
+       * Per TURN, in this closure, like `compactedTokens` above — so it already
+       * starts at zero and the zeroing below is unobservable, verified by
+       * mutation: removing it changes no test. It stays because the durable
+       * write ADDS, so the day a closure serves two turns an un-zeroed counter
+       * would contribute the first turn's tools again on the second settle, and
+       * the figure would silently overcount rather than fail.
+       */
+      let turnToolCalls = 0;
+      /**
        * How many units of background work this turn is being HELD for — 0
        * whenever the agent is itself still working.
        *
@@ -4063,6 +4076,38 @@ export class ChatService implements OnModuleInit {
                 contextTokens: event.usage?.contextTokens ?? null,
                 contextWindowTokens: event.usage?.contextWindowTokens ?? null,
               });
+              // This turn's worked time and tool count, ADDED to the chat's
+              // running totals. Read out and zeroed synchronously, for the
+              // reason the window above is resolved eagerly: the write is
+              // fire-and-forget, and by the time it runs the next turn's calls
+              // could already have moved the counter.
+              const workedMs = event.usage?.durationMs ?? null;
+              const toolCalls = turnToolCalls;
+              turnToolCalls = 0;
+              void this.runDao
+                .rememberWork(runId, workedMs, toolCalls)
+                // A failed bookkeeping write must not fail the turn — the same
+                // rule every durable write on this path follows.
+                .catch(() => {});
+            }
+            if (event.type === 'turn_cancelled' || event.type === 'error') {
+              // A turn the user STOPPED, or one that failed, still called the
+              // tools it called: that work happened, and the column answers how
+              // much this agent has done rather than how much of it finished.
+              // Counting it only on `turn_complete` left a delegate-heavy chat
+              // — the long kind these columns exist for — permanently short by
+              // every turn that ended any other way, since the per-turn counter
+              // dies with this closure.
+              //
+              // The TOOLS alone: neither terminal carries a `usage`, so there is
+              // no duration to add, and `rememberWork` takes the two
+              // independently precisely so a figure nobody measured stays null
+              // rather than being written as a zero.
+              const stoppedToolCalls = turnToolCalls;
+              turnToolCalls = 0;
+              void this.runDao
+                .rememberWork(runId, null, stoppedToolCalls)
+                .catch(() => {});
             }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
@@ -4230,6 +4275,11 @@ export class ChatService implements OnModuleInit {
               event.type === 'tool_call' &&
               event.parentToolUseId === undefined
             ) {
+              // This chat's OWN tools. The `parentToolUseId` guard this branch
+              // already applies is the delegate exclusion the durable count
+              // needs too — a sub-agent has its own card, so folding its
+              // toolbelt in here would report a fan-out's total as the chat's.
+              turnToolCalls += 1;
               // What "running" actually means right now, for a badge the user
               // is not looking at.
               //

@@ -2531,3 +2531,125 @@ describe('AgentsPanel workflows', () => {
     expect(section(el)).toBeNull();
   });
 });
+
+describe('AgentsPanel — worked time and tool count', () => {
+  // Reuses the module-scope `cardFor` — a second helper of the same name with a
+  // different matching rule is one an edit to either silently misses.
+  const workLine = (el: HTMLDivElement, name: string): Element | null =>
+    cardFor(el, name).querySelector('[data-slot="agent-work"]');
+
+  it("draws an agent's durable worked time and tool count", () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        workByAgent={
+          new Map([['orchestrator', { workedMs: 125_000, toolCalls: 12 }]])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')?.textContent).toContain('worked 2m 5s');
+    expect(workLine(el, 'Orchestrator')?.textContent).toContain('12 tools');
+    // Keyed per agent: Worker has no entry and so no line, rather than
+    // inheriting its neighbour's figures.
+    expect(workLine(el, 'Worker')).toBeNull();
+  });
+
+  it('draws NOTHING for an agent whose figures are ZERO, not just null', () => {
+    // Null is the unmeasured sentinel, but zero reaches the same render path —
+    // and `worked 0s · 0 tools` claims a measurement nobody took just as loudly
+    // as a fabricated one would. An agent that ran and used no tool is the
+    // ordinary case this has to stay quiet for.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        workByAgent={new Map([['orchestrator', { workedMs: 0, toolCalls: 0 }]])}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')).toBeNull();
+  });
+
+  it('draws NOTHING for an agent nothing has measured', () => {
+    // The omit-when-unmeasured rule this card already follows for spend: `0s ·
+    // 0 tools` claims a measurement nobody took, and every agent that has yet
+    // to take a turn would wear it.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')).toBeNull();
+    expect(workLine(el, 'Worker')).toBeNull();
+  });
+
+  it('says `1 tool`, never `1 tools`', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        workByAgent={
+          new Map([['orchestrator', { workedMs: null, toolCalls: 1 }]])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')?.textContent).toContain('1 tool');
+    expect(workLine(el, 'Orchestrator')?.textContent).not.toContain('1 tools');
+  });
+
+  it('ADDS the turn in flight to the settled total rather than choosing one', () => {
+    // Neither of the cases either side of this one supplies both, so
+    // `settledMs ?? liveMs` would pass them — and under that a card would
+    // freeze at its last durable total for the whole of its next turn, which
+    // is the stuck-clock class this change exists to remove.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        workByAgent={
+          new Map([['orchestrator', { workedMs: 120_000, toolCalls: null }]])
+        }
+        openTurns={[
+          {
+            agentKey: 'orchestrator',
+            startedAt: Date.now() - 30_000,
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')?.textContent).toContain(
+      'worked 2m 30s',
+    );
+  });
+
+  it("counts the turn in flight against THAT agent's card alone", () => {
+    // What keying the open turns bought: before it they arrived unlabelled, so
+    // a fan-out's live turns could not be told apart and none of them could be
+    // added to the card it belonged to.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        openTurns={[
+          {
+            agentKey: 'orchestrator',
+            startedAt: Date.now() - 30_000,
+            parkedMs: 0,
+            openSince: [],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(workLine(el, 'Orchestrator')?.textContent).toContain('worked');
+    expect(workLine(el, 'Worker')).toBeNull();
+  });
+});

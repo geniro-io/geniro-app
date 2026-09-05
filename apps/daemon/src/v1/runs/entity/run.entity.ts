@@ -150,6 +150,42 @@ export class Run extends TimestampsEntity {
   contextWindowTokens: number | null = null;
 
   /**
+   * How long this chat's agent has WORKED and how many tool calls it has made,
+   * totalled across every turn — the chat twin of `NodeState.workedMs` /
+   * `toolCalls`, on the RUN for the reason {@link contextTokens} is on it.
+   *
+   * The pair above is a LEVEL, so `rememberContext` replaces it and a missed
+   * write costs nothing. These are TOTALS, so `RunDao.rememberWork` SUMS and a
+   * missed write is a figure permanently short.
+   *
+   * They exist because the alternative — folding the transcript the client
+   * happens to hold — can only ever describe the loaded window: `HISTORY_PAGE`
+   * is 1,000 items, so on a long chat that fold is a fraction of the answer
+   * presented as the whole of it, with nothing on screen marking the difference.
+   *
+   * Null means never measured, never zero, and the two are independently
+   * nullable: every ACP agent reports no timing while still using tools.
+   *
+   * WHAT IS COUNTED, precisely, because "totalled across every turn" is the
+   * kind of claim that quietly stops being true. Every turn geniro STARTED,
+   * however it ended — a `turn_complete` contributes both figures, while a Stop
+   * or a failure contributes the tools it had already called and no duration,
+   * neither terminal carrying a `usage`. What is NOT counted is what the CLI
+   * does OFF-TURN: a claude process routinely opens a continuation turn of its
+   * own when a delegate reports back, and `handleBetweenTurnEvent` has no
+   * terminal arm, so that work reaches the transcript and not these columns.
+   * The renderer's fold still covers it inside the loaded window; past
+   * `HISTORY_PAGE` items it is simply missing, and a delegate-heavy chat is
+   * where that is largest. Closing it needs a per-RUN counter rather than the
+   * per-turn one in `sendMessage`'s closure — deliberately not built here.
+   */
+  @Property({ type: 'integer', nullable: true })
+  workedMs: number | null = null;
+
+  @Property({ type: 'integer', nullable: true })
+  toolCalls: number | null = null;
+
+  /**
    * Plugin directory a single-agent run's turns load, CANONICAL (the path
    * `resolveValidConfigDir` returned when the chat was created); null = none,
    * which is every row predating the chip and every CLI with no plugin

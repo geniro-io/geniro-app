@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CHAT_AGENT_KEY } from './agent-activity';
 import { ChatHeader } from './chat-header';
 
 (
@@ -152,6 +153,7 @@ describe('ChatHeader — how long this turn has been running', () => {
         lastActivityAt="2026-08-04T00:00:00.000Z"
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -483,6 +485,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -512,6 +515,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -536,6 +540,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [Date.parse('2026-08-04T00:00:20.000Z')],
@@ -587,6 +592,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={0}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],

@@ -72,6 +72,7 @@ import {
   type AgentActivity,
   type AgentDisplay,
   type AgentThread,
+  type AgentWork,
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
@@ -231,7 +232,7 @@ import { type StagedAttachment, useAttachments } from './use-attachments';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
-import { useNodeContextReadings } from './use-node-context';
+import { useNodeDurableReadings } from './use-node-context';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import {
   threadPullRequestsOf,
@@ -3661,9 +3662,9 @@ export function Chats({
    * that made `NodeState.contextTokens` reach a client at all.
    *
    * Asked on open and on reconnect; everything in between arrives as a live
-   * delta, which outranks it. See {@link useNodeContextReadings}.
+   * delta, which outranks it. See {@link useNodeDurableReadings}.
    */
-  const nodeReadings = useNodeContextReadings(
+  const nodeReadings = useNodeDurableReadings(
     activeRunId,
     activeRun?.workflowId != null,
     workflowApi,
@@ -4809,6 +4810,23 @@ export function Chats({
       ),
     [turnScan.open, holding, activeRunId],
   );
+  /**
+   * The open turns any LIVE readout may count — the header's total and each
+   * agent card's alike.
+   *
+   * Both guards belong HERE rather than at either call site, on the rule
+   * `shellsByAgent` below already follows: two readouts of one figure that
+   * apply different guards are two answers to one question. `parkWhileHeld`
+   * because a hold is the run NOT working, so a card that kept climbing through
+   * one would out-count the header and then jump backwards at the settle; and
+   * the settled check because `scanTurns` emits an open turn for any thread
+   * with a start and no terminal row — a daemon that died mid-turn leaves
+   * exactly that, and a clock reading off the rows alone ticks for days on a
+   * thread nothing is working on.
+   */
+  const openTurnsShown = isSettledRunStatus(activeRunStatus)
+    ? undefined
+    : openTurnForHeader;
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -5293,6 +5311,90 @@ export function Chats({
     }
     return byAgent;
   }, [agents, handle.startedAt, items]);
+  /**
+   * Worked time and tool count per agent — the pair each card draws under its
+   * spend line, keyed like `shellsByAgent` above.
+   *
+   * DURABLE OUTRANKS THE TRANSCRIPT, and that order is the whole point. A fold
+   * over `items` can only see the window this client loaded (`HISTORY_PAGE`), so
+   * on a long thread it is a fraction of the answer presented as the whole of
+   * it. The daemon totals both figures across every turn instead — on the NODE
+   * row for a workflow node, and on the RUN row for a 1:1 chat, which is the
+   * same split `contextTokens` already follows. The fold stays underneath as the
+   * first-turn answer, before either row has been written.
+   *
+   * A delegate's rows are excluded, on `shell-activity.ts`'s rule — a
+   * sub-agent has its own card, and folding its toolbelt into its launcher's
+   * would report a fan-out's total as one agent's.
+   */
+  const workByAgent = useMemo(() => {
+    const byAgent = new Map<string, AgentWork>();
+    const entryFor = (key: string): AgentWork => {
+      const found = byAgent.get(key);
+      if (found !== undefined) {
+        return found;
+      }
+      const fresh = { workedMs: null, toolCalls: null };
+      byAgent.set(key, fresh);
+      return fresh;
+    };
+    for (const item of items) {
+      if (subagentIdOf(item) !== null) {
+        continue;
+      }
+      const key = item.nodeId ?? CHAT_AGENT_KEY;
+      const settled = turnDurations.get(item.id);
+      if (settled !== undefined) {
+        const entry = entryFor(key);
+        entry.workedMs = (entry.workedMs ?? 0) + settled.ms;
+      }
+      if (item.kind === 'tool_call') {
+        const entry = entryFor(key);
+        entry.toolCalls = (entry.toolCalls ?? 0) + 1;
+      }
+    }
+    for (const [nodeId, reading] of nodeReadings) {
+      if (reading.workedMs === null && reading.toolCalls === null) {
+        continue;
+      }
+      const entry = entryFor(nodeId);
+      // The LARGER of the two, never a straight replace. `nodeReadings` is a
+      // SNAPSHOT — fetched on run open and on reconnect and never again — so
+      // replacing would freeze a reopened run's tool count at whatever the
+      // snapshot held, and make `workedMs` climb through a turn and then SNAP
+      // BACK by the whole of it at the settle. Durable still outranks the fold
+      // where it matters, because on a long thread it IS the larger figure by
+      // construction: the fold can only see the loaded window.
+      if (reading.workedMs !== null) {
+        entry.workedMs = Math.max(entry.workedMs ?? 0, reading.workedMs);
+      }
+      if (reading.toolCalls !== null) {
+        entry.toolCalls = Math.max(entry.toolCalls ?? 0, reading.toolCalls);
+      }
+    }
+    // A 1:1 CHAT's durable totals are on the RUN row rather than a node row —
+    // the same split `contextTokens` follows — so they arrive with the run this
+    // window already holds and cost no second fetch. The row is kept current by
+    // the SETTLE announce (`RunStatusEvent.workedMs` / `.toolCalls`), which had
+    // to be added for this: without it the copy fetched at open never moved, and
+    // since a durable total outranks the fold on any chat past `HISTORY_PAGE`
+    // items, the card's clock climbed through a turn and then dropped back by
+    // the whole of it the moment that turn settled.
+    //
+    // Still merged as the LARGER of the two rather than replacing, because the
+    // announce lands only on a settle: mid-turn the fold is the fresher of the
+    // pair, holding this turn's own rows before any durable write has happened.
+    if (activeRun !== null && activeRun.workflowId == null) {
+      const entry = entryFor(CHAT_AGENT_KEY);
+      if (activeRun.workedMs !== null) {
+        entry.workedMs = Math.max(entry.workedMs ?? 0, activeRun.workedMs);
+      }
+      if (activeRun.toolCalls !== null) {
+        entry.toolCalls = Math.max(entry.toolCalls ?? 0, activeRun.toolCalls);
+      }
+    }
+    return byAgent;
+  }, [items, turnDurations, nodeReadings, activeRun]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -6801,11 +6903,7 @@ export function Chats({
                         // days on a thread nothing is working on. The status
                         // is the authority on whether work is in flight; the
                         // rows only say what it started from.
-                        openTurns={
-                          isSettledRunStatus(activeRunStatus)
-                            ? undefined
-                            : openTurnForHeader
-                        }
+                        openTurns={openTurnsShown}
                         // The delegate, task and terminal counters that used to
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
@@ -7649,6 +7747,11 @@ export function Chats({
                       onRevealWorkflow={revealWorkflow}
                       tasksByAgent={tasksByAgent}
                       shellsByAgent={shellsByAgent}
+                      workByAgent={workByAgent}
+                      // The SAME guarded list the header counts — keyed per
+                      // agent by `scanTurns`, so each card adds the turn in
+                      // flight that belongs to it.
+                      openTurns={openTurnsShown}
                       onOpenShell={setOpenShell}
                       // Withheld for a run with no working directory, so the
                       // panel cannot draw a control over a folder that is not

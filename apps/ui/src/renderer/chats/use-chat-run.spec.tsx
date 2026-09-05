@@ -47,6 +47,8 @@ const run1: ChatRun = {
   archivedAt: null,
   lastMessage: null,
   pullRequests: [],
+  workedMs: null,
+  toolCalls: null,
   taskList: [],
 };
 const run2: ChatRun = { ...run1, id: 'r2', title: 'Other chat' };

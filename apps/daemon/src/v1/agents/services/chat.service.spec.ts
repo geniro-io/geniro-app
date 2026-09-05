@@ -56,6 +56,7 @@ import {
   HOST_QUESTION_TOOL,
   SINGLE_AGENT_NODE,
 } from '../chat.types';
+import type { CallContextDao } from '../dao/call-context.dao';
 import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
@@ -742,9 +743,17 @@ function setup(
   // that keeps a turn's writes and a mid-turn follow-up from sharing a seq, so
   // a double here would leave the duplicate-seq tests pinning the double.
   const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
+  // A chat run holds no agent-to-agent calls, so this table is always empty
+  // here — the seat exists because the teardown is shared with workflow runs.
+  const callContextDao = {
+    async hardDeleteIncludingSoftDeleted() {
+      return 0;
+    },
+  };
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
+    callContextDao as unknown as CallContextDao,
     runDao as unknown as RunDao,
     bus,
     registry,

@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
 import type { ChatListScope } from '../chat.types';
+import { positive } from '../utils/positive-figure';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -387,15 +388,4 @@ export class RunDao extends BaseDao<Run> {
       { disableIdentityMap: true },
     );
   }
-}
-
-/**
- * A figure worth storing: a real number above zero.
- *
- * Zero is rejected as hard as null, and for the reason the renderer's own fold
- * states — a turn that reported `0` measured nothing, and both halves of the
- * ring read it as a denominator or a numerator that cannot be right.
- */
-function positive(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }

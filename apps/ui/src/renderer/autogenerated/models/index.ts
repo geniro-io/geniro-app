@@ -710,6 +710,31 @@ export type AttachmentMediaType = typeof AttachmentMediaType[keyof typeof Attach
 /**
  * 
  * @export
+ * @interface CallContextReading
+ */
+export interface CallContextReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallContextReading
+     */
+    callId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    contextWindowTokens: number | null;
+}
+/**
+ * 
+ * @export
  * @interface CancelledDto
  */
 export interface CancelledDto {
@@ -2248,6 +2273,12 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {Array<CallContextReading>}
+     * @memberof NodeStateDto
+     */
+    calls: Array<CallContextReading>;
     /**
      * 
      * @type {number}

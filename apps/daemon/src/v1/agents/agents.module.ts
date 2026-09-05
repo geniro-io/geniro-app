@@ -15,6 +15,7 @@ import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
+import { CallContextDao } from './dao/call-context.dao';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -235,6 +236,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ItemSeqAllocator,
     ItemDao,
     NodeStateDao,
+    CallContextDao,
     RunDao,
     RunGroupDao,
     {
@@ -355,6 +357,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     McpHarvestStore,
     ItemDao,
     NodeStateDao,
+    CallContextDao,
     RunDao,
     ClaudeAdapter,
     CursorAcpAdapter,

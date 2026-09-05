@@ -6,6 +6,7 @@ import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
+  callBlockContext,
   type CallBlockEntry,
   callBlockSummary,
   collectSubagentBlocks,
@@ -884,6 +885,85 @@ describe('groupTranscript — call blocks', () => {
     expect(JSON.stringify((entries[0] as CallBlockEntry).entries)).toContain(
       'CALLEE_FAILED',
     );
+  });
+});
+
+describe('callBlockContext', () => {
+  /** A call block holding the callee's own settled turns. */
+  function callWith(turns: readonly unknown[]): CallBlockEntry {
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          mode: 'async',
+          message: 'Write a haiku about the sea.',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      ...turns.map((usage) =>
+        item('turn_complete', { usage, callId: 'call-1' }, 'poet'),
+      ),
+    ]);
+    const block = entries.find((entry) => entry.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    return block;
+  }
+
+  it('reads the callee’s own reading off its turns', () => {
+    expect(
+      callBlockContext(
+        callWith([{ contextTokens: 42_000, contextWindowTokens: 200_000 }]),
+      ),
+    ).toEqual({ contextTokens: 42_000, contextWindowTokens: 200_000 });
+  });
+
+  it('takes the LAST turn’s level rather than summing them', () => {
+    // The difference from `callBlockUsage` beside it: spend accumulates, a
+    // context reading is a level. Summing would report a figure the callee
+    // never held, and over its window would draw a ring past full.
+    expect(
+      callBlockContext(
+        callWith([
+          { contextTokens: 42_000, contextWindowTokens: 200_000 },
+          { contextTokens: 51_000, contextWindowTokens: 200_000 },
+        ]),
+      ),
+    ).toEqual({ contextTokens: 51_000, contextWindowTokens: 200_000 });
+  });
+
+  it('carries each figure independently, so a later turn omitting the window keeps it', () => {
+    expect(
+      callBlockContext(
+        callWith([
+          { contextTokens: 42_000, contextWindowTokens: 200_000 },
+          { contextTokens: 51_000, contextWindowTokens: null },
+        ]),
+      ),
+    ).toEqual({ contextTokens: 51_000, contextWindowTokens: 200_000 });
+  });
+
+  it('rejects a non-positive figure — a reported 0 measured nothing', () => {
+    expect(
+      callBlockContext(
+        callWith([{ contextTokens: 0, contextWindowTokens: 200_000 }]),
+      ),
+    ).toEqual({ contextTokens: null, contextWindowTokens: 200_000 });
+  });
+
+  it('answers nulls for a call whose turns reported no usage at all', () => {
+    expect(callBlockContext(callWith([null]))).toEqual({
+      contextTokens: null,
+      contextWindowTokens: null,
+    });
   });
 });
 

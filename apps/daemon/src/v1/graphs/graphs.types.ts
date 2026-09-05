@@ -452,6 +452,24 @@ export const NodeStateWireSchema = z.object({
    */
   contextTokens: z.number().nullable(),
   contextWindowTokens: z.number().nullable(),
+  /**
+   * The same reading per agent-to-agent CALL this node ran (from `call_context`
+   * rows). The node figures above collapse to whichever call wrote last, so a
+   * node called several times needs these to draw one ring per call thread
+   * rather than one flickering between windows.
+   *
+   * Nested, so it carries a `.meta({ id })` of its own to land as a named
+   * component, exactly as `AgentCount` above does.
+   */
+  calls: z.array(
+    z
+      .object({
+        callId: z.string(),
+        contextTokens: z.number().nullable(),
+        contextWindowTokens: z.number().nullable(),
+      })
+      .meta({ id: 'CallContextReading' }),
+  ),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
   error: z.string().nullable(),

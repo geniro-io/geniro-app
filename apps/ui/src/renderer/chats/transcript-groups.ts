@@ -1251,6 +1251,79 @@ function addCallUsage(
   }
 }
 
+/** How full the CALLEE's window was when it last reported, for its own ring. */
+export interface CallBlockContext {
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
+}
+
+/**
+ * The callee's own context reading, folded out of this block.
+ *
+ * The LAST turn's figures rather than a sum, which is what separates this from
+ * `callBlockUsage` beside it: spend ACCUMULATES across a callee's turns, while
+ * a context reading is a LEVEL — adding two of them produces a number the
+ * callee never held, and one over a window would read as a ring past full.
+ *
+ * Folded rather than passed in as a prop, because neither other source reaches
+ * here: the live per-call plane is keyed `<nodeId>::<callId>` and reaches no
+ * ancestor of a call block, and the durable row the sidebar's rings read is
+ * fetched per NODE. The block's own `turn_complete` rows are already in hand.
+ *
+ * Each figure is carried independently, on the daemon's own rule: a reading
+ * that omits one half says nothing about it, so a later turn reporting only a
+ * count must not erase the window an earlier one reported.
+ */
+export function callBlockContext(block: CallBlockEntry): CallBlockContext {
+  const found: CallBlockContext = {
+    contextTokens: null,
+    contextWindowTokens: null,
+  };
+  readCallContext(block.entries, found);
+  return found;
+}
+
+function readCallContext(
+  entries: readonly TranscriptEntry[],
+  into: CallBlockContext,
+): void {
+  for (const entry of entries) {
+    if (entry.type === 'item') {
+      if (entry.item.kind !== 'turn_complete') {
+        continue;
+      }
+      const usage = recordOf(recordOf(entry.item.payload)?.usage);
+      if (usage === undefined) {
+        continue;
+      }
+      const tokens = measured(usage.contextTokens);
+      const window = measured(usage.contextWindowTokens);
+      if (tokens !== null) {
+        into.contextTokens = tokens;
+      }
+      if (window !== null) {
+        into.contextWindowTokens = window;
+      }
+      continue;
+    }
+    if (entry.type === 'tools' || isCardEntry(entry)) {
+      continue;
+    }
+    readCallContext(entry.entries, into);
+  }
+}
+
+/**
+ * A figure worth drawing — the renderer's half of the rule the daemon's own
+ * `positive` states: a turn that reported `0` measured nothing, and both halves
+ * of a ring read it as a numerator or a denominator that cannot be right.
+ */
+function measured(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
 function recordOf(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null
     ? (value as Record<string, unknown>)

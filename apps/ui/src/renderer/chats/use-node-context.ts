@@ -10,6 +10,12 @@ export interface NodeContextReading {
 
 const EMPTY: ReadonlyMap<string, NodeContextReading> = new Map();
 
+interface NodeContextState {
+  /** Which run these readings were fetched for — see the guard on the return. */
+  runId: string | null;
+  readings: ReadonlyMap<string, NodeContextReading>;
+}
+
 /**
  * Every workflow node's last context reading, read off the DAEMON's own rows.
  *
@@ -38,8 +44,10 @@ export function useNodeContextReadings(
   workflowApi: WorkflowsApi,
   reconnectNonce: number,
 ): ReadonlyMap<string, NodeContextReading> {
-  const [readings, setReadings] =
-    useState<ReadonlyMap<string, NodeContextReading>>(EMPTY);
+  const [state, setState] = useState<NodeContextState>(() => ({
+    runId,
+    readings: EMPTY,
+  }));
 
   useEffect(() => {
     // Cleared FIRST and unconditionally, which a run→run switch is what forces:
@@ -48,7 +56,7 @@ export function useNodeContextReadings(
     // wrong run's row. That is the same defect `apps/ui/CLAUDE.md` states the
     // rule for on the metrics panel — a reading is carried with the run it was
     // taken from, and a mismatch reads as empty.
-    setReadings(EMPTY);
+    setState({ runId, readings: EMPTY });
     if (runId === null || !isWorkflowRun) {
       return;
     }
@@ -59,8 +67,9 @@ export function useNodeContextReadings(
         if (cancelled) {
           return;
         }
-        setReadings(
-          new Map(
+        setState({
+          runId,
+          readings: new Map(
             nodes.map((node) => [
               node.nodeId,
               {
@@ -69,7 +78,7 @@ export function useNodeContextReadings(
               },
             ]),
           ),
-        );
+        });
       })
       .catch(() => {
         // Silent by design — this is a fallback under two fresher sources, and
@@ -83,5 +92,10 @@ export function useNodeContextReadings(
     };
   }, [runId, isWorkflowRun, workflowApi, reconnectNonce]);
 
-  return readings;
+  // The readings belong to the run they were fetched for. The effect clears on
+  // entry, but it runs AFTER the render that changed `runId` — and since two
+  // runs of one workflow share node ids, that one render resolves every ring
+  // against the previous run's row instead of drawing none. Same guard, and the
+  // same reason, as the one on `use-chat-totals.ts`.
+  return state.runId === runId ? state.readings : EMPTY;
 }

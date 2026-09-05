@@ -1812,7 +1812,7 @@ export class ChatService implements OnModuleInit {
         null,
         event.contextTokens,
       );
-      await this.rememberContext(runId, {
+      await this.rememberContext(runId, SINGLE_AGENT_NODE, {
         contextTokens: event.contextTokens,
         contextWindowTokens: event.contextWindowTokens ?? null,
       });
@@ -2034,21 +2034,33 @@ export class ChatService implements OnModuleInit {
 
   private async rememberContext(
     runId: string,
+    ownerKey: string,
     reading: {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
     },
   ): Promise<void> {
+    // A reading that names no window borrows the one the live plane already
+    // resolved for this owner — most readings carry a count alone, so without
+    // this the durable row keeps a numerator nothing can divide. Above BOTH
+    // writes rather than between them, for the reason the next comment gives:
+    // resolving after the twin would fix the stored row and leave every
+    // client's ring undrawn.
+    const window =
+      reading.contextWindowTokens ?? this.partials.windowFor(runId, ownerKey);
     // The in-memory twin FIRST, and unconditionally: it is what every status
     // broadcast is stamped from, so a database write that fails must not also
     // cost every client its reading. Same rule the DAO applies — a half of the
     // pair that was not reported does not clear the half that was.
     this.contexts.remember(runId, {
       tokens: reading.contextTokens ?? null,
-      window: reading.contextWindowTokens ?? null,
+      window,
     });
     try {
-      await this.runDao.rememberContext(runId, reading);
+      await this.runDao.rememberContext(runId, {
+        ...reading,
+        contextWindowTokens: window,
+      });
     } catch (err) {
       this.logger.warn(
         `failed to record the context reading for run ${runId}: ${
@@ -4006,7 +4018,7 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.contextTokens,
               );
-              void this.rememberContext(runId, {
+              void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.contextTokens,
                 contextWindowTokens: event.contextWindowTokens ?? null,
               });
@@ -4047,7 +4059,7 @@ export class ChatService implements OnModuleInit {
               // the ring is withheld rather than drawn against an assumed size.
               // From the second turn on the row already holds one — the write
               // never clears it — so this is what gets a new chat its ring.
-              void this.rememberContext(runId, {
+              void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.usage?.contextTokens ?? null,
                 contextWindowTokens: event.usage?.contextWindowTokens ?? null,
               });

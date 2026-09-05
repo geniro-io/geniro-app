@@ -390,6 +390,23 @@ export class PartialStreamService {
   }
 
   /**
+   * The window resolved for this owner — the denominator a DURABLE write needs.
+   *
+   * The same read {@link eventOf} puts on every live delta, so a conversation
+   * reopened after a restart shows the fraction its live plane was already
+   * showing rather than a count over nothing.
+   *
+   * An empty entry means nothing is knowable, and that is why there is no
+   * second tier behind this one: {@link useModel} has already resolved cache →
+   * store into this map, and falling back to the run's STORED window would
+   * resurrect the previous model's during a switch — the same poisoning the
+   * guard in {@link rememberWindow} exists to stop, reached from the other end.
+   */
+  windowFor(runId: string, ownerKey: string): number | null {
+    return this.windows.get(this.ownerId(runId, ownerKey)) ?? null;
+  }
+
+  /**
    * The per-model cache key, keyed by AGENT and by the turn's WINDOW CHOICE as
    * well — the exported one, so this in-memory half and the durable store
    * cannot spell it differently. See {@link contextWindowKey} for why all three
@@ -455,8 +472,7 @@ export class PartialStreamService {
       thinkingSince: reasoning ? state.thinkingSince : null,
       thinkingStretch: reasoning ? state.thinkingStretch : null,
       contextTokens: state.contextTokens,
-      contextWindowTokens:
-        this.windows.get(this.ownerId(runId, ownerKey)) ?? null,
+      contextWindowTokens: this.windowFor(runId, ownerKey),
     };
   }
 

@@ -54,7 +54,16 @@ function prettyJson(value: unknown): string {
   }
 }
 
-/** The file a tool is acting on, under any of the spellings in use. */
+/**
+ * The file a tool is acting on, under any of the spellings in use.
+ *
+ * TWIN PARSER: `searchableText` in
+ * `apps/daemon/src/v1/agents/utils/searchable-text.ts` reads the same spellings
+ * off the same payloads to build the search index. The two cannot share code —
+ * this module is renderer-side and pulls in the syntax highlighter — so a
+ * spelling added HERE must be added THERE, or the transcript will show a path
+ * that a search over the same conversation cannot find.
+ */
 export function filePathOf(input: unknown): string | null {
   const record = asRecord(input);
   if (!record) {
@@ -75,6 +84,11 @@ export function filePathOf(input: unknown): string | null {
  * payloads for the panel's running-shells list: a second reading of these
  * spellings is how a CLI's `cmd` comes to be highlighted in the transcript and
  * missing from the panel.
+ *
+ * TWIN PARSER: `searchableText` in
+ * `apps/daemon/src/v1/agents/utils/searchable-text.ts`, on the terms
+ * {@link filePathOf} states — a spelling added here must be added there too, or
+ * the command is searchable in one surface and not the other.
  */
 export function commandOf(input: unknown): string | null {
   const record = asRecord(input);

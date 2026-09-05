@@ -20,6 +20,7 @@ import type {
   ChatDeletedDto,
   ChatExportDto,
   ChatMetricsDto,
+  ChatSearchResultDto,
   ChatTotalsDto,
   CreateChatDto,
   ForgottenInstructionsDto,
@@ -92,6 +93,12 @@ export interface ChatsApiReadShellOutputRequest {
 export interface ChatsApiRenameRunRequest {
     runId: string;
     renameRunDto: RenameRunDto;
+}
+
+export interface ChatsApiSearchChatRequest {
+    runId: string;
+    query: string;
+    limit?: number;
 }
 
 export interface ChatsApiSendChatMessageRequest {
@@ -791,6 +798,66 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async renameRun(requestParameters: ChatsApiRenameRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.renameRunRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async searchChatRaw(requestParameters: ChatsApiSearchChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatSearchResultDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling searchChat().'
+            );
+        }
+
+        if (requestParameters['query'] == null) {
+            throw new runtime.RequiredError(
+                'query',
+                'Required parameter "query" was null or undefined when calling searchChat().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['query'] != null) {
+            queryParameters['query'] = requestParameters['query'];
+        }
+
+        if (requestParameters['limit'] != null) {
+            queryParameters['limit'] = requestParameters['limit'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/search`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async searchChat(requestParameters: ChatsApiSearchChatRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatSearchResultDto> {
+        const response = await this.searchChatRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

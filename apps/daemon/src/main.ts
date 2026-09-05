@@ -29,6 +29,7 @@ import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { ChatService } from './v1/agents/services/chat.service';
+import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import {
   CHILD_JOURNAL_FILE_NAME,
@@ -98,6 +99,17 @@ const bootstrapper = buildBootstrapper({
   appVersion: environment.version,
 });
 
+/**
+ * Resolved in the appChangeCb below and read from `onListening`, because the
+ * sweep must start AFTER the ready print and `onListening` has no Nest app in
+ * scope.
+ *
+ * The order is fixed by `packages/http-server/src/setup.ts` —
+ * `buildHttpNestApp` → appChangeCb → `runHttpApp` → `listen` → `onListening` —
+ * so this is always assigned by the time the listen callback fires.
+ */
+let searchTextBackfill: SearchTextBackfillService | null = null;
+
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -140,6 +152,14 @@ bootstrapper.addExtension(
         process.stdout.write(
           `GENIRO_DAEMON_READY ${JSON.stringify({ port })}\n`,
         );
+        // AFTER the ready print, and deliberately NOT awaited — the one sweep
+        // here that is neither. It walks every transcript row the app has ever
+        // written (~160,000 on a real profile), and Nest awaits `onModuleInit`
+        // before the socket binds, so giving it either of the shapes its two
+        // siblings use would hold the pidfile write and this print behind it.
+        // The app would look hung on the first launch after an update; search
+        // being incomplete for a minute is the cheaper failure.
+        void searchTextBackfill?.backfillQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -177,6 +197,11 @@ bootstrapper.addExtension(
       // workflow twice and which task not once. Boot is the only moment —
       // nothing revisits a settled run.
       await app.get(WorkflowTitleBackfillService).backfillQuietly();
+
+      // Resolved here, STARTED from `onListening` — see that comment. This is
+      // the only line of it that may run before the server is up, and it only
+      // reads the container.
+      searchTextBackfill = app.get(SearchTextBackfillService);
 
       // Sweep MCP config files a prior crash left behind (the per-turn
       // disposer only runs on a clean settle). The tokens in them are already

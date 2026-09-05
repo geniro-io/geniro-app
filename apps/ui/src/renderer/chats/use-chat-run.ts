@@ -56,6 +56,17 @@ const EMPTY_NAMING: ReadonlySet<string> = new Set();
 export const HISTORY_PAGE = 1000;
 
 /**
+ * How many items after a jumped-to one the window keeps.
+ *
+ * A hit landed on the very last row of the window would have nothing under it
+ * and read as the end of the conversation. A page's worth of context above and
+ * a screenful below is what makes the jump land somewhere a reader can orient
+ * in — and it is the daemon's own `beforeSeq` that provides it, so no new query
+ * parameter was needed for any of this.
+ */
+const JUMP_CONTEXT_AFTER = 50;
+
+/**
  * May a REPLAYED transcript release this run's queue?
  *
  * The one rule, in one place. A replay carries every past turn's terminal item,
@@ -155,6 +166,22 @@ export interface ChatRunState {
    * were prepended, so the caller can hold the reader's scroll position.
    */
   loadOlder: () => Promise<boolean>;
+  /**
+   * The transcript is showing a window from the MIDDLE of the conversation —
+   * so its end is not on screen and live items are not being appended.
+   *
+   * The one state where the transcript is not a tail, and the reason the caller
+   * has to offer a way back: without it a reader who jumped to a search hit in
+   * old history would watch the thread go silent with nothing saying why.
+   */
+  awayFromTail: boolean;
+  /**
+   * Show the window around one item, wherever it sits. Resolves true when the
+   * window moved, so the caller only scrolls when there is a row to scroll to.
+   */
+  loadAround: (seq: number) => Promise<boolean>;
+  /** Go back to the newest page, and resume receiving live items. */
+  returnToTail: () => Promise<boolean>;
   /**
    * The runs whose NAME the daemon is working out right now.
    *
@@ -345,6 +372,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * requests.
    */
   const loadingOlderRef = useRef(false);
+  /**
+   * Is the transcript showing a window from the middle of the conversation?
+   *
+   * A ref beside the state because `addItem` reads it from inside a stream
+   * callback, where state is one commit behind — and the items it must not
+   * append arrive during exactly that commit.
+   */
+  const [awayFromTail, setAwayFromTail] = useState(false);
+  const awayFromTailRef = useRef(false);
   // The agent's not-yet-durable words, per agent. Ephemeral: never persisted,
   // never replayed, and cleared whenever the durable transcript is refetched.
   const [liveText, setLiveText] =
@@ -577,36 +613,52 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     if (item.runId !== activeRunIdRef.current) {
       return;
     }
-    setItems((prev) => {
-      const last = prev[prev.length - 1];
-      // Fast path: items carry a monotonic seq and are emitted persist-first,
-      // so a strictly-newer item just appends. `items` stays seq-sorted, so a
-      // full copy+resort per stream item (O(N² log N) to build a run) is only
-      // needed on the rare out-of-order case below.
-      if (last === undefined || item.seq > last.seq) {
-        return [...prev, item];
-      }
-      // The replay/live seam (or a reconnect delta) can re-deliver an item:
-      // de-dupe, then insert in seq order.
-      //
-      // BY ID, never by seq. Identity is what `id` means and what the seam
-      // actually re-delivers — the same row twice — while `seq` is only the
-      // ORDER. Treating a repeated seq as a repeated item made this the second
-      // half of the duplicate-seq defect: the daemon issued one value to two
-      // different rows, and this silently dropped whichever arrived second,
-      // which was reliably the agent's reply ("it deletes its last message").
-      // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
-      // transcript written before that fix still holds such a pair, and an
-      // ordering number is the wrong thing to establish identity with in any
-      // case: this way those rows come back on the next replay instead of
-      // staying invisible forever.
-      if (prev.some((existing) => existing.id === item.id)) {
-        return prev;
-      }
-      // A stable sort keeps two rows that DO share a seq in arrival order,
-      // rather than letting their relative position flip between renders.
-      return [...prev, item].sort((a, b) => a.seq - b.seq);
-    });
+    // While the transcript shows a window from the MIDDLE of the conversation,
+    // there is no end on screen for a new item to be appended to: doing it
+    // anyway would draw the newest message directly beneath one from hours
+    // earlier, with nothing marking the join. Nothing is lost — the row is on
+    // the daemon, and `returnToTail` fetches the newest page when the reader
+    // goes back.
+    //
+    // It suppresses the APPEND and nothing else, which is the whole of the
+    // distinction. An early return here also swallowed the terminal branch
+    // below, so a turn that ended while the reader was parked on an old search
+    // hit never cleared `streaming` and never kicked the queue drain: the
+    // composer stayed on Queue-and-Stop, and a follow-up waited until the user
+    // switched chats and back. `returnToTail` cannot repair that either — it
+    // refetches rows, and refetched rows do not pass through here.
+    if (!awayFromTailRef.current) {
+      setItems((prev) => {
+        const last = prev[prev.length - 1];
+        // Fast path: items carry a monotonic seq and are emitted persist-first,
+        // so a strictly-newer item just appends. `items` stays seq-sorted, so a
+        // full copy+resort per stream item (O(N² log N) to build a run) is only
+        // needed on the rare out-of-order case below.
+        if (last === undefined || item.seq > last.seq) {
+          return [...prev, item];
+        }
+        // The replay/live seam (or a reconnect delta) can re-deliver an item:
+        // de-dupe, then insert in seq order.
+        //
+        // BY ID, never by seq. Identity is what `id` means and what the seam
+        // actually re-delivers — the same row twice — while `seq` is only the
+        // ORDER. Treating a repeated seq as a repeated item made this the second
+        // half of the duplicate-seq defect: the daemon issued one value to two
+        // different rows, and this silently dropped whichever arrived second,
+        // which was reliably the agent's reply ("it deletes its last message").
+        // The daemon can no longer issue one twice (`ItemSeqAllocator`), but a
+        // transcript written before that fix still holds such a pair, and an
+        // ordering number is the wrong thing to establish identity with in any
+        // case: this way those rows come back on the next replay instead of
+        // staying invisible forever.
+        if (prev.some((existing) => existing.id === item.id)) {
+          return prev;
+        }
+        // A stable sort keeps two rows that DO share a seq in arrival order,
+        // rather than letting their relative position flip between renders.
+        return [...prev, item].sort((a, b) => a.seq - b.seq);
+      });
+    }
     if (item.seq > lastSeqRef.current) {
       lastSeqRef.current = item.seq;
     }
@@ -1012,6 +1064,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setHasOlder(false);
       setLoadingOlder(false);
       loadingOlderRef.current = false;
+      // A jump belongs to the thread being left. Without this the incoming
+      // thread would load its newest page and then silently drop every live
+      // item, because `addItem`'s guard would still be armed.
+      awayFromTailRef.current = false;
+      setAwayFromTail(false);
       setLiveText(EMPTY_LIVE_TEXT);
       setStreaming(false);
       setError(null);
@@ -1114,6 +1171,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // Throwaway by design — only ever shown for the run on screen, and
       // dropped wholesale on a run switch or a disconnect.
       if (event.runId !== activeRunIdRef.current) {
+        return;
+      }
+      // The SIBLING of `addItem`'s append guard, and the same reason: while the
+      // reader is parked on a window from the middle of the conversation, the
+      // agent's streaming row would be drawn under rows from hours earlier —
+      // the exact join the guard exists to prevent, arriving on the other live
+      // channel. Guarding one channel and not the other left the live row
+      // showing and then vanishing when the turn settled.
+      if (awayFromTailRef.current) {
         return;
       }
       setLiveText((prev) => applyLiveText(prev, event));
@@ -1662,6 +1728,125 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     }
   }, [chatApi]);
 
+  /**
+   * Show the window AROUND one item, wherever in the conversation it sits.
+   *
+   * This is what a daemon-side search is FOR. The client holds at most
+   * {@link HISTORY_PAGE} items, so every hit older than that had no row on
+   * screen to scroll to — and the only pager was {@link loadOlder}, anchored to
+   * the oldest item held and driven by the scroll handler, so reaching a hit at
+   * seq 5 from a window at 100,000 meant ~100 sequential round trips holding
+   * every row in between. Pressing such a hit did nothing at all: no scroll, no
+   * error, no feedback.
+   *
+   * The window REPLACES what is held rather than merging with it. A merge would
+   * either hold both windows with an invisible gap between them — rows that
+   * look adjacent and are hours apart — or pull in every row between, which is
+   * the memory `HISTORY_PAGE` exists to bound.
+   *
+   * Answers whether it moved, so the caller only scrolls when there is
+   * something to scroll to.
+   */
+  const loadAround = useCallback(
+    async (seq: number): Promise<boolean> => {
+      const runId = activeRunIdRef.current;
+      if (runId === null) {
+        return false;
+      }
+      try {
+        const page = await chatApi.listRunItems({
+          runId,
+          limit: HISTORY_PAGE,
+          // `beforeSeq` takes the newest `limit` items BELOW it, so asking a
+          // little PAST the target is what leaves context on both sides of it.
+          beforeSeq: seq + JUMP_CONTEXT_AFTER,
+        });
+        // The user may have switched threads while this was in flight.
+        if (activeRunIdRef.current !== runId || page.length === 0) {
+          return false;
+        }
+        const last = page[page.length - 1];
+        // Whether the reader is AWAY from the tail is asked rather than
+        // assumed: a hit inside the newest page needs no return affordance and
+        // must go on receiving live items. One row is enough to answer it, and
+        // a count query would scan the same rows to say the same thing.
+        const after =
+          last === undefined
+            ? []
+            : await chatApi.listRunItems({
+                runId,
+                afterSeq: last.seq,
+                limit: 1,
+              });
+        if (activeRunIdRef.current !== runId) {
+          return false;
+        }
+        const away = after.length > 0;
+        setItems(page);
+        setHasOlder(page.length === HISTORY_PAGE);
+        awayFromTailRef.current = away;
+        setAwayFromTail(away);
+        if (away) {
+          // The live plane is dropped with the window it belonged to. It holds
+          // whatever the agent was streaming a moment ago, which under a page
+          // from the middle of the conversation would render beneath rows from
+          // hours earlier — the same join the append guard refuses. Further
+          // deltas are suppressed at the subscription; this clears what was
+          // already there.
+          setLiveText(new Map());
+        }
+        return true;
+      } catch {
+        // A window that will not load leaves the transcript exactly as it was.
+        // The press can be repeated; nothing is half-applied, because the state
+        // is written only on the success path above.
+        return false;
+      }
+    },
+    [chatApi],
+  );
+
+  /**
+   * ENSURE the newest page is what is loaded, and start receiving live items
+   * again.
+   *
+   * Idempotent, which is what lets a caller ask for the tail without first
+   * asking whether it is already there: already at the tail costs no fetch and
+   * answers true. The send path relies on that — a message goes to the end of
+   * the conversation, so the reader has to be at the end to see it, and only the
+   * hook knows whether they are.
+   *
+   * The flag is cleared on SUCCESS only. Clearing it after a failed refetch
+   * would resume appending live rows onto the mid-conversation window still on
+   * screen — the exact join {@link addItem}'s guard exists to prevent — where
+   * leaving it set costs a second press of a control that is still on screen.
+   */
+  const returnToTail = useCallback(async (): Promise<boolean> => {
+    const runId = activeRunIdRef.current;
+    if (runId === null) {
+      return false;
+    }
+    if (!awayFromTailRef.current) {
+      return true;
+    }
+    try {
+      const history = await chatApi.listRunItems({
+        runId,
+        limit: HISTORY_PAGE,
+      });
+      if (activeRunIdRef.current !== runId) {
+        return false;
+      }
+      setItems(history);
+      setHasOlder(history.length === HISTORY_PAGE);
+      awayFromTailRef.current = false;
+      setAwayFromTail(false);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [chatApi]);
+
   return {
     runs,
     setRuns,
@@ -1673,6 +1858,9 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     hasOlder,
     loadingOlder,
     loadOlder,
+    awayFromTail,
+    loadAround,
+    returnToTail,
     namingRunIds,
     markRenamed,
     liveText,

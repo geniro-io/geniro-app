@@ -89,6 +89,8 @@ function build(
                 title: 'A thread',
                 agentKind: AgentKind.Claude,
                 cwd: '/proj',
+                startSha: 'a'.repeat(40),
+                startDirty: false,
                 model: 'claude-opus-5',
                 approval: 'ask',
                 effort: 'high',

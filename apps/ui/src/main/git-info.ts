@@ -6,6 +6,7 @@ import type {
   BranchSwitchResult,
   BranchWorktree,
   GitInfo,
+  GitStamp,
 } from '../shared/contracts';
 
 const execFileAsync = promisify(execFile);
@@ -20,6 +21,30 @@ const GIT_TIMEOUT_MS = 5000;
  * the user reads as a bug.
  */
 const GIT_PULL_TIMEOUT_MS = 60_000;
+
+/**
+ * Config every git call here is made under, ahead of the subcommand.
+ *
+ * The app runs git in a folder the USER named, so the repository's own config
+ * is untrusted input: `core.fsmonitor` names a PROGRAM git runs on any command
+ * that reads the index — a composer chip render, a branch listing — so a
+ * `.git/config` carrying one turns opening a folder into arbitrary code
+ * execution. `-c` beats the repository's value, and there is no way to opt out
+ * per-invocation, so refusing it by name is the whole mechanism.
+ *
+ * `core.quotePath=false` is correctness rather than safety: it is ON by
+ * default, so a non-ASCII branch or path comes back as C-style escapes
+ * (`\320\277`) that no consumer here un-escapes.
+ *
+ * The same list, and the same reasoning, as `git-changes.ts`'s — that one adds
+ * `diff.relative`, which nothing here reads.
+ */
+const SAFE_CONFIG = [
+  '-c',
+  'core.fsmonitor=false',
+  '-c',
+  'core.quotePath=false',
+];
 
 const NOT_A_REPO: GitInfo = {
   isRepo: false,
@@ -36,7 +61,7 @@ const NOT_A_REPO: GitInfo = {
  */
 async function git(cwd: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync('git', args, {
+    const { stdout } = await execFileAsync('git', [...SAFE_CONFIG, ...args], {
       cwd,
       timeout: GIT_TIMEOUT_MS,
       // A repo with thousands of branches must not blow up the IPC payload.
@@ -184,7 +209,7 @@ export async function switchBranch(
     // `git checkout -- <name>` is unambiguously the file form, not the branch
     // form. `switch` only ever means a branch. execFile takes an argv array, so
     // there is no shell to inject into either.
-    await execFileAsync('git', ['switch', branch], {
+    await execFileAsync('git', [...SAFE_CONFIG, 'switch', branch], {
       cwd: dir,
       timeout: GIT_TIMEOUT_MS,
     });
@@ -364,7 +389,7 @@ export async function pullBranch(dir: string): Promise<BranchPullResult> {
  */
 async function runGit(dir: string, args: string[]): Promise<true | string> {
   try {
-    await execFileAsync('git', args, {
+    await execFileAsync('git', [...SAFE_CONFIG, ...args], {
       cwd: dir,
       timeout: GIT_PULL_TIMEOUT_MS,
     });
@@ -392,6 +417,46 @@ async function runGit(dir: string, args: string[]): Promise<true | string> {
 export async function readHeadBranch(dir: string): Promise<string | null> {
   const head = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
   return head === null || head === 'HEAD' ? null : head;
+}
+
+/** A commit id as `rev-parse` prints one — never abbreviated. */
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * Where a folder stands RIGHT NOW — the commit it has checked out and whether
+ * it already carries uncommitted work. Stamped onto a chat when it is created,
+ * so the diff view has a fixed point to measure against.
+ *
+ * Its own read rather than a field on {@link GitInfo}, which is the house
+ * pattern {@link readHeadBranch} documents and which matters more here: that
+ * type is rendered by the composer's chip on every folder change, and widening
+ * it would put a sha through five files and two `NOT_A_REPO` literals for a
+ * reading one caller takes once per chat. Two subprocesses against that
+ * function's five, for the same reason.
+ *
+ * A non-repository, a checkout with no commits and a missing `git` all answer
+ * `{sha: null, dirty: null}` — {@link git} never throws, and both reads fail on
+ * each of them.
+ */
+export async function readGitStamp(dir: string): Promise<GitStamp> {
+  const [head, status] = await Promise.all([
+    git(dir, ['rev-parse', 'HEAD']),
+    git(dir, ['status', '--porcelain']),
+  ]);
+  return {
+    // Checked here as well as at the daemon's edge, and this is the side that
+    // decides what a bad reading COSTS: the stamp rides chat creation, whose
+    // schema refuses anything but a commit id, so a surprising line from git
+    // filtered out here loses the stamp where passing it on would fail the
+    // whole chat.
+    sha: head !== null && FULL_SHA.test(head) ? head : null,
+    // `null` = the status call itself failed, and here that means UNMEASURED
+    // rather than dirty — the opposite of {@link readGitInfo}, deliberately.
+    // That one gates a checkout switch, where an unknown answer must fail
+    // closed; this one is a record, and recording `false` would assert a clean
+    // tree nobody looked at.
+    dirty: status === null ? null : status !== '',
+  };
 }
 
 /** `owner` out of both URL forms git writes for a GitHub remote. */

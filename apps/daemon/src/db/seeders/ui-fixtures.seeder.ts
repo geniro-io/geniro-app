@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { Seeder } from '@mikro-orm/seeder';
 import type { EntityManager } from '@mikro-orm/sqlite';
 
+import { searchIndexText } from '../../v1/agents/utils/searchable-text';
 import { Item } from '../../v1/runs/entity/item.entity';
 import { Run } from '../../v1/runs/entity/run.entity';
 import type { ItemKind } from '../../v1/runs/runs.types';
@@ -278,6 +279,13 @@ export class UiFixturesSeeder extends Seeder {
         kind: item.kind,
         role: item.role ?? null,
         payload: JSON.stringify(item.payload),
+        // The one `Item` write that does not go through `persistItemAndEmit`,
+        // so it has to flatten for itself. Without this a seeded conversation
+        // is unsearchable for good — the backfill is marker-retired, so it
+        // never comes back for rows created after it ran, and a developer
+        // checking the search against fixtures would read a working feature
+        // as broken.
+        searchText: searchIndexText(item.payload),
         createdAt: item.secondsAgo === undefined ? at : itemAt,
         updatedAt: item.secondsAgo === undefined ? at : itemAt,
       });

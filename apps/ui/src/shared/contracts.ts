@@ -841,6 +841,69 @@ export interface GitInfo {
   worktrees: BranchWorktree[];
 }
 
+/**
+ * Where a folder stood at ONE moment — stamped onto a chat when it is created,
+ * so "what changed since this conversation started" has a fixed point.
+ *
+ * Its own shape rather than two fields on {@link GitInfo}, which is read on
+ * every folder change to draw a chip: this is taken once per chat, and the two
+ * answer different questions about the same folder. Both fields are null
+ * whenever the reading could not be taken at all — a plain folder, a checkout
+ * with no commits, no `git` on PATH.
+ */
+export interface GitStamp {
+  /** Full commit id of HEAD, or null when there was none to read. */
+  sha: string | null;
+  /**
+   * Whether the tree already carried uncommitted changes — null means the
+   * question was never answered, which is NOT the same as clean and must not be
+   * rendered as it.
+   */
+  dirty: boolean | null;
+}
+
+/** What happened to one file since a chat's starting commit. */
+export type GitChangeStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  /**
+   * Created and never `git add`ed — invisible to `git diff <sha>`, and the case
+   * the view is paired with `ls-files --others` to catch. Its own status rather
+   * than folded into `added`, because the two are different facts about the
+   * tree and only this one is at risk of being lost by a checkout.
+   */
+  | 'untracked';
+
+/** One file's change, with the diff to draw for it. */
+export interface GitChange {
+  /** Path as git names it — relative to the repository root. */
+  path: string;
+  status: GitChangeStatus;
+  /**
+   * The unified diff for this file, or null when there is none to show — an
+   * untracked file past the per-read body budget, or a diff git could not
+   * produce. Null is "no body", never "no change".
+   */
+  diff: string | null;
+}
+
+/**
+ * What a folder holds now that it did not at a chat's starting commit.
+ *
+ * `unavailableReason` is the ONE failure shape, on `readGitInfo`'s rule: the
+ * caller is deciding whether to draw a view, and an empty list with no reason
+ * would claim nothing changed about a folder nobody could read.
+ */
+export interface GitChanges {
+  changes: GitChange[];
+  /** More files changed than one read returns — the list is real but short. */
+  truncated: boolean;
+  unavailableReason: string | null;
+}
+
 /** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
 export interface BranchSwitchResult {
   ok: boolean;
@@ -1115,6 +1178,20 @@ export interface GeniroApi {
   /** Read a folder's git state (repo? branch? branches? dirty?). */
   getGitInfo(dir: string): Promise<GitInfo>;
   /**
+   * Read where a folder stands right now — the commit and the dirty flag a new
+   * chat is stamped with. Two subprocesses, against {@link getGitInfo}'s five.
+   */
+  getGitStamp(dir: string): Promise<GitStamp>;
+  /**
+   * Read what a folder holds now that it did not at `sha` — the chat's own
+   * starting commit ({@link GitStamp}).
+   *
+   * READ-ONLY, and the view built on it offers no revert: it says what happened,
+   * and undoing any of it is the user's own git, where they can see what they
+   * are undoing.
+   */
+  getChangesSince(dir: string, sha: string): Promise<GitChanges>;
+  /**
    * Open the user's own terminal on a command — the handoff out of geniro.
    * Takes the command as DATA (never a shell string) so nothing here has to
    * quote it, and so the renderer cannot smuggle a second command in.
@@ -1148,11 +1225,21 @@ export interface GeniroApi {
    * — see `main/save-chat-export.ts` for why that differs from
    * {@link pickWorkflowExport}, whose bytes live in the daemon. A cancelled
    * dialog resolves `saved: false`, which is an outcome and not an error.
+   *
+   * BOTH renderings go across and main writes the one the user's chosen filename
+   * asks for: the format is picked in an AppKit save panel, which is a surface
+   * only main can read.
    */
   saveChatExport(input: {
-    /** A bare file name to suggest — never a path; main refuses separators. */
+    /**
+     * A bare file name to suggest, with NO extension — main appends the one
+     * matching the filter it opens on. Never a path; main refuses separators.
+     */
     suggestedName: string;
-    content: string;
+    /** The complete document, for a machine or a maintainer. */
+    json: string;
+    /** The readable rendering, for a person. */
+    markdown: string;
   }): Promise<ChatExportSaveResult>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
@@ -1295,6 +1382,8 @@ export const IPC = {
   relaunchForUpdate: 'geniro:relaunchForUpdate',
   onUpdateState: 'geniro:onUpdateState',
   getGitInfo: 'geniro:getGitInfo',
+  getGitStamp: 'geniro:getGitStamp',
+  getChangesSince: 'geniro:getChangesSince',
   openInTerminal: 'geniro:openInTerminal',
   openTerminalAt: 'geniro:openTerminalAt',
   saveChatExport: 'geniro:saveChatExport',

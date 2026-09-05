@@ -32,6 +32,8 @@ const run1: ChatRun = {
   agentKind: 'claude',
   workflowId: null,
   cwd: '/proj',
+  startSha: null,
+  startDirty: null,
   model: null,
   approval: null,
   effort: null,
@@ -835,5 +837,231 @@ describe('useChatRun', () => {
     });
 
     expect([...harness.state().deadRequestKeys]).toEqual(['r1:q1']);
+  });
+});
+
+/**
+ * The jump a search hit needs.
+ *
+ * Search is a DAEMON route precisely because the client holds only the newest
+ * page, so a hit can name a seq this window does not hold. The pager cannot
+ * reach one: it is anchored to the oldest item on screen and only fires from the
+ * scroll handler, which is why fetching a window AROUND an arbitrary seq is its
+ * own path.
+ */
+describe('useChatRun — jumping to a hit outside the loaded window', () => {
+  /** Answer the three shapes of history read this feature makes. */
+  function serveHistory(pages: {
+    tail?: ChatItem[];
+    around?: ChatItem[];
+    after?: ChatItem[];
+  }): void {
+    chatApi.listRunItems.mockImplementation(
+      (args: { afterSeq?: number; beforeSeq?: number; limit?: number }) => {
+        if (args.afterSeq !== undefined) {
+          return Promise.resolve(pages.after ?? []);
+        }
+        if (args.beforeSeq !== undefined) {
+          return Promise.resolve(pages.around ?? []);
+        }
+        return Promise.resolve(pages.tail ?? []);
+      },
+    );
+  }
+
+  it('replaces the window with the page around the hit, keeping context below it', async () => {
+    const { client } = makeClient();
+    serveHistory({
+      tail: [msg('r1', 9000, 'assistant', 'newest')],
+      around: [msg('r1', 5, 'user', 'the bloom filter')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
+    // Asked PAST the hit, so the window carries rows on both sides of it — a
+    // hit on the window's last row would read as the end of the conversation.
+    expect(chatApi.listRunItems).toHaveBeenCalledWith({
+      runId: 'r1',
+      limit: 1000,
+      beforeSeq: 55,
+    });
+  });
+
+  it('reports being away from the tail when rows exist after the window', async () => {
+    const { client } = makeClient();
+    serveHistory({
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    expect(harness.state().awayFromTail).toBe(true);
+  });
+
+  it('does NOT report being away when the window already reaches the end', async () => {
+    // A hit inside the newest page needs no way back, and must go on receiving
+    // live items — asking is what tells the two apart.
+    const { client } = makeClient();
+    serveHistory({
+      around: [msg('r1', 9000, 'assistant', 'newest')],
+      after: [],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      await harness.state().loadAround(9000);
+    });
+
+    expect(harness.state().awayFromTail).toBe(false);
+  });
+
+  it('suppresses a live item while showing a mid-conversation window', async () => {
+    // The load-bearing pin. Appending would draw the newest message directly
+    // under one from hours earlier, with nothing marking the join.
+    const { client, emitItem } = makeClient();
+    serveHistory({
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    await act(async () => {
+      emitItem(msg('r1', 9001, 'assistant', 'just said'));
+    });
+
+    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
+  });
+
+  it('still SETTLES a turn that ends while the reader is away', async () => {
+    // The guard suppresses the APPEND and nothing else. Returning early from
+    // `addItem` also swallowed the terminal branch, so a turn that finished
+    // while the reader was parked on an old search hit left `streaming` true —
+    // the composer stuck on Queue-and-Stop — and never kicked the queue drain.
+    // `returnToTail` cannot repair it either: it refetches rows, and refetched
+    // rows never pass through `addItem`.
+    const { client, emitItem } = makeClient();
+    serveHistory({
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      harness.state().setStreaming(true);
+    });
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    await act(async () => {
+      emitItem(turnEnd('r1', 9001));
+    });
+
+    // Settled, even though the row itself is correctly kept off the window.
+    expect(harness.state().streaming).toBe(false);
+    expect(harness.state().items.map((item) => item.seq)).toEqual([5]);
+  });
+
+  it('goes back to the newest page and resumes live items', async () => {
+    const { client, emitItem } = makeClient();
+    serveHistory({
+      tail: [msg('r1', 9000, 'assistant', 'newest')],
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    await act(async () => {
+      await harness.state().returnToTail();
+    });
+    expect(harness.state().awayFromTail).toBe(false);
+    expect(harness.state().items.map((item) => item.seq)).toEqual([9000]);
+
+    await act(async () => {
+      emitItem(msg('r1', 9001, 'assistant', 'just said'));
+    });
+    expect(harness.state().items.map((item) => item.seq)).toEqual([9000, 9001]);
+  });
+
+  it('costs no fetch when the reader is ALREADY at the tail', async () => {
+    // What makes it safe for a caller to ask for the tail without first asking
+    // whether it is already there — which the send path does on every message,
+    // since only this hook knows whether the reader is parked on a search hit.
+    const { client } = makeClient();
+    serveHistory({ tail: [msg('r1', 9000, 'assistant', 'newest')] });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    const reads = chatApi.listRunItems.mock.calls.length;
+
+    let answered: boolean | undefined;
+    await act(async () => {
+      answered = await harness.state().returnToTail();
+    });
+
+    expect(answered).toBe(true);
+    expect(chatApi.listRunItems.mock.calls.length).toBe(reads);
+  });
+
+  it('stays away from the tail when the way back FAILS', async () => {
+    // Clearing the flag on a failed refetch would resume appending live rows
+    // onto the mid-conversation window still on screen — the exact join the
+    // guard exists to prevent. A second press is the honest cost.
+    const { client } = makeClient();
+    serveHistory({
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+
+    chatApi.listRunItems.mockRejectedValue(new Error('offline'));
+    await act(async () => {
+      await harness.state().returnToTail();
+    });
+
+    expect(harness.state().awayFromTail).toBe(true);
+  });
+
+  it('clears the jump when another thread is opened', async () => {
+    // Without this the incoming thread loads its newest page and then silently
+    // drops every live item, the guard still being armed.
+    const { client } = makeClient();
+    serveHistory({
+      around: [msg('r1', 5, 'user', 'old')],
+      after: [msg('r1', 9000, 'assistant', 'newest')],
+    });
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    await act(async () => {
+      await harness.state().loadAround(5);
+    });
+    expect(harness.state().awayFromTail).toBe(true);
+
+    await open(harness, 'r2');
+
+    expect(harness.state().awayFromTail).toBe(false);
   });
 });

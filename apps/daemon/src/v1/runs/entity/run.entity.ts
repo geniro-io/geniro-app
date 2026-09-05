@@ -31,6 +31,37 @@ export class Run extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   cwd: string | null = null;
 
+  /**
+   * The commit {@link cwd} had checked out when this chat was created — the
+   * fixed point "what has changed since this conversation started" is measured
+   * against.
+   *
+   * Null for a graph run (whose `cwd` is null for the reason above), for a
+   * folder that is not a repository, for a checkout with no commits yet, and
+   * for every row predating the stamp. Read by the ELECTRON process at
+   * creation and sent, like `configDir` and `customInstructions`: the daemon
+   * runs no git of its own.
+   *
+   * A moment rather than a range, and that is what makes it durable — a branch
+   * moves, a checkout is switched, the folder is reused by another chat, and
+   * this still names the commit this conversation began at. TEXT so the
+   * `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'string', nullable: true })
+  startSha: string | null = null;
+
+  /**
+   * Whether {@link cwd} already had uncommitted changes at that same moment.
+   *
+   * Beside the commit because the diff needs both to be honest: measured from
+   * `startSha` alone, work the user had in flight before the chat opened is
+   * presented as the agent's. Null means never measured — a graph run, a
+   * non-repository, a row predating the stamp — and is NOT read as clean, since
+   * a false there would make exactly the claim that cannot be checked.
+   */
+  @Property({ type: 'boolean', nullable: true })
+  startDirty: boolean | null = null;
+
   /** Which CLI agent drives a single-agent chat run; null for graph runs. */
   @Property({ type: 'string', nullable: true })
   agentKind: AgentKind | null = null;

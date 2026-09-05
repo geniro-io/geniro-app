@@ -1,5 +1,12 @@
 /**
- * The file name to suggest for a chat export, built from the thread's own label.
+ * The BASE of the file name to suggest for a chat export, built from the
+ * thread's own label — no extension.
+ *
+ * The extension is MAIN's (`save-chat-export.ts`), because main is what orders
+ * the save panel's filters and therefore what knows which format is the default
+ * one. Deciding it here as well would be two answers to one question, and the
+ * one that lost would show the user a name whose extension the panel then
+ * silently changed.
  *
  * A thread's name is whatever the user typed or the agent generated, so it
  * routinely holds the characters a file name cannot: a `/` (which macOS shows
@@ -13,7 +20,7 @@
  * That is why an unusable label falls back to a fixed word instead of failing —
  * a thread called `///` is still worth exporting.
  */
-export function chatExportFileName(label: string): string {
+export function chatExportBaseName(label: string): string {
   const slug = label
     .normalize('NFC')
     // Anything a path separator, a shell or a file manager would act on, plus
@@ -31,5 +38,5 @@ export function chatExportFileName(label: string): string {
     // the suffix below — a generated title can be a whole opening line.
     .slice(0, 80)
     .replace(/-+$/, '');
-  return `${slug === '' ? 'chat' : slug}-export.json`;
+  return `${slug === '' ? 'chat' : slug}-export`;
 }

@@ -188,6 +188,22 @@ export function createPreloadStub(
       note('getGitInfo');
       return Promise.resolve(NO_GIT);
     },
+    getGitStamp: () => {
+      note('getGitStamp');
+      // Both null, matching NO_GIT beside it: the fixture's folder is not a
+      // repository, so there is no commit to stamp and nothing was measured.
+      return Promise.resolve({ sha: null, dirty: null });
+    },
+    getChangesSince: () => {
+      note('getChangesSince');
+      // The reason a non-repository gives, so the view shows its own explained
+      // empty state rather than an unexplained blank list.
+      return Promise.resolve({
+        changes: [],
+        truncated: false,
+        unavailableReason: 'Not a git repository.',
+      });
+    },
     switchBranch: (
       _dir: string,
       branch: string,

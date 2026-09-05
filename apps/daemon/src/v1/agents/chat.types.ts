@@ -1307,6 +1307,52 @@ export const ItemWireSchema = z.object({
 export type ItemWire = z.infer<typeof ItemWireSchema>;
 
 /**
+ * One search hit: where in the conversation it is, and enough to recognise it.
+ *
+ * Deliberately NOT an {@link ItemWireSchema} — a hit list wants a quotable line
+ * and a place to jump to, and returning whole payloads would make a 200-hit
+ * answer as heavy as a page of transcript for a list nobody reads in full. The
+ * row itself is already on the client, or one `beforeSeq` fetch away.
+ */
+export const ChatSearchHitSchema = z
+  .object({
+    seq: z
+      .number()
+      .int()
+      .describe('Where in the run this is — the jump target'),
+    kind: ItemKindSchema,
+    role: z.string().nullable(),
+    /**
+     * The matching text, windowed on the term and cut from the payload's own
+     * words — so it reads as it was written, where the stored `searchText` this
+     * matched against is lowercased for the query's benefit.
+     */
+    snippet: z.string(),
+    createdAt: z.string(),
+  })
+  .meta({ id: 'ChatSearchHit' });
+export type ChatSearchHit = z.infer<typeof ChatSearchHitSchema>;
+
+/**
+ * The answer to a transcript search.
+ *
+ * `partialReason` is the same two-reason vocabulary the session picker already
+ * renders: a non-null value means the list is real but incomplete, which a
+ * search that caps its results has to be able to SAY — a silently truncated
+ * list reads as "that is all there is", and the whole point of a daemon-side
+ * search is finding what the client could not see.
+ *
+ * No `.meta({ id })` on this root: nestjs-zod would then register the component
+ * under that id while the response still points at the DTO class name, and
+ * `setupSwagger` fails the boot on the dangling `$ref`.
+ */
+export const ChatSearchResultSchema = z.object({
+  hits: z.array(ChatSearchHitSchema),
+  partialReason: z.string().nullable(),
+});
+export type ChatSearchResult = z.infer<typeof ChatSearchResultSchema>;
+
+/**
  * The version of the export DOCUMENT's own shape, stamped on every file.
  *
  * An export is read back by whatever the user pastes it into — a bug report, a
@@ -1337,6 +1383,18 @@ export const ChatExportRunSchema = z
     title: z.string().nullable(),
     agentKind: AgentKindSchema.nullable(),
     cwd: z.string().nullable(),
+    startSha: z
+      .string()
+      .nullable()
+      .describe(
+        'HEAD commit of the folder when this chat was created — what "changed since" is measured against',
+      ),
+    startDirty: z
+      .boolean()
+      .nullable()
+      .describe(
+        'Whether that folder already had uncommitted changes; null = never measured, which is not the same as clean',
+      ),
     model: z.string().nullable(),
     approval: ChatApprovalModeSchema.nullable(),
     effort: z.string().nullable(),
@@ -2546,6 +2604,27 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe('Workflow slug for a graph run; null for a single-agent chat'),
   cwd: z.string().nullable(),
+  /**
+   * The commit the folder had checked out when this chat was created, and
+   * whether it already had uncommitted changes — the fixed point the "what
+   * changed since this conversation started" view measures against.
+   *
+   * Both null for a graph run, a folder that is not a repository, and every row
+   * predating the stamp; `startDirty` null is "never measured" rather than
+   * clean. See {@link Run.startSha}.
+   */
+  startSha: z
+    .string()
+    .nullable()
+    .describe(
+      'HEAD commit of the run folder when this chat was created; null when there was none to read',
+    ),
+  startDirty: z
+    .boolean()
+    .nullable()
+    .describe(
+      'Whether the run folder already had uncommitted changes at that moment; null = never measured, which is not the same as clean',
+    ),
   model: z.string().nullable(),
   approval: ChatApprovalModeSchema.nullable().describe(
     'Chat approval mode; null = legacy row (no permission flags, pre-selector)',

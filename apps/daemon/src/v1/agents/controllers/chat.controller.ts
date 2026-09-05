@@ -16,6 +16,7 @@ import type {
   AttachmentDataWire,
   ChatExportWire,
   ChatMetricsWire,
+  ChatSearchResult,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
@@ -28,6 +29,7 @@ import {
   ChatDeletedDto,
   ChatExportDto,
   ChatMetricsDto,
+  ChatSearchResultDto,
   ChatTotalsDto,
   CreateChatDto,
   ForgottenInstructionsDto,
@@ -38,6 +40,7 @@ import {
   LocalImageQueryDto,
   RenameRunDto,
   RunDto,
+  SearchChatQueryDto,
   SendMessageDto,
   ShellOutputDto,
   ShellOutputQueryDto,
@@ -49,6 +52,7 @@ import { SetRunGroupDto } from '../dto/run-group.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
+import { ChatSearchService } from '../services/chat-search.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
@@ -69,6 +73,7 @@ export class ChatController {
     private readonly chatExport: ChatExportService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
+    private readonly search: ChatSearchService,
     private readonly shellOutput: ShellOutputService,
   ) {}
 
@@ -166,6 +171,25 @@ export class ChatController {
         ? undefined
         : { limit: query.limit, beforeSeq: query.beforeSeq },
     );
+  }
+
+  /**
+   * Find a message inside this conversation — including one the client has
+   * never loaded, which is the whole reason this is a route.
+   *
+   * `:runId/items` serves a WINDOW to a screen and pages behind a cursor; a
+   * search filtered over that window could only ever answer about the newest
+   * page, and would say nothing about the rest — silent by construction, and
+   * exactly wrong for the question a search box is opened to ask.
+   */
+  @Get(':runId/search')
+  @ApiOperation({ operationId: 'searchChat' })
+  @ZodResponse({ status: 200, type: ChatSearchResultDto })
+  searchChat(
+    @Param('runId') runId: string,
+    @Query() query: SearchChatQueryDto,
+  ): Promise<ChatSearchResult> {
+    return this.search.search(runId, query.query, query.limit);
   }
 
   /**

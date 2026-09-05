@@ -8,6 +8,7 @@ import {
   ChatExportWireSchema,
   ChatListScopeSchema,
   ChatMetricsWireSchema,
+  ChatSearchResultSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
   ItemWireSchema,
@@ -34,6 +35,25 @@ import {
 export const createChatSchema = z.object({
   agentKind: AgentKindSchema,
   cwd: z.string().min(1),
+  /**
+   * The commit `cwd` has checked out right now, and whether it already carries
+   * uncommitted changes — snapshotted onto the run so the diff view has a fixed
+   * point to measure against ({@link Run.startSha}).
+   *
+   * Sent by the client for the reason `configDir` and `customInstructions` are:
+   * the reading is the ELECTRON process's, which owns every git call this app
+   * makes. Omitted is a real answer — a folder that is not a repository, or one
+   * with no commits — and the row stays null rather than being guessed at.
+   *
+   * The sha's SHAPE is checked here because it later becomes argv to `git`: a
+   * value that is not a commit id names nothing, and refusing it at the edge
+   * keeps every reader downstream from having to wonder.
+   */
+  startSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
+  startDirty: z.boolean().optional(),
   model: z.string().min(1).optional(),
   title: z.string().min(1).optional(),
   /** Omitted = the service default (claude 'ask', cursor 'auto'). */
@@ -244,6 +264,29 @@ export const listChatsQuerySchema = z.object({
 });
 export class ListChatsQueryDto extends createZodDto(listChatsQuerySchema) {}
 
+export const searchChatQuerySchema = z.object({
+  /**
+   * What to look for. Split into terms by `searchTerms`, ALL of which a row
+   * must answer for.
+   *
+   * Bounded at the same 200 characters `listAgentSessionsQuerySchema.query`
+   * uses, and for its reason: generous enough for a real pasted phrase, while
+   * the term cap downstream bounds what splitting one can produce.
+   */
+  query: z.string().trim().min(1).max(200),
+  /**
+   * At most this many hits, newest first.
+   *
+   * Bounded here rather than trusted, on `historyQuerySchema.limit`'s rule —
+   * this is a scan over one conversation's rows, and the answer's size is a
+   * number the client picks. A hit list nobody scrolls past the first screen of
+   * needs far less headroom than a transcript replay, hence the much lower
+   * ceiling.
+   */
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+export class SearchChatQueryDto extends createZodDto(searchChatQuerySchema) {}
+
 // ── Responses ───────────────────────────────────────────────────────────────
 
 /** A run — a single-agent chat or a workflow execution. */
@@ -251,6 +294,9 @@ export class RunDto extends createZodDto(RunWireSchema) {}
 
 /** One persisted transcript item. */
 export class ItemDto extends createZodDto(ItemWireSchema) {}
+
+/** The hits a transcript search found, with why the list may be incomplete. */
+export class ChatSearchResultDto extends createZodDto(ChatSearchResultSchema) {}
 
 /** One whole conversation as a file — settings, transcript, nodes, spend. */
 export class ChatExportDto extends createZodDto(ChatExportWireSchema) {}

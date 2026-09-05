@@ -1042,6 +1042,18 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
+    startSha: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ChatExportRun
+     */
+    startDirty: boolean | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
     model: string | null;
     /**
      * 
@@ -1172,6 +1184,64 @@ export interface ChatMetricsDto {
      * @memberof ChatMetricsDto
      */
     totals: ChatTotals;
+}
+/**
+ * 
+ * @export
+ * @interface ChatSearchHit
+ */
+export interface ChatSearchHit {
+    /**
+     * Where in the run this is — the jump target
+     * @type {number}
+     * @memberof ChatSearchHit
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof ChatSearchHit
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    snippet: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    createdAt: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ChatSearchResultDto
+ */
+export interface ChatSearchResultDto {
+    /**
+     * 
+     * @type {Array<ChatSearchHit>}
+     * @memberof ChatSearchResultDto
+     */
+    hits: Array<ChatSearchHit>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchResultDto
+     */
+    partialReason: string | null;
 }
 /**
  * 
@@ -1459,6 +1529,18 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     cwd: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof CreateChatDto
+     */
+    startDirty?: boolean;
     /**
      * 
      * @type {string}
@@ -2525,6 +2607,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    startSha: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunDto
+     */
+    startDirty: boolean | null;
     /**
      * 
      * @type {string}

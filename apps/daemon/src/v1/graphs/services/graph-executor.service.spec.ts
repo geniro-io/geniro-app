@@ -82,6 +82,22 @@ class FakeRunDao {
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
   }
+  /**
+   * Read by every SETTLE announce (`writeRunStatus`), which is why a workflow
+   * run needs it at all: a workflow keeps its figures per NODE, so both come
+   * back null here and the announce carries nulls the renderer's chat-only
+   * guard ignores. Answering `undefined` — which is what a missing method does
+   * — fails the settle and takes the whole run down with it.
+   */
+  async readWork(
+    id: string,
+  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return null;
+    }
+    return { workedMs: run.workedMs ?? null, toolCalls: run.toolCalls ?? null };
+  }
   async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
     this.hardDeleted.push(where);
     if (this.purgeGate) {
@@ -179,6 +195,8 @@ interface FakeNodeRow {
   agentSessionId: string | null;
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  workedMs: number | null;
+  toolCalls: number | null;
   startedAt: number | null;
   endedAt: number | null;
   error: string | null;
@@ -209,6 +227,29 @@ class FakeNodeStateDao {
     }
     if (contextWindowTokens !== null && contextWindowTokens > 0) {
       found.contextWindowTokens = contextWindowTokens;
+    }
+  }
+  /**
+   * The durable per-node TOTALS, following the real DAO's own rule — it ADDS
+   * where `rememberContext` above replaces, because worked time and tool count
+   * are totals rather than levels. A fake that overwrote here would let a
+   * clobbering writer pass.
+   */
+  async rememberWork(
+    runId: string,
+    nodeId: string,
+    workedMs: number | null,
+    toolCalls: number | null,
+  ): Promise<void> {
+    const found = this.row(runId, nodeId);
+    if (!found) {
+      return;
+    }
+    if (workedMs !== null && workedMs > 0) {
+      found.workedMs = (found.workedMs ?? 0) + workedMs;
+    }
+    if (toolCalls !== null && toolCalls > 0) {
+      found.toolCalls = (found.toolCalls ?? 0) + toolCalls;
     }
   }
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
@@ -248,6 +289,8 @@ class FakeNodeStateDao {
       agentSessionId: null,
       contextTokens: null,
       contextWindowTokens: null,
+      workedMs: null,
+      toolCalls: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -270,6 +313,8 @@ class FakeNodeStateDao {
       agentSessionId: null,
       contextTokens: null,
       contextWindowTokens: null,
+      workedMs: null,
+      toolCalls: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -483,6 +528,21 @@ const drain = async (): Promise<void> => {
     await new Promise((resolve) => setImmediate(resolve));
   }
 };
+
+/** Every usage figure absent — spread over, so a case names only what it measures. */
+const NO_USAGE = {
+  inputTokens: null,
+  outputTokens: null,
+  cacheReadTokens: null,
+  cacheCreationTokens: null,
+  thinkingTokens: null,
+  contextTokens: null,
+  contextWindowTokens: null,
+  contextModel: null,
+  costUsd: null,
+  durationMs: null,
+  apiMs: null,
+} as const;
 
 function completeTurn(turn: FakeTurn, finalText: string): void {
   turn.emit({ type: 'text', text: finalText });
@@ -4187,6 +4247,71 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
   });
 
+  it("ACCUMULATES a node's worked time and tool calls across its turns", async () => {
+    // The distinction from the context pair written beside it: a reading is a
+    // LEVEL, so the newest one is the whole truth and `rememberContext`
+    // replaces. These are TOTALS — a callee called twice has worked the sum of
+    // both turns, and a writer that replaced would report only the second.
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await first;
+    await second;
+    await drain();
+
+    const [callOne, callTwo] = claude.starts.slice(1, 3);
+    // Two tools on the first turn, one on the second — and a DELEGATE's call
+    // in between, which must not be counted as the node's own.
+    callOne!.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    callOne!.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    callOne!.emit({
+      type: 'tool_call',
+      id: 't3',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 'delegate-1',
+    });
+    callOne!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, durationMs: 5_000 },
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    callOne!.finish();
+    callTwo!.emit({ type: 'tool_call', id: 't4', name: 'Bash', input: {} });
+    callTwo!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, durationMs: 7_000 },
+      stopReason: 'end_turn',
+      finalText: 'two done',
+    });
+    callTwo!.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')).toMatchObject({
+      workedMs: 12_000,
+      toolCalls: 3,
+    });
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('writes a DURABLE reading per CALL, so both rings survive a reload', async () => {
     // The live twin above proves the EPHEMERAL plane is per-call. This proves
     // the row is: without it a reloaded window has only `node_state`, keyed
@@ -4269,7 +4394,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
     // key a row on — and inventing one would file an ordinary node turn under
     // a call that never happened.
     const { service, claude, callContextDao } = setup();
-    const run = await service.startRun({
+    await service.startRun({
       slug: 'ctx',
       workflow: triggered(CALL_WORKFLOW),
       cwd: dir,

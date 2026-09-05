@@ -235,6 +235,8 @@ const run1: ChatRun = {
   archivedAt: null,
   lastMessage: null,
   pullRequests: [],
+  workedMs: null,
+  toolCalls: null,
   taskList: [],
 };
 
@@ -3338,6 +3340,8 @@ describe('Chats workflow runs', () => {
     archivedAt: null,
     lastMessage: null,
     pullRequests: [],
+    workedMs: null,
+    toolCalls: null,
     taskList: [],
   };
 
@@ -3461,6 +3465,8 @@ describe('Chats workflow runs', () => {
             contextWindowTokens: 200_000,
           },
         ],
+        workedMs: null,
+        toolCalls: null,
         startedAt: null,
         endedAt: null,
         error: null,
@@ -4018,6 +4024,8 @@ describe('Chats — handing a conversation to the user', () => {
       archivedAt: null,
       lastMessage: null,
       pullRequests: [],
+      workedMs: null,
+      toolCalls: null,
       taskList: [],
     };
     workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
@@ -8417,6 +8425,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        workedMs: null,
+        toolCalls: null,
         startedAt: null,
         endedAt: null,
         error: null,
@@ -8507,6 +8517,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        workedMs: null,
+        toolCalls: null,
         startedAt: null,
         endedAt: null,
         error: null,
@@ -8583,6 +8595,8 @@ describe('Chats sidebar list', () => {
         contextTokens: 90_000,
         contextWindowTokens: 1_000_000,
         calls: [],
+        workedMs: null,
+        toolCalls: null,
         startedAt: null,
         endedAt: null,
         error: null,

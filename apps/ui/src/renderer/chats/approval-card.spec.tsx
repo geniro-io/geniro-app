@@ -1621,3 +1621,246 @@ describe('ApprovalCard — Enter moves to the next question', () => {
     );
   });
 });
+
+describe('ApprovalCard — hazardous-character warning', () => {
+  // Built from numeric codepoints, never typed literally: the repo's
+  // pre-commit hook refuses any staged .ts/.tsx whose blob git classifies as
+  // binary (a NUL in the first 8000 bytes), and a bidi override sitting
+  // literally in this file would itself reorder the source around it.
+  const RIGHT_TO_LEFT_OVERRIDE = String.fromCodePoint(0x202e);
+  const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b);
+  const CYRILLIC_A = String.fromCodePoint(0x0430); // visually "a"
+
+  it('warns and gates Approve on a bidi override, and leaves Deny free', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: `rm -rf ${RIGHT_TO_LEFT_OVERRIDE}tmp` }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    // The BANNER never renders the character itself — it would reorder the
+    // warning around it. `inputPreview`'s own `<pre>` is a separate element
+    // that legitimately shows the raw byte (it exists to show bytes
+    // verbatim), so the assertion is scoped to the banner alone.
+    const banner = el.querySelector('[data-slot="hazard-warning"]')!;
+    expect(banner.textContent).toContain('U+202E');
+    expect(banner.textContent).not.toContain(RIGHT_TO_LEFT_OVERRIDE);
+
+    const approve = buttonNamed(el, 'Approve');
+    const deny = buttonNamed(el, 'Deny');
+    expect(approve.disabled).toBe(true);
+    expect(deny.disabled).toBe(false);
+
+    click(deny);
+    expect(onRespond).toHaveBeenLastCalledWith(false);
+  });
+
+  it('names one character ONCE, though the overlapping scans see it twice', () => {
+    // A patch's `new_string` is read inside the input's JSON and again from the
+    // diff body, so one override produces two hits at two offsets. The row
+    // carries no offset, so undeduplicated they render as the identical
+    // sentence twice and read as two separate hazards.
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{
+          file_path: '/x.ts',
+          old_string: 'const a = 1;',
+          new_string: `const a = 2;${RIGHT_TO_LEFT_OVERRIDE} // safe`,
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    const banner = el.querySelector('[data-slot="hazard-warning"]')!;
+    const rows = banner.textContent?.split('U+202E').length ?? 0;
+    expect(rows - 1).toBe(1);
+  });
+
+  it('scans the TOOL NAME, which names what is about to run', () => {
+    // `toolName` is a sibling prop, not part of `input`, and the badge renders
+    // it. For an MCP tool the name comes from a third-party server's own
+    // `tools/list`, so it is exactly as untrusted as the arguments.
+    const el = render(
+      <ApprovalCard
+        toolName={`Bash${RIGHT_TO_LEFT_OVERRIDE}`}
+        input={{ command: 'ls' }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    const banner = el.querySelector('[data-slot="hazard-warning"]');
+    expect(banner?.textContent).toContain('U+202E');
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+
+  it('scans the DIFF body, which the patch arm renders RAW', () => {
+    // The compact JSON escapes C0 controls, and the diff arm prints
+    // `new_string` verbatim — so an escape character is displayed but would be
+    // invisible to a scan of the JSON alone. This is the arm where a hidden
+    // character matters most.
+    const ESCAPE = String.fromCodePoint(0x1b);
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{
+          file_path: '/x.ts',
+          old_string: 'const a = 1;',
+          new_string: `const a = 2;${ESCAPE}[31m`,
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    const banner = el.querySelector('[data-slot="hazard-warning"]');
+    expect(banner?.textContent).toContain('U+001B');
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+
+  it('does not FABRICATE a look-alike hit at a line join in the diff', () => {
+    // The diff is re-scanned with `\n\t\r` neutralized, and REMOVING them glues
+    // the lines either side into one token: a Cyrillic comment above an
+    // unindented Latin line became the single word `Проверкаexport`, which is a
+    // genuine mixed-script token and was reported as a look-alike hazard —
+    // naming plain `U+0065` as the danger. The same join happened between
+    // `oldText` and `newText`, which were concatenated with nothing between
+    // them at all. Both are separated by a space, which is `\p{Zs}` and so in
+    // none of the three classes: a real hazard still reaches the detector while
+    // the separator invents none.
+    const el = render(
+      <ApprovalCard
+        toolName="propose_patch"
+        input={{
+          file_path: '/x.ts',
+          old_string: '// Проверка\nexport function foo() {}',
+          new_string: '// Проверка\nexport function bar() {}',
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.querySelector('[data-slot="hazard-warning"]')).toBeNull();
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+  });
+
+  it('stays quiet on an ordinary MULTI-LINE command', () => {
+    // The one case the compact-vs-pretty scan choice exists for. Newlines and
+    // tabs are `\p{Cc}`, so scanning the PRETTY-printed preview — or the input's
+    // value strings directly — would put the red banner and the acknowledgement
+    // toggle on every multi-line patch and shell script the agent ever
+    // proposes, which is how a gate stops being read and starts being ticked.
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'set -e\nrm -rf /tmp/x\necho done\n' }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+
+    expect(el.querySelector('[data-slot="hazard-warning"]')).toBeNull();
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+  });
+
+  it('unlocks Approve once the acknowledgement switch is ticked', () => {
+    const onRespond = vi.fn();
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: `echo ${ZERO_WIDTH_SPACE}hidden` }}
+        verdict={null}
+        onRespond={onRespond}
+      />,
+    );
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+
+    const ack = el.querySelector<HTMLButtonElement>('[role="switch"]')!;
+    click(ack);
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+
+    click(buttonNamed(el, 'Approve'));
+    expect(onRespond).toHaveBeenLastCalledWith(true);
+  });
+
+  it('does not gate Approve on a mixedScript-only hit, and offers no acknowledgement control', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: `p${CYRILLIC_A}ypal --version` }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('U+0430');
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+    expect(el.querySelector('[role="switch"]')).toBeNull();
+  });
+
+  it('shows no warning at all for plain input', () => {
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: 'ls -la' }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).not.toContain('U+');
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+  });
+
+  it('warns above a rendered DIFF too, not only above raw JSON', () => {
+    // The banner sits OUTSIDE the diff/pre ternary, so a hazard hiding in an
+    // Edit's `new_string` must gate exactly as one in a plain tool call does.
+    const el = render(
+      <ApprovalCard
+        toolName="Edit"
+        input={{
+          file_path: '/proj/a.txt',
+          old_string: 'before',
+          new_string: `after${RIGHT_TO_LEFT_OVERRIDE}`,
+        }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    expect(el.textContent).toContain('U+202E');
+    expect(el.querySelector('[data-slot="diff"]')).not.toBeNull();
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+
+  it('resets the acknowledgement when the same card starts describing different content', () => {
+    // A user who ticked once must not arrive pre-ticked for a different,
+    // genuinely dangerous input — exercised here as a prop update on the SAME
+    // component instance, not a fresh mount.
+    const el = render(
+      <ApprovalCard
+        toolName="Bash"
+        input={{ command: `rm -rf ${RIGHT_TO_LEFT_OVERRIDE}a` }}
+        verdict={null}
+        onRespond={vi.fn()}
+      />,
+    );
+    click(el.querySelector<HTMLButtonElement>('[role="switch"]')!);
+    expect(buttonNamed(el, 'Approve').disabled).toBe(false);
+
+    act(() => {
+      root!.render(
+        <ApprovalCard
+          toolName="Bash"
+          input={{ command: `rm -rf ${RIGHT_TO_LEFT_OVERRIDE}b` }}
+          verdict={null}
+          onRespond={vi.fn()}
+        />,
+      );
+    });
+    expect(buttonNamed(el, 'Approve').disabled).toBe(true);
+  });
+});

@@ -2157,6 +2157,29 @@ export interface RunStatusEvent {
    */
   taskList?: RunTaskGroup[];
   /**
+   * How long this run's agent has WORKED and how many tools it has called, as
+   * the durable totals stand now — sent on a SETTLE alone.
+   *
+   * They ride this channel for `taskList`'s reason rather than `status`'s: a
+   * client cannot derive a running total from the event that moved it, and
+   * nothing else refreshes the row between full listings, so a window's copy
+   * froze at the moment it fetched the run. On a chat past the renderer's
+   * history page that frozen total outranks the renderer's own windowed fold,
+   * which is what was drawn — the agent card's clock climbed through a turn and
+   * then dropped back by the whole of it at the settle.
+   *
+   * Absent asserts nothing, on the rule every optional field here follows: an
+   * activity announce fires on every tool call without reading the run. Either
+   * may be null WITH the other present — a CLI reporting no timing while using
+   * tools is the ordinary case on every ACP agent — but a pair of nulls is sent
+   * as ABSENT rather than as two nulls, because these columns only ever grow:
+   * nothing nulls one once written, so a null could never correct a client's
+   * copy of anything. That silence covers every workflow run, whose figures
+   * live per NODE.
+   */
+  workedMs?: number | null;
+  toolCalls?: number | null;
+  /**
    * Whether a NAME for this run is being worked out right now — absent when this
    * announce says nothing about it.
    *
@@ -2621,6 +2644,22 @@ export const RunWireSchema = z.object({
     .describe(
       "Each agent's own task list as it stands now, folded from the whole transcript",
     ),
+  /**
+   * This chat's worked milliseconds and tool count, TOTALLED across its turns.
+   *
+   * On the ROW for the reason `taskList` above is, and the same one
+   * {@link RunWireSchema.shape.contextTokens} gives: the renderer can only fold
+   * the transcript its loaded WINDOW holds, so past `HISTORY_PAGE` items a
+   * folded total silently describes the window rather than the conversation —
+   * with nothing on screen marking the difference. The `node_state` twin
+   * (`workedMs` / `toolCalls`) does the same job for a workflow node.
+   *
+   * They ACCUMULATE where the context pair replaces, so `RunDao.rememberWork`
+   * sums. Null means never measured, never zero, and the two are independently
+   * nullable: every ACP agent reports no timing while still using tools.
+   */
+  workedMs: z.number().nullable(),
+  toolCalls: z.number().nullable(),
 });
 export type RunWire = z.infer<typeof RunWireSchema>;
 

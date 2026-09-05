@@ -200,4 +200,70 @@ describe('NodeStateDao (in-memory sqlite)', () => {
       expect(row?.cursorSpendThroughMs).toBeNull();
     });
   });
+
+  describe('rememberWork', () => {
+    it('SUMS across turns rather than replacing — the whole difference from rememberContext', async () => {
+      // The one assertion that separates an accumulator from the last-write-wins
+      // shape beside it: under a `data.workedMs = workedMs` writer this reads
+      // 300/2 — the last turn's work reported as the node's whole history.
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberWork('run-1', 'node-a', 500, 3);
+      await dao.rememberWork('run-1', 'node-a', 300, 2);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.workedMs).toBe(800);
+      expect(row?.toolCalls).toBe(5);
+    });
+
+    it('a turn reporting no timing leaves the time already counted alone', async () => {
+      // Every ACP agent reports no duration, so this is the ordinary case rather
+      // than a degenerate one: the tool count must still accumulate while the
+      // clock stands, or a cursor node would show neither figure.
+      await dao.createPending('run-1', 'node-a');
+      await dao.rememberWork('run-1', 'node-a', 500, 3);
+
+      await dao.rememberWork('run-1', 'node-a', null, 2);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.workedMs).toBe(500);
+      expect(row?.toolCalls).toBe(5);
+    });
+
+    it('leaves both figures null when the turn carries nothing positive', async () => {
+      // Enters the early return. Null is "never measured" downstream, and the
+      // panel omits an unmeasured figure — so a zero written here would draw
+      // `0s · 0 tools` under an agent nobody timed.
+      await dao.createPending('run-1', 'node-a');
+
+      await dao.rememberWork('run-1', 'node-a', 0, 0);
+
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'run-1',
+        'node-a',
+      );
+      expect(row?.workedMs).toBeNull();
+      expect(row?.toolCalls).toBeNull();
+    });
+
+    it('writes nothing for a runId/nodeId pair with no row, and does not throw', async () => {
+      await expect(
+        dao.rememberWork('missing-run', 'missing-node', 500, 3),
+      ).resolves.toBeUndefined();
+
+      // "Writes nothing" is the claim, so read it back: a writer that CREATED
+      // the row would resolve undefined just as quietly.
+      const row = await new NodeStateDao(orm.em.fork()).getByRunNode(
+        'missing-run',
+        'missing-node',
+      );
+      expect(row).toBeNull();
+    });
+  });
 });

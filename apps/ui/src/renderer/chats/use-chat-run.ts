@@ -1262,6 +1262,25 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
        * Absent asserts nothing, like every other three-state field here.
        */
       const tasks = event.taskList;
+      /**
+       * The run's durable worked-time and tool-count TOTALS, after the settle
+       * that moved them.
+       *
+       * They ride this channel for the same reason `tasks` above does: the row
+       * this window fetched at open is the ONLY copy it has, and nothing
+       * refreshes it between full listings — so the figures froze there. That is
+       * invisible on a short chat, where the renderer's own transcript fold
+       * covers the whole conversation and wins; past `HISTORY_PAGE` items the
+       * fold describes the loaded window alone, the durable total outranks it,
+       * and the frozen copy is what `AgentSpend` drew — a clock that climbed
+       * through a turn and dropped back by the whole of it at the settle, over
+       * a tool count that never moved at all.
+       *
+       * Absent asserts nothing and is the common case, an activity announce
+       * saying nothing about either.
+       */
+      const workedMs = event.workedMs;
+      const toolCalls = event.toolCalls;
       // Absent asserts nothing, exactly like every other three-state field on
       // this event: an ordinary activity announce must not lower a shimmer.
       if (event.titlePending !== undefined) {
@@ -1334,6 +1353,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         at !== undefined ||
         named !== undefined ||
         opened !== undefined ||
+        workedMs !== undefined ||
+        toolCalls !== undefined ||
         previewLine !== undefined
       ) {
         setRuns((prev) =>
@@ -1344,6 +1365,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
                   ...(at === undefined ? {} : { updatedAt: at }),
+                  // Each SET independently: the daemon sends the pair on a
+                  // settle, and either half is legitimately null there (a CLI
+                  // that reports no timing while calling tools is the ordinary
+                  // ACP case), so `null` is written rather than skipped.
+                  ...(workedMs === undefined ? {} : { workedMs }),
+                  ...(toolCalls === undefined ? {} : { toolCalls }),
                   ...(previewLine === undefined
                     ? {}
                     : { lastMessage: previewLine }),

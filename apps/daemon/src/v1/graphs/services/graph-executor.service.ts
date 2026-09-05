@@ -608,6 +608,8 @@ export class GraphExecutorService {
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
       calls: callsByNode.get(row.nodeId) ?? [],
+      workedMs: row.workedMs,
+      toolCalls: row.toolCalls,
       startedAt: row.startedAt,
       endedAt: row.endedAt,
       error: row.error,
@@ -1237,6 +1239,19 @@ export class GraphExecutorService {
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
+      /**
+       * Tool calls seen since the last `turn_complete`, counted here because no
+       * CLI reports a total and the transcript a client loads is windowed.
+       *
+       * Today this closure is built per TURN, so it starts at zero anyway and
+       * the zeroing below is unobservable — verified by mutation: removing it
+       * changes no test. It stays because the durable write ADDS, so the day a
+       * closure serves two turns (a kept session driving them, as the ACP
+       * transport already does for its own state) an un-zeroed counter would
+       * contribute the first turn's tools again on the second settle, and the
+       * figure would silently overcount rather than fail.
+       */
+      let toolCalls = 0;
       // The turn's own CLI session — the broker's thread-resume handle.
       let capturedSessionId: string | null = null;
 
@@ -1437,6 +1452,16 @@ export class GraphExecutorService {
             );
             return;
           }
+          if (
+            event.type === 'tool_call' &&
+            event.parentToolUseId === undefined
+          ) {
+            // This node's OWN tools, never its delegates'. `parentToolUseId` is
+            // the daemon-side twin of the renderer's `subagentIdOf` exclusion:
+            // a delegate has its own card and its own rows, so folding its
+            // toolbelt in here would report a fan-out's total as one node's.
+            toolCalls += 1;
+          }
           if (event.type === 'text') {
             textChunks.push(event.text);
           }
@@ -1486,6 +1511,21 @@ export class GraphExecutorService {
                   .catch(() => {}),
               );
             }
+            // This turn's worked time and tool count, ADDED to the node's
+            // running totals. `rememberWork` rather than another
+            // `rememberContext` because these are totals rather than levels —
+            // the reading above may be overwritten harmlessly, this one may not.
+            // Read out and zeroed HERE, synchronously, for the reason the window
+            // above is resolved eagerly: the queue drains later, and by then the
+            // next turn's calls would already have moved the counter.
+            const turnToolCalls = toolCalls;
+            toolCalls = 0;
+            const turnWorkedMs = event.usage?.durationMs ?? null;
+            enqueue(() =>
+              this.nodeStateDao
+                .rememberWork(runId, node.id, turnWorkedMs, turnToolCalls, em)
+                .catch(() => {}),
+            );
           }
           const terminal = terminalStatus(event);
           if (

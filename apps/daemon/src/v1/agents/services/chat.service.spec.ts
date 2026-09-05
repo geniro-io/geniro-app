@@ -227,6 +227,42 @@ class FakeRunDao {
       run.contextWindowTokens = reading.contextWindowTokens;
     }
   }
+  /**
+   * The chat's durable TOTALS, following the real DAO's own rule — it ADDS
+   * where `rememberContext` above replaces, because worked time and tool count
+   * are totals rather than levels. A fake that overwrote here would let a
+   * clobbering writer pass.
+   */
+  async rememberWork(
+    id: string,
+    workedMs: number | null,
+    toolCalls: number | null,
+  ): Promise<void> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return;
+    }
+    if (typeof workedMs === 'number' && workedMs > 0) {
+      run.workedMs = (run.workedMs ?? 0) + workedMs;
+    }
+    if (typeof toolCalls === 'number' && toolCalls > 0) {
+      run.toolCalls = (run.toolCalls ?? 0) + toolCalls;
+    }
+  }
+  /**
+   * What the settle announce reads back — the totals AFTER this turn's write,
+   * which is the whole point of the real DAO's `disableIdentityMap`. A fake
+   * answering a snapshot taken earlier would let a stale announce pass.
+   */
+  async readWork(
+    id: string,
+  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return null;
+    }
+    return { workedMs: run.workedMs ?? null, toolCalls: run.toolCalls ?? null };
+  }
   /** Mirrors the real `nativeUpdate` — every run holding a value, count back. */
   async forgetCustomInstructions(): Promise<number> {
     let cleared = 0;
@@ -2516,6 +2552,133 @@ describe('ChatService', () => {
       published.map((e) => `${e.item.seq}:${e.item.kind}/${e.item.role ?? ''}`),
     ).toEqual(['0:message/user', '1:message/assistant', '2:turn_complete/']);
     expect((await runDao.getById(run.id))?.status).toBe('completed');
+  });
+
+  it("totals a chat's worked time and tool count on the RUN row, across turns", async () => {
+    // The durable half of the agent card's work line. Folding the transcript
+    // instead would describe only the loaded window (`HISTORY_PAGE`), so on a
+    // long chat the figure would be a fraction of the answer presented as the
+    // whole of it — which is exactly what these columns exist to beat.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    const settle = (durationMs: number) => ({
+      type: 'turn_complete' as const,
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs,
+        apiMs: null,
+      },
+      stopReason: 'end_turn' as const,
+      finalText: null,
+    });
+
+    await service.sendMessage(run.id, 'one');
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    claude.emit({ type: 'tool_call', id: 't2', name: 'Bash', input: {} });
+    // A DELEGATE's call, which belongs to the sub-agent's own card and must not
+    // be folded into the chat's own count.
+    claude.emit({
+      type: 'tool_call',
+      id: 't3',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 'delegate-1',
+    });
+    claude.emit(settle(5_000));
+    claude.finish();
+    await drain();
+
+    await service.sendMessage(run.id, 'two');
+    claude.emit({ type: 'tool_call', id: 't4', name: 'Read', input: {} });
+    claude.emit(settle(7_000));
+    claude.finish();
+    await drain();
+
+    // SUMMED, not replaced: a writer that overwrote would read 7000/1 here,
+    // reporting the newest turn as the conversation's whole history.
+    expect(await runDao.getById(run.id)).toMatchObject({
+      workedMs: 12_000,
+      toolCalls: 3,
+    });
+  });
+
+  it('counts the tools a STOPPED turn had already called', async () => {
+    // Writing only on `turn_complete` left the per-turn counter to die with its
+    // closure on every other ending, so a chat the user stops — or one whose
+    // turn fails — was permanently short by that turn's whole toolbelt. The
+    // column answers how much this agent has DONE, and work that happened
+    // happened whether or not the turn got to finish.
+    //
+    // The TOOLS alone: neither terminal carries a `usage`, so there is no
+    // duration to add and `workedMs` must stay null rather than become a zero.
+    const { service, claude, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'one');
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    claude.emit({ type: 'tool_call', id: 't2', name: 'Bash', input: {} });
+    claude.emit({ type: 'turn_cancelled' });
+    claude.finish();
+    await drain();
+
+    const stopped = await runDao.getById(run.id);
+    expect(stopped?.toolCalls).toBe(2);
+    // Neither terminal carries a `usage`, so there is no duration to add and the
+    // clock must stay UNMEASURED rather than become a zero somebody could read
+    // as "this turn took no time".
+    expect(stopped?.workedMs ?? null).toBeNull();
+  });
+
+  it("carries the run's durable totals on the SETTLE announce", async () => {
+    // A client cannot derive a running TOTAL from the event that moved it, and
+    // nothing else refreshes the row between full listings — so a window's copy
+    // froze at the moment it fetched the run. Past the renderer's history page
+    // that frozen total outranks its own windowed fold, which is what got drawn:
+    // the agent card's clock climbed through a turn and dropped back by the
+    // whole of it the instant the turn settled.
+    const { service, claude, statuses } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+    await service.sendMessage(run.id, 'one');
+    claude.emit({ type: 'tool_call', id: 't1', name: 'Read', input: {} });
+    claude.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: 5_000,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    // The figures ride the SETTLE, and they are this turn's own — a read taken
+    // before the write, or through the identity map, would answer nulls here.
+    const settled = statuses.filter((event) => event.status === 'completed');
+    expect(settled.at(-1)).toMatchObject({ workedMs: 5_000, toolCalls: 1 });
+    // …and NOT the activity announces, which fire on every tool call without
+    // reading the run: one extra query per tool call is what that would cost.
+    expect(
+      statuses.filter((event) => event.status === null),
+    ).not.toContainEqual(expect.objectContaining({ workedMs: 5_000 }));
   });
 
   it('persists tool-use rows (reasoning/tool_call/tool_result) with their payload fields intact', async () => {

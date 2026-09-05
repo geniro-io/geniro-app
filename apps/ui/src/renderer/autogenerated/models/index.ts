@@ -2284,6 +2284,18 @@ export interface NodeStateDto {
      * @type {number}
      * @memberof NodeStateDto
      */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
+    toolCalls: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
     startedAt: number | null;
     /**
      * 
@@ -2609,6 +2621,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     taskList: Array<RunTaskGroup>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    toolCalls: number | null;
 }
 
 

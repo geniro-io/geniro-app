@@ -470,6 +470,14 @@ export const NodeStateWireSchema = z.object({
       })
       .meta({ id: 'CallContextReading' }),
   ),
+  /**
+   * This node's worked milliseconds and tool count, TOTALLED across its turns
+   * (see `NodeState` for why these accumulate where the pair above replaces).
+   * Null means never measured — separately, since an ACP agent reports no
+   * timing while still using tools.
+   */
+  workedMs: z.number().nullable(),
+  toolCalls: z.number().nullable(),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
   error: z.string().nullable(),

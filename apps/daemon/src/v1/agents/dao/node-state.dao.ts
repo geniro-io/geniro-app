@@ -161,6 +161,60 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * Add one turn's worked milliseconds and tool count to this node's running
+   * totals — the ACCUMULATING counterpart of {@link rememberContext}, and the
+   * difference between the two is the whole reason it is a separate method.
+   *
+   * That one records a LEVEL: the newest reading is the entire truth, so it
+   * overwrites and a write that never lands costs nothing, because the next one
+   * supersedes it. These are TOTALS, where every write is a fraction of the
+   * answer — overwriting would report the last turn's work as the node's whole
+   * history, and a lost write is a figure that is permanently short.
+   *
+   * Read-modify-write rather than a SQL increment because nothing else in this
+   * daemon reaches past the ORM, and it is safe here for a reason that lives
+   * outside this method: the executor funnels these through the same serialized
+   * `enqueue()` chain its context writes use, and the DAG gives a node one turn
+   * at a time — so the writes that can touch one row never overlap. A second
+   * writer reaching this row from another path would break that assumption and
+   * needs a real increment instead, not a longer read. The read is also far
+   * cheaper than the one {@link rememberContext} refuses to make: this fires
+   * once per turn where that fires once per model response.
+   *
+   * Neither figure is cleared by a turn that omits it, on that method's rule —
+   * a CLI reporting no timing must not erase the time already counted, and the
+   * two are independently optional for exactly that case. A row that does not
+   * exist is left alone rather than created, since a reading is about a turn and
+   * a turn always has its `createPending` row by the time one arrives.
+   */
+  async rememberWork(
+    runId: string,
+    nodeId: string,
+    workedMs: number | null,
+    toolCalls: number | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (!positive(workedMs) && !positive(toolCalls)) {
+      return;
+    }
+    const row = await this.getRepo(txEm).findOne(
+      { runId, nodeId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return;
+    }
+    const data: Partial<NodeState> = {};
+    if (positive(workedMs)) {
+      data.workedMs = (row.workedMs ?? 0) + workedMs;
+    }
+    if (positive(toolCalls)) {
+      data.toolCalls = (row.toolCalls ?? 0) + toolCalls;
+    }
+    await this.getRepo(txEm).nativeUpdate({ runId, nodeId }, data);
+  }
+
+  /**
    * Advance how far this node's conversation has been PRICED — the watermark
    * behind the cursor spend accumulator.
    *

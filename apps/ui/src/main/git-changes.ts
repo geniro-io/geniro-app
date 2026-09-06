@@ -214,6 +214,50 @@ function splitDiff(diff: string): Map<string, string> {
 }
 
 /**
+ * How many lines one file's diff adds and removes.
+ *
+ * Counted from the BODY rather than asked of `git diff --numstat`, and that is a
+ * choice with two reasons rather than a shortcut. The body is already in hand
+ * for every file — `splitDiff` keyed it by the path git itself names — so this
+ * costs no fourth subprocess. And numstat renders a RENAME as
+ * `old.txt => new.txt` (or the `dir/{a => b}.txt` brace form), which would have
+ * to be parsed back into the single path `--name-status` reports before the two
+ * lists could be joined at all; counting sidesteps a match that has a wrong
+ * answer available.
+ *
+ * It must be given the RAW body, never {@link boundedDiff}'s: that one truncates
+ * at {@link MAX_DIFF_LINES}, so a capped file would report the count of the part
+ * that survived and quietly under-state a large change — the figure a reader
+ * most wants to be true.
+ *
+ * A missing body and a BINARY one both answer null, which is "not measured"
+ * rather than zero. Binary is detected by the absence of a hunk header: git
+ * writes `Binary files a/x and b/x differ` and no `@@`, so counting it would
+ * report a confident `+0 −0` about a file that certainly changed.
+ */
+export function countDiffLines(diff: string | null): {
+  added: number | null;
+  removed: number | null;
+} {
+  if (diff === null || !diff.includes('\n@@')) {
+    return { added: null, removed: null };
+  }
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split('\n')) {
+    // `+++` / `---` are the file headers, not content. Checking the second
+    // character is enough because a content line's own `+`/`-` is followed by
+    // whatever the file holds, and a header's is followed by another of itself.
+    if (line.startsWith('+') && !line.startsWith('+++')) {
+      added += 1;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      removed += 1;
+    }
+  }
+  return { added, removed };
+}
+
+/**
  * What has changed in a folder since one commit — including files that were
  * created and never `git add`ed.
  *
@@ -298,10 +342,13 @@ export async function readChangesSince(
     if (path === '') {
       continue;
     }
+    const body = bodies.get(path) ?? null;
     changes.push({
       path,
       status: statusOf(letter),
-      diff: boundedDiff(bodies.get(path) ?? null),
+      diff: boundedDiff(body),
+      // From the RAW body, ahead of the cap — see `countDiffLines`.
+      ...countDiffLines(body),
     });
   }
 
@@ -331,10 +378,15 @@ export async function readChangesSince(
       ),
   );
   for (const [index, path] of untracked.entries()) {
+    const body = bodyList[index] ?? null;
     changes.push({
       path,
       status: 'untracked',
-      diff: boundedDiff(bodyList[index] ?? null),
+      diff: boundedDiff(body),
+      // Null past `MAX_UNTRACKED_BODIES`, which is the honest answer: no body
+      // was read, so nothing counted it. A new file's count is its whole length,
+      // and guessing one would be the only fabricated figure on the screen.
+      ...countDiffLines(body),
     });
   }
 

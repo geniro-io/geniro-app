@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import type { GitChange, GitChangeStatus } from '../../shared/contracts';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { SearchResultList } from '../components/search-panel';
 import { Dialog } from '../components/ui/dialog';
+import { cn } from '../components/ui/utils';
+import { buildChangesTree, type ChangeTreeNode } from './changes-tree';
 import { UnifiedDiff } from './diff-view';
 
 /**
@@ -14,6 +17,14 @@ import { UnifiedDiff } from './diff-view';
  * because the two are different facts about the tree: an added file is in the
  * index and a checkout carries it, while this one exists only in the working
  * directory and is the case a plain `git diff` loses.
+ *
+ * **`modified` is the one status left MUTED, and that is the point of the set
+ * rather than an omission.** On any real branch it is most of the list — 60 of
+ * the 67 rows on the change this view was built in — so giving it a colour
+ * paints the whole dialog one hue and leaves the reader exactly where they
+ * started. Colour here marks what is NOTABLE: a file that appeared, one that
+ * went, one that moved. That is the same rule the Stats page states for its
+ * breakdowns, where a repeated colour is what a reader takes to mean something.
  */
 const STATUS_META: Record<
   GitChangeStatus,
@@ -22,46 +33,192 @@ const STATUS_META: Record<
   added: { label: 'added', className: 'text-success' },
   modified: { label: 'modified', className: 'text-muted-foreground' },
   deleted: { label: 'deleted', className: 'text-destructive' },
-  renamed: { label: 'renamed', className: 'text-muted-foreground' },
-  copied: { label: 'copied', className: 'text-muted-foreground' },
+  renamed: { label: 'renamed', className: 'text-warning' },
+  copied: { label: 'copied', className: 'text-warning' },
   untracked: { label: 'new · not staged', className: 'text-success' },
 };
 
-function ChangeRow({ change }: { change: GitChange }): React.JSX.Element {
+/** Each level's own indent, in the tree's monospace column. */
+const INDENT_REM = 0.85;
+
+/**
+ * `+N −M`, in two fixed COLUMNS.
+ *
+ * Null is NOT MEASURED — an untracked file past the body budget, a binary one —
+ * and drawing `+0 −0` for it would assert a file changed by nothing, which is
+ * the one thing the figure must never say. A measured ZERO on one side is drawn
+ * (a pure deletion really did add no lines); it is only the null that is
+ * withheld, per side, so a file can honestly show `+12` alone.
+ *
+ * The columns are RESERVED whether or not there is a figure in them, which is
+ * not the same as drawing a zero: an empty column keeps `+6728` on the root row
+ * and `+8` twenty rows below it ending at the same x, and a list of numbers that
+ * do not line up is one the eye cannot compare down. Reserving is also what lets
+ * a row with nothing measured leave a gap rather than pulling its status left
+ * out of line with every other status on screen.
+ */
+function LineCounts({
+  added,
+  removed,
+}: {
+  added: number | null;
+  removed: number | null;
+}): React.JSX.Element {
+  return (
+    <span className="flex shrink-0 gap-2 font-mono text-xs tabular-nums">
+      {/* A measured ZERO is drawn but MUTED. It has to be drawn — `+12` alone
+          cannot be told apart from `+12` with the other side unmeasured — and it
+          must not be toned, because a pure addition is most of any diff, so a
+          red `−0` on fifty rows paints the column the colour of loss over files
+          that lost nothing. Same rule as `modified` staying muted above: the
+          tone is for what is notable. */}
+      <span
+        className={cn(
+          'w-12 text-right',
+          added ? 'text-success' : 'text-muted-foreground',
+        )}>
+        {added === null ? null : `+${added}`}
+      </span>
+      <span
+        className={cn(
+          'w-10 text-right',
+          removed ? 'text-destructive' : 'text-muted-foreground',
+        )}>
+        {removed === null ? null : `−${removed}`}
+      </span>
+    </span>
+  );
+}
+
+function FileRow({
+  change,
+  name,
+  depth,
+}: {
+  change: GitChange;
+  name: string;
+  depth: number;
+}): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const meta = STATUS_META[change.status];
   return (
-    <li className="border-b border-border last:border-b-0">
+    // NO hairline between rows, deliberately. A `border-b` on file rows alone
+    // draws a line between two sibling FILES and none between a file and the
+    // directory after it — which is `last:border-b-0` doing exactly what it says
+    // inside each nested list, and reads on screen as lines scattered at random.
+    // The indent and the directory rows are the structure here; a rule that
+    // appears on some boundaries and not others is worse than none.
+    <li>
       <button
         type="button"
-        className="flex w-full cursor-pointer items-baseline gap-2 px-3 py-2 text-left hover:bg-sidebar-accent"
+        className="flex w-full cursor-pointer items-baseline gap-2 py-1.5 pr-3 text-left hover:bg-sidebar-accent"
+        style={{ paddingLeft: `${0.75 + depth * INDENT_REM}rem` }}
         aria-expanded={open}
         onClick={() => setOpen((was) => !was)}>
-        {/* The path is what identifies the row, so it is what gets the width
-            and what breaks — a long path is one unbroken token with nothing to
-            wrap at. */}
+        {/* The NAME now, not the path — the directories above carry the rest,
+            which is the whole reason for the tree. It still breaks rather than
+            truncates: a filename is one unbroken token with nothing to wrap at,
+            and the end of it is as identifying as the start. */}
         <span className="min-w-0 flex-1 font-mono text-xs break-all text-foreground">
-          {change.path}
+          {name}
         </span>
-        <span className={`shrink-0 text-xs ${meta.className}`}>
+        {/* Status BEFORE the counts, so the counts are the last column on a file
+            row as they are on a directory row and the two line up. */}
+        <span
+          className={cn('w-28 shrink-0 text-right text-xs', meta.className)}>
           {meta.label}
         </span>
+        <LineCounts added={change.added} removed={change.removed} />
       </button>
       {open ? (
-        change.diff === null ? (
-          <div className="px-3 pb-3">
+        <div
+          className="pr-3 pb-3"
+          style={{ paddingLeft: `${0.75 + depth * INDENT_REM}rem` }}>
+          {change.diff === null ? (
             <EmptyState>
               No diff for this file — it is either too large for one read or git
               could not produce one.
             </EmptyState>
-          </div>
-        ) : (
-          <div className="px-3 pb-3">
+          ) : (
             <UnifiedDiff diff={change.diff} />
-          </div>
-        )
+          )}
+        </div>
       ) : null}
     </li>
+  );
+}
+
+/**
+ * One directory, with what changed under it rolled up onto its own row.
+ *
+ * Open by DEFAULT: this dialog is opened to read what an agent did, so a tree
+ * that starts shut answers that with a row of folder names and makes the reader
+ * click to learn anything. The fold is for putting a finished area away, not for
+ * getting in.
+ */
+function DirRow({
+  node,
+  depth,
+}: {
+  node: Extract<ChangeTreeNode, { type: 'dir' }>;
+  depth: number;
+}): React.JSX.Element {
+  const [open, setOpen] = useState(true);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <li>
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-baseline gap-2 py-1.5 pr-3 text-left hover:bg-sidebar-accent"
+        style={{ paddingLeft: `${0.75 + depth * INDENT_REM}rem` }}
+        aria-expanded={open}
+        onClick={() => setOpen((was) => !was)}>
+        <Chevron
+          className="size-3 shrink-0 self-center text-muted-foreground"
+          aria-hidden
+        />
+        <span className="min-w-0 flex-1 font-mono text-xs break-all text-muted-foreground">
+          {node.name}/
+        </span>
+        {/* The roll-up is what makes a SHUT directory still worth reading: it
+            says how much is under it without opening it. Same width as a file
+            row's status, which is the column it shares. */}
+        <span className="w-28 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
+          {node.files} {node.files === 1 ? 'file' : 'files'}
+        </span>
+        <LineCounts added={node.added} removed={node.removed} />
+      </button>
+      {open ? <TreeRows nodes={node.children} depth={depth + 1} /> : null}
+    </li>
+  );
+}
+
+function TreeRows({
+  nodes,
+  depth,
+}: {
+  nodes: readonly ChangeTreeNode[];
+  depth: number;
+}): React.JSX.Element {
+  return (
+    <ul className="m-0 flex list-none flex-col p-0">
+      {nodes.map((node) =>
+        node.type === 'dir' ? (
+          <DirRow key={`dir:${node.path}`} node={node} depth={depth} />
+        ) : (
+          // Keyed on the pair: one path can appear twice — a file removed from
+          // tracking is a `D` row from the diff AND an untracked row from
+          // `ls-files`, which is a duplicate key and two rows whose expand state
+          // can swap.
+          <FileRow
+            key={`${node.change.status}:${node.change.path}`}
+            change={node.change}
+            name={node.name}
+            depth={depth}
+          />
+        ),
+      )}
+    </ul>
   );
 }
 
@@ -121,6 +278,10 @@ export function ChatChangesDialog({
     }
   }, [open, read]);
 
+  // Memoized because every DirRow and FileRow below owns expand state: rebuilding
+  // the tree on an unrelated render would hand them new nodes and reset it.
+  const tree = useMemo(() => buildChangesTree(changes), [changes]);
+
   return (
     <Dialog
       open={open}
@@ -152,18 +313,7 @@ export function ChatChangesDialog({
               Nothing has changed in this folder since the chat started.
             </EmptyState>
           }>
-          <ul className="m-0 flex list-none flex-col p-0">
-            {changes.map((change) => (
-              // Keyed on the pair: one path can appear twice — a file removed
-              // from tracking is a `D` row from the diff AND an untracked row
-              // from `ls-files`, which is a duplicate key and two rows whose
-              // expand state can swap.
-              <ChangeRow
-                key={`${change.status}:${change.path}`}
-                change={change}
-              />
-            ))}
-          </ul>
+          <TreeRows nodes={tree} depth={0} />
         </SearchResultList>
       </div>
     </Dialog>

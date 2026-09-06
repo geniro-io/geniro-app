@@ -7151,23 +7151,44 @@ export function Chats({
                                       // of them left; a one-child flex column
                                       // hands the alignment back untouched.
                                       // `display: contents` would too, and is
-                                      // wrong — it generates no box, so the ring
+                                      // wrong — it generates no box, so the mark
                                       // below would not paint and `revealSeq`
                                       // would have nothing to measure.
                                       //
-                                      // The landing mark is a RING, which is a
-                                      // box-shadow and so costs no layout — a
-                                      // background tint would need padding the
-                                      // row does not have, and adding some would
-                                      // move every row in the transcript to
-                                      // decorate one of them. It fades through
-                                      // `transition-shadow`, which is what a
-                                      // ring animates on.
+                                      // The landing mark is a WASH, and it was a
+                                      // ring first — reported as not liked, and
+                                      // the reason is visible the moment a user
+                                      // message is the hit: this wrapper spans
+                                      // the transcript's whole width while a
+                                      // bubble is `self-end`, so an OUTLINE
+                                      // draws a box around the empty half and
+                                      // reads as a stray rectangle rather than
+                                      // as "this row". A fill reads as the row
+                                      // either way, which is also why the mark
+                                      // stays on the wrapper rather than moving
+                                      // onto the bubble: a tool group, a card
+                                      // and a `note` are not bubbles and have no
+                                      // one element to tint.
+                                      //
+                                      // The ring was chosen because it is a
+                                      // box-shadow and costs no layout, and that
+                                      // reasoning was right about padding and
+                                      // wrong about the conclusion: `-my-1 py-1`
+                                      // is net ZERO — the padding grows the
+                                      // painted box, the negative margin takes
+                                      // the same amount back off the margin box
+                                      // flex actually lays out — so the wash
+                                      // breathes without moving a single
+                                      // neighbouring row. Both are in the marked
+                                      // arm, so an unmarked row is untouched.
+                                      // Only the colour transitions; the
+                                      // geometry is instant, which is the right
+                                      // way round for a flash.
                                       className={cn(
-                                        'flex flex-col empty:hidden rounded-md transition-shadow duration-500',
+                                        'flex flex-col empty:hidden rounded-md transition-colors duration-500',
                                         startSeq !== null &&
                                           startSeq === markedSeq &&
-                                          'ring-2 ring-ring/50',
+                                          '-mx-2 -my-1 bg-accent/60 px-2 py-1',
                                       )}
                                       {...(startSeq === null
                                         ? {}

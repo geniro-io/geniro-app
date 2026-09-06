@@ -233,6 +233,84 @@ describe('readChangesSince', () => {
     expect(body).toContain('more lines');
   });
 
+  it('counts the lines a change adds and removes', async () => {
+    const sha = initRepo();
+    // REPLACING the one line it had, so both sides are non-zero — appending
+    // would leave `hello` as unchanged context and pin only the added side.
+    writeFileSync(join(dir, 'README.md'), 'first\nsecond\nthird\n');
+
+    const { changes } = await readChangesSince(dir, sha);
+
+    expect(changes).toEqual([
+      expect.objectContaining({ path: 'README.md', added: 3, removed: 1 }),
+    ]);
+  });
+
+  it('counts a NEW file’s whole length, since all of it is an addition', async () => {
+    const sha = initRepo();
+    writeFileSync(join(dir, 'fresh.txt'), 'a\nb\nc\nd\n');
+
+    const { changes } = await readChangesSince(dir, sha);
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: 'fresh.txt', added: 4, removed: 0 }),
+    );
+  });
+
+  it('counts the WHOLE change even where the body was capped for display', async () => {
+    // The trap this ordering exists for: `boundedDiff` truncates at
+    // MAX_DIFF_LINES, so counting after it would under-state exactly the large
+    // change a reader most wants the true figure for.
+    //
+    // BOTH arms, because they are two separate push sites that each call the
+    // counter with their own body — a first draft of this case used only an
+    // untracked file, and a mutation moving the TRACKED site to count the
+    // capped body left it green.
+    const lines = (n: number): string =>
+      Array.from({ length: n }, (_, i) => `line ${i}`).join('\n') + '\n';
+    const sha = initRepo();
+    writeFileSync(join(dir, 'README.md'), lines(3_000));
+    writeFileSync(join(dir, 'fresh.txt'), lines(3_000));
+
+    const { changes } = await readChangesSince(dir, sha);
+    const tracked = changes.find((change) => change.path === 'README.md');
+    const untracked = changes.find((change) => change.path === 'fresh.txt');
+
+    expect(tracked?.added).toBe(3_000);
+    expect(untracked?.added).toBe(3_000);
+    // …while the bodies they will draw really were cut.
+    expect(tracked?.diff?.split('\n').length).toBeLessThan(2_100);
+    expect(untracked?.diff?.split('\n').length).toBeLessThan(2_100);
+  });
+
+  it('answers null rather than +0 −0 for a BINARY file', async () => {
+    // A binary diff carries no hunk header, so there is nothing to count — and
+    // `+0 −0` would assert a file changed by nothing, which is the one thing
+    // the figure must never say.
+    const sha = initRepo();
+    writeFileSync(join(dir, 'blob.bin'), Buffer.from([0, 1, 2, 0, 255, 0]));
+    run(['add', '-A']);
+
+    const { changes } = await readChangesSince(dir, sha);
+
+    expect(changes).toContainEqual(
+      expect.objectContaining({ path: 'blob.bin', added: null, removed: null }),
+    );
+  });
+
+  it('leaves the counts null for an untracked file past the body budget', async () => {
+    // No body was read, so nothing counted it. Guessing a length would be the
+    // only fabricated figure on the screen.
+    const sha = initRepo();
+    for (let i = 0; i < 30; i += 1) {
+      writeFileSync(join(dir, `n${String(i).padStart(2, '0')}.txt`), 'new\n');
+    }
+
+    const { changes } = await readChangesSince(dir, sha);
+
+    expect(changes.filter((change) => change.added !== null)).toHaveLength(25);
+  });
+
   it('names a RENAME by where the file ended up', async () => {
     // Rename detection is git's own default, so this arm is reached by an
     // ordinary `git mv` — and the `--name-status` line carries TWO paths, of

@@ -888,6 +888,17 @@ export interface GitChange {
    * produce. Null is "no body", never "no change".
    */
   diff: string | null;
+  /**
+   * Lines this file's diff adds and removes, counted from the RAW body before
+   * it was capped for display.
+   *
+   * Both are null together, and null means NOT MEASURED rather than zero —
+   * there was no body to count (an untracked file past the budget), or the body
+   * is binary and has no lines to speak of. A renderer must draw nothing for a
+   * null rather than a `+0 −0`, which would assert a file changed by nothing.
+   */
+  added: number | null;
+  removed: number | null;
 }
 
 /**

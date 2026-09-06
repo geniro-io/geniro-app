@@ -108,10 +108,70 @@ describe('ProjectsService (in-memory sqlite)', () => {
     });
   });
 
+  it('refuses a second project on a folder another already holds', async () => {
+    // The autopilot bounds concurrent work per PROJECT while the worktree is
+    // created in the FOLDER, so two projects on one folder would give that
+    // folder twice the cap.
+    await service.create({ name: 'First', folder });
+
+    await expect(
+      service.create({ name: 'Second', folder }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('already uses that folder'),
+    });
+  });
+
+  it('refuses moving a project onto an occupied folder, but lets it keep its own', async () => {
+    const first = await service.create({ name: 'First', folder });
+    const second = await service.create({
+      name: 'Second',
+      folder: otherFolder,
+    });
+
+    await expect(service.update(second.id, { folder })).rejects.toMatchObject({
+      message: expect.stringContaining('already uses that folder'),
+    });
+
+    // Its own folder is not "taken" by itself — the guard has to exempt the
+    // project being updated, or no patch touching `folder` could ever pass.
+    const kept = await service.update(first.id, { folder, name: 'Renamed' });
+    expect(kept.folder).toBe(first.folder);
+    expect(kept.name).toBe('Renamed');
+  });
+
+  it('frees a folder when its project is deleted', async () => {
+    // The guard reads through the `softDelete` filter, and it has to: a
+    // delete leaves the row and its folder behind, so anything answering
+    // from the raw table reserves that folder forever. A unique index does
+    // exactly that — this same sequence raised
+    // `UNIQUE constraint failed: projects.folder` from the driver while one
+    // was on the column, on the ordinary act of removing a project and
+    // adding it back.
+    const first = await service.create({ name: 'First', folder });
+    await service.remove(first.id);
+
+    const second = await service.create({ name: 'Second', folder });
+
+    expect(second.folder).toBe(first.folder);
+    expect(second.id).not.toBe(first.id);
+  });
+
+  it('removes the project and its tasks in one transaction', async () => {
+    const project = await service.create({ name: 'Board', folder });
+    await taskDao.create({ projectId: project.id, title: 'a card' });
+
+    await service.remove(project.id);
+
+    expect(await projectDao.getById(project.id)).toBeNull();
+    expect(await taskDao.listForProject(project.id)).toEqual([]);
+  });
+
   it('refuses a project past the cap', async () => {
+    // Distinct folders, because `Project.folder` is unique — seeded through
+    // the DAO, which does not canonicalize, so these need not exist on disk.
     const filler = Array.from({ length: 199 }, (_, i) => ({
       name: `filler ${i}`,
-      folder,
+      folder: `${folder}/filler-${i}`,
     }));
     await projectDao.createMany(filler);
 

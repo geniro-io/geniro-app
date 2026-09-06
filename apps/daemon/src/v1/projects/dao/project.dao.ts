@@ -19,13 +19,15 @@ export class ProjectDao extends BaseDao<Project> {
   }
 
   /**
-   * One project bound to this folder — NOT necessarily the only one.
+   * A LIVE project bound to this folder, if one holds it.
    *
-   * Nothing enforces folder uniqueness: `folder` carries no unique index and
-   * `create` runs no such check, so two projects may name one directory and
-   * this answers with an arbitrary one of them. Named for what it does rather
-   * than for the singular contract it cannot keep; a caller that needs "the"
-   * project for a folder has to settle that question first.
+   * Reads through the default `softDelete` filter, which is what makes it the
+   * right question to ask: a deleted project keeps its row and its folder, and
+   * that folder is free again. `ProjectsService.refuseTakenFolder` is the one
+   * caller and the only thing keeping the answer singular — no unique index
+   * backs it, deliberately, per `Project.folder`. Named `findAny` rather than
+   * `findBy` because rows written before that check existed could still
+   * collide, and this would then answer with an arbitrary one of them.
    */
   async findAnyByFolder(
     folder: string,

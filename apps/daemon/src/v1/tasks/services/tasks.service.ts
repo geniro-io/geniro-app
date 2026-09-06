@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -114,7 +115,21 @@ export class TasksService {
       task.branch = patch.branch;
     }
     if (patch.worktreePath !== undefined) {
-      task.worktreePath = patch.worktreePath;
+      // Canonicalized on the way in, like every other caller-supplied path the
+      // daemon stores — this one becomes an agent's spawn cwd, and a check at
+      // the consumer would sit at the seam furthest from the input.
+      //
+      // It therefore has to EXIST when it is recorded, which orders the
+      // milestone-3 flow rather than constraining it: the worktree is created
+      // and then written down. Recording a path before creating it is the one
+      // thing this refuses.
+      task.worktreePath =
+        patch.worktreePath === null
+          ? null
+          : resolveValidDirectory(patch.worktreePath, {
+              errorCode: 'INVALID_WORKTREE_PATH',
+              noun: 'worktree path',
+            });
     }
     if (patch.runId !== undefined) {
       task.runId = patch.runId;

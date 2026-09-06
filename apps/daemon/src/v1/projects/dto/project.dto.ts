@@ -24,14 +24,14 @@ import {
 /** A project's name — non-blank after trimming, sanely bounded. */
 const projectNameSchema = z.string().trim().min(1).max(PROJECT_NAME_MAX);
 
-const autopilotMaxConcurrentSchema = z
-  .number()
-  .int()
-  .min(1)
-  .max(PROJECT_MAX_CONCURRENT_CEILING)
-  .describe(
-    'Bounded because each concurrent task takes its own git worktree — a whole working copy on disk',
-  );
+// The three autopilot policy fields are deliberately absent from both input
+// schemas below: they are READ over the wire and not yet WRITTEN. Their columns
+// exist because the parent spec fixes the Project field list, but nothing acts
+// on them until the conductor lands, and a route that accepts a setting it will
+// not honour is a contract the daemon does not keep — worse on a committed
+// client, where the field reads as live. The setters arrive with the behaviour;
+// `schema.update({ safe: true })` adds a defaulted column additively, so
+// landing them now would save no migration later.
 
 export const createProjectSchema = z.object({
   name: projectNameSchema,
@@ -47,9 +47,6 @@ export const createProjectSchema = z.object({
   approval: ChatApprovalModeSchema.optional(),
   configDir: z.string().min(1).optional(),
   workflowSlug: z.string().min(1).optional(),
-  autopilotEnabled: z.boolean().optional(),
-  autopilotIntakeStatus: TaskStatusSchema.optional(),
-  autopilotMaxConcurrent: autopilotMaxConcurrentSchema.optional(),
   provider: TaskSourceSchema.optional(),
 });
 export class CreateProjectDto extends createZodDto(createProjectSchema) {}
@@ -70,9 +67,6 @@ export const updateProjectSchema = z
     approval: ChatApprovalModeSchema.nullable().optional(),
     configDir: z.string().min(1).nullable().optional(),
     workflowSlug: z.string().min(1).nullable().optional(),
-    autopilotEnabled: z.boolean().optional(),
-    autopilotIntakeStatus: TaskStatusSchema.optional(),
-    autopilotMaxConcurrent: autopilotMaxConcurrentSchema.optional(),
   })
   .refine(
     (dto) => Object.values(dto).some((value) => value !== undefined),

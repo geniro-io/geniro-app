@@ -65,6 +65,7 @@ export class ProjectsService {
       errorCode: 'INVALID_PROJECT_FOLDER',
       noun: 'project folder',
     });
+    await this.refuseTakenFolder(folder, null, em);
     const created = await this.projectDao.create(
       {
         name: input.name,
@@ -128,10 +129,12 @@ export class ProjectsService {
       project.name = patch.name;
     }
     if (patch.folder !== undefined) {
-      project.folder = resolveValidDirectory(patch.folder, {
+      const folder = resolveValidDirectory(patch.folder, {
         errorCode: 'INVALID_PROJECT_FOLDER',
         noun: 'project folder',
       });
+      await this.refuseTakenFolder(folder, project.id, em);
+      project.folder = folder;
     }
     if (patch.groupId !== undefined) {
       project.groupId = patch.groupId;
@@ -192,9 +195,35 @@ export class ProjectsService {
     const em = this.em.fork();
     await this.require(projectId, em);
     const tasksRemoved = await this.taskDao.countInProject(projectId, em);
-    await this.taskDao.deleteForProject(projectId, em);
-    await this.projectDao.deleteById(projectId, em);
+    // One transaction, because half of this is worse than none of it: the
+    // tasks go first, so a failure between the two writes would leave a board
+    // standing with every card hidden and nothing to retry it.
+    await em.transactional(async (tx) => {
+      await this.taskDao.deleteForProject(projectId, tx);
+      await this.projectDao.deleteById(projectId, tx);
+    });
     return { deleted: true, tasksRemoved };
+  }
+
+  /**
+   * Refuse a folder another project already holds.
+   *
+   * Checked here as well as by the unique index, so the caller gets a named
+   * refusal rather than a driver error — and on UPDATE too, which is the path
+   * that would otherwise move a second project onto an occupied folder.
+   */
+  private async refuseTakenFolder(
+    folder: string,
+    exceptProjectId: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const holder = await this.projectDao.findAnyByFolder(folder, em);
+    if (holder && holder.id !== exceptProjectId) {
+      throw new BadRequestException(
+        'FOLDER_ALREADY_A_PROJECT',
+        `${holder.name} already uses that folder`,
+      );
+    }
   }
 
   private async require(

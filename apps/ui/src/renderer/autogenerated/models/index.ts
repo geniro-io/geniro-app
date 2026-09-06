@@ -1666,24 +1666,6 @@ export interface CreateProjectDto {
     workflowSlug?: string;
     /**
      * 
-     * @type {boolean}
-     * @memberof CreateProjectDto
-     */
-    autopilotEnabled?: boolean;
-    /**
-     * 
-     * @type {TaskStatus}
-     * @memberof CreateProjectDto
-     */
-    autopilotIntakeStatus?: TaskStatus;
-    /**
-     * Bounded because each concurrent task takes its own git worktree — a whole working copy on disk
-     * @type {number}
-     * @memberof CreateProjectDto
-     */
-    autopilotMaxConcurrent?: number;
-    /**
-     * 
      * @type {TaskSource}
      * @memberof CreateProjectDto
      */
@@ -3698,24 +3680,6 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     workflowSlug?: string | null;
-    /**
-     * 
-     * @type {boolean}
-     * @memberof UpdateProjectDto
-     */
-    autopilotEnabled?: boolean;
-    /**
-     * 
-     * @type {TaskStatus}
-     * @memberof UpdateProjectDto
-     */
-    autopilotIntakeStatus?: TaskStatus;
-    /**
-     * Bounded because each concurrent task takes its own git worktree — a whole working copy on disk
-     * @type {number}
-     * @memberof UpdateProjectDto
-     */
-    autopilotMaxConcurrent?: number;
 }
 
 

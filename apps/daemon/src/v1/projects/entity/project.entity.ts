@@ -26,7 +26,23 @@ export class Project extends TimestampsEntity {
   @Property({ type: 'text' })
   name!: string;
 
-  /** Absolute, and canonicalized by the service before it is stored. */
+  /**
+   * Absolute, and canonicalized by the service before it is stored.
+   *
+   * At most one LIVE project may hold a folder, and that is a safety
+   * property rather than tidiness: the autopilot bounds concurrent work per
+   * PROJECT while a worktree is created in the FOLDER, so two projects
+   * sharing one would give that folder twice the cap it is meant to hold to.
+   *
+   * Enforced by `ProjectsService.refuseTakenFolder` and NOT by a unique
+   * index, because the database cannot express "live": a soft delete leaves
+   * the row and its folder behind, so a plain unique index reserves the
+   * folder forever and removing a project then adding it back raises
+   * `UNIQUE constraint failed: projects.folder` from the driver. The `where`
+   * option that would scope such an index to `deleted_at is null` is dropped
+   * by MikroORM's sqlite schema generator, so the check lives where the
+   * filter does and answers with a named refusal rather than a 500.
+   */
   @Property({ type: 'text' })
   folder!: string;
 

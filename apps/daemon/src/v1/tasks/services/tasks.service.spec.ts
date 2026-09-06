@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   defineConfig,
   type EntityManager,
@@ -28,8 +32,12 @@ describe('TasksService (in-memory sqlite)', () => {
   // must flush on THIS one: `orm.em` is a different UnitOfWork and does not
   // manage entities loaded here, so a write flushed there never lands.
   let em: EntityManager;
+  // A real directory: `update` canonicalizes `worktreePath` through
+  // `resolveValidDirectory`, which refuses one that is not on disk.
+  let worktree: string;
 
   beforeAll(async () => {
+    worktree = mkdtempSync(join(tmpdir(), 'geniro-worktree-'));
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
@@ -45,6 +53,7 @@ describe('TasksService (in-memory sqlite)', () => {
 
   afterAll(async () => {
     await orm.close(true);
+    rmSync(worktree, { recursive: true, force: true });
   });
 
   beforeEach(async () => {
@@ -178,6 +187,33 @@ describe('TasksService (in-memory sqlite)', () => {
     ).rejects.toMatchObject({
       message: expect.stringContaining('at most'),
     });
+  });
+
+  it('refuses a worktree path that is not a directory on disk', async () => {
+    // It becomes an agent's spawn cwd, so it is canonicalized at write time
+    // like every other caller-supplied path the daemon stores.
+    const task = await service.create({ projectId, title: 'needs a tree' });
+
+    await expect(
+      service.update(task.id, { worktreePath: '/no/such/worktree/anywhere' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('does not exist'),
+    });
+  });
+
+  it('clears the worktree path on an explicit null', async () => {
+    // The other arm of the check above: `null` releases the worktree and must
+    // not be handed to `resolveValidDirectory`, which would refuse it as a
+    // path that does not exist and leave a released worktree unclearable.
+    const task = await service.create({ projectId, title: 'has a tree' });
+    const attached = await service.update(task.id, {
+      worktreePath: worktree,
+    });
+    expect(attached.worktreePath).toBe(worktree);
+
+    const released = await service.update(task.id, { worktreePath: null });
+
+    expect(released.worktreePath).toBeNull();
   });
 
   it('refuses a task naming a project that does not exist', async () => {

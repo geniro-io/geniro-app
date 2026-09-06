@@ -103,7 +103,9 @@ describe('ProjectsService (in-memory sqlite)', () => {
   it('refuses a folder that is not a directory on disk', async () => {
     await expect(
       service.create({ name: 'Bad', folder: join(folder, 'does-not-exist') }),
-    ).rejects.toMatchObject({ message: expect.stringContaining('does not exist') });
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('does not exist'),
+    });
   });
 
   it('clears a nullable field on an explicit null and leaves omitted keys alone', async () => {

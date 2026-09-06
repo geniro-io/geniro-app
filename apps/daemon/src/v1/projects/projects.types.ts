@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-import { AgentKindSchema } from '../runs/runs.types';
 import { ChatApprovalModeSchema } from '../agents/chat.types';
+import { AgentKindSchema } from '../runs/runs.types';
 import { TaskSourceSchema, TaskStatusSchema } from '../tasks/tasks.types';
 
 /** A project's name — non-blank after trimming, sanely bounded. */

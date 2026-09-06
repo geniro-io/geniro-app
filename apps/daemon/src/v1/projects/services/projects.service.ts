@@ -124,18 +124,30 @@ export class ProjectsService {
     const em = this.em.fork();
     const project = await this.require(projectId, em);
 
-    if (patch.name !== undefined) project.name = patch.name;
+    if (patch.name !== undefined) {
+      project.name = patch.name;
+    }
     if (patch.folder !== undefined) {
       project.folder = resolveValidDirectory(patch.folder, {
         errorCode: 'INVALID_PROJECT_FOLDER',
         noun: 'project folder',
       });
     }
-    if (patch.groupId !== undefined) project.groupId = patch.groupId;
-    if (patch.agentKind !== undefined) project.agentKind = patch.agentKind;
-    if (patch.model !== undefined) project.model = patch.model;
-    if (patch.effort !== undefined) project.effort = patch.effort;
-    if (patch.approval !== undefined) project.approval = patch.approval;
+    if (patch.groupId !== undefined) {
+      project.groupId = patch.groupId;
+    }
+    if (patch.agentKind !== undefined) {
+      project.agentKind = patch.agentKind;
+    }
+    if (patch.model !== undefined) {
+      project.model = patch.model;
+    }
+    if (patch.effort !== undefined) {
+      project.effort = patch.effort;
+    }
+    if (patch.approval !== undefined) {
+      project.approval = patch.approval;
+    }
     if (patch.configDir !== undefined) {
       project.configDir =
         patch.configDir === null

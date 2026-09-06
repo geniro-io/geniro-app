@@ -34,9 +34,7 @@ export type TaskStatus = z.infer<typeof TaskStatusSchema>;
  * already on disk had been.
  */
 export const TASK_SOURCES = ['geniro'] as const;
-export const TaskSourceSchema = z
-  .enum(TASK_SOURCES)
-  .meta({ id: 'TaskSource' });
+export const TaskSourceSchema = z.enum(TASK_SOURCES).meta({ id: 'TaskSource' });
 export type TaskSource = z.infer<typeof TaskSourceSchema>;
 
 /** A task's title — non-blank after trimming, sanely bounded. */
@@ -75,7 +73,9 @@ export const TaskWireSchema = z.object({
   worktreePath: z
     .string()
     .nullable()
-    .describe('The worktree that branch is checked out in; null until one runs'),
+    .describe(
+      'The worktree that branch is checked out in; null until one runs',
+    ),
   runId: z
     .string()
     .nullable()

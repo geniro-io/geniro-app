@@ -104,7 +104,11 @@ describe('TasksService (in-memory sqlite)', () => {
   });
 
   it('places a moved task at the end of the column it lands in', async () => {
-    await service.create({ projectId, title: 'already in todo', status: 'todo' });
+    await service.create({
+      projectId,
+      title: 'already in todo',
+      status: 'todo',
+    });
     const mover = await service.create({ projectId, title: 'arriving' });
 
     const moved = await service.moveStatus(mover.id, {
@@ -141,7 +145,9 @@ describe('TasksService (in-memory sqlite)', () => {
     // The guard exists so one bad row cannot make a whole board unopenable,
     // and without a test entering it a later cleanup would delete it silently.
     const row = await taskDao.getById(task.id);
-    if (!row) throw new Error('the task under test disappeared');
+    if (!row) {
+      throw new Error('the task under test disappeared');
+    }
     row.labels = 'not json at all';
     await orm.em.flush();
 

@@ -71,11 +71,7 @@ export class TasksService {
         sourceRef: input.sourceRef ?? null,
         // Appended to the end of its column, never inserted: a new card is the
         // user's newest thought and moving it is one drag away.
-        position: await this.taskDao.countInStatus(
-          input.projectId,
-          status,
-          em,
-        ),
+        position: await this.taskDao.countInStatus(input.projectId, status, em),
       },
       em,
     );
@@ -101,14 +97,24 @@ export class TasksService {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
 
-    if (patch.title !== undefined) task.title = patch.title;
-    if (patch.description !== undefined) task.description = patch.description;
-    if (patch.labels !== undefined) task.labels = JSON.stringify(patch.labels);
-    if (patch.branch !== undefined) task.branch = patch.branch;
+    if (patch.title !== undefined) {
+      task.title = patch.title;
+    }
+    if (patch.description !== undefined) {
+      task.description = patch.description;
+    }
+    if (patch.labels !== undefined) {
+      task.labels = JSON.stringify(patch.labels);
+    }
+    if (patch.branch !== undefined) {
+      task.branch = patch.branch;
+    }
     if (patch.worktreePath !== undefined) {
       task.worktreePath = patch.worktreePath;
     }
-    if (patch.runId !== undefined) task.runId = patch.runId;
+    if (patch.runId !== undefined) {
+      task.runId = patch.runId;
+    }
     if (patch.reportItemId !== undefined) {
       task.reportItemId = patch.reportItemId;
     }

@@ -1,6 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
-import { Entity, Index, PrimaryKey, Property } from '@mikro-orm/decorators/legacy';
+import {
+  Entity,
+  Index,
+  PrimaryKey,
+  Property,
+} from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
 import type { TaskSource, TaskStatus } from '../tasks.types';

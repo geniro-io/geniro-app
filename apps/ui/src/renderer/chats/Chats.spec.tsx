@@ -978,19 +978,25 @@ describe('Chats — searching one conversation', () => {
       rows[0]!.click();
     });
 
+    // A WASH, not an outline. The wrapper spans the transcript's whole width
+    // while a user's bubble is `self-end`, so a ring drew a box around the empty
+    // half and read as a stray rectangle rather than as "this row" — reported,
+    // and replaced. The class is the whole of the mark, so it is what to assert.
     const landed = container.querySelector('[data-transcript-seq="901"]')!;
-    expect(classesOf(landed)).toContain('ring-2');
+    expect(classesOf(landed)).toContain('bg-accent/60');
+    // And NOT the ring it replaced, so the two cannot both quietly be applied.
+    expect(classesOf(landed)).not.toContain('ring-2');
     // Its neighbour is not marked — a mark on everything says nothing.
     expect(
       classesOf(container.querySelector('[data-transcript-seq="900"]')!),
-    ).not.toContain('ring-2');
+    ).not.toContain('bg-accent/60');
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(3_000);
     });
     expect(
       classesOf(container.querySelector('[data-transcript-seq="901"]')!),
-    ).not.toContain('ring-2');
+    ).not.toContain('bg-accent/60');
   });
 
   it('keeps the seq anchor a FLEX parent, so a bubble stays where it belongs', async () => {

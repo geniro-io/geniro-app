@@ -11,6 +11,7 @@ import {
   callBlockSummary,
   collectSubagentBlocks,
   countTools,
+  entryStartSeq,
   groupTranscript,
   pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
@@ -58,6 +59,101 @@ const result = (
   value: unknown = 'ok',
   nodeId: string | null = 'orch',
 ): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
+
+describe('entryStartSeq', () => {
+  it('answers a plain row with its own seq', () => {
+    const row = item('message', { text: 'hi' });
+    expect(entryStartSeq({ type: 'item', item: row })).toBe(row.seq);
+  });
+
+  it('answers a BLOCK with where it begins, not where it ends', () => {
+    // The lookup that uses this is nearest-at-or-below, so a block spanning
+    // several rows has to answer for every one of them. Reporting its LAST seq
+    // would send a hit in the middle of a turn to whatever came after it.
+    const first = item('message', { text: 'starting' });
+    const last = item('message', { text: 'done' });
+    const block: TurnBlockEntry = {
+      type: 'turn-block',
+      id: 'b1',
+      createdAt: 'now',
+      nodeId: 'orch',
+      subagentId: null,
+      entries: [
+        { type: 'item', item: last },
+        { type: 'item', item: first },
+      ],
+    };
+    // Asserted against the LOWER seq even though it is listed second, so the
+    // case cannot pass by reading whichever entry happens to come first.
+    expect(entryStartSeq(block)).toBe(first.seq);
+  });
+
+  it('answers a tool group with the CALL, never the result', () => {
+    // A backgrounded command's result lands thousands of rows later; the group
+    // is drawn where it was invoked.
+    const invoked = call('Bash', 'c1');
+    const answered = result('c1');
+    const entries = groupTranscript([invoked, answered]);
+    const group = entries.flatMap((entry) =>
+      entry.type === 'turn-block' ? entry.entries : [entry],
+    );
+    const tools = group.find((entry) => entry.type === 'tools');
+    expect(tools).toBeDefined();
+    expect(entryStartSeq(tools!)).toBe(invoked.seq);
+  });
+
+  it('is NOT monotonic across the rendered list — a delegate block starts late', () => {
+    // The premise the transcript's seq anchors are looked up under. A sub-agent
+    // block is placed where its delegate was LAUNCHED but encloses rows the
+    // delegate wrote later, so its start seq can exceed that of the entry drawn
+    // after it. Anything picking "the last anchor at or below the target" by
+    // DOCUMENT POSITION therefore lands in the wrong place for a hit inside a
+    // delegate's thread; the pick has to compare seq VALUES.
+    const launch = item('tool_call', {
+      id: 'toolu_d',
+      name: 'Task',
+      input: { description: 'go' },
+    });
+    const answered = item('tool_result', {
+      id: 'toolu_d',
+      name: null,
+      result: 'launched',
+    });
+    const mainSaid = item('message', { text: 'carrying on' }, 'orch');
+    const delegateSaid = item(
+      'message',
+      { text: 'on it', parentToolUseId: 'toolu_d' },
+      'orch',
+      'assistant',
+    );
+    const entries = buildSubagentBlocks(
+      groupTranscript([launch, answered, mainSaid, delegateSaid]),
+      [launch, answered, mainSaid, delegateSaid],
+    );
+
+    const starts = entries
+      .map((entry) => entryStartSeq(entry))
+      .filter((seq): seq is number => seq !== null);
+    const ascending = starts.every(
+      (seq, index) => index === 0 || seq >= starts[index - 1]!,
+    );
+    expect(ascending).toBe(false);
+  });
+
+  it('answers null for a block that encloses nothing', () => {
+    // Not zero: a caller emitting an anchor for it would claim the whole
+    // transcript begins there, and every jump would land on it.
+    const empty: TurnBlockEntry = {
+      type: 'turn-block',
+      id: 'empty',
+      createdAt: 'now',
+      nodeId: null,
+      subagentId: null,
+      entries: [],
+    };
+    expect(entryStartSeq(empty)).toBeNull();
+  });
+});
 
 describe('groupTranscript', () => {
   it('collapses consecutive same-node tool calls into ONE group and pairs results by id', () => {

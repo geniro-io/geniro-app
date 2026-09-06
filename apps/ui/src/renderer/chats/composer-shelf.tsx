@@ -1,11 +1,17 @@
-import { GitPullRequest, Workflow as WorkflowIcon } from 'lucide-react';
+import {
+  GitCompare,
+  GitPullRequest,
+  Workflow as WorkflowIcon,
+} from 'lucide-react';
 import { useContext } from 'react';
 
 import type { PullRequestRefResult } from '../../shared/contracts';
+import { DiffFigures } from '../components/diff-figures';
 import { HoverPopover } from '../components/hover-popover';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import type { AgentThread } from './agent-activity';
+import type { ChangesSummary } from './changes-tree';
 import { RunSettledContext } from './live-row';
 import { revealThreadPullRequests, revealWorkflows } from './panel-flags';
 import { ThreadPullRequestChip } from './pull-request-row';
@@ -69,6 +75,55 @@ export function ComposerShelf({
 }
 
 /**
+ * What the run's FOLDER holds that it did not when the chat started — the
+ * leftmost chip on the shelf, and the way into the file list behind it.
+ *
+ * It was in the chat header first, beside search and export, and moved here on
+ * report: the shelf is the row of what this thread has produced, and a folder an
+ * agent has been writing to is the most literal case of that. It also stops the
+ * header's chip competing with the thread TITLE for width, which is the one
+ * element there that has to stay readable.
+ *
+ * LEFTMOST, ahead of the pull requests, by the shelf's own DURABLE → VOLATILE
+ * rule: a working tree outlives every pull request opened from it, so nothing
+ * here can shift it.
+ *
+ * Two states draw NOTHING at all, and they differ. A summary of `null` has not
+ * been read yet, so there is no figure to state and a chip would have to invent
+ * one. `files === 0` is a real reading of a folder nothing has touched — and on
+ * the SHELF that draws nothing either, unlike the header where the control had
+ * to stay reachable: this row is a row of what EXISTS, so an empty folder is
+ * said by the chip's absence, exactly as a thread with no pull requests is.
+ */
+export function FolderChangesChip({
+  summary,
+  onOpen,
+}: {
+  summary: ChangesSummary | null;
+  onOpen: () => void;
+}): React.JSX.Element | null {
+  if (summary === null || summary.files === 0) {
+    return null;
+  }
+  const label = `${summary.files} ${summary.files === 1 ? 'file' : 'files'} changed since this chat started — open the list`;
+  return (
+    <button
+      type="button"
+      data-slot="folder-changes-chip"
+      aria-label={label}
+      title={label}
+      onClick={onOpen}
+      className={cn(SHELF_CHIP_CLASS, 'shrink-0')}>
+      <GitCompare aria-hidden="true" className="size-3.5 shrink-0" />
+      <span className="tabular-nums">
+        {summary.files} {summary.files === 1 ? 'file' : 'files'}
+      </span>
+      <DiffFigures added={summary.added} removed={summary.removed} />
+    </button>
+  );
+}
+
+/**
  * How wide ONE pull-request chip may get, by how many are drawn beside it.
  *
  * The shelf is a single line that never wraps, so width taken by one chip is
@@ -82,15 +137,22 @@ export function ComposerShelf({
  * that comes down as the count goes up.
  *
  * The steps are not linear because the chip is not all title: a number, a glyph
- * and the padding are fixed at about 5rem, so 14 → 11 → 9rem leaves roughly
- * 9rem, 6rem and 4rem of title. That is a readable title, a recognisable one,
- * and a hint — which is the right shape for a row where the leftmost chip is
- * the one the thread is most likely on.
+ * and the padding are fixed at about 5rem, so the old 14 → 11 → 9rem left
+ * roughly 9rem, 6rem and 4rem of title. That is a readable title, a
+ * recognisable one, and a hint — which is the right shape for a row where the
+ * leftmost chip is the one the thread is most likely on.
+ *
+ * They went UP when the chips gained their size — `3 files +26 −1` is about
+ * 7rem of figures that must never truncate, so at the old caps the title had
+ * nothing left at any count. The same three shapes, moved along: a title with
+ * room, one that is recognisable, and a hint. Past that the flex shrink still
+ * governs, so a genuinely crowded row still fits by construction rather than by
+ * these numbers being right.
  */
 const PULL_REQUEST_CHIP_WIDTH: Record<number, string> = {
-  1: 'max-w-56',
-  2: 'max-w-44',
-  3: 'max-w-36',
+  1: 'max-w-96',
+  2: 'max-w-72',
+  3: 'max-w-60',
 };
 
 /**

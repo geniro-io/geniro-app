@@ -104,6 +104,9 @@ describe('ThreadPullRequestChips', () => {
             headRepositoryOwner: 'acme',
             author: 'someone',
             updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
           } satisfies PullRequestInfo),
   });
 

@@ -174,9 +174,27 @@ describe('readPullRequests', () => {
 
     for (const call of ghCalls()) {
       expect(call).toContain(
-        '--json number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt',
+        '--json number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,additions,deletions,changedFiles',
       );
       expect(call).toContain('--limit 50');
+    }
+  });
+
+  it('asks for the diff figures every surface now states', async () => {
+    // Named SEPARATELY from the field list above, which is a `toContain` on a
+    // prefix: appending to that list leaves it green, so dropping the three
+    // figures again would cost every chip and row its size with the assertion
+    // above still passing. These are the newest fields and the likeliest to be
+    // dropped by someone trimming the query's cost.
+    initRepo();
+    installGhShim(recordingShim());
+
+    await readPullRequests(dir);
+
+    for (const call of ghCalls()) {
+      expect(call).toContain('additions');
+      expect(call).toContain('deletions');
+      expect(call).toContain('changedFiles');
     }
   });
 
@@ -273,6 +291,62 @@ describe('parsePullRequests', () => {
       'closed',
     ]);
     expect(parsed?.[0]?.author).toBe('someone');
+  });
+
+  it('reads the diff figures gh reports', () => {
+    const parsed = parsePullRequests(
+      JSON.stringify([
+        {
+          ...row(1, 'OPEN'),
+          additions: 6757,
+          deletions: 211,
+          changedFiles: 68,
+        },
+      ]),
+    );
+
+    expect(parsed?.[0]).toMatchObject({
+      added: 6757,
+      removed: 211,
+      changedFiles: 68,
+    });
+  });
+
+  it('KEEPS a row that carries no figures, rather than dropping it', () => {
+    // They are the newest thing this query asks for, so an older `gh` simply
+    // does not answer them. Requiring them would make one version gap the
+    // difference between a populated panel and an empty one — a pull request
+    // without its size is still a pull request.
+    const parsed = parsePullRequests(JSON.stringify([row(1, 'OPEN')]));
+
+    expect(parsed).toHaveLength(1);
+    expect(parsed?.[0]).toMatchObject({
+      number: 1,
+      added: null,
+      removed: null,
+      changedFiles: null,
+    });
+  });
+
+  it('reads an unusable figure as NOT MEASURED rather than as zero', () => {
+    // gh answering a string, or nothing at all, must not become a confident
+    // `+0 −0` — that asserts a pull request changed nothing.
+    const parsed = parsePullRequests(
+      JSON.stringify([
+        {
+          ...row(1, 'OPEN'),
+          additions: 'lots',
+          deletions: null,
+          changedFiles: 4,
+        },
+      ]),
+    );
+
+    expect(parsed?.[0]).toMatchObject({
+      added: null,
+      removed: null,
+      changedFiles: 4,
+    });
   });
 
   it('drops a malformed row and keeps the rest', () => {

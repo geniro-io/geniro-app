@@ -187,7 +187,7 @@ describe('SessionPicker', () => {
     });
 
     expect(
-      container.querySelector('[data-slot="session-snippet"]')?.textContent,
+      container.querySelector('[data-slot="search-snippet"]')?.textContent,
     ).toContain('app.asar archive');
     // Beside the title, never instead of it — a search result still has to name
     // the conversation.

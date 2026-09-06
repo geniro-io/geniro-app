@@ -11,12 +11,19 @@ import { IPC } from '../shared/contracts';
 import { detectClis } from './cli-detect';
 import { runCliUpdate } from './cli-update';
 import type { DaemonSupervisor } from './daemon-supervisor';
-import { pullBranch, readGitInfo, switchBranch } from './git-info';
+import { readChangesSince } from './git-changes';
+import {
+  pullBranch,
+  readGitInfo,
+  readGitStamp,
+  switchBranch,
+} from './git-info';
 import { readPullRequests, readPullRequestsByRef } from './github-prs';
 import {
   branchNameSchema,
   chatExportSaveSchema,
   cliKindSchema,
+  commitShaSchema,
   gitDirSchema,
   notificationSchema,
   onboardingInputSchema,
@@ -157,6 +164,12 @@ export function registerIpc(
 
   ipcMain.handle(IPC.getGitInfo, (_event, dir: unknown) =>
     readGitInfo(gitDirSchema.parse(dir)),
+  );
+  ipcMain.handle(IPC.getGitStamp, (_event, dir: unknown) =>
+    readGitStamp(gitDirSchema.parse(dir)),
+  );
+  ipcMain.handle(IPC.getChangesSince, (_event, dir: unknown, sha: unknown) =>
+    readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
   );
 
   ipcMain.handle(IPC.getPullRequests, (_event, dir: unknown) =>

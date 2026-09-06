@@ -643,6 +643,14 @@ export class ChatService implements OnModuleInit {
   async createChat(input: {
     agentKind: AgentKind;
     cwd: string;
+    /**
+     * What `cwd` had checked out at this moment, read by the client — the fixed
+     * point the diff view measures against. Absent for a folder that is not a
+     * repository or has no commits yet, which is a real answer and stored as
+     * null; see {@link Run.startSha}.
+     */
+    startSha?: string;
+    startDirty?: boolean;
     model?: string;
     title?: string;
     approval?: ChatApprovalMode;
@@ -709,6 +717,12 @@ export class ChatService implements OnModuleInit {
         status: 'pending',
         agentKind: input.agentKind,
         cwd,
+        // The client's reading of the folder, taken a moment ago. Stored as
+        // given: the daemon runs no git, so there is nothing here it could
+        // check the pair against, and re-reading it later would answer about a
+        // different moment than the one the chat began at.
+        startSha: input.startSha ?? null,
+        startDirty: input.startDirty ?? null,
         model: input.model ?? null,
         effort: input.effort ?? null,
         contextWindow: input.contextWindow ?? null,

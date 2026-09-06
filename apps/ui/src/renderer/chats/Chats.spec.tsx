@@ -46,6 +46,7 @@ const api = vi.hoisted(() => ({
   readChatMetrics: vi.fn(),
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
+  searchChat: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -220,6 +221,8 @@ const run1: ChatRun = {
   agentKind: 'claude',
   workflowId: null,
   cwd: '/proj',
+  startSha: null,
+  startDirty: null,
   model: null,
   approval: null,
   effort: null,
@@ -621,6 +624,9 @@ beforeEach(() => {
   groupApi.reorderRunGroups.mockReset();
   groupApi.deleteRunGroup.mockReset();
   api.listRunItems.mockReset().mockResolvedValue([]);
+  api.searchChat
+    .mockReset()
+    .mockResolvedValue({ hits: [], partialReason: null });
   api.sendChatMessage.mockReset();
   api.cancelChat.mockReset().mockResolvedValue({ cancelled: true });
   api.createChat.mockReset();
@@ -816,6 +822,254 @@ describe('Chats transcript — no sideways scroll', () => {
       el.className.includes('overflow-y-auto'),
     )!;
     expect(classesOf(scroller)).toContain('overflow-x-hidden');
+  });
+});
+
+describe('Chats — searching one conversation', () => {
+  /** Type into a field the way a user does, through React's own tracker. */
+  function typeInto(input: HTMLInputElement, value: string): void {
+    // Assigning `input.value` leaves React's value tracker believing nothing
+    // changed, so the synthetic `onChange` never fires — the native setter is
+    // what a real keystroke goes through.
+    Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      'value',
+    )!.set!.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  async function search(
+    container: HTMLElement,
+    query: string,
+  ): Promise<HTMLButtonElement[]> {
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Search this conversation"]',
+        )
+        ?.click();
+    });
+    const field = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Search this conversation"]',
+    )!;
+    await act(async () => {
+      typeInto(field, query);
+    });
+    // Past the hook's debounce, and the ask itself resolves within the act.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    return [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="search-snippet"]',
+      ),
+    ].map((snippet) => snippet.closest('button')!);
+  }
+
+  const hit = (seq: number, snippet: string): Record<string, unknown> => ({
+    seq,
+    kind: 'message',
+    role: 'assistant',
+    snippet,
+    createdAt: '2026-09-05T10:00:00.000Z',
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('asks the DAEMON rather than filtering the rows it holds', async () => {
+    // The whole reason the route exists: a chat holds at most `HISTORY_PAGE`
+    // items, so a client-side filter could only ever answer about the part of
+    // the conversation already on screen.
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'hi')]);
+    api.searchChat.mockResolvedValue({
+      hits: [hit(12, 'sizing the bloom filter')],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const rows = await search(container, 'bloom');
+
+    expect(api.searchChat).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', query: 'bloom' }),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.textContent).toContain('sizing the bloom filter');
+  });
+
+  it('fetches the window around a hit the loaded page does not hold', async () => {
+    // THE milestone's own criterion. Before the fetch-around-seq path a hit
+    // older than the newest 1,000 items was an inert row: clicking it scrolled
+    // nowhere, loaded nothing and reported no error — which is the failure a
+    // daemon-side search exists to fix. Reverting `jumpToSeq`'s `loadAround`
+    // branch makes this assertion fail, because no second history read is made.
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'newest')]);
+    api.searchChat.mockResolvedValue({
+      hits: [hit(12, 'sizing the bloom filter')],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const rows = await search(container, 'bloom');
+
+    api.listRunItems.mockClear();
+    await act(async () => {
+      rows[0]!.click();
+    });
+
+    // Around the hit, not at it: the window is asked for with room on the
+    // newer side so the row lands in context rather than against the edge.
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: 'r1', beforeSeq: 62 }),
+    );
+  });
+
+  it('does NOT re-fetch for a hit already on screen', async () => {
+    // The other half of the same decision. Replacing the window costs a round
+    // trip and drops the reader off the tail, so a hit inside the loaded page
+    // must be a scroll and nothing more.
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'hi'),
+      msg(901, 'assistant', 'sizing the bloom filter'),
+    ]);
+    api.searchChat.mockResolvedValue({
+      hits: [hit(901, 'sizing the bloom filter')],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const rows = await search(container, 'bloom');
+
+    api.listRunItems.mockClear();
+    await act(async () => {
+      rows[0]!.click();
+    });
+
+    expect(api.listRunItems).not.toHaveBeenCalled();
+  });
+
+  it('marks the row a jump landed on, and unmarks it again', async () => {
+    // The mark is on the ROW rather than the matched words, deliberately: a
+    // message renders as markdown — which is most of what a search finds — and
+    // wrapping highlight markup around markdown source corrupts it, so word-level
+    // marking would have to skip exactly the commonest hit.
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'hi'),
+      msg(901, 'assistant', 'sizing the bloom filter'),
+    ]);
+    api.searchChat.mockResolvedValue({
+      hits: [hit(901, 'sizing the bloom filter')],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const rows = await search(container, 'bloom');
+
+    await act(async () => {
+      rows[0]!.click();
+    });
+
+    // A WASH, not an outline. The wrapper spans the transcript's whole width
+    // while a user's bubble is `self-end`, so a ring drew a box around the empty
+    // half and read as a stray rectangle rather than as "this row" — reported,
+    // and replaced. The class is the whole of the mark, so it is what to assert.
+    const landed = container.querySelector('[data-transcript-seq="901"]')!;
+    expect(classesOf(landed)).toContain('bg-accent/60');
+    // And NOT the ring it replaced, so the two cannot both quietly be applied.
+    expect(classesOf(landed)).not.toContain('ring-2');
+    // Its neighbour is not marked — a mark on everything says nothing.
+    expect(
+      classesOf(container.querySelector('[data-transcript-seq="900"]')!),
+    ).not.toContain('bg-accent/60');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_000);
+    });
+    expect(
+      classesOf(container.querySelector('[data-transcript-seq="901"]')!),
+    ).not.toContain('bg-accent/60');
+  });
+
+  it('keeps the seq anchor a FLEX parent, so a bubble stays where it belongs', async () => {
+    // `align-self` resolves only against a flex parent, and a bare
+    // `MessageBubble` relies on it — `note` is `self-center`, which is how the
+    // `✓ done · 21s` row at the end of every turn is centred. Introducing the
+    // anchor as a plain block wrapper displaced every one of those left.
+    //
+    // The CLASS is the assertion because it IS the mechanism, not a proxy for
+    // one: jsdom computes no layout, so the displacement itself is unobservable
+    // here, and `flex flex-col` on the wrapper is the whole of the fix.
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'hi')]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const anchor = container.querySelector('[data-transcript-seq]')!;
+    expect(classesOf(anchor)).toContain('flex');
+    expect(classesOf(anchor)).toContain('flex-col');
+  });
+
+  it('gives the way back to the tail once a jump has taken it away', async () => {
+    // Without it a reader who jumped to an old hit is parked in a
+    // mid-conversation window with live rows suppressed, and the control that
+    // says "Latest" would only scroll to the bottom of THAT window — which is
+    // not the newest message. It has to FETCH.
+    api.listRunItems.mockResolvedValue([msg(900, 'user', 'newest')]);
+    api.searchChat.mockResolvedValue({
+      hits: [hit(12, 'sizing the bloom filter')],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const rows = await search(container, 'bloom');
+    await act(async () => {
+      rows[0]!.click();
+    });
+
+    const latest = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Jump to the latest message"]',
+    );
+    expect(latest).not.toBeNull();
+
+    api.listRunItems.mockClear();
+    await act(async () => {
+      latest!.click();
+    });
+
+    // Asked for the NEWEST page — no `beforeSeq` — rather than scrolled to the
+    // bottom of the window it was already holding.
+    expect(api.listRunItems).toHaveBeenCalledWith(
+      expect.not.objectContaining({ beforeSeq: expect.anything() }),
+    );
+  });
+
+  it('anchors each rendered entry by the seq it starts at', async () => {
+    // What makes a hit REACHABLE once its window is loaded. Without an anchor
+    // the fetch lands the right rows and the reader is left looking at whatever
+    // part of them the scroller happened to be on.
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'hi'),
+      msg(901, 'assistant', 'sizing the bloom filter'),
+    ]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const seqs = [...container.querySelectorAll('[data-transcript-seq]')].map(
+      (el) => el.getAttribute('data-transcript-seq'),
+    );
+    expect(seqs).toContain('900');
+    expect(seqs).toContain('901');
   });
 });
 
@@ -3325,6 +3579,8 @@ describe('Chats workflow runs', () => {
     agentKind: null,
     workflowId: 'review-team',
     cwd: '/proj',
+    startSha: null,
+    startDirty: null,
     model: null,
     approval: null,
     effort: null,
@@ -4009,6 +4265,8 @@ describe('Chats — handing a conversation to the user', () => {
       agentKind: null,
       workflowId: 'review-team',
       cwd: '/proj',
+      startSha: null,
+      startDirty: null,
       model: null,
       approval: null,
       effort: null,
@@ -8878,6 +9136,8 @@ describe('Chats error strip', () => {
     agentKind: null,
     workflowId: 'review-team',
     cwd: '/proj',
+    startSha: null,
+    startDirty: null,
     model: null,
     createdAt: 'later',
     updatedAt: 'later',
@@ -12273,6 +12533,9 @@ describe('Chats — the pull request above the composer', () => {
     author: 'someone',
     url: 'https://github.com/o/r/pull/70',
     updatedAt: '2026-08-01T00:00:00Z',
+    added: null,
+    removed: null,
+    changedFiles: null,
   };
 
   async function openMyChat(result: PullRequestsResult): Promise<HTMLElement> {

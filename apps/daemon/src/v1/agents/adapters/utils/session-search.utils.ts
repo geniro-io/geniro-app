@@ -65,6 +65,38 @@ export function unmatchedTerms(
   return terms.filter((term) => !stated.includes(term));
 }
 
+/**
+ * One matching line, short enough for a row and WINDOWED ON THE MATCH.
+ *
+ * Not the line's first `maxChars`, which is what it was: measured against a real
+ * profile, a search for `asar` quoted a paragraph whose match sat 400 characters
+ * in, so the row displayed a sentence with no visible connection to what had
+ * been typed — a quote that does not show the searched word explains a match no
+ * better than no quote at all. A third of the budget is kept ahead of the term
+ * so the result reads as a sentence rather than starting on one.
+ *
+ * `maxChars` is the CALLER's, and that argument is what makes the rest of this
+ * agent-agnostic: the budget is a property of the surface a snippet is rendered
+ * on — a session-picker row and a transcript hit list have different room — and
+ * it was the only CLI-flavoured thing this carried while it lived, private, in
+ * the claude adapter's own session reader.
+ */
+export function snippetAround(
+  text: string,
+  term: string,
+  maxChars: number,
+): string {
+  const line = text.replace(/\s+/g, ' ').trim();
+  if (line.length <= maxChars) {
+    return line;
+  }
+  const at = line.toLowerCase().indexOf(term);
+  const lead = at < 0 ? 0 : Math.max(0, at - Math.floor(maxChars / 3));
+  const cut = line.slice(lead, lead + maxChars).trim();
+  const tail = lead + maxChars < line.length ? '…' : '';
+  return `${lead > 0 ? '…' : ''}${cut}${tail}`;
+}
+
 /** The rows whose title or folder answers for every term; all rows if none. */
 export function matchSessions<
   T extends Pick<AgentSessionRecord, 'title' | 'cwd'>,

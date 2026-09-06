@@ -94,3 +94,59 @@ export function DiffView({
     </div>
   );
 }
+
+/** How one line of a unified diff is drawn — decided by its first character. */
+function unifiedLineClass(line: string): string {
+  // Order matters: `+++` and `---` are FILE HEADERS and start with the same
+  // characters as an added and a removed line. Read as content they would paint
+  // every file's header as a change, which on a one-line change is most of what
+  // the reader sees.
+  if (line.startsWith('+++') || line.startsWith('---')) {
+    return 'text-muted-foreground';
+  }
+  if (line.startsWith('@@')) {
+    return 'text-muted-foreground';
+  }
+  if (line.startsWith('+')) {
+    return 'bg-success/10 text-success';
+  }
+  if (line.startsWith('-')) {
+    return 'bg-destructive/10 text-destructive';
+  }
+  if (line.startsWith('diff --git') || line.startsWith('index ')) {
+    return 'text-muted-foreground';
+  }
+  return 'text-foreground';
+}
+
+/**
+ * A UNIFIED diff, as git prints one — the other shape a diff reaches this app in.
+ *
+ * Beside {@link DiffView} rather than in a file of its own, because the two are
+ * one subject seen from two directions: that one is handed the before and after
+ * of a tool call and computes nothing, this one is handed git's own rendering
+ * and only colours it. Split apart they would sooner or later stop looking alike,
+ * on a screen where a reader meets both.
+ *
+ * It COLOURS and never re-derives: the hunk arithmetic is git's, and a second
+ * implementation of it here would be a chance to disagree with the tool that
+ * produced the text.
+ */
+export function UnifiedDiff({ diff }: { diff: string }): React.JSX.Element {
+  return (
+    <div
+      data-slot="unified-diff"
+      className="overflow-x-auto rounded-md border border-border font-mono text-xs">
+      {diff.split('\n').map((line, index) => (
+        <div
+          key={index}
+          className={`whitespace-pre-wrap break-all px-2 ${unifiedLineClass(line)}`}>
+          {/* A non-breaking space so an empty context line still occupies one
+              row — without it a blank line in the source collapses and the diff
+              reads as having fewer lines than it has. */}
+          {line === '' ? ' ' : line}
+        </div>
+      ))}
+    </div>
+  );
+}

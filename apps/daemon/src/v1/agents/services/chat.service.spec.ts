@@ -1114,6 +1114,56 @@ describe('ChatService', () => {
     expect(assertedGroups).toEqual(['g-work']);
   });
 
+  describe('the run-start git stamp', () => {
+    const sha = 'b'.repeat(40);
+
+    it('keeps the commit and the dirty flag the client read', async () => {
+      const { service, runDao } = setup();
+
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        startSha: sha,
+        startDirty: true,
+      });
+
+      // On the ROW, which is what a diff view opened days later reads — the
+      // response is only this one client's copy.
+      expect(runDao.runs.get(run.id)?.startSha).toBe(sha);
+      expect(runDao.runs.get(run.id)?.startDirty).toBe(true);
+      expect(run.startSha).toBe(sha);
+      expect(run.startDirty).toBe(true);
+    });
+
+    it('stores a CLEAN tree as false rather than losing it', async () => {
+      // `false` is a measurement and null is its absence, so the two must not
+      // collapse — a `?? null` on a falsy value would file a tree somebody
+      // looked at as one nobody did.
+      const { service, runDao } = setup();
+
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        startSha: sha,
+        startDirty: false,
+      });
+
+      expect(runDao.runs.get(run.id)?.startDirty).toBe(false);
+      expect(run.startDirty).toBe(false);
+    });
+
+    it('leaves both null when the folder had nothing to stamp', async () => {
+      const { service, runDao } = setup();
+
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      expect(runDao.runs.get(run.id)?.startSha).toBeNull();
+      expect(runDao.runs.get(run.id)?.startDirty).toBeNull();
+      expect(run.startSha).toBeNull();
+      expect(run.startDirty).toBeNull();
+    });
+  });
+
   describe('host question channel', () => {
     async function settle(agent: {
       emit: (e: AgentEvent) => void;

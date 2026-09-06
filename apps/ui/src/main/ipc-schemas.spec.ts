@@ -1,6 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
-import { branchNameSchema, gitDirSchema } from './ipc-schemas';
+import { branchNameSchema, commitShaSchema, gitDirSchema } from './ipc-schemas';
+
+describe('commitShaSchema', () => {
+  const accepted = (value: string): boolean =>
+    commitShaSchema.safeParse(value).success;
+
+  it('accepts a commit id as `rev-parse` prints one', () => {
+    expect(accepted('a'.repeat(40))).toBe(true);
+    expect(accepted('0123456789abcdef0123456789abcdef01234567')).toBe(true);
+  });
+
+  it('refuses a revision EXPRESSION, which is a small language', () => {
+    // The value becomes argv to `git`. `HEAD~3`, `@{upstream}` and `:/text` are
+    // all things git would happily resolve to a commit nobody named here — the
+    // only thing this channel has business resolving is an id the app stamped
+    // itself. Restated in this process rather than trusted from the daemon's
+    // own copy, which is what the schema's doc block says it is for.
+    expect(accepted('HEAD')).toBe(false);
+    expect(accepted('HEAD~3')).toBe(false);
+    expect(accepted('@{upstream}')).toBe(false);
+    expect(accepted(':/fix the parser')).toBe(false);
+  });
+
+  it('refuses an abbreviation, and anything the wrong length or case', () => {
+    expect(accepted('a'.repeat(7))).toBe(false);
+    expect(accepted('a'.repeat(39))).toBe(false);
+    expect(accepted('a'.repeat(41))).toBe(false);
+    expect(accepted('A'.repeat(40))).toBe(false);
+  });
+});
 
 const accepts = (branch: string): boolean =>
   branchNameSchema.safeParse(branch).success;

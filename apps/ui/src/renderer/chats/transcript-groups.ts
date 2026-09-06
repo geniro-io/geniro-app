@@ -879,6 +879,44 @@ function entryNodeId(entry: TranscriptEntry): string | null {
   return entry.nodeId;
 }
 
+/**
+ * The LOWEST `seq` any row inside one entry carries — where that entry BEGINS
+ * in the transcript — or null when it encloses no row at all.
+ *
+ * What makes a rendered entry addressable by seq, which is what a search hit
+ * names. The lowest rather than the highest because the lookup that uses it is
+ * nearest-at-or-below: an entry is the right landing place for every row it
+ * holds, and a block spanning 480–520 has to answer for a hit at 500.
+ *
+ * A range rather than a point is the whole difficulty — the fold collapses runs
+ * of rows into one turn block, one tool group, one card — so an exact match is
+ * not available and must not be assumed by callers.
+ */
+export function entryStartSeq(entry: TranscriptEntry): number | null {
+  if (entry.type === 'item') {
+    return entry.item.seq;
+  }
+  if (entry.type === 'tools') {
+    // The CALL's seq: a pair begins where it was invoked, and its result may be
+    // thousands of rows later on a long-running command.
+    return entry.pairs.reduce<number | null>(
+      (min, pair) =>
+        min === null ? pair.call.seq : Math.min(min, pair.call.seq),
+      null,
+    );
+  }
+  if (isCardEntry(entry)) {
+    return entry.seq;
+  }
+  return entry.entries.reduce<number | null>((min, inner) => {
+    const seq = entryStartSeq(inner);
+    if (seq === null) {
+      return min;
+    }
+    return min === null ? seq : Math.min(min, seq);
+  }, null);
+}
+
 /** The highest `seq` any row inside these entries carries (0 when empty). */
 function maxSeqOf(list: readonly TranscriptEntry[]): number {
   let max = 0;

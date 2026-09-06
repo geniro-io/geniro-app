@@ -64,7 +64,7 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
-import { followTail, jumpToBottom } from '../scroll-to-bottom';
+import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
@@ -84,11 +84,14 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { chatExportFileName } from './chat-export-name';
+import { ChatChangesDialog } from './chat-changes-dialog';
+import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
+import { chatToMarkdown } from './chat-markdown';
 import { ChatMetricsLoaderContext } from './chat-metrics';
 import { ChatScopeFilter } from './chat-scope-filter';
+import { ChatSearchDialog } from './chat-search-dialog';
 import { CliLoginContext } from './cli-login-context';
 import {
   compactionOnlyTurnEnds,
@@ -100,6 +103,7 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import {
   ActiveWorkflowChips,
   ComposerShelf,
+  FolderChangesChip,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -197,6 +201,7 @@ import {
   buildTurnBlocks,
   buildWorkflowCards,
   collectSubagentBlocks,
+  entryStartSeq,
   groupTranscript,
   pullFileChangesOutOfGroups,
   type RunSettleAt,
@@ -229,7 +234,9 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
+import { useChatSearch } from './use-chat-search';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
@@ -238,6 +245,7 @@ import {
   threadPullRequestsOf,
   useThreadPullRequests,
 } from './use-thread-pull-requests';
+import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
 import { rootAgentOf } from './workflow-root';
 
@@ -393,6 +401,31 @@ async function currentRunSettings(): Promise<{
     // switched Max Mode off must not be indistinguishable from one who never
     // touched it.
     ...(cursorMaxMode === undefined ? {} : { cursorMaxMode }),
+  };
+}
+
+/**
+ * Where the run's folder stands right now, as a spreadable create-payload
+ * fragment — the fixed point the chat's diff view later measures against.
+ *
+ * Read at creation for the reason {@link currentRunSettings} is, and kept
+ * SEPARATE from it because the third caller of that helper starts a WORKFLOW
+ * run, whose payload has no stamp: a workflow's folder is whatever one of its
+ * nodes named, so a commit stamped beside it would describe no particular
+ * agent's tree.
+ *
+ * Each field is omitted rather than sent null when there is nothing to say — a
+ * plain folder, a checkout with no commits — so an unstamped run is one shape
+ * on the wire whatever failed to answer.
+ */
+async function chatGitStamp(cwd: string): Promise<{
+  startSha?: string;
+  startDirty?: boolean;
+}> {
+  const { sha, dirty } = await window.geniro.getGitStamp(cwd);
+  return {
+    ...(sha === null ? {} : { startSha: sha }),
+    ...(dirty === null ? {} : { startDirty: dirty }),
   };
 }
 
@@ -834,6 +867,9 @@ export function Chats({
     hasOlder,
     loadingOlder,
     loadOlder,
+    loadAround,
+    returnToTail,
+    awayFromTail,
     namingRunIds,
     markRenamed,
     liveText,
@@ -1499,11 +1535,16 @@ export function Chats({
         try {
           const doc = await chatApi.exportChat({ runId });
           await window.geniro.saveChatExport({
-            suggestedName: chatExportFileName(runLabel(run, workflowNames)),
+            suggestedName: chatExportBaseName(runLabel(run, workflowNames)),
             // Indented rather than compact: this file exists to be read and
             // pasted into a bug report, and two spaces is the difference
             // between a diffable document and one very long line.
-            content: JSON.stringify(doc, null, 2),
+            json: JSON.stringify(doc, null, 2),
+            // Rendered up front rather than after the pick, because the format
+            // is chosen inside a native panel main owns — see
+            // `main/save-chat-export.ts`. Both are strings over a document
+            // already in memory.
+            markdown: chatToMarkdown(doc),
           });
         } catch (err) {
           setError(String(err));
@@ -2069,15 +2110,51 @@ export function Chats({
     setAboveTail(!isScrolledToBottom(scroller));
   }, []);
 
-  const jumpToLatest = useCallback((): void => {
-    const scroller = transcriptEndRef.current?.parentElement;
-    if (!scroller) {
-      return;
-    }
-    followingRef.current = true;
-    setAboveTail(false);
-    jumpToBottom(scroller);
-  }, []);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const chatSearch = useChatSearch(activeRunId, chatApi);
+
+  // The jump state machine — reveal, mark, fetch-around, and what "Latest"
+  // means once a jump has taken the reader off the tail. Its own module beside
+  // `use-chat-search.ts`, the sibling half of the same feature; the scroll state
+  // it acts on (`followingRef`, `aboveTail`) stays owned here, because a second
+  // copy of "is the reader at the bottom" is how the Latest control and the
+  // transcript come to disagree.
+  const { markedSeq, jumpToSeq, jumpToLatest, backToTail } = useTranscriptJump({
+    items,
+    endRef: transcriptEndRef,
+    followingRef,
+    setAboveTail,
+    loadAround,
+    returnToTail,
+  });
+
+  const openChatSearch = useCallback((): void => setSearchOpen(true), []);
+  const openChatChanges = useCallback((): void => setChangesOpen(true), []);
+  const closeChatChanges = useCallback((): void => setChangesOpen(false), []);
+
+  /**
+   * Close the search and forget what it found.
+   *
+   * The query is dropped rather than kept for the next opening, because it is
+   * scoped to ONE conversation: a thread switch while the dialog is shut would
+   * otherwise reopen it showing the previous thread's hits under a field the
+   * user has to clear before the surface means anything.
+   */
+  const resetChatSearch = chatSearch.reset;
+  const closeChatSearch = useCallback((): void => {
+    setSearchOpen(false);
+    resetChatSearch();
+  }, [resetChatSearch]);
+
+  /** Land on the hit, then get out of the way — the answer is the place. */
+  const jumpToHit = useCallback(
+    (seq: number): void => {
+      closeChatSearch();
+      jumpToSeq(seq);
+    },
+    [closeChatSearch, jumpToSeq],
+  );
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -2193,6 +2270,7 @@ export function Chats({
           // start the chat on instructions the settings screen no longer
           // shows. Omitted when empty so the daemon stores null.
           ...(await currentRunSettings()),
+          ...(await chatGitStamp(cwd)),
           // Omitted entirely when the composer is on the CLI default — the
           // daemon only passes `--model` when a run names one.
           ...(models[agentKind] ? { model: models[agentKind] } : {}),
@@ -2536,8 +2614,10 @@ export function Chats({
             cwd: session.cwd,
             resumeSessionId: session.id,
             // An imported conversation is a new run like any other, so it gets
-            // the same snapshot — read now, for the same freshness reason.
+            // the same snapshot — read now, for the same freshness reason. The
+            // stamp is taken against the SESSION's folder, like the run itself.
             ...(await currentRunSettings()),
+            ...(await chatGitStamp(session.cwd)),
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
@@ -2840,6 +2920,16 @@ export function Chats({
       if (runId === activeRunIdRef.current) {
         setError(null);
         setStreaming(true);
+        // A message goes to the END of the conversation, so the reader has to be
+        // AT the end to see it. Parked on a window fetched around a search hit,
+        // the append is suppressed (`useChatRun`'s `awayFromTail`, which exists
+        // so a live row is never drawn under one from hours earlier) — and that
+        // is right for a row the daemon pushes and wrong for the row the user
+        // just wrote: they would get a Stop button over an old transcript with
+        // nothing saying where their message went. Awaited BEFORE the send, so
+        // the row lands in a window that can hold it. `returnToTail` is
+        // idempotent, so this costs nothing when the reader is already there.
+        await returnToTail();
       }
       const before =
         runsRef.current.find((run) => run.id === runId)?.status ??
@@ -3680,6 +3770,32 @@ export function Chats({
    * accepted text only to have it bounced is the shape this exists to avoid.
    */
   const activeRunArchived = activeRun?.archivedAt != null;
+
+  // ONE read of the run's folder, feeding the header's changes chip AND the
+  // dialog behind it. Kept here rather than inside the dialog because the chip
+  // states the figures without anything being opened — see `useChatChanges`.
+  const chatChanges = useChatChanges(
+    activeRun?.cwd ?? null,
+    activeRun?.startSha ?? null,
+  );
+  const refreshChatChanges = chatChanges.refresh;
+  // What the DIALOG asks for when it opens: past the freshness floor, because
+  // the reader is looking at it now — which is exactly the distinction the floor
+  // exists to draw against the ambient turn-settle refresh below.
+  const readChangesNow = useCallback(
+    (): void => refreshChatChanges(true),
+    [refreshChatChanges],
+  );
+
+  // A turn ENDING is the moment the folder can have changed — it is what the
+  // agent was doing. Bounded by the hook's own freshness floor, so a thread
+  // settling several turns a minute (a delegate reporting back opens a
+  // continuation turn of its own) does not spend its life running `git diff`.
+  useEffect(() => {
+    if (!streaming) {
+      refreshChatChanges();
+    }
+  }, [streaming, refreshChatChanges]);
 
   /**
    * Every distinct folder the chat list names, so pull requests are read once
@@ -6908,6 +7024,7 @@ export function Chats({
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
+                        onSearch={openChatSearch}
                       />
                     ) : null}
 
@@ -7014,17 +7131,95 @@ export function Chats({
                               <SubagentDetailContext.Provider
                                 value={openSubagentDetail}>
                                 {transcriptEntries.map((entry) => {
+                                  const key =
+                                    entry.type === 'item'
+                                      ? entry.item.id
+                                      : entry.id;
+                                  const startSeq = entryStartSeq(entry);
+                                  // The seq ANCHOR, which is what makes a search
+                                  // hit reachable: `revealSeq` finds the last
+                                  // anchor at or below the hit's seq and scrolls
+                                  // to it. Here rather than inside
+                                  // `TranscriptEntryView`, because that component
+                                  // returns a different root per entry kind and
+                                  // this is the one place they are all one list.
+                                  //
+                                  // `empty:hidden` is load-bearing twice over. An
+                                  // entry CAN render nothing (`TranscriptItem`
+                                  // answers null for ten kinds), and an empty flex
+                                  // child would still consume the container's
+                                  // `gap-2.5` — a stray 10px wherever one of those
+                                  // rows falls. It is also exactly the condition
+                                  // `revealSeq`'s `:not(:empty)` filters on, so
+                                  // what is skipped and what is invisible cannot
+                                  // drift apart.
+                                  const wrap = (
+                                    children: React.ReactNode,
+                                  ): React.JSX.Element => (
+                                    <div
+                                      key={key}
+                                      // `flex flex-col` is LOAD-BEARING, not
+                                      // decoration: `align-self` resolves only
+                                      // against a flex parent, and a bare
+                                      // `MessageBubble` relies on it — the
+                                      // `note` variant is `self-center`, which
+                                      // is how the `✓ done · 21s` row at the
+                                      // end of every turn is centred. As a plain
+                                      // block wrapper this displaced every one
+                                      // of them left; a one-child flex column
+                                      // hands the alignment back untouched.
+                                      // `display: contents` would too, and is
+                                      // wrong — it generates no box, so the mark
+                                      // below would not paint and `revealSeq`
+                                      // would have nothing to measure.
+                                      //
+                                      // The landing mark is a WASH, and it was a
+                                      // ring first — reported as not liked, and
+                                      // the reason is visible the moment a user
+                                      // message is the hit: this wrapper spans
+                                      // the transcript's whole width while a
+                                      // bubble is `self-end`, so an OUTLINE
+                                      // draws a box around the empty half and
+                                      // reads as a stray rectangle rather than
+                                      // as "this row". A fill reads as the row
+                                      // either way, which is also why the mark
+                                      // stays on the wrapper rather than moving
+                                      // onto the bubble: a tool group, a card
+                                      // and a `note` are not bubbles and have no
+                                      // one element to tint.
+                                      //
+                                      // The ring was chosen because it is a
+                                      // box-shadow and costs no layout, and that
+                                      // reasoning was right about padding and
+                                      // wrong about the conclusion: `-my-1 py-1`
+                                      // is net ZERO — the padding grows the
+                                      // painted box, the negative margin takes
+                                      // the same amount back off the margin box
+                                      // flex actually lays out — so the wash
+                                      // breathes without moving a single
+                                      // neighbouring row. Both are in the marked
+                                      // arm, so an unmarked row is untouched.
+                                      // Only the colour transitions; the
+                                      // geometry is instant, which is the right
+                                      // way round for a flash.
+                                      className={cn(
+                                        'flex flex-col empty:hidden rounded-md transition-colors duration-500',
+                                        startSeq !== null &&
+                                          startSeq === markedSeq &&
+                                          '-mx-2 -my-1 bg-accent/60 px-2 py-1',
+                                      )}
+                                      {...(startSeq === null
+                                        ? {}
+                                        : { 'data-transcript-seq': startSeq })}>
+                                      {children}
+                                    </div>
+                                  );
                                   if (
                                     entry.type !== 'item' ||
                                     entry.item.kind !== 'approval_request'
                                   ) {
-                                    const key =
-                                      entry.type === 'item'
-                                        ? entry.item.id
-                                        : entry.id;
-                                    return (
+                                    return wrap(
                                       <TranscriptEntryView
-                                        key={key}
                                         entry={entry}
                                         nodes={nodeMeta}
                                         chatAgentName={
@@ -7032,7 +7227,7 @@ export function Chats({
                                         }
                                         soloAgent={soloAgent}
                                         soloNodeId={wfNodes.rootId}
-                                      />
+                                      />,
                                     );
                                   }
                                   const item = entry.item;
@@ -7045,14 +7240,12 @@ export function Chats({
                                   // one-shot verdict channel; leaving nothing would silently
                                   // drop a row out of the conversation's order.
                                   if (openRequestId(item) !== null) {
-                                    return (
-                                      <MessageBubble
-                                        key={item.id}
-                                        variant="note">
+                                    return wrap(
+                                      <MessageBubble variant="note">
                                         {pinnedRequest?.id === item.id
                                           ? '❓ waiting on your answer — the card is pinned below'
                                           : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                      </MessageBubble>
+                                      </MessageBubble>,
                                     );
                                   }
                                   const askerName =
@@ -7066,16 +7259,17 @@ export function Chats({
                                     </div>
                                   );
                                   // A solo agent's card needs no identity frame either.
-                                  return soloAgent ? (
-                                    <div key={item.id}>{card}</div>
-                                  ) : (
-                                    <SenderRow
-                                      key={item.id}
-                                      name={askerName}
-                                      colorKey={item.nodeId ?? undefined}
-                                      time={formatClockTime(item.createdAt)}>
-                                      {card}
-                                    </SenderRow>
+                                  return wrap(
+                                    soloAgent ? (
+                                      card
+                                    ) : (
+                                      <SenderRow
+                                        name={askerName}
+                                        colorKey={item.nodeId ?? undefined}
+                                        time={formatClockTime(item.createdAt)}>
+                                        {card}
+                                      </SenderRow>
+                                    ),
                                   );
                                 })}
                               </SubagentDetailContext.Provider>
@@ -7090,7 +7284,16 @@ export function Chats({
                   the transcript from a zero-height row — see
                   `jump-to-latest.tsx` for why it cannot take part in the
                   column's sizing. */}
-                    <JumpToLatest visible={aboveTail} onJump={jumpToLatest} />
+                    {/* Offered whenever the newest message is not what is on
+                    screen, which is TWO states rather than one. `aboveTail` is
+                    the scroll position; `awayFromTail` is a window fetched
+                    around a search hit, whose own bottom is somewhere in the
+                    middle of the conversation — there the button is the only way
+                    back, and it has to FETCH rather than scroll. */}
+                    <JumpToLatest
+                      visible={aboveTail || awayFromTail}
+                      onJump={awayFromTail ? backToTail : jumpToLatest}
+                    />
 
                     {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
@@ -7265,9 +7468,24 @@ export function Chats({
                           {/* The readings run DURABLE → VOLATILE, left to
                               right, and that is the whole of the ordering
                               rule: a chip that comes and goes must never shift
-                              one that stays. Pull requests outlive the thread;
-                              the task list outlives the turn; a workflow, a
-                              delegate and a command each end within one. */}
+                              one that stays. The working TREE outlives every
+                              pull request opened from it, so it leads; pull
+                              requests outlive the thread; the task list
+                              outlives the turn; a workflow, a delegate and a
+                              command each end within one.
+
+                              Only where there is something to compare: a run
+                              without a folder, and one this app never stamped a
+                              commit for (a plain folder, a checkout with no
+                              commits, a chat that predates the stamp), have no
+                              "since" to answer about. */}
+                          {activeRun?.cwd !== null &&
+                          activeRun?.startSha !== null ? (
+                            <FolderChangesChip
+                              summary={chatChanges.summary}
+                              onOpen={openChatChanges}
+                            />
+                          ) : null}
                           <ThreadPullRequestChips
                             results={openedByActiveThread}
                           />
@@ -8019,6 +8237,38 @@ export function Chats({
                   onClose={() => setSessionPickerOpen(false)}
                   onResume={(row) => void resumeSession(row)}
                 />
+                {/* Beside the session picker because they are the same kind of
+                    surface — a search whose answer is a place to go — and the
+                    two must not grow different ideas of what one looks like.
+                    Rendered only with a thread open: without one there is no
+                    conversation to search. */}
+                {activeRunId === null ? null : (
+                  <ChatSearchDialog
+                    open={searchOpen}
+                    search={chatSearch}
+                    onClose={closeChatSearch}
+                    onJump={jumpToHit}
+                  />
+                )}
+                {/* Mounted only while OPEN — but it no longer READS: the header
+                    chip states the same figures, so one `useChatChanges` feeds
+                    both and the two cannot disagree about a folder they are
+                    describing at the same instant. Opening still asks for a
+                    fresh read (`refresh(true)`, past the freshness floor), which
+                    is the behaviour the dialog documented for itself. */}
+                {changesOpen && activeRun ? (
+                  <ChatChangesDialog
+                    open
+                    startSha={activeRun.startSha}
+                    changes={chatChanges.changes}
+                    truncated={chatChanges.truncated}
+                    unavailableReason={chatChanges.unavailableReason}
+                    error={chatChanges.error}
+                    loading={chatChanges.loading}
+                    onRefresh={readChangesNow}
+                    onClose={closeChatChanges}
+                  />
+                ) : null}
               </div>
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>

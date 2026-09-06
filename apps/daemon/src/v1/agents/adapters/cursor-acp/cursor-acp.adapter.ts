@@ -385,6 +385,9 @@ export class CursorAcpAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      // The ACP driver reads `AgentTurnInput.resumeOnly`: it branches the
+      // prompt away and settles the turn from the `session/load` reply.
+      resumeOnlyUnavailableReason: null,
       /**
        * FALSE: the list above is a union of what SOME models offer, and it
        * cannot be complete — `gpt-5.2` enumerates `extra-high` on its own

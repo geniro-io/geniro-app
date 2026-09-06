@@ -39,6 +39,7 @@ import {
   LocalImageDto,
   LocalImageQueryDto,
   RenameRunDto,
+  RetriedDto,
   RunDto,
   SearchChatQueryDto,
   SendMessageDto,
@@ -302,6 +303,21 @@ export class ChatController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.chatService.cancel(runId);
+  }
+
+  /**
+   * Reopen a failed turn's conversation without replaying its prompt.
+   *
+   * Its own route rather than a flag on `sendChatMessage`: the guarantee that
+   * matters here is that NO prompt goes out, and a route whose name promises a
+   * message would bury that in a branch. 200 rather than 201 for the same
+   * reason `cancel` is — nothing is created that the caller did not have.
+   */
+  @Post(':runId/retry')
+  @ApiOperation({ operationId: 'retryChat' })
+  @ZodResponse({ status: 200, type: RetriedDto })
+  retry(@Param('runId') runId: string): Promise<{ retried: boolean }> {
+    return this.chatService.retry(runId);
   }
 
   /**

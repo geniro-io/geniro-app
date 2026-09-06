@@ -99,6 +99,70 @@ export function commandOf(input: unknown): string | null {
 }
 
 /**
+ * The files a tool call NAMED, when it named any — the ACP `locations` the
+ * daemon puts on a `tool_call` row.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/event-to-item.ts` writes this
+ * key. An item payload is `z.unknown()` on the wire BY DESIGN, so no generated
+ * type spans the two sides — renaming the key there means renaming it here.
+ *
+ * Read off the PAYLOAD rather than off the call's input, which is what makes it
+ * worth having: an ACP agent routinely discloses no arguments at all, so
+ * {@link filePathOf} finds nothing and the row names no file. This is the only
+ * channel on which such a call says what it touched.
+ */
+export function toolLocations(
+  payload: unknown,
+): { path: string; line: number | null }[] {
+  const record = asRecord(payload);
+  if (!record || !Array.isArray(record.locations)) {
+    return [];
+  }
+  const locations: { path: string; line: number | null }[] = [];
+  for (const entry of record.locations) {
+    const row = asRecord(entry);
+    const path = row ? asText(row.path) : null;
+    if (path === null) {
+      continue;
+    }
+    const line = row ? row.line : null;
+    locations.push({
+      path,
+      line: typeof line === 'number' && Number.isFinite(line) ? line : null,
+    });
+  }
+  return locations;
+}
+
+/**
+ * Those files as a body, for a call that disclosed nothing else.
+ *
+ * A LAST resort, never a first: a call that showed its diff, its command or its
+ * contents has already said more than a path list would. What this covers is
+ * the row that would otherwise render empty — which on an ACP agent is most of
+ * them.
+ *
+ * A `code` body rather than a kind of its own: a path is monospace text and the
+ * existing renderer already sets it that way, so a fourth `ToolBody` variant
+ * would buy a second rendering of the same thing. `language: null` because a
+ * path list is not code and highlighting one as though it were is a claim.
+ */
+export function toolLocationsBody(payload: unknown): ToolBody | null {
+  const locations = toolLocations(payload);
+  if (locations.length === 0) {
+    return null;
+  }
+  return {
+    kind: 'code',
+    code: locations
+      .map(({ path, line }) => (line === null ? path : `${path}:${line}`))
+      .join('\n'),
+    language: null,
+    caption: null,
+  };
+}
+
+/**
  * Whether a tool call disclosed any arguments at all.
  *
  * TWIN PARSER: `disclosedInput` in

@@ -2530,6 +2530,19 @@ export interface ReorderRunGroupsDto {
      */
     ids: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface RetriedDto
+ */
+export interface RetriedDto {
+    /**
+     * True when the conversation was reopened without re-prompting
+     * @type {boolean}
+     * @memberof RetriedDto
+     */
+    retried: boolean;
+}
 
 /**
  * 

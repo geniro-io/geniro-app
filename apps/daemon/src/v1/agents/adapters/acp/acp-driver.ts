@@ -19,6 +19,7 @@ import {
   type AcpPermissionOptionKind,
   type AcpStopReason,
   type AcpToolCall,
+  type AcpToolLocation,
   type AcpUsageSnapshot,
 } from './acp.types';
 import { buildAcpImageBlocks } from './acp-content';
@@ -548,6 +549,27 @@ function readAcpDiffs(
   return diffs;
 }
 
+/**
+ * ACP `ToolCallLocation[]` — the files a tool call names.
+ *
+ * Answers NULL for an absent, empty or unreadable list, so the field keeps the
+ * one meaning {@link AcpToolCall.locations} states — inventing an `[]` here
+ * would file "the agent named no files" under it too.
+ */
+function readToolLocations(value: unknown): AcpToolLocation[] | null {
+  const locations: AcpToolLocation[] = [];
+  for (const entry of asArray(value)) {
+    const record = asRecord(entry);
+    const path = record ? asString(record.path) : null;
+    if (path === null) {
+      // A location naming no file names nothing.
+      continue;
+    }
+    locations.push({ path, line: record ? asNumber(record.line) : null });
+  }
+  return locations.length > 0 ? locations : null;
+}
+
 function readToolCall(source: Record<string, unknown>): AcpToolCall {
   return {
     toolCallId: asString(source.toolCallId) ?? '',
@@ -559,6 +581,7 @@ function readToolCall(source: Record<string, unknown>): AcpToolCall {
     kind: asString(source.kind),
     rawInput: disclosedInput(source.rawInput),
     rawOutput: source.rawOutput ?? null,
+    locations: readToolLocations(source.locations),
   };
 }
 
@@ -915,6 +938,20 @@ export class AcpTurnDriver {
     id: JsonRpcId,
   ): AgentEvent[] {
     if (kind === 'session_load') {
+      if (this.options.input.resumeOnly === true) {
+        // A resume-only turn has nothing to degrade TO. The fallback below is
+        // right for an ordinary turn — it has a prompt to run, and running it
+        // without the history beats losing it — but this turn's ONLY product
+        // is the reopened conversation, so opening a fresh session would report
+        // success while discarding the very thing the user pressed Retry to
+        // recover.
+        return [
+          {
+            type: 'error',
+            message: `agent could not reopen this conversation: ${message}`,
+          },
+        ];
+      }
       // The thread could not be reopened — so run the turn on a FRESH session
       // rather than ending it. A hard failure here is a dead end by
       // construction: every later turn of that chat resumes the same id, so the
@@ -1061,6 +1098,24 @@ export class AcpTurnDriver {
       );
       return events;
     }
+    if (this.options.input.resumeOnly === true) {
+      // A resume-only turn that reaches here has nothing left to do: either the
+      // agent does not advertise `loadSession`, or no id was given. Falling
+      // through would open a FRESH session, and this turn's own branch in
+      // `onSessionReady` would then settle it as a success — while
+      // `createSessionIdSaver` wrote that new id over the one the run was
+      // holding, destroying the pointer to the conversation being recovered.
+      // The refused-load arm in `onErrorReply` covers a load the agent
+      // REJECTED; this covers one that was never sent.
+      return [
+        {
+          type: 'error',
+          message: resumeId
+            ? 'agent cannot reopen a conversation — it does not support loading a session'
+            : 'there is no conversation to reopen',
+        },
+      ];
+    }
     if (resumeId) {
       // Resume was asked for and the agent cannot do it. The turn still runs,
       // but it starts a FRESH conversation — the user must see that their
@@ -1150,6 +1205,28 @@ export class AcpTurnDriver {
     // reply stays the agent's own answer about what it offers for as long as
     // the process lives — see {@link openOnLiveSession}.
     this.session.lastSessionReply = root;
+    if (this.options.input.resumeOnly === true) {
+      // The load reply IS the settle for this turn — the in-repo precedent is
+      // `acpSessionLoadSettled` (`acp-sessions.ts`), which ends its spawned
+      // handshake on exactly this frame. Nothing else could end it: no prompt
+      // is in flight, so no stop reason is ever produced, and the turn would
+      // otherwise wait out the transport's silence deadline and settle as a
+      // failure having done precisely what it was asked to.
+      //
+      // The reading is still owed. `beginTurn` takes one on its way to a
+      // prompt, and a reopened conversation is the case it exists for: the
+      // window holds everything the agent already has.
+      this.emitContextReading(events);
+      events.push({
+        type: 'turn_complete',
+        usage: this.buildUsage(),
+        // Neither is a figure this turn can honestly report: the agent was
+        // asked nothing, so it stopped for no reason and answered nothing.
+        stopReason: null,
+        finalText: null,
+      });
+      return events;
+    }
     this.beginTurn(root, events);
     return events;
   }
@@ -1222,6 +1299,15 @@ export class AcpTurnDriver {
 
   /** The turn's prompt — composed once, whether it goes now or after a reply. */
   private sendPrompt(events: AgentEvent[]): void {
+    if (this.options.input.resumeOnly === true) {
+      // The ONE place a prompt frame is written, so the one place that can
+      // guarantee this turn never sends one. Both openers reach here by their
+      // own route — `onSessionReady` after a handshake, `openOnLiveSession`
+      // when the process is kept — and only the first carries the branch that
+      // settles the turn, so a turn opened on a live session would otherwise
+      // send the very frame this mode exists to withhold.
+      return;
+    }
     if (this.session.sessionId === null) {
       return;
     }
@@ -1264,6 +1350,11 @@ export class AcpTurnDriver {
     // the turn's OWN prompt has not gone out, so there is nothing to interrupt
     // and a follow-up would race it. False leaves the message queued, which is
     // the safe answer.
+    //
+    // A resume-only turn needs no clause of its own here: it runs on a process
+    // spawned for it, so its session id is null until the load reply, and that
+    // reply settles the turn. `ChatService.retry` is what keeps that true, by
+    // closing a kept session before it starts one.
     if (this.session.sessionId === null || this.promptHeld) {
       return false;
     }
@@ -2416,7 +2507,17 @@ export class AcpTurnDriver {
     ];
   }
 
-  /** Restore the kind and name cached from this id's `tool_call` update. */
+  /**
+   * Restore the kind and name cached from this id's `tool_call` update.
+   *
+   * `locations` is deliberately NOT among them. The only caller is
+   * {@link onPermissionRequest}, and what it needs restored is what it decides
+   * and asks on — the kind `acceptEdits` reads and the name and arguments the
+   * card shows. Nothing there consults a location, so merging one would cache
+   * a value with no reader. The transcript row needs no merge either: the six
+   * kinds that carry locations carry them on the OPENING frame, which is the
+   * frame that becomes the row.
+   */
   private withCachedToolFacts(toolCall: AcpToolCall): AcpToolCall {
     const id = toolCall.toolCallId;
     if (id === '') {
@@ -2547,6 +2648,13 @@ export class AcpTurnDriver {
             // rather than defaulted when the agent sent none: `other` would
             // claim a classification nobody made.
             ...(toolCall.kind === null ? {} : { kind: toolCall.kind }),
+            // Same spread-only-when-present rule as `kind` above, and it
+            // carries a distinction rather than tidiness: the agent omits the
+            // field when a call touches no files, so an empty array here would
+            // put words in its mouth.
+            ...(toolCall.locations === null
+              ? {}
+              : { locations: toolCall.locations }),
           },
           // A delegation announces itself twice: here, so the block opens while
           // the delegate is still working, and again with its brief when the
@@ -2656,6 +2764,17 @@ export class AcpTurnDriver {
         // creation time, so they land BELOW the first message the user sends
         // here), plan/plan_update, config_option_update, session_info_update —
         // all real ACP updates this transcript does not model.
+        //
+        // `session_info_update` carries a `title` and nothing else, and the
+        // agent WRITES that same name into its own session store before
+        // emitting the frame (measured in cursor-agent 2026.08.31-4057e58's
+        // own auto-name path). `AgentAdapter.readSessionTitle` reads that
+        // store, so the name already reaches geniro by a route that survives a
+        // restart; the frame would buy only TIMING, and collecting it needs a
+        // consumer able to hand the title to `ChatTitleService` — which owns
+        // the guard that keeps a user's manual rename permanent, and which no
+        // driver can reach. Recording it here without that consumer is state
+        // nobody reads.
         return [];
     }
   }

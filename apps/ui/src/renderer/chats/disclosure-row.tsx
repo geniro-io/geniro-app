@@ -1,5 +1,5 @@
 import { cva, type VariantProps } from 'class-variance-authority';
-import { ChevronRight, LogIn, TriangleAlert } from 'lucide-react';
+import { ChevronRight, TriangleAlert } from 'lucide-react';
 import { Fragment, useState } from 'react';
 
 import { CopyButton } from '../components/copy-button';
@@ -65,7 +65,7 @@ export function DisclosureRow({
   detail,
   facts = [],
   copyText,
-  onSignIn,
+  recovery,
 }: {
   /** Row caption, e.g. "flaky · error" or "conversation compacted". */
   caption: string;
@@ -101,20 +101,28 @@ export function DisclosureRow({
    */
   copyText?: string;
   /**
-   * Sign the failing CLI back in, when the daemon recognised this failure as a
-   * lapsed account session.
+   * What the user can DO about this failure, when there is something.
    *
    * On the row rather than off in the chrome because this is where the user
    * meets the problem: an expired session rendered as a stack trace, with the
    * fix two screens away, is the gap this closes. Omitted for every failure
-   * with no known cure, which is nearly all of them.
+   * with no offered recovery.
    *
-   * Named for the ONE recovery that exists rather than taken as a generic
-   * `{label, icon, onClick}` action: the row renders a sign-in glyph, so a
-   * general seam would let a future non-login cure render under it. Widen this
-   * when a second recovery is real, and let its icon arrive with it.
+   * GENERIC — `{label, icon, title, onClick}` — because there is more than one
+   * cure (reopening a conversation after a failed turn, signing a lapsed CLI
+   * session back in). The icon arrives WITH the action, so the row cannot draw
+   * a sign-in glyph over a cure that is not one; and the caller owns the
+   * wording, since only it knows which recovery this is.
+   *
+   * `title` says what now HAPPENS rather than naming the control again — the
+   * one thing a hover can add to a button that already carries a label.
    */
-  onSignIn?: () => void;
+  recovery?: {
+    label: string;
+    icon: React.ReactNode;
+    title: string;
+    onClick: () => void;
+  };
 }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const firstLine = message.split('\n', 1)[0] ?? '';
@@ -252,7 +260,7 @@ export function DisclosureRow({
           ) : null}
         </div>
       ) : null}
-      {onSignIn ? (
+      {recovery ? (
         // A SIBLING of the expand button, never inside it: a button nested in a
         // button is invalid, and the click would toggle the row on its way out.
         // Shown collapsed as well as expanded — the cure is the point of the
@@ -262,13 +270,10 @@ export function DisclosureRow({
             type="button"
             variant="outline"
             size="sm"
-            // Says what now HAPPENS, and it changed: the sign-in runs here and
-            // reports above the composer, so a title still promising a terminal
-            // would describe the mechanism this row was fixed to stop using.
-            title="Sign this agent back in — it runs here and opens your browser"
-            onClick={onSignIn}>
-            <LogIn aria-hidden="true" className="size-3.5 shrink-0" />
-            Sign in
+            title={recovery.title}
+            onClick={recovery.onClick}>
+            {recovery.icon}
+            {recovery.label}
           </Button>
         </div>
       ) : null}

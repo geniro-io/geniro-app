@@ -2663,15 +2663,94 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Persist the user message, then start a turn whose streamed events are each
-   * persisted-then-emitted. Returns the persisted user item immediately; the
-   * agent's reply streams over the bus → WS while this method has already
-   * resolved.
+   * Reopen a failed turn's conversation without replaying its prompt.
+   *
+   * What the user pressed is Retry on an error row: the conversation is intact
+   * and the work is not, so this re-establishes the agent's session and stops.
+   * The agent is asked nothing, so it answers nothing — the transcript row the
+   * turn writes is the only evidence the recovery happened.
+   *
+   * The kept session is CLOSED first, and that is what keeps a turn that merely
+   * reloads an already-live session out of reach: a failure the agent reports
+   * about ITSELF settles the turn while its process lives on
+   * (`AcpAgentFailureProtocol`), and reloading a session that never went away
+   * would report a recovery that recovered nothing.
+   */
+  async retry(runId: string): Promise<{ retried: boolean }> {
+    const em = this.em.fork();
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    if (run.archivedAt !== null) {
+      throw new ConflictException(
+        'RUN_ARCHIVED',
+        'this chat is archived — unarchive it before retrying',
+      );
+    }
+    const node = await this.nodeStateDao.getByRunNode(
+      runId,
+      SINGLE_AGENT_NODE,
+      em,
+    );
+    // BEFORE the close below, which is destructive and unconditional: it
+    // terminates the process group, taking the live turn's CLI, its MCP
+    // servers and every delegate still out with it. `sendMessage`'s own busy
+    // check is downstream of that, so refusing there would refuse having
+    // already destroyed the work — and an error row is durable, so Retry stays
+    // pressable on an old row while a later turn runs.
+    if (this.registry.has(runId)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'this chat is still working — retry is for a turn that has already failed',
+      );
+    }
+    // A per-CLI fact, not a branch on the agent's name: the resume-only turn is
+    // an ACP frame, and an adapter that cannot honour it would run this turn
+    // as an ordinary one — spending a real, billed turn on the EMPTY prompt a
+    // retry composes, under a transcript row saying nothing was sent again.
+    // A run with no agent named cannot be reopened either, and `sendMessage`
+    // would refuse it a moment later as RUN_NOT_CONFIGURED — but only after
+    // the close below had already fired.
+    if (!run.agentKind) {
+      throw new BadRequestException(
+        'RUN_NOT_CONFIGURED',
+        'run is missing an agent',
+      );
+    }
+    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
+      .resumeOnlyUnavailableReason;
+    if (cannotReopen !== null) {
+      throw new ConflictException('RUN_NOT_RESUMABLE', cannotReopen);
+    }
+    if (!node?.agentSessionId) {
+      // There is no conversation to reopen. Left to run, the turn would open a
+      // FRESH session and settle at once — a success reported for a recovery
+      // that did not happen, on a thread that is still exactly as stuck.
+      throw new ConflictException(
+        'RUN_NOT_RESUMABLE',
+        'this chat has no agent session to reopen — send a message to start one',
+      );
+    }
+    this.sessions.close(runId);
+    await this.sendMessage(runId, '', [], { resumeOnly: true });
+    return { retried: true };
+  }
+
+  /**
+   * Persist the opening row, then start a turn whose streamed events are each
+   * persisted-then-emitted. Returns that row immediately; the agent's reply
+   * streams over the bus → WS while this method has already resolved.
+   *
+   * `resumeOnly` makes it the RETRY turn instead: no prompt is composed or
+   * sent, and the opening row is a `system` note rather than the user's
+   * message. One method rather than two, because everything after that row —
+   * the claim, the seq allocation, the spawn, the event chain, the delegate
+   * leases, every settle path — is identical, and a second copy of it is how
+   * the two would come to disagree about what ending a turn means.
    */
   async sendMessage(
     runId: string,
     text: string,
     images: SendMessageImage[] = [],
+    options: { resumeOnly?: boolean } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
@@ -2727,6 +2806,19 @@ export class ChatService implements OnModuleInit {
       // running turn is picked up at the next tool boundary. So try that first,
       // and fall back to the queue only when this CLI has no such channel (ACP)
       // or the turn is already on its way out.
+      if (options.resumeOnly === true) {
+        // A retry has nothing to recover on a run that is WORKING: the
+        // conversation is live rather than lost. Falling through would deliver
+        // this turn's empty text as a follow-up — writing a blank user message
+        // into the transcript, and on ACP sending a second `session/prompt`,
+        // which CANCELS the turn in flight. The press would then destroy the
+        // work it was meant to rescue, while sending the very frame this route
+        // exists not to send.
+        throw new ConflictException(
+          'RUN_BUSY',
+          'this chat is still working — retry is for a turn that has already failed',
+        );
+      }
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
     /**
@@ -2882,14 +2974,35 @@ export class ChatService implements OnModuleInit {
       // (`deliverIntoRunningTurn`) writes a user item on its own request
       // chain — and a local counter cannot see that row, so it reissued the
       // seq the follow-up had just taken. See {@link ItemSeqAllocator}.
-      const userWire = await this.persist(
-        em,
-        runId,
-        await this.seqs.reserve(runId),
-        'message',
-        'user',
-        { text, ...(attachments.length > 0 ? { images: attachments } : {}) },
-      );
+      const openingWire =
+        options.resumeOnly === true
+          ? // A retry writes a SYSTEM row where the message would go. It sends
+            // no prompt and the agent answers nothing, so this row is the only
+            // evidence the recovery happened — without it the press is
+            // indistinguishable from a dead button.
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'system',
+              null,
+              {
+                message:
+                  'Reopened this conversation. Your next message carries on ' +
+                  'from here — nothing was sent again.',
+              },
+            )
+          : await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'message',
+              'user',
+              {
+                text,
+                ...(attachments.length > 0 ? { images: attachments } : {}),
+              },
+            );
 
       const adapter: AgentAdapter = this.adapterFor(agentKind);
 
@@ -2936,10 +3049,18 @@ export class ChatService implements OnModuleInit {
        * The take is read-and-clear, so the column cannot ride a second prompt —
        * including this one's own retry.
        */
-      const turnPrompt = withCarriedContext(
-        await this.runDao.takePendingContext(runId, em),
-        geniroCommand ? geniroCommand.prompt : text,
-      );
+      const turnPrompt =
+        options.resumeOnly === true
+          ? // Nothing is composed for a turn that sends no prompt — and the
+            // take is read-and-CLEAR, so reaching it here would consume a
+            // carried summary this turn cannot deliver and leave the next real
+            // message opening on an agent that has forgotten the conversation
+            // it just summarised.
+            ''
+          : withCarriedContext(
+              await this.runDao.takePendingContext(runId, em),
+              geniroCommand ? geniroCommand.prompt : text,
+            );
 
       const node = await this.nodeStateDao.getByRunNode(
         runId,
@@ -3944,6 +4065,10 @@ export class ChatService implements OnModuleInit {
           customInstructions,
           cursorMaxMode,
           resumeSessionId,
+          // Only ever set alongside a resume id — `retry` refuses the pairing
+          // without one, since a resume-only turn on a fresh session opens a
+          // conversation nobody asked for and settles at once.
+          ...(options.resumeOnly === true ? { resumeOnly: true } : {}),
           approvalMode,
           // A human is watching a chat: let the agent ask, and stream its
           // words as they are written. Each adapter decides what that costs —
@@ -4792,7 +4917,7 @@ export class ChatService implements OnModuleInit {
       // rejects, per `AgentTurnHandle.done`.
       void finalized.finally(disposeHostTools);
 
-      return userWire;
+      return openingWire;
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
       // so the run is not wedged as permanently busy, and take the host tools

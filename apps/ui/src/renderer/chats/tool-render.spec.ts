@@ -4,6 +4,7 @@ import {
   shortenPath,
   stripLineNumbers,
   toolInputBody,
+  toolLocationsBody,
   toolResultBody,
 } from './tool-render';
 
@@ -238,5 +239,42 @@ describe('shortenPath', () => {
   it('keeps the filename even when one segment alone exceeds the budget', () => {
     const path = `/${'x'.repeat(80)}/file.ts`;
     expect(shortenPath(path)).toBe('…/file.ts');
+  });
+});
+
+describe('toolLocationsBody — the files a call named', () => {
+  it('names the file, with its line only where the agent set one', () => {
+    // Measured on cursor-agent 2026.08.31-4057e58: `read` is the one kind that
+    // sets a line, from `args.offset`, and only above zero.
+    expect(
+      toolLocationsBody({
+        locations: [
+          { path: '/repo/src/a.ts', line: 42 },
+          { path: '/repo/src/b.ts', line: null },
+        ],
+      }),
+    ).toMatchObject({
+      kind: 'code',
+      code: '/repo/src/a.ts:42\n/repo/src/b.ts',
+      // Not highlighted: a path list is not code, and painting it as some
+      // language would be a claim about it.
+      language: null,
+    });
+  });
+
+  it('answers null when the call named no files', () => {
+    // Which is every claude row — its calls disclose their arguments, so the
+    // ordinary body path has already answered and this must not override it.
+    expect(
+      toolLocationsBody({ input: { file_path: '/repo/a.ts' } }),
+    ).toBeNull();
+    expect(toolLocationsBody({ locations: [] })).toBeNull();
+    expect(toolLocationsBody(null)).toBeNull();
+  });
+
+  it('drops an entry that names no file rather than rendering a blank line', () => {
+    expect(
+      toolLocationsBody({ locations: [{ line: 3 }, { path: '/repo/c.ts' }] }),
+    ).toMatchObject({ code: '/repo/c.ts' });
   });
 });

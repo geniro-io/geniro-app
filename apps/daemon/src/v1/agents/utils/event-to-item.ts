@@ -130,6 +130,14 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
           name: event.name,
           input: event.input,
           ...(event.kind === undefined ? {} : { toolKind: event.kind }),
+          // TWIN PARSER, same contract as `toolKind` above:
+          // `apps/ui/src/renderer/chats/tool-render.ts`'s `toolLocations` reads
+          // this key back to name the file a call touched. Omitted when the
+          // agent named none — every claude row and most cursor ones — so an
+          // existing row stays byte-identical.
+          ...(event.locations === undefined
+            ? {}
+            : { locations: event.locations }),
         },
       };
     case 'tool_result':

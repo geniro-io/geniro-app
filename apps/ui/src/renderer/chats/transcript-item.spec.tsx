@@ -10,6 +10,7 @@ import type {
 import {
   cardBackedRequestIds,
   CardBackedRequestsContext,
+  errorRecovery,
   TranscriptItem,
   type TranscriptNodeMeta,
   unanswerableRequestIds,
@@ -858,5 +859,43 @@ describe('TranscriptItem — an error row carries what the failure reported', ()
     expect(
       container.querySelector('button[aria-label="Copy the error report"]'),
     ).not.toBeNull();
+  });
+});
+
+describe('errorRecovery — which cure an error row offers', () => {
+  const signIn = (): void => {};
+  const retry = (): void => {};
+
+  it('prefers the daemon-recognised cure over the general one', () => {
+    // Sign-in is the cure for THIS failure; retry is the one any failed turn
+    // has. Offering both would put the weaker answer beside the right one.
+    expect(errorRecovery('cli-login', signIn, retry)).toMatchObject({
+      label: 'Sign in',
+      onClick: signIn,
+    });
+  });
+
+  it('offers NOTHING for a lapsed session it cannot sign in, never retry', () => {
+    // The loop guard: reopening the conversation does not renew an account
+    // session, so the reopened one fails on its next turn for the same reason.
+    // A button that looks like progress and is not is worse than no button.
+    expect(errorRecovery('cli-login', null, retry)).toBeUndefined();
+  });
+
+  it('offers retry for a failure with no recognised cure', () => {
+    expect(errorRecovery(null, signIn, retry)).toMatchObject({
+      label: 'Retry',
+      onClick: retry,
+    });
+  });
+
+  it('says the prompt is not sent again, which "retry" alone does not', () => {
+    // The one thing about this action a user cannot guess from its label — and
+    // the whole reason the feature exists rather than re-sending the message.
+    expect(errorRecovery(null, null, retry)?.title).toContain('not sent again');
+  });
+
+  it('offers nothing when the chat can do neither', () => {
+    expect(errorRecovery(null, null, null)).toBeUndefined();
   });
 });

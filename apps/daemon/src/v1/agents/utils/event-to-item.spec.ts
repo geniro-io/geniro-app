@@ -103,6 +103,33 @@ describe('mapEventToItem', () => {
     });
   });
 
+  it('stamps the files a call named, and omits the key otherwise', () => {
+    // The JOINT of the locations seam: both ENDS are pinned (`readToolCall` on
+    // the daemon, `toolLocationsBody` in the renderer) and this is what puts
+    // them in the same row. Omitted for a call that named none — which is every
+    // claude row — so existing rows stay byte-identical.
+    expect(
+      mapEventToItem({
+        type: 'tool_call',
+        id: 't1',
+        name: 'Read File',
+        input: null,
+        locations: [{ path: '/repo/a.ts', line: 42 }],
+      }),
+    ).toMatchObject({
+      kind: 'tool_call',
+      payload: { locations: [{ path: '/repo/a.ts', line: 42 }] },
+    });
+
+    const bare = mapEventToItem({
+      type: 'tool_call',
+      id: 't2',
+      name: 'Bash',
+      input: null,
+    });
+    expect(bare?.payload).not.toHaveProperty('locations');
+  });
+
   it("stamps an agent's own classification as `toolKind`, and omits it otherwise", () => {
     // `toolKind`, not `kind`: the row's own item kind already owns that word one
     // object away, and a reader bucketing tool calls by the string 'tool_call' is

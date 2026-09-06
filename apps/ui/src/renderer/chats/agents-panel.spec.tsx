@@ -2245,6 +2245,9 @@ describe('AgentsPanel pull requests', () => {
     author: 'someone',
     url: `https://github.com/o/r/pull/${number}`,
     updatedAt: '2026-08-01T00:00:00Z',
+    added: null,
+    removed: null,
+    changedFiles: null,
   });
 
   const withPullRequests = (pullRequests: PullRequestInfo[]): HTMLDivElement =>
@@ -2341,6 +2344,9 @@ describe('AgentsPanel thread pull requests', () => {
             author: 'someone',
             url: `https://github.com/acme/${repo}/pull/${number}`,
             updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
           },
   });
 

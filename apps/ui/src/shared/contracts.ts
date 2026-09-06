@@ -997,6 +997,17 @@ export interface PullRequestInfo {
   author: string;
   url: string;
   updatedAt: string;
+  /**
+   * How big it is: lines added, lines removed, files touched — as GitHub itself
+   * counts them, over the whole pull request rather than the working tree.
+   *
+   * Null is NOT MEASURED and never zero: gh was not asked, is too old to answer,
+   * or gave something unreadable. A surface draws nothing for a null, on the
+   * same rule the git-side {@link GitChange} counts follow.
+   */
+  added: number | null;
+  removed: number | null;
+  changedFiles: number | null;
 }
 
 /**

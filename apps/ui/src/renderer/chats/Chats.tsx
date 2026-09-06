@@ -233,6 +233,7 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
 import { useChatTotals } from './use-chat-totals';
@@ -3769,6 +3770,32 @@ export function Chats({
    */
   const activeRunArchived = activeRun?.archivedAt != null;
 
+  // ONE read of the run's folder, feeding the header's changes chip AND the
+  // dialog behind it. Kept here rather than inside the dialog because the chip
+  // states the figures without anything being opened — see `useChatChanges`.
+  const chatChanges = useChatChanges(
+    activeRun?.cwd ?? null,
+    activeRun?.startSha ?? null,
+  );
+  const refreshChatChanges = chatChanges.refresh;
+  // What the DIALOG asks for when it opens: past the freshness floor, because
+  // the reader is looking at it now — which is exactly the distinction the floor
+  // exists to draw against the ambient turn-settle refresh below.
+  const readChangesNow = useCallback(
+    (): void => refreshChatChanges(true),
+    [refreshChatChanges],
+  );
+
+  // A turn ENDING is the moment the folder can have changed — it is what the
+  // agent was doing. Bounded by the hook's own freshness floor, so a thread
+  // settling several turns a minute (a delegate reporting back opens a
+  // continuation turn of its own) does not spend its life running `git diff`.
+  useEffect(() => {
+    if (!streaming) {
+      refreshChatChanges();
+    }
+  }, [streaming, refreshChatChanges]);
+
   /**
    * Every distinct folder the chat list names, so pull requests are read once
    * per CHECKOUT rather than once per thread — threads share folders, and each
@@ -7007,6 +7034,8 @@ export function Chats({
                             ? openChatChanges
                             : undefined
                         }
+                        // What that view would say, on the control itself.
+                        changesSummary={chatChanges.summary}
                       />
                     ) : null}
 
@@ -8217,14 +8246,22 @@ export function Chats({
                     onJump={jumpToHit}
                   />
                 )}
-                {/* Mounted only while OPEN, unlike its neighbour: it reads the
-                    folder on mount, and a mounted-but-shut dialog would spawn
-                    git on every thread switch for a view nobody asked for. */}
+                {/* Mounted only while OPEN — but it no longer READS: the header
+                    chip states the same figures, so one `useChatChanges` feeds
+                    both and the two cannot disagree about a folder they are
+                    describing at the same instant. Opening still asks for a
+                    fresh read (`refresh(true)`, past the freshness floor), which
+                    is the behaviour the dialog documented for itself. */}
                 {changesOpen && activeRun ? (
                   <ChatChangesDialog
                     open
-                    cwd={activeRun.cwd}
                     startSha={activeRun.startSha}
+                    changes={chatChanges.changes}
+                    truncated={chatChanges.truncated}
+                    unavailableReason={chatChanges.unavailableReason}
+                    error={chatChanges.error}
+                    loading={chatChanges.loading}
+                    onRefresh={readChangesNow}
                     onClose={closeChatChanges}
                   />
                 ) : null}

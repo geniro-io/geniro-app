@@ -35,6 +35,39 @@ export interface ChangeTreeDir {
 
 export type ChangeTreeNode = ChangeTreeDir | ChangeTreeFile;
 
+/** What a whole read comes to — the figures the header chip states. */
+export interface ChangesSummary {
+  files: number;
+  added: number | null;
+  removed: number | null;
+}
+
+/**
+ * Total one read, under the SAME null rule the tree's directories follow: a
+ * total over what WAS measured, and null only when nothing beneath it was.
+ *
+ * Its own function rather than a roll-up over the tree's roots, because a file
+ * at the repository root belongs to no directory and would be missed — and
+ * `changes-tree.spec.ts` pins that the two agree on a shape where both apply,
+ * which is what keeps the chip and the tree from ever stating different totals
+ * about one read.
+ */
+export function summarizeChanges(
+  changes: readonly GitChange[],
+): ChangesSummary {
+  let added: number | null = null;
+  let removed: number | null = null;
+  for (const change of changes) {
+    if (change.added !== null) {
+      added = (added ?? 0) + change.added;
+    }
+    if (change.removed !== null) {
+      removed = (removed ?? 0) + change.removed;
+    }
+  }
+  return { files: changes.length, added, removed };
+}
+
 interface Building {
   dirs: Map<string, Building>;
   files: ChangeTreeFile[];

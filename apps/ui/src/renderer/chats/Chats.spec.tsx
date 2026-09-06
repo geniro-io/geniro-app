@@ -12527,6 +12527,9 @@ describe('Chats — the pull request above the composer', () => {
     author: 'someone',
     url: 'https://github.com/o/r/pull/70',
     updatedAt: '2026-08-01T00:00:00Z',
+    added: null,
+    removed: null,
+    changedFiles: null,
   };
 
   async function openMyChat(result: PullRequestsResult): Promise<HTMLElement> {

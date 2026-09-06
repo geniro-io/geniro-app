@@ -464,6 +464,9 @@ const pr = (number: number): PullRequestRefResult => ({
     isCrossRepository: false,
     author: 'sergey',
     updatedAt: new Date().toISOString(),
+    added: null,
+    removed: null,
+    changedFiles: null,
   },
 });
 

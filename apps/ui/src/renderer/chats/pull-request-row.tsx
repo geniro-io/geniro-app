@@ -10,6 +10,7 @@ import type {
   PullRequestInfo,
   PullRequestRefResult,
 } from '../../shared/contracts';
+import { DiffFigures } from '../components/diff-figures';
 import { PanelLinkRow } from '../components/panel-link-row';
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
@@ -86,6 +87,60 @@ export function PullRequestStateIcon({
  * a trailing `· merged` had to be read. The word survives in the row's tooltip
  * and in the icon's own screen-reader text.
  */
+/**
+ * How big a pull request is, said in words — for a tooltip, where there is room
+ * for the units the row itself has to leave off.
+ *
+ * Empty when GitHub reported nothing, which a caller appends rather than
+ * branches on.
+ */
+function sizeSentence(pullRequest: PullRequestInfo): string {
+  const parts: string[] = [];
+  if (pullRequest.changedFiles !== null) {
+    parts.push(
+      `${pullRequest.changedFiles} ${pullRequest.changedFiles === 1 ? 'file' : 'files'}`,
+    );
+  }
+  if (pullRequest.added !== null || pullRequest.removed !== null) {
+    parts.push(
+      [
+        pullRequest.added === null ? null : `+${pullRequest.added}`,
+        pullRequest.removed === null ? null : `−${pullRequest.removed}`,
+      ]
+        .filter((part) => part !== null)
+        .join(' '),
+    );
+  }
+  return parts.length === 0 ? '' : ` · ${parts.join(' ')}`;
+}
+
+/**
+ * The trailing detail on a pull request's PANEL row: its name, then its size.
+ *
+ * The panel has the width the shelf does not, so this is where the file count
+ * gets its own word rather than being folded into a tooltip.
+ */
+function PullRequestMeta({
+  name,
+  pullRequest,
+}: {
+  name: string;
+  pullRequest: PullRequestInfo;
+}): React.JSX.Element {
+  return (
+    <span className="flex items-baseline gap-2">
+      <span className="tabular-nums">{name}</span>
+      {pullRequest.changedFiles === null ? null : (
+        <span className="tabular-nums">
+          {pullRequest.changedFiles}{' '}
+          {pullRequest.changedFiles === 1 ? 'file' : 'files'}
+        </span>
+      )}
+      <DiffFigures added={pullRequest.added} removed={pullRequest.removed} />
+    </span>
+  );
+}
+
 export function PullRequestRow({
   pullRequest,
 }: {
@@ -95,9 +150,14 @@ export function PullRequestRow({
     <PanelLinkRow
       href={pullRequest.url}
       title={pullRequest.title}
-      tooltip={`#${pullRequest.number} ${pullRequest.title} · ${lookOf(pullRequest).word}`}
+      tooltip={`#${pullRequest.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={`#${pullRequest.number}`}
+      meta={
+        <PullRequestMeta
+          name={`#${pullRequest.number}`}
+          pullRequest={pullRequest}
+        />
+      }
     />
   );
 }
@@ -196,9 +256,9 @@ export function ThreadPullRequestRow({
     <PanelLinkRow
       href={pullRequest.url}
       title={pullRequest.title}
-      tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}`}
+      tooltip={`${ref.owner}/${ref.repo}#${ref.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`}
       icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={name}
+      meta={<PullRequestMeta name={name} pullRequest={pullRequest} />}
     />
   );
 }
@@ -230,7 +290,7 @@ export function ThreadPullRequestChip({
   const label =
     pullRequest === null
       ? `${ref.owner}/${ref.repo}#${ref.number}`
-      : `${name} ${pullRequest.title} · ${lookOf(pullRequest).word}`;
+      : `${name} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`;
   return (
     <a
       data-slot="pull-request-chip"
@@ -252,6 +312,19 @@ export function ThreadPullRequestChip({
         <span className="min-w-0 truncate text-muted-foreground">
           {pullRequest.title}
         </span>
+      )}
+      {/* The SIZE, and `shrink-0` like the number beside it: a half-shown figure
+          is worse than a shortened word, so the title is what gives up width as
+          the shelf fills — which is the mechanism the chip already used, extended
+          rather than replaced.
+
+          Lines only, no file count. Three figures plus a title do not fit a chip
+          whose whole budget is 9rem once the shelf holds three of them, and of
+          the two the LINES are the size signal a glance is after. The file count
+          is one hover away on `title`, and stated in full on the panel row, which
+          has the width for it. */}
+      {pullRequest === null ? null : (
+        <DiffFigures added={pullRequest.added} removed={pullRequest.removed} />
       )}
     </a>
   );

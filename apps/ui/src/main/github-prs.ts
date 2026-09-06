@@ -28,9 +28,20 @@ const GH_TIMEOUT_MS = 15_000;
  */
 const PULL_REQUEST_LIMIT = 50;
 
-/** The fields {@link readPullRequestRow} requires; a row missing any is dropped. */
+/**
+ * The fields {@link readPullRequestRow} reads. A row missing any of the REQUIRED
+ * ones is dropped; the three diff figures are optional and their absence costs
+ * the figures alone.
+ *
+ * `additions` / `deletions` / `changedFiles` are what let a pull request state
+ * its own size, and they are not free: measured on 2.72.0 against this repo, a
+ * five-row query went from 0.68s to 1.18s with them. That is paid once per
+ * repository per read, on a query already bounded to one head branch and gated
+ * behind a five-minute freshness floor, for the figure a reader wants first
+ * about a pull request they did not write.
+ */
 const PULL_REQUEST_FIELDS =
-  'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt';
+  'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,additions,deletions,changedFiles';
 
 const NO_PULL_REQUESTS: PullRequestsResult = {
   branch: null,
@@ -127,7 +138,20 @@ function readPullRequestRow(entry: unknown): PullRequestInfo | null {
     author,
     url: row.url,
     updatedAt: row.updatedAt,
+    // OPTIONAL, unlike everything above: a row that does not carry them is a
+    // pull request without its size, never a row to drop. gh omits them on an
+    // older version, and the fields are the newest thing this query asks for —
+    // so requiring them would make one gh upgrade the difference between a
+    // populated panel and an empty one.
+    added: numberOrNull(row.additions),
+    removed: numberOrNull(row.deletions),
+    changedFiles: numberOrNull(row.changedFiles),
   };
+}
+
+/** A figure gh reported, or null — never a zero standing in for silence. */
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 /**

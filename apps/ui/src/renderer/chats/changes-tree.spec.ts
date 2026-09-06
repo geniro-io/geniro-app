@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GitChange } from '../../shared/contracts';
-import { buildChangesTree, type ChangeTreeNode } from './changes-tree';
+import {
+  buildChangesTree,
+  type ChangeTreeNode,
+  summarizeChanges,
+} from './changes-tree';
 
 const change = (
   path: string,
@@ -138,5 +142,53 @@ describe('buildChangesTree', () => {
 
   it('has nothing to draw for nothing changed', () => {
     expect(buildChangesTree([])).toEqual([]);
+  });
+});
+
+describe('summarizeChanges', () => {
+  it('agrees with the tree’s own roll-up, which is the point of it', () => {
+    // The header chip states these figures and the tree states them again on
+    // its root row, inches apart, about one read. Two arithmetics is how they
+    // would come to disagree, so this pins that they do not.
+    const changes = [
+      change('apps/a/one.ts', 10, 2),
+      change('apps/b/two.ts', 5, 3),
+    ];
+    const apps = dirAt(buildChangesTree(changes), 'apps');
+    expect(summarizeChanges(changes)).toEqual({
+      files: apps.files,
+      added: apps.added,
+      removed: apps.removed,
+    });
+  });
+
+  it('counts a file at the repository ROOT, which no directory holds', () => {
+    // The reason this is its own function rather than a roll-up over the tree's
+    // roots: `README.md` belongs to no directory, so summing the directories
+    // would silently leave it out of the total.
+    expect(summarizeChanges([change('README.md', 4, 1)])).toEqual({
+      files: 1,
+      added: 4,
+      removed: 1,
+    });
+  });
+
+  it('totals what WAS measured, and answers null only when nothing was', () => {
+    expect(
+      summarizeChanges([change('a.ts', 7, 1), change('b.png', null, null)]),
+    ).toEqual({ files: 2, added: 7, removed: 1 });
+    expect(summarizeChanges([change('b.png', null, null)])).toEqual({
+      files: 1,
+      added: null,
+      removed: null,
+    });
+  });
+
+  it('reads an empty folder as zero, which is not the same as unmeasured', () => {
+    expect(summarizeChanges([])).toEqual({
+      files: 0,
+      added: null,
+      removed: null,
+    });
   });
 });

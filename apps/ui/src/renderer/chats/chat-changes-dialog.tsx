@@ -1,7 +1,8 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import type { GitChange, GitChangeStatus } from '../../shared/contracts';
+import { DiffFigures } from '../components/diff-figures';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
 import { SearchResultList } from '../components/search-panel';
@@ -41,54 +42,16 @@ const STATUS_META: Record<
 /** Each level's own indent, in the tree's monospace column. */
 const INDENT_REM = 0.85;
 
-/**
- * `+N −M`, in two fixed COLUMNS.
- *
- * Null is NOT MEASURED — an untracked file past the body budget, a binary one —
- * and drawing `+0 −0` for it would assert a file changed by nothing, which is
- * the one thing the figure must never say. A measured ZERO on one side is drawn
- * (a pure deletion really did add no lines); it is only the null that is
- * withheld, per side, so a file can honestly show `+12` alone.
- *
- * The columns are RESERVED whether or not there is a figure in them, which is
- * not the same as drawing a zero: an empty column keeps `+6728` on the root row
- * and `+8` twenty rows below it ending at the same x, and a list of numbers that
- * do not line up is one the eye cannot compare down. Reserving is also what lets
- * a row with nothing measured leave a gap rather than pulling its status left
- * out of line with every other status on screen.
- */
-function LineCounts({
+/** The tree's rows are a LIST, so their figures take the aligned columns. */
+const LineCounts = ({
   added,
   removed,
 }: {
   added: number | null;
   removed: number | null;
-}): React.JSX.Element {
-  return (
-    <span className="flex shrink-0 gap-2 font-mono text-xs tabular-nums">
-      {/* A measured ZERO is drawn but MUTED. It has to be drawn — `+12` alone
-          cannot be told apart from `+12` with the other side unmeasured — and it
-          must not be toned, because a pure addition is most of any diff, so a
-          red `−0` on fifty rows paints the column the colour of loss over files
-          that lost nothing. Same rule as `modified` staying muted above: the
-          tone is for what is notable. */}
-      <span
-        className={cn(
-          'w-12 text-right',
-          added ? 'text-success' : 'text-muted-foreground',
-        )}>
-        {added === null ? null : `+${added}`}
-      </span>
-      <span
-        className={cn(
-          'w-10 text-right',
-          removed ? 'text-destructive' : 'text-muted-foreground',
-        )}>
-        {removed === null ? null : `−${removed}`}
-      </span>
-    </span>
-  );
-}
+}): React.JSX.Element | null => (
+  <DiffFigures added={added} removed={removed} layout="columns" />
+);
 
 function FileRow({
   change,
@@ -237,46 +200,47 @@ function TreeRows({
  */
 export function ChatChangesDialog({
   open,
-  cwd,
   startSha,
+  changes,
+  truncated,
+  unavailableReason: reason,
+  error,
+  loading,
+  onRefresh,
   onClose,
 }: {
   open: boolean;
-  /** The run's folder; null for a run that has none. */
-  cwd: string | null;
   /** The commit the chat started at; null when nothing was stamped. */
   startSha: string | null;
+  /**
+   * The read, which this dialog no longer performs.
+   *
+   * It owned the read while it was the only thing that wanted one. The header's
+   * changes chip states the SAME figures without anything being opened, so the
+   * read moved up to `useChatChanges` and both draw from it — two readers would
+   * mean two `git diff` runs whose answers could differ by whatever the agent
+   * wrote in between, and the chip and the dialog disagreeing about one folder
+   * at one instant is exactly the bug that would produce.
+   */
+  changes: GitChange[];
+  truncated: boolean;
+  unavailableReason: string | null;
+  error: string | null;
+  loading: boolean;
+  /** Asked for on open — the "I am looking at it now" read. */
+  onRefresh: () => void;
   onClose: () => void;
 }): React.JSX.Element {
-  const [changes, setChanges] = useState<GitChange[]>([]);
-  const [truncated, setTruncated] = useState(false);
-  const [reason, setReason] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  const read = useCallback(async (): Promise<void> => {
-    if (cwd === null || startSha === null) {
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const result = await window.geniro.getChangesSince(cwd, startSha);
-      setChanges(result.changes);
-      setTruncated(result.truncated);
-      setReason(result.unavailableReason);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [cwd, startSha]);
-
   useEffect(() => {
     if (open) {
-      void read();
+      onRefresh();
     }
-  }, [open, read]);
+    // `onRefresh` is in the deps and belongs there: it is a `useCallback` keyed
+    // on the run's folder and starting commit, so within one open thread its
+    // identity is stable and this fires once — and if the thread DID change
+    // underneath an open dialog, re-reading is the correct answer rather than a
+    // dependency to suppress.
+  }, [open, onRefresh]);
 
   // Memoized because every DirRow and FileRow below owns expand state: rebuilding
   // the tree on an unrelated render would hand them new nodes and reset it.

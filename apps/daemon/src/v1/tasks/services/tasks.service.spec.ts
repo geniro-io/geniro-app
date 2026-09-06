@@ -1,5 +1,6 @@
 import {
   defineConfig,
+  type EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -23,6 +24,10 @@ describe('TasksService (in-memory sqlite)', () => {
   let taskDao: TaskDao;
   let projectDao: ProjectDao;
   let projectId: string;
+  // The fork the DAOs and the service share. A test that writes a row directly
+  // must flush on THIS one: `orm.em` is a different UnitOfWork and does not
+  // manage entities loaded here, so a write flushed there never lands.
+  let em: EntityManager;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
@@ -44,7 +49,7 @@ describe('TasksService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    const em = orm.em.fork();
+    em = orm.em.fork();
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
     service = new TasksService(em, taskDao, projectDao);
@@ -93,6 +98,11 @@ describe('TasksService (in-memory sqlite)', () => {
 
     // A retried request must not read as a lost race.
     expect(moved.status).toBe('backlog');
+    // And the early return is what this observes: without it the move falls
+    // through to the position allocation and the card is appended past itself,
+    // so the status alone would pass on both sides of the branch.
+    expect(moved.position).toBe(0);
+    expect((await taskDao.getById(task.id))?.position).toBe(0);
   });
 
   it('appends each new task to the end of its column', async () => {
@@ -119,6 +129,55 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(moved.position).toBe(1);
   });
 
+  it('gives every live card in a column a distinct position, after a delete', async () => {
+    // The count-based allocation this replaced handed the next card a slot a
+    // live card already held: `countInStatus` counts through the default-on
+    // softDelete filter, so a removed card leaves the count while keeping its
+    // position. Measured before the fix: three live rows all at position 2.
+    const first = await service.create({ projectId, title: 'first' });
+    const second = await service.create({ projectId, title: 'second' });
+    expect([first.position, second.position]).toEqual([0, 1]);
+
+    await service.remove(first.id);
+    const third = await service.create({ projectId, title: 'third' });
+
+    const live = await taskDao.listForProject(projectId);
+    const positions = live.map((task) => task.position);
+    expect(new Set(positions).size).toBe(positions.length);
+    expect(third.position).toBe(2);
+  });
+
+  it('gives every live card in a column a distinct position, after a move-out', async () => {
+    // The other route into the same collision: a move sets only the mover's
+    // own position, so its old column keeps a hole the count cannot see.
+    const leaving = await service.create({ projectId, title: 'leaving' });
+    const staying = await service.create({ projectId, title: 'staying' });
+    await service.moveStatus(leaving.id, { from: 'backlog', to: 'todo' });
+
+    const arriving = await service.create({ projectId, title: 'arriving' });
+
+    const backlog = await taskDao.listInStatus(projectId, 'backlog');
+    const positions = backlog.map((task) => task.position);
+    expect(new Set(positions).size).toBe(positions.length);
+    expect(arriving.position).not.toBe(staying.position);
+  });
+
+  it('refuses a task past the per-project cap', async () => {
+    // The guard the plan's own rationale cites. Unentered it is exactly the
+    // dead code a later cleanup deletes with a green suite.
+    const filler = Array.from({ length: 1000 }, (_, i) => ({
+      projectId,
+      title: `filler ${i}`,
+    }));
+    await taskDao.createMany(filler, em);
+
+    await expect(
+      service.create({ projectId, title: 'one too many' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('at most'),
+    });
+  });
+
   it('refuses a task naming a project that does not exist', async () => {
     await expect(
       service.create({ projectId: 'no-such-project', title: 'orphan' }),
@@ -140,16 +199,43 @@ describe('TasksService (in-memory sqlite)', () => {
   });
 
   it('reads a task whose stored labels are unreadable as having none', async () => {
-    const task = await service.create({ projectId, title: 'corrupt' });
-    // Drive the real defensive branch: a row whose text column is not JSON.
-    // The guard exists so one bad row cannot make a whole board unopenable,
-    // and without a test entering it a later cleanup would delete it silently.
+    // Created WITH labels, so the healthy reading and the corrupt one differ.
+    // Created without any, both are `[]` and this passes with `parseLabels`'
+    // whole try/catch deleted — a test that certifies a guard nothing verifies.
+    const task = await service.create({
+      projectId,
+      title: 'corrupt',
+      labels: ['bug'],
+    });
+    expect(task.labels).toEqual(['bug']);
+
     const row = await taskDao.getById(task.id);
     if (!row) {
       throw new Error('the task under test disappeared');
     }
     row.labels = 'not json at all';
-    await orm.em.flush();
+    // On the fork that OWNS this row. `orm.em` is a separate UnitOfWork which
+    // never loaded it, so flushing there writes nothing and the assertion
+    // below would be reading the healthy row back.
+    await em.flush();
+
+    expect((await service.get(task.id)).labels).toEqual([]);
+  });
+
+  it('reads valid JSON that is not an array of strings as no labels', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'wrong shape',
+      labels: ['bug'],
+    });
+    const row = await taskDao.getById(task.id);
+    if (!row) {
+      throw new Error('the task under test disappeared');
+    }
+    // Parses cleanly and is still not a label list — the arm `JSON.parse`
+    // succeeding does not cover.
+    row.labels = '{"not":"an array"}';
+    await em.flush();
 
     expect((await service.get(task.id)).labels).toEqual([]);
   });

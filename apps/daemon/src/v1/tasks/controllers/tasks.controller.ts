@@ -13,6 +13,7 @@ import { ZodResponse } from 'nestjs-zod';
 
 import {
   CreateTaskDto,
+  ListTasksQueryDto,
   MoveTaskStatusDto,
   TaskDeletedDto,
   TaskDto,
@@ -39,8 +40,8 @@ export class TasksController {
   @Get()
   @ApiOperation({ operationId: 'listTasks' })
   @ZodResponse({ status: 200, type: [TaskDto] })
-  list(@Query('projectId') projectId: string): Promise<TaskWire[]> {
-    return this.tasks.listForProject(projectId);
+  list(@Query() query: ListTasksQueryDto): Promise<TaskWire[]> {
+    return this.tasks.listForProject(query.projectId);
   }
 
   @Post()

@@ -71,7 +71,11 @@ export class TasksService {
         sourceRef: input.sourceRef ?? null,
         // Appended to the end of its column, never inserted: a new card is the
         // user's newest thought and moving it is one drag away.
-        position: await this.taskDao.countInStatus(input.projectId, status, em),
+        position: await this.taskDao.nextPositionIn(
+          input.projectId,
+          status,
+          em,
+        ),
       },
       em,
     );
@@ -152,7 +156,7 @@ export class TasksService {
     }
 
     task.status = move.to;
-    task.position = await this.taskDao.countInStatus(
+    task.position = await this.taskDao.nextPositionIn(
       task.projectId,
       move.to,
       em,

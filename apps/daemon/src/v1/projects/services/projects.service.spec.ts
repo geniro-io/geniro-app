@@ -108,6 +108,22 @@ describe('ProjectsService (in-memory sqlite)', () => {
     });
   });
 
+  it('refuses a project past the cap', async () => {
+    // Same reasoning as the task cap: a guard with no test entering it ships
+    // unpinned, and reads as dead code to the next cleanup.
+    const filler = Array.from({ length: 200 }, (_, i) => ({
+      name: `filler ${i}`,
+      folder,
+    }));
+    await projectDao.createMany(filler);
+
+    await expect(
+      service.create({ name: 'one too many', folder }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('at most'),
+    });
+  });
+
   it('clears a nullable field on an explicit null and leaves omitted keys alone', async () => {
     const project = await service.create({
       name: 'Board',

@@ -3511,7 +3511,7 @@ export interface TaskDto {
      */
     reportItemId: string | null;
     /**
-     * Order within the column, ascending and contiguous from 0
+     * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
      * @type {number}
      * @memberof TaskDto
      */

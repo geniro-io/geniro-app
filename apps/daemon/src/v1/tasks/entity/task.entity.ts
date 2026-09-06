@@ -85,9 +85,19 @@ export class Task extends TimestampsEntity {
   reportItemId: string | null = null;
 
   /**
-   * Order within the column, ascending. Kept contiguous from 0 by every write
-   * that reorders, the same contract `RunGroup.position` holds, so no gap can
-   * accumulate into an ordering two open boards disagree about.
+   * Order within the column, ascending — monotonic, and deliberately NOT
+   * contiguous.
+   *
+   * Gaps are expected: a delete soft-deletes and a move sets only the mover's
+   * own position, so both leave a hole and nothing renumbers. `RunGroup` does
+   * hold the contiguity contract, and the difference is that it ships a
+   * reorder route which renumbers every row on each write; this module has
+   * none until the board can drag a card, so a claim of contiguity here would
+   * be one no code keeps.
+   *
+   * What IS guaranteed is uniqueness within a column, and it comes from
+   * appending past the current maximum rather than counting the live rows —
+   * see `TaskDao.nextPositionIn` for the collision that the count produced.
    */
   @Property({ type: 'integer' })
   position: number = 0;

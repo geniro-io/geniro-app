@@ -40,6 +40,18 @@ export type TaskSource = z.infer<typeof TaskSourceSchema>;
 /** A task's title — non-blank after trimming, sanely bounded. */
 export const TASK_TITLE_MAX = 200;
 
+/**
+ * How long a task's free text may be.
+ *
+ * Bounded here rather than left to Fastify's `bodyLimit`, which is ~54MB and
+ * would let one description become a 54MB TEXT column. `description` is
+ * heading for an agent's brief, so it is the daemon's to bound independently
+ * of whatever the client allows — the same rule `CustomInstructionsSchema`
+ * states for a separate process validating untrusted input.
+ */
+export const TASK_DESCRIPTION_MAX = 20_000;
+export const TASK_SOURCE_REF_MAX = 200;
+
 /** How many labels one task may carry, and how long each may be. */
 export const TASK_LABELS_MAX = 20;
 export const TASK_LABEL_MAX = 40;
@@ -89,7 +101,9 @@ export const TaskWireSchema = z.object({
   position: z
     .number()
     .int()
-    .describe('Order within the column, ascending and contiguous from 0'),
+    .describe(
+      'Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers',
+    ),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });

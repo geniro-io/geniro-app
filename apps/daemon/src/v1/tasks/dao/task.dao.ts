@@ -53,13 +53,41 @@ export class TaskDao extends BaseDao<Task> {
     return this.count({ projectId }, txEm);
   }
 
-  /** How many tasks a column already holds — the next task's `position`. */
+  /** How many tasks a column already holds. */
   async countInStatus(
     projectId: string,
     status: TaskStatus,
     txEm?: EntityManager,
   ): Promise<number> {
     return this.count({ projectId, status }, txEm);
+  }
+
+  /**
+   * The position to give the next card appended to a column.
+   *
+   * The COUNT of the column is the wrong answer and was the first one here: a
+   * soft-deleted card keeps its position but leaves the count, and a card moved
+   * to another column leaves its old slot behind too — so counting hands the
+   * next card a position a live card already holds, and `orderBy: position`
+   * then leaves those two to SQLite's tie-break. Measured: three live rows
+   * sharing position 2 after one delete and one move-out.
+   *
+   * Reading the maximum instead is collision-free by construction, because a
+   * position is only ever appended. It leaves GAPS where the count did not,
+   * which is the trade — nothing here renumbers, so the column is monotonic
+   * rather than contiguous.
+   */
+  async nextPositionIn(
+    projectId: string,
+    status: TaskStatus,
+    txEm?: EntityManager,
+  ): Promise<number> {
+    const last = await this.getOne(
+      { projectId, status },
+      { orderBy: { position: 'desc' } },
+      txEm,
+    );
+    return (last?.position ?? -1) + 1;
   }
 
   /**

@@ -2,8 +2,10 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import {
+  TASK_DESCRIPTION_MAX,
   TASK_LABEL_MAX,
   TASK_LABELS_MAX,
+  TASK_SOURCE_REF_MAX,
   TASK_TITLE_MAX,
   TaskSourceSchema,
   TaskStatusSchema,
@@ -28,15 +30,32 @@ const labelsSchema = z
   .array(z.string().trim().min(1).max(TASK_LABEL_MAX))
   .max(TASK_LABELS_MAX);
 
+/**
+ * Which project's board to list.
+ *
+ * A DTO rather than a bare `@Query('projectId')`, and the difference is not
+ * stylistic: the global Zod pipe validates only when the parameter's metatype
+ * is a `ZodDto`, so a raw param is passed through untouched. An absent one then
+ * arrives as `undefined`, which `ignoreUndefinedInQuery` STRIPS from the filter
+ * rather than matching — the existence guard resolved an arbitrary project and
+ * the listing returned every task row in the database. `fastify-qs` also parses
+ * `?projectId[$ne]=x` into an object, which MikroORM honours as an operator.
+ * Both become a 400 here, before anything reaches the ORM.
+ */
+export const listTasksQuerySchema = z.object({
+  projectId: z.string().min(1),
+});
+export class ListTasksQueryDto extends createZodDto(listTasksQuerySchema) {}
+
 export const createTaskSchema = z.object({
   projectId: z.string().min(1),
   title: taskTitleSchema,
-  description: z.string().optional(),
+  description: z.string().max(TASK_DESCRIPTION_MAX).optional(),
   /** Omitted = `backlog`, where a jotted-down task belongs until it is queued. */
   status: TaskStatusSchema.optional(),
   labels: labelsSchema.optional(),
   source: TaskSourceSchema.optional(),
-  sourceRef: z.string().min(1).optional(),
+  sourceRef: z.string().min(1).max(TASK_SOURCE_REF_MAX).optional(),
 });
 export class CreateTaskDto extends createZodDto(createTaskSchema) {}
 
@@ -44,7 +63,7 @@ export const updateTaskSchema = z
   .object({
     title: taskTitleSchema.optional(),
     /** Explicit null clears the description; an omitted key leaves it alone. */
-    description: z.string().nullable().optional(),
+    description: z.string().max(TASK_DESCRIPTION_MAX).nullable().optional(),
     labels: labelsSchema.optional(),
     branch: z.string().min(1).nullable().optional(),
     worktreePath: z.string().min(1).nullable().optional(),

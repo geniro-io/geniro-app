@@ -417,8 +417,9 @@ export class Run extends TimestampsEntity {
    *
    * A plain id column rather than a MikroORM relation, the same shape
    * `groupId` uses above: the task owns nothing about the run, and a task
-   * deleted from a board must never take a conversation with it. TEXT so the
-   * `safe: true` schema sync adds it additively, no migration.
+   * deleted from a board must never take a conversation with it. Nullable, so
+   * the `safe: true` schema sync adds it to an existing `runs` table
+   * additively — verified against a database that already held rows.
    */
   @Property({ type: 'string', nullable: true })
   taskId: string | null = null;

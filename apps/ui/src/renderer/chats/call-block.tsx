@@ -1,5 +1,5 @@
 import { ArrowRight, ArrowRightLeft } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useContext } from 'react';
 
 import { HoverPopover } from '../components/hover-popover';
 import { avatarTone, initialsOf } from '../components/ui/avatar';
@@ -16,6 +16,7 @@ import {
   BlockTitle,
   BlockToolFooter,
 } from './block-shell';
+import { CalleeContextResolverContext } from './call-context';
 import { ContextMeter } from './context-meter';
 import { liveRowKind } from './live-row';
 import { NestedThreadContext } from './subagent-context';
@@ -179,7 +180,31 @@ export const CallBlock = memo(function CallBlock({
   const status = blockStatusOf(block.status);
   const toolCount = countTools(block.entries);
   const usage = callBlockUsage(block);
-  const context = callBlockContext(block);
+  /**
+   * The callee's window, live first and the block's own settled rows last.
+   *
+   * The fold alone could only ever answer AFTER the call — a `turn_complete` is
+   * the one row it reads and the callee has not written one yet — so the ring
+   * was blank for the whole of every call and appeared at the moment it stopped
+   * being worth watching. REPORTED against a running cursor call, and measured
+   * on that same run: no ring for 46 seconds, then `80.4k / 200k` at the settle.
+   *
+   * Each figure falls back on its own, the rule `resolveCalleeContext` states in
+   * full: a source that reports one half says nothing about the other, so a
+   * live delta carrying only a count must not erase a window the settled turn
+   * already had.
+   */
+  const folded = callBlockContext(block);
+  const resolveCallReading = useContext(CalleeContextResolverContext);
+  const live =
+    resolveCallReading !== null && block.calleeNodeId !== null
+      ? resolveCallReading(block.calleeNodeId, block.callId)
+      : null;
+  const context = {
+    contextTokens: live?.contextTokens ?? folded.contextTokens,
+    contextWindowTokens:
+      live?.contextWindowTokens ?? folded.contextWindowTokens,
+  };
   const tasks = callBlockTasks(block);
   const failed = block.status === 'failed';
   // The callee's live row draws its own spinner and its own clock, so the

@@ -33,6 +33,21 @@ export interface MenuItem {
   /** Native tooltip — where `label` is an abbreviation of something longer. */
   title?: string;
   /**
+   * A second line under {@link label}, small and muted.
+   *
+   * For a row whose label NAMES something and whose identity is a longer
+   * string the user still needs: a saved configuration called "Work account"
+   * that is really a directory. Both belong on the row — the name is why the
+   * user picked it, the path is which one it actually is — and a picker that
+   * can show only one of them has to choose per row, which is what makes a
+   * list read as two kinds of thing.
+   *
+   * Absent leaves the row a single line, which is what every row in every
+   * other menu is. Not {@link hint}: that is right-aligned and `shrink-0`, so
+   * a path in it would take width from the label rather than sit under it.
+   */
+  subLabel?: string;
+  /**
    * An action rather than a choice — rendered without a checkmark column and
    * separated from the choices above it ("Choose folder…").
    */
@@ -482,6 +497,9 @@ export function Menu({
             // searching for.
             item.action ||
             item.label.toLowerCase().includes(needle) ||
+            // The sub-label is on the row in plain sight, so a filter that
+            // could not see it would hide rows whose visible text matches.
+            (item.subLabel?.toLowerCase().includes(needle) ?? false) ||
             // `title` where set holds the UNABBREVIATED value — a folder row's
             // label is elided at the front, so without this a search for
             // anything in the elided head would find nothing.
@@ -824,11 +842,27 @@ export function Menu({
                         commit(item);
                       }}>
                       {item.icon}
-                      <span className="min-w-0 flex-1 truncate">
-                        {item.label}
+                      {/* A column so a sub-label stacks under the label rather
+                          than beside it. `items-center` on the row then centres
+                          the glyph, the hint and the mark against the pair,
+                          which is what keeps a two-line row from hanging its
+                          icon at the top. */}
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span data-slot="menu-item-label" className="truncate">
+                          {item.label}
+                        </span>
+                        {item.subLabel === undefined ? null : (
+                          <span
+                            data-slot="menu-item-sublabel"
+                            className="truncate text-xs text-muted-foreground">
+                            {item.subLabel}
+                          </span>
+                        )}
                       </span>
                       {item.hint !== undefined ? (
-                        <span className="shrink-0 text-xs text-muted-foreground">
+                        <span
+                          data-slot="menu-item-hint"
+                          className="shrink-0 text-xs text-muted-foreground">
                           {item.hint}
                         </span>
                       ) : null}

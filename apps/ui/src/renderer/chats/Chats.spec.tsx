@@ -433,9 +433,15 @@ async function pickMenuRow(
   await act(async () => {
     trigger.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
+  // By SLOT, not by span position: a row wraps its label in a column so a
+  // sub-label can sit under it, and the first span is then that wrapper —
+  // whose text is the two lines joined.
   const row = [
     ...container.querySelectorAll<HTMLElement>('[role="option"]'),
-  ].find((o) => o.querySelector('span')?.textContent === rowText);
+  ].find(
+    (o) =>
+      o.querySelector('[data-slot="menu-item-label"]')?.textContent === rowText,
+  );
   if (!row) {
     throw new Error(`no menu row labelled "${rowText}"`);
   }
@@ -4664,11 +4670,10 @@ describe('Chats composer memory & suggestions', () => {
     const { client } = makeClient();
     const container = await mount(client);
 
-    await pickMenuRow(
-      container,
-      configDirTrigger(container)!,
-      '/profiles/work',
-    );
+    // The row LEADS with the leaf now, over the path on a second line — the
+    // config picker draws every directory name-over-path. What it reports is
+    // still the whole path, asserted below.
+    await pickMenuRow(container, configDirTrigger(container)!, 'work');
     await sendTask(container);
 
     expect(api.createChat).toHaveBeenCalledWith({

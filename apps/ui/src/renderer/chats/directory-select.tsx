@@ -126,6 +126,22 @@ export function DirectorySelect({
   ).filter((path) => !named?.entries.has(path));
 
   /**
+   * Whether rows are drawn NAME-over-PATH — a short identifier on the first
+   * line, the directory it stands for on the second.
+   *
+   * Keyed on the picker HAVING a named group rather than on that group being
+   * non-empty, so a user's rows do not change shape the moment they save their
+   * first configuration. It is what the two-line row is FOR: a list that can
+   * hold both named and unnamed directories is the list where a one-line row
+   * has to choose between saying which account and saying which directory.
+   *
+   * The folder picker passes no `named` at all (`folder-select.tsx`) and is
+   * therefore untouched — it lists directories that never carry a name, so a
+   * second line there would state the same path twice.
+   */
+  const nameOverPath = named !== undefined;
+
+  /**
    * The row that sets the value back to null — for the config picker, the CLI's
    * own account.
    *
@@ -203,9 +219,13 @@ export function DirectorySelect({
                   ...[...named.entries].map(([path, entry]) => ({
                     value: path,
                     label: entry.name,
-                    // The path is still reachable — a name says which ACCOUNT,
-                    // the tooltip says which directory, and only one of those
-                    // can fit on a row this narrow.
+                    // The name says which ACCOUNT, the line under it says which
+                    // DIRECTORY. Shortened rather than whole: the sub-label
+                    // truncates, and CSS eats the tail — which for a path is
+                    // the only part that identifies it — while `shortenPath`
+                    // gives up the head, which is what the rows share. The
+                    // untouched path stays on the tooltip.
+                    subLabel: shortenPath(path),
                     title: path,
                     icon,
                     accent: entry.accent,
@@ -220,9 +240,15 @@ export function DirectorySelect({
                 label: 'Recents',
                 items: rows.map((path) => ({
                   value: path,
-                  // More than the leaf: two checkouts of the same repo are both
-                  // "geniro-app" and would be indistinguishable as rows.
-                  label: shortenPath(path),
+                  // With the path on the line below, the LEAF is enough to lead
+                  // with — and it is the same shape a named row leads with, so
+                  // an unnamed recent and a saved configuration stop reading as
+                  // two kinds of row. Without a line below it is NOT enough:
+                  // two checkouts of one repo are both "geniro-app" and would
+                  // be indistinguishable, which is why the one-line form still
+                  // says the path.
+                  label: nameOverPath ? folderName(path) : shortenPath(path),
+                  ...(nameOverPath ? { subLabel: shortenPath(path) } : {}),
                   title: path,
                   icon,
                 })),

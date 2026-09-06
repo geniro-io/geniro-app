@@ -241,6 +241,188 @@ describe('CallBlock', () => {
     expect(shut!.textContent).toContain('is thinking');
   });
 
+  it('names the tool a wordless callee is running, instead of "is thinking"', () => {
+    // The measured case, reproduced on a live cursor call: a callee asked to
+    // read files before answering was wordless for 16.3s of a 16.3s call, so
+    // `is thinking...` was the whole of what the caller's transcript said
+    // while six rows of real work landed under it.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'tool_call',
+        { id: 't1', name: 'Read File', input: {}, callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]');
+    expect(shut!.textContent).toContain('Read File');
+    // And it must stop claiming the callee is merely thinking, or the band
+    // would say both things at once.
+    expect(shut!.textContent).not.toContain('is thinking');
+
+    // The OPEN card draws its own pending line under a different condition,
+    // which is the case the un-gated activity lookup exists for.
+    expand();
+    expect(container.textContent).toContain('is running');
+    expect(container.textContent).toContain('Read File');
+  });
+
+  it('marks a call that has gone quiet, on the band and in the line', () => {
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'tool_call',
+        { id: 't1', name: 'Read File', input: {}, callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          stalledCall: true,
+          severity: 'info',
+          message: "'poet' has produced nothing for 10 minutes.",
+        },
+        'orch',
+      ),
+    ]);
+    const block = entries.find((entry) => entry.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]');
+    expect(
+      shut!.querySelector('[data-slot="call-summary-stalled"]'),
+    ).not.toBeNull();
+    // And the line stops naming the tool: that work is no longer happening,
+    // so reporting it would be the wrong of the two true-sounding claims.
+    expect(shut!.textContent).toContain('gone quiet');
+    expect(shut!.textContent).not.toContain('Read File');
+
+    // The OPEN card carries the same sentence — it draws its pending line
+    // under a different condition, so the shut band's assertion says nothing
+    // about it.
+    expand();
+    expect(container.textContent).toContain('gone quiet');
+  });
+
+  it('draws the band for a stalled call that has NOTHING else to show', () => {
+    // `hasSummary`'s stalled arm. The card is running with a message already
+    // spoken — so `pending` is false and every other source is empty — and the
+    // band exists solely to carry the one fact the reader is owed.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item('message', { text: 'working on it', callId: 'call-1' }, 'poet'),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          stalledCall: true,
+          severity: 'info',
+          message: "'poet' has produced nothing for 10 minutes.",
+        },
+        'orch',
+      ),
+    ]);
+    const block = entries.find((entry) => entry.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    const shut = container.querySelector('[data-slot="block-summary"]');
+    expect(shut).not.toBeNull();
+    expect(
+      shut!.querySelector('[data-slot="call-summary-stalled"]'),
+    ).not.toBeNull();
+    // A callee that SPOKE and then stopped is the case worth reporting, and
+    // the pending line would never have carried it.
+    expect(shut!.textContent).toContain('working on it');
+  });
+
+  it('drops the quiet marker once the callee produces again', () => {
+    // The daemon announces a silence once and never retracts it, so leaving
+    // the marker latched would report a working callee as silent.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Count them.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          stalledCall: true,
+          severity: 'info',
+          message: "'poet' has produced nothing for 10 minutes.",
+        },
+        'orch',
+      ),
+      // …and then it wakes up.
+      item(
+        'tool_call',
+        { id: 't9', name: 'Read File', input: {}, callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries.find((entry) => entry.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    expect(block.stalled).toBe(false);
+
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    const shut = container.querySelector('[data-slot="block-summary"]');
+    expect(
+      shut!.querySelector('[data-slot="call-summary-stalled"]'),
+    ).toBeNull();
+    expect(shut!.textContent).toContain('Read File');
+  });
+
   it('draws NO summary band at all when there is nothing to put in it', () => {
     // The band used to be unconditional, because `BlockShell` renders it on
     // `summary ?` and an element is always truthy — so a card with nothing to

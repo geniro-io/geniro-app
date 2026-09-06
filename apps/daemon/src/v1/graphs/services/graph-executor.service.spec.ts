@@ -2122,6 +2122,44 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.input.customInstructions).toBeNull();
   });
 
+  it('tells the broker its callee is alive — at the turn start and on every row', async () => {
+    // The seam the silence watchdog rests on, and the one nothing else can
+    // pin: the broker launches a callee turn and then holds a promise, so
+    // this is the ONLY place a callee's output is visible to it. Delete the
+    // call and every `call-broker.service.spec.ts` case still passes while a
+    // working callee is reported silent after ten minutes.
+    const { service, claude, callBroker } = setup();
+    const note = vi.spyOn(callBroker, 'noteCalleeActivity');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    // The turn BEGAN — armed from here rather than from `call_agent`, since a
+    // depth-1 call queues on the sub-turn pool and may not have started yet.
+    expect(note).toHaveBeenCalledWith(run.id, 'call-1');
+    const atStart = note.mock.calls.length;
+
+    // …and every row the callee produces re-arms it.
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'helped');
+    await envelope;
+    await drain();
+    expect(note.mock.calls.length).toBeGreaterThan(atStart);
+    expect(note.mock.calls.every(([, callId]) => callId === 'call-1')).toBe(
+      true,
+    );
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({

@@ -6,6 +6,7 @@ import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
+  callBlockActivity,
   callBlockContext,
   type CallBlockEntry,
   callBlockSummary,
@@ -483,17 +484,17 @@ describe('groupTranscript', () => {
     });
   });
 
-  describe('callBlockSummary', () => {
-    function callBlockOf(items: ChatItem[]): CallBlockEntry {
-      const found = groupTranscript(items).find(
-        (entry) => entry.type === 'call-block',
-      );
-      if (found?.type !== 'call-block') {
-        throw new Error('expected a call block');
-      }
-      return found;
+  function callBlockOf(items: ChatItem[]): CallBlockEntry {
+    const found = groupTranscript(items).find(
+      (entry) => entry.type === 'call-block',
+    );
+    if (found?.type !== 'call-block') {
+      throw new Error('expected a call block');
     }
+    return found;
+  }
 
+  describe('callBlockSummary', () => {
     it('is the callee’s newest words while the call runs', () => {
       // What a COLLAPSED card shows as its current state — asked for with the
       // fold itself ("we always should see last message there").
@@ -558,6 +559,234 @@ describe('groupTranscript', () => {
         ),
       ]);
       expect(callBlockSummary(block)).toBeNull();
+    });
+
+    it('is STILL null over a callee that has only used tools', () => {
+      // The gap this suite had: every case above feeds it a `message`, so
+      // nothing pinned what happens over the rows a real callee produces
+      // FIRST. Reproduced on a live cursor call — six rows of reasoning and
+      // tool work before the first word, 16.3s of a 16.3s call.
+      //
+      // It stays null on purpose: what the callee DID is a different question,
+      // answered by `callBlockActivity`. Folding tools into this one would
+      // render a tool name where the callee's own words go.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'reasoning',
+          { text: 'I should look first', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Find', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_result',
+          { id: 't1', name: null, result: 'ok', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockSummary(block)).toBeNull();
+    });
+  });
+
+  describe('a call the daemon says has gone quiet', () => {
+    const stallItems = (): ChatItem[] => [
+      item('call_started', {
+        callId: 'call-1',
+        calleeNodeId: 'poet',
+        message: 'Count them.',
+      }),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          stalledCall: true,
+          severity: 'info',
+          message: "'poet' has produced nothing for 10 minutes.",
+        },
+        'orch',
+      ),
+    ];
+
+    it('flags the block, and LEAVES the advisory in the caller’s main flow', () => {
+      const items = stallItems();
+
+      expect(callBlockOf(items).stalled).toBe(true);
+
+      // The row must not claim into the block: a warning folded inside a
+      // collapsed card is a warning nobody reads.
+      const loose = groupTranscript(items).filter(
+        (entry) => entry.type === 'item' && entry.item.kind === 'system',
+      );
+      expect(loose).toHaveLength(1);
+    });
+
+    it('is not flagged by an ordinary system row of the same call', () => {
+      // `stalledCall` is the discriminator, never the kind: a callee's own
+      // system rows carry this call's id too.
+      const items = stallItems();
+      items[2] = item(
+        'system',
+        { callId: 'call-1', severity: 'info', message: 'something else' },
+        'orch',
+      );
+
+      expect(callBlockOf(items).stalled).toBe(false);
+    });
+  });
+
+  describe('callBlockActivity — what a wordless callee is DOING', () => {
+    it('names the newest tool the callee called', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Find', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_result',
+          { id: 't1', name: null, result: 'ok', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't2', name: 'Read File', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      // The NEWEST, not the first: the band is a readout of where the callee
+      // has got to, so a name that froze on its opening tool would be as
+      // uninformative as the placeholder it replaces.
+      expect(callBlockActivity(block)).toBe('Read File');
+    });
+
+    it('finds a tool nested inside the callee’s own delegate block', () => {
+      // `buildCallBlock` folds a callee's delegates into blocks of their own,
+      // so the newest tool routinely sits one level down. A flat scan would
+      // report `is thinking...` over a callee three tools deep.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'subagent_info',
+          { subagentId: 's1', label: 'Reader', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          {
+            id: 'd1',
+            name: 'Task',
+            input: {},
+            callId: 'call-1',
+          },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          {
+            id: 'd2',
+            name: 'Grep',
+            input: {},
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).not.toBeNull();
+    });
+
+    it('skips a tool whose name is blank and keeps scanning older ones', () => {
+      // A call that discloses no name must not blank the readout — the older
+      // named tool is still the truest thing to say.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Read File', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't2', name: '   ', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).toBe('Read File');
+    });
+
+    it('is null while the callee has done nothing either', () => {
+      // Which is what keeps `<callee> is thinking...` as the honest line for
+      // the one state it was ever true of.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'reasoning',
+          { text: 'thinking about it', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).toBeNull();
     });
   });
 

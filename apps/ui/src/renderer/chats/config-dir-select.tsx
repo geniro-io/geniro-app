@@ -44,16 +44,22 @@ export function ConfigDirSelect({
    * The user's NAMED configurations (Settings → the claude card), so a
    * directory they have named wears its colour here.
    *
-   * A left border on the row, and only that — asked for in those words ("там
-   * должен быть просто левый бордер вот этого же цвета"). The row still says
-   * the PATH: the colour is a way to recognise a directory at a glance, not a
-   * replacement for knowing which one it is, and a picker that showed names
-   * would leave every unnamed recent looking like a different kind of row.
+   * A left border on the row — asked for in those words ("там должен быть
+   * просто левый бордер вот этого же цвета") — plus the profile's NAME on the
+   * row's first line, with the directory it stands for under it.
+   *
+   * The colour is recognition and never a replacement for knowing WHICH
+   * directory a row is, which is why the path did not simply give way to the
+   * name. Both lines carry, so an unnamed recent is not a different kind of
+   * row: it leads with its leaf over the same path line, and every row in the
+   * list has the same shape.
    *
    * Defaulted to empty, so a caller that has not read them (the graph
-   * builder's node inspector, the run-configuration editor) renders exactly
-   * what it rendered before rather than being made to thread a list it has no
-   * use for yet.
+   * builder's node inspector, the run-configuration editor) is not made to
+   * thread a list it has no use for yet. Empty means no NAMES, not a different
+   * row shape: this picker always passes a `named` group, so every one of its
+   * call sites draws the two-line row and an unnamed directory simply leads
+   * with its leaf.
    */
   configProfiles?: readonly ConfigProfile[];
   /**

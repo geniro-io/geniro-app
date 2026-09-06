@@ -597,16 +597,21 @@ describe('pullBranch', () => {
     // "Pulling is not possible…" and only appears if the code went on to run
     // `pull` after a stash push it never checked the result of.
     //
-    // Asserted as the NEGATIVE, because no positive literal is stable across
-    // git versions. git 2.43 refuses on STDOUT ("README.md: needs merge") with
-    // an empty stderr, so `runGit` falls back to its own "git stash failed";
-    // newer git writes "could not write index" to stderr and that is what
-    // surfaces. Pinning either string passes on one machine and fails on the
-    // other while this behaviour is perfectly correct — which is exactly what
-    // it did. What the abort really rests on is asserted below: no stash was
-    // made, and the conflicted tree was never touched.
-    expect(result.error).not.toBeNull();
-    expect(result.error).not.toContain('Pulling is not possible');
+    // Matched across every form the refusal is known to take, rather than
+    // pinned to one: git 2.43 refuses on STDOUT ("README.md: needs merge")
+    // with an EMPTY stderr, so `runGit` falls back to its own "git stash
+    // failed", while newer git writes "could not write index" to stderr and
+    // that is what surfaces. Pinning either literal passes on one machine and
+    // fails on the other while this behaviour is perfectly correct.
+    //
+    // An alternation and not a negative assertion, which is the version this
+    // replaced: `not.toContain('Pulling is not possible')` holds on reverted
+    // code the moment git rewords that sentence, so it would stop pinning
+    // anything without ever going red. The two structural assertions below
+    // cannot cover for it either — they hold on both sides of the guard.
+    expect(result.error).toMatch(
+      /git stash failed|needs merge|could not write index/i,
+    );
     // The tree is exactly as it was left by the conflict — nothing was moved
     // aside, and no fast-forward was attempted against it.
     expect(run(['status', '--porcelain'])).toContain('UU README.md');

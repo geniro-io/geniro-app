@@ -79,15 +79,6 @@ export function PullRequestStateIcon({
 }
 
 /**
- * One pull request in the right-hand panel's list.
- *
- * The state is the ICON's — its colour and its shape — never a word beside the
- * number. Within the settled group a merged pull request and an abandoned one
- * are the same row shape, and green-versus-red separates them at a glance where
- * a trailing `· merged` had to be read. The word survives in the row's tooltip
- * and in the icon's own screen-reader text.
- */
-/**
  * How big a pull request is, said in words — for a tooltip, where there is room
  * for the units the row itself has to leave off.
  *
@@ -141,6 +132,15 @@ function PullRequestMeta({
   );
 }
 
+/**
+ * One pull request in the right-hand panel's list.
+ *
+ * The state is the ICON's — its colour and its shape — never a word beside the
+ * number. Within the settled group a merged pull request and an abandoned one
+ * are the same row shape, and green-versus-red separates them at a glance where
+ * a trailing `· merged` had to be read. The word survives in the row's tooltip
+ * and in the icon's own screen-reader text.
+ */
 export function PullRequestRow({
   pullRequest,
 }: {
@@ -313,18 +313,29 @@ export function ThreadPullRequestChip({
           {pullRequest.title}
         </span>
       )}
-      {/* The SIZE, and `shrink-0` like the number beside it: a half-shown figure
-          is worse than a shortened word, so the title is what gives up width as
-          the shelf fills — which is the mechanism the chip already used, extended
-          rather than replaced.
+      {/* The SIZE — files AND lines, `shrink-0` like the number beside them: a
+          half-shown figure is worse than a shortened word, so the title is what
+          gives up width as the shelf fills, which is the mechanism the chip
+          already used rather than a new one.
 
-          Lines only, no file count. Three figures plus a title do not fit a chip
-          whose whole budget is 9rem once the shelf holds three of them, and of
-          the two the LINES are the size signal a glance is after. The file count
-          is one hover away on `title`, and stated in full on the panel row, which
-          has the width for it. */}
+          Lines alone shipped here first, on the reasoning that three figures
+          plus a title do not fit a 9rem chip. That was true of the CAP, not of
+          the chip — the caps went up with this (`PULL_REQUEST_CHIP_WIDTH`),
+          because "how many files" is the other half of the question "how big is
+          this" and reading it required a hover. */}
       {pullRequest === null ? null : (
-        <DiffFigures added={pullRequest.added} removed={pullRequest.removed} />
+        <>
+          {pullRequest.changedFiles === null ? null : (
+            <span className="shrink-0 tabular-nums text-muted-foreground">
+              {pullRequest.changedFiles}{' '}
+              {pullRequest.changedFiles === 1 ? 'file' : 'files'}
+            </span>
+          )}
+          <DiffFigures
+            added={pullRequest.added}
+            removed={pullRequest.removed}
+          />
+        </>
       )}
     </a>
   );

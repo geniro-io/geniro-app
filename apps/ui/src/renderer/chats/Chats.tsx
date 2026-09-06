@@ -103,6 +103,7 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import {
   ActiveWorkflowChips,
   ComposerShelf,
+  FolderChangesChip,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -7024,18 +7025,6 @@ export function Chats({
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
                         onSearch={openChatSearch}
-                        // Only where there is something to compare: a run
-                        // without a folder, and one this app never stamped a
-                        // commit for (a plain folder, a checkout with no
-                        // commits, a chat that predates the stamp), have no
-                        // "since" to answer about.
-                        onShowChanges={
-                          activeRun.cwd !== null && activeRun.startSha !== null
-                            ? openChatChanges
-                            : undefined
-                        }
-                        // What that view would say, on the control itself.
-                        changesSummary={chatChanges.summary}
                       />
                     ) : null}
 
@@ -7479,9 +7468,24 @@ export function Chats({
                           {/* The readings run DURABLE → VOLATILE, left to
                               right, and that is the whole of the ordering
                               rule: a chip that comes and goes must never shift
-                              one that stays. Pull requests outlive the thread;
-                              the task list outlives the turn; a workflow, a
-                              delegate and a command each end within one. */}
+                              one that stays. The working TREE outlives every
+                              pull request opened from it, so it leads; pull
+                              requests outlive the thread; the task list
+                              outlives the turn; a workflow, a delegate and a
+                              command each end within one.
+
+                              Only where there is something to compare: a run
+                              without a folder, and one this app never stamped a
+                              commit for (a plain folder, a checkout with no
+                              commits, a chat that predates the stamp), have no
+                              "since" to answer about. */}
+                          {activeRun?.cwd !== null &&
+                          activeRun?.startSha !== null ? (
+                            <FolderChangesChip
+                              summary={chatChanges.summary}
+                              onOpen={openChatChanges}
+                            />
+                          ) : null}
                           <ThreadPullRequestChips
                             results={openedByActiveThread}
                           />

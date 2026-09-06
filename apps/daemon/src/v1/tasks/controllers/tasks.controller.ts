@@ -1,0 +1,90 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ZodResponse } from 'nestjs-zod';
+
+import {
+  CreateTaskDto,
+  MoveTaskStatusDto,
+  TaskDeletedDto,
+  TaskDto,
+  UpdateTaskDto,
+} from '../dto/task.dto';
+import { TasksService } from '../services/tasks.service';
+import type { TaskWire } from '../tasks.types';
+
+/**
+ * Tasks — the cards on a project's board (token-gated by the global
+ * LoopbackTokenGuard).
+ */
+@Controller('v1/tasks')
+@ApiTags('tasks')
+@ApiBearerAuth()
+export class TasksController {
+  constructor(private readonly tasks: TasksService) {}
+
+  /**
+   * One project's board. Scoped by query rather than served unfiltered: every
+   * screen that reads tasks is looking at one project, and an unscoped list
+   * would be a table scan the board never needs.
+   */
+  @Get()
+  @ApiOperation({ operationId: 'listTasks' })
+  @ZodResponse({ status: 200, type: [TaskDto] })
+  list(@Query('projectId') projectId: string): Promise<TaskWire[]> {
+    return this.tasks.listForProject(projectId);
+  }
+
+  @Post()
+  @ApiOperation({ operationId: 'createTask' })
+  @ZodResponse({ status: 201, type: TaskDto })
+  create(@Body() dto: CreateTaskDto): Promise<TaskWire> {
+    return this.tasks.create(dto);
+  }
+
+  @Get(':taskId')
+  @ApiOperation({ operationId: 'readTask' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  read(@Param('taskId') taskId: string): Promise<TaskWire> {
+    return this.tasks.get(taskId);
+  }
+
+  @Patch(':taskId')
+  @ApiOperation({ operationId: 'updateTask' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  update(
+    @Param('taskId') taskId: string,
+    @Body() dto: UpdateTaskDto,
+  ): Promise<TaskWire> {
+    return this.tasks.update(taskId, dto);
+  }
+
+  /**
+   * Move a card between columns. The body carries the status the caller is
+   * moving FROM, and a stale one is refused — see {@link MoveTaskStatusDto}.
+   */
+  @Patch(':taskId/status')
+  @ApiOperation({ operationId: 'moveTaskStatus' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  moveStatus(
+    @Param('taskId') taskId: string,
+    @Body() dto: MoveTaskStatusDto,
+  ): Promise<TaskWire> {
+    return this.tasks.moveStatus(taskId, dto);
+  }
+
+  @Delete(':taskId')
+  @ApiOperation({ operationId: 'deleteTask' })
+  @ZodResponse({ status: 200, type: TaskDeletedDto })
+  remove(@Param('taskId') taskId: string): Promise<{ deleted: boolean }> {
+    return this.tasks.remove(taskId);
+  }
+}

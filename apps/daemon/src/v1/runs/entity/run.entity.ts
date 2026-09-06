@@ -410,4 +410,16 @@ export class Run extends TimestampsEntity {
    */
   @Property({ type: 'integer', nullable: true })
   cursorCostEvents: number | null = null;
+
+  /**
+   * The task on a project board this run was started to serve — null for every
+   * ordinary chat, which is almost all of them.
+   *
+   * A plain id column rather than a MikroORM relation, the same shape
+   * `groupId` uses above: the task owns nothing about the run, and a task
+   * deleted from a board must never take a conversation with it. TEXT so the
+   * `safe: true` schema sync adds it additively, no migration.
+   */
+  @Property({ type: 'string', nullable: true })
+  taskId: string | null = null;
 }

@@ -7,5 +7,7 @@ export * from './CliAuthApi';
 export * from './DiagnosticsApi';
 export * from './GroupsApi';
 export * from './HandoffApi';
+export * from './ProjectsApi';
 export * from './StatsApi';
+export * from './TasksApi';
 export * from './WorkflowsApi';

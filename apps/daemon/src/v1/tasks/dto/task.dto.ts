@@ -40,7 +40,9 @@ const labelsSchema = z
  * rather than matching — the existence guard resolved an arbitrary project and
  * the listing returned every task row in the database. `fastify-qs` also parses
  * `?projectId[$ne]=x` into an object, which MikroORM honours as an operator.
- * Both become a 400 here, before anything reaches the ORM.
+ * Both are refused here, before anything reaches the ORM — as a 403, not the
+ * 400 the shape suggests: the vendored `ValidationException` carries that
+ * status for every malformed body and query in this daemon.
  */
 export const listTasksQuerySchema = z.object({
   projectId: z.string().min(1),

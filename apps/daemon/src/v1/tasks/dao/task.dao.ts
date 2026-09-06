@@ -53,29 +53,20 @@ export class TaskDao extends BaseDao<Task> {
     return this.count({ projectId }, txEm);
   }
 
-  /** How many tasks a column already holds. */
-  async countInStatus(
-    projectId: string,
-    status: TaskStatus,
-    txEm?: EntityManager,
-  ): Promise<number> {
-    return this.count({ projectId, status }, txEm);
-  }
-
   /**
    * The position to give the next card appended to a column.
    *
-   * The COUNT of the column is the wrong answer and was the first one here: a
-   * soft-deleted card keeps its position but leaves the count, and a card moved
-   * to another column leaves its old slot behind too — so counting hands the
-   * next card a position a live card already holds, and `orderBy: position`
-   * then leaves those two to SQLite's tie-break. Measured: three live rows
-   * sharing position 2 after one delete and one move-out.
+   * Counting the column is the wrong answer: a soft-deleted card keeps its
+   * position but leaves the count, and a card moved to another column leaves
+   * its old slot behind — so a count hands the next card a position a live
+   * card still holds, and `orderBy: position` then leaves those two to
+   * SQLite's tie-break. Reading the maximum cannot collide, at the price of
+   * gaps, since nothing here renumbers.
    *
-   * Reading the maximum instead is collision-free by construction, because a
-   * position is only ever appended. It leaves GAPS where the count did not,
-   * which is the trade — nothing here renumbers, so the column is monotonic
-   * rather than contiguous.
+   * Projected to `position` alone, like `ItemDao.maxSeq`: hydrating the whole
+   * newest row — `description` runs to `TASK_DESCRIPTION_MAX` — to read one
+   * integer is waste, and attaching it to the caller's UnitOfWork is a side
+   * effect this read has no business having.
    */
   async nextPositionIn(
     projectId: string,
@@ -84,7 +75,11 @@ export class TaskDao extends BaseDao<Task> {
   ): Promise<number> {
     const last = await this.getOne(
       { projectId, status },
-      { orderBy: { position: 'desc' } },
+      {
+        orderBy: { position: 'desc' },
+        fields: ['position'],
+        disableIdentityMap: true,
+      },
       txEm,
     );
     return (last?.position ?? -1) + 1;

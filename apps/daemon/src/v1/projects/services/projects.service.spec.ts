@@ -109,13 +109,16 @@ describe('ProjectsService (in-memory sqlite)', () => {
   });
 
   it('refuses a project past the cap', async () => {
-    // Same reasoning as the task cap: a guard with no test entering it ships
-    // unpinned, and reads as dead code to the next cleanup.
-    const filler = Array.from({ length: 200 }, (_, i) => ({
+    const filler = Array.from({ length: 199 }, (_, i) => ({
       name: `filler ${i}`,
       folder,
     }));
     await projectDao.createMany(filler);
+
+    // The boundary accepts, so a cap that fires a row early cannot pass.
+    await expect(
+      service.create({ name: 'the two hundredth', folder }),
+    ).resolves.toMatchObject({ name: 'the two hundredth' });
 
     await expect(
       service.create({ name: 'one too many', folder }),

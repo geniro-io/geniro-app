@@ -130,10 +130,8 @@ describe('TasksService (in-memory sqlite)', () => {
   });
 
   it('gives every live card in a column a distinct position, after a delete', async () => {
-    // The count-based allocation this replaced handed the next card a slot a
-    // live card already held: `countInStatus` counts through the default-on
-    // softDelete filter, so a removed card leaves the count while keeping its
-    // position. Measured before the fix: three live rows all at position 2.
+    // A soft-deleted card keeps its position while leaving the live count, so
+    // an allocation that counted would hand this slot out twice.
     const first = await service.create({ projectId, title: 'first' });
     const second = await service.create({ projectId, title: 'second' });
     expect([first.position, second.position]).toEqual([0, 1]);
@@ -141,7 +139,7 @@ describe('TasksService (in-memory sqlite)', () => {
     await service.remove(first.id);
     const third = await service.create({ projectId, title: 'third' });
 
-    const live = await taskDao.listForProject(projectId);
+    const live = await taskDao.listInStatus(projectId, 'backlog');
     const positions = live.map((task) => task.position);
     expect(new Set(positions).size).toBe(positions.length);
     expect(third.position).toBe(2);
@@ -163,13 +161,17 @@ describe('TasksService (in-memory sqlite)', () => {
   });
 
   it('refuses a task past the per-project cap', async () => {
-    // The guard the plan's own rationale cites. Unentered it is exactly the
-    // dead code a later cleanup deletes with a green suite.
-    const filler = Array.from({ length: 1000 }, (_, i) => ({
+    const filler = Array.from({ length: 999 }, (_, i) => ({
       projectId,
       title: `filler ${i}`,
     }));
     await taskDao.createMany(filler, em);
+
+    // The last one the cap permits. Asserting only the refusal leaves a guard
+    // that fires a row early looking correct.
+    await expect(
+      service.create({ projectId, title: 'the thousandth' }),
+    ).resolves.toMatchObject({ title: 'the thousandth' });
 
     await expect(
       service.create({ projectId, title: 'one too many' }),
@@ -199,9 +201,8 @@ describe('TasksService (in-memory sqlite)', () => {
   });
 
   it('reads a task whose stored labels are unreadable as having none', async () => {
-    // Created WITH labels, so the healthy reading and the corrupt one differ.
-    // Created without any, both are `[]` and this passes with `parseLabels`'
-    // whole try/catch deleted — a test that certifies a guard nothing verifies.
+    // The fixture must carry labels: with none, the healthy and the corrupt
+    // readings are both `[]` and nothing here observes the guard.
     const task = await service.create({
       projectId,
       title: 'corrupt',
@@ -222,7 +223,7 @@ describe('TasksService (in-memory sqlite)', () => {
     expect((await service.get(task.id)).labels).toEqual([]);
   });
 
-  it('reads valid JSON that is not an array of strings as no labels', async () => {
+  it('drops stored labels that are not strings', async () => {
     const task = await service.create({
       projectId,
       title: 'wrong shape',
@@ -232,11 +233,18 @@ describe('TasksService (in-memory sqlite)', () => {
     if (!row) {
       throw new Error('the task under test disappeared');
     }
-    // Parses cleanly and is still not a label list — the arm `JSON.parse`
-    // succeeding does not cover.
-    row.labels = '{"not":"an array"}';
+    // An array holding a non-string is the one malformed shape whose handling
+    // is observable: without the type filter these numbers reach
+    // `TaskWire.labels`, which is typed `string[]`.
+    //
+    // The `!Array.isArray` arm beside it cannot be pinned at all, and that is
+    // a property of the code rather than a gap here: every non-array throws
+    // inside `filter` and lands in the same `catch`, so removing the check
+    // returns `[]` exactly as keeping it does. It stays because reaching a
+    // result through an exception is not the same as deciding it.
+    row.labels = '[1,"ok",2]';
     await em.flush();
 
-    expect((await service.get(task.id)).labels).toEqual([]);
+    expect((await service.get(task.id)).labels).toEqual(['ok']);
   });
 });

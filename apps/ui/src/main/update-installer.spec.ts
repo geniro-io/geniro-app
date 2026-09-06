@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import {
   mkdir,
   mkdtemp,
@@ -14,13 +14,54 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * `ditto` is the one thing stubbed. Everything else is the real filesystem in a
- * temp directory: the rename/restore dance is the whole point of the installer,
- * and a mocked `fs` would pin the calls it makes rather than whether the user's
- * app survives a failed copy.
+ * `ditto` is the one thing stubbed wholesale. Everything else is the real
+ * filesystem in a temp directory: the rename/restore dance is the whole point
+ * of the installer, and a mocked `fs` would pin the calls it makes rather than
+ * whether the user's app survives a failed copy.
+ *
+ * ONE narrow exception, and it is a fault injector rather than a stub: `rm`
+ * refuses exactly the paths a test puts in {@link unremovable} and is the real
+ * `rm` for every other path. Two tests here need a removal to FAIL, and the
+ * obvious way to arrange that — making the directory unwritable with `chmod` —
+ * is not a failure at all when the suite runs as root, because permission bits
+ * do not restrict uid 0: the removal succeeds, the error path is never entered,
+ * and both tests fail while the code they cover is correct. No portable
+ * filesystem trick fixes that (an immutable flag, a mount point and a read-only
+ * filesystem each work on one platform or need privileges), so the fault is
+ * injected instead. What is asserted stays real throughout — that the update
+ * still completed, and that the undeleted directory is genuinely still on disk.
  */
 type DittoOptions = { signal?: AbortSignal };
 type DittoCallback = (err: Error | null, result?: unknown) => void;
+
+/**
+ * Paths whose removal must fail for the test currently running. Registered by
+ * the test, cleared between them, and consulted by the `rm` injector below.
+ */
+const { unremovable } = vi.hoisted(() => ({
+  unremovable: new Set<string>(),
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rm: (
+      path: Parameters<typeof actual.rm>[0],
+      options?: Parameters<typeof actual.rm>[1],
+    ) =>
+      typeof path === 'string' && unremovable.has(path)
+        ? Promise.reject(
+            Object.assign(
+              new Error(`EPERM: operation not permitted, rm '${path}'`),
+              {
+                code: 'EPERM',
+              },
+            ),
+          )
+        : actual.rm(path, options),
+  };
+});
 
 const mocks = vi.hoisted(() => ({
   ditto:
@@ -135,6 +176,9 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.unstubAllGlobals();
   mocks.ditto.mockReset();
+  // Before the cleanup below, or a path one test made unremovable would still
+  // be refused while the next test's temp tree is being torn down.
+  unremovable.clear();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -230,16 +274,21 @@ describe('installUpdate', () => {
       workDir,
       onStage: (stage) => {
         if (stage === 'installing') {
-          // Entries can no longer be removed FROM workDir; everything inside
-          // the scratch directory itself still works, so the unpack succeeds.
-          chmodSync(workDir, 0o500);
+          // The scratch is named by `mkdtemp`, so it can only be identified
+          // once it exists. Registering it HERE is what makes its later
+          // removal fail — the one in the `finally`, after the swap — while
+          // the unpack that is still using it goes through untouched.
+          for (const name of readdirSync(workDir)) {
+            if (name.startsWith('update-')) {
+              unremovable.add(join(workDir, name));
+            }
+          }
         }
       },
     });
 
     // The update happened, and nothing threw.
     expect(await installedVersion()).toBe('installed-1.4.0');
-    chmodSync(workDir, 0o700);
     // …and the cleanup really did fail, so this is not passing by accident.
     expect(
       (await readdir(workDir)).some((name) => name.startsWith('update-')),
@@ -456,18 +505,16 @@ describe('sweepUpdateDebris', () => {
     await mkdir(locked, { recursive: true });
     await writeFile(join(locked, 'trapped'), 'cannot be unlinked');
     await mkdir(join(workDir, 'update-ok'), { recursive: true });
-    // No write permission on the parent — the child cannot be unlinked, so the
-    // removal genuinely fails rather than being told to fail.
-    chmodSync(locked, 0o500);
+    // This one's removal fails and the other's does not, so the sweep has to
+    // tell them apart rather than reporting whatever it walked.
+    unremovable.add(locked);
 
-    try {
-      const removed = await sweepUpdateDebris({ workDir, bundlePath });
+    const removed = await sweepUpdateDebris({ workDir, bundlePath });
 
-      expect(removed).toEqual([join(workDir, 'update-ok')]);
-      expect(await readdir(workDir)).toEqual(['update-locked']);
-    } finally {
-      chmodSync(locked, 0o700);
-    }
+    expect(removed).toEqual([join(workDir, 'update-ok')]);
+    // The real observable, not the injector's own say-so: the directory the
+    // sweep left out of its list is still sitting on disk.
+    expect(await readdir(workDir)).toEqual(['update-locked']);
   });
 
   it('answers a clean install with nothing, rather than failing on a work dir that was never created', async () => {

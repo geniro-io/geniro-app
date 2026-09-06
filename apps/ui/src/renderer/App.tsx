@@ -39,6 +39,9 @@ const Settings = lazy(() =>
 const Stats = lazy(() =>
   import('./stats/Stats').then((m) => ({ default: m.Stats })),
 );
+const Tasks = lazy(() =>
+  import('./tasks/Tasks').then((m) => ({ default: m.Tasks })),
+);
 
 type Phase = 'loading' | 'onboarding' | 'ready';
 
@@ -52,6 +55,7 @@ type Phase = 'loading' | 'onboarding' | 'ready';
 const VIEW_TITLE: Record<AppView, string> = {
   chats: 'Chats',
   workflows: 'Workflows',
+  tasks: 'Tasks',
   stats: 'Stats',
   settings: 'Settings',
 };
@@ -63,6 +67,9 @@ export function App(): React.JSX.Element {
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
   const [workflowsMounted, setWorkflowsMounted] = useState(false);
+  // Same latch, same reason: the board holds a selected project, a scroll
+  // position and a half-finished drag, none of which survive a remount.
+  const [tasksMounted, setTasksMounted] = useState(false);
   /**
    * Which pane Settings opens on — HERE rather than inside Settings because
    * another screen can ask for one: Settings is unmounted while hidden, so a
@@ -73,6 +80,9 @@ export function App(): React.JSX.Element {
     useState<SettingsSection>('general');
   if (view === 'workflows' && !workflowsMounted) {
     setWorkflowsMounted(true);
+  }
+  if (view === 'tasks' && !tasksMounted) {
+    setTasksMounted(true);
   }
   const [connected, setConnected] = useState(false);
   const [handle, setHandle] = useState<DaemonHandle | null>(null);
@@ -388,6 +398,11 @@ export function App(): React.JSX.Element {
                 view !== 'workflows' && 'hidden',
               )}>
               {workflowsMounted ? <Workflows handle={handle} /> : null}
+            </div>
+            <div className={cn('min-h-0 flex-1', view !== 'tasks' && 'hidden')}>
+              {tasksMounted ? (
+                <Tasks handle={handle} client={clientRef.current} />
+              ) : null}
             </div>
             {/* Unmounted when hidden, like Settings and unlike Chats/Workflows:
               the page holds no unsaved edit and no live subscription, and a

@@ -54,6 +54,48 @@ const buttonNamed = (el: HTMLElement, label: string): HTMLButtonElement =>
   ) as HTMLButtonElement;
 
 describe('NavRail', () => {
+  it('reaches every AppView — a member added to the union without a nav entry is unreachable', () => {
+    // The union's OWN members, not a list of labels: as a `Record<AppView, …>`
+    // this fails `check-types` the moment a view is added without a row here,
+    // and then fails at runtime if that row never reaches the rail. Both halves
+    // are load-bearing. The rail's item lists are plain arrays and App's render
+    // arms are a conditional chain, so nothing else in the build catches a view
+    // that type-checks, ships, and cannot be opened.
+    const LABELS: Record<AppView, string> = {
+      chats: 'Chats',
+      workflows: 'Workflows',
+      tasks: 'Tasks',
+      stats: 'Stats',
+      settings: 'Settings',
+    };
+    const el = rail('chats');
+
+    const missing = Object.values(LABELS).filter(
+      (label) => buttonNamed(el, label) === undefined,
+    );
+
+    expect(missing).toEqual([]);
+  });
+
+  it('navigates to each destination it offers', () => {
+    // Pairs with the test above: presence alone would pass for a button wired
+    // to nothing, which is the same unreachable view seen one step later.
+    for (const [view, label] of Object.entries({
+      chats: 'Chats',
+      workflows: 'Workflows',
+      tasks: 'Tasks',
+      stats: 'Stats',
+      settings: 'Settings',
+    } satisfies Record<AppView, string>)) {
+      const onNavigate = vi.fn();
+      const el = rail(view === 'chats' ? 'settings' : 'chats', onNavigate);
+
+      buttonNamed(el, label).click();
+
+      expect(onNavigate).toHaveBeenCalledWith(view);
+    }
+  });
+
   it('offers every top-level destination', () => {
     const el = rail('chats');
 

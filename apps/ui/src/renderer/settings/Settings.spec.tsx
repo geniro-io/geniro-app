@@ -73,6 +73,10 @@ const chatsApi = vi.hoisted(() => ({
 const workflowsApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(() => Promise.resolve([])),
 }));
+const projectsApi = vi.hoisted(() => ({
+  listProjects: vi.fn(() => Promise.resolve([])),
+  deleteProject: vi.fn(() => Promise.resolve({ deleted: true })),
+}));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: vi.fn(() => ({
@@ -80,6 +84,7 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     capabilities: capabilitiesApi,
     chats: chatsApi,
     workflows: workflowsApi,
+    projects: projectsApi,
   })),
 }));
 
@@ -1029,6 +1034,7 @@ describe('Settings — sections', () => {
       'General',
       'Run configurations',
       'Fast actions',
+      'Projects',
     ]);
   });
 

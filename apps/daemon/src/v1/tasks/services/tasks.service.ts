@@ -12,6 +12,7 @@ import type {
   TaskStatusMove,
   TaskWire,
 } from '../tasks.types';
+import { TaskEventBus } from './task-events.bus';
 
 /** How many tasks one project's board may hold — a guard, not a design limit. */
 const MAX_TASKS_PER_PROJECT = 1000;
@@ -29,6 +30,7 @@ export class TasksService {
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
+    private readonly events: TaskEventBus,
   ) {}
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
@@ -80,6 +82,11 @@ export class TasksService {
       },
       em,
     );
+    this.events.publishTaskChanged({
+      taskId: created.id,
+      projectId: created.projectId,
+      status: created.status,
+    });
     return toWire(created);
   }
 
@@ -139,6 +146,11 @@ export class TasksService {
     }
 
     await em.flush();
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return toWire(task);
   }
 
@@ -177,13 +189,26 @@ export class TasksService {
       em,
     );
     await em.flush();
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return toWire(task);
   }
 
   async remove(taskId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
-    await this.require(taskId, em);
+    const task = await this.require(taskId, em);
     await this.taskDao.deleteById(taskId, em);
+    // Captured off the row BEFORE the delete rather than re-read after: a
+    // soft-deleted task is invisible to `getById` (the `softDelete` filter),
+    // so there is nothing left here to read `status`/`projectId` off of.
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return { deleted: true };
   }
 

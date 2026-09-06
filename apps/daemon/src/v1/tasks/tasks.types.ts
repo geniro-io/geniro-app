@@ -122,3 +122,17 @@ export interface TaskStatusMove {
   from: TaskStatus;
   to: TaskStatus;
 }
+
+/**
+ * A task write the board needs to hear about, over the WS `task_changed`
+ * broadcast — see {@link TaskEventBus}.
+ *
+ * Deliberately thin: `status` (rather than the whole {@link TaskWire}) is what
+ * a board draws a card by, and the renderer already holds the rest from its
+ * own fetch — a wider payload would be a second, driftable copy of the row.
+ */
+export interface TaskChangedEvent {
+  taskId: string;
+  projectId: string;
+  status: TaskStatus;
+}

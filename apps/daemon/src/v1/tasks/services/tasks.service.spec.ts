@@ -14,6 +14,8 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
+import type { TaskChangedEvent } from '../tasks.types';
+import { TaskEventBus } from './task-events.bus';
 import { TasksService } from './tasks.service';
 
 /**
@@ -35,6 +37,8 @@ describe('TasksService (in-memory sqlite)', () => {
   // A real directory: `update` canonicalizes `worktreePath` through
   // `resolveValidDirectory`, which refuses one that is not on disk.
   let worktree: string;
+  let events: TaskEventBus;
+  let changes: TaskChangedEvent[];
 
   beforeAll(async () => {
     worktree = mkdtempSync(join(tmpdir(), 'geniro-worktree-'));
@@ -61,7 +65,10 @@ describe('TasksService (in-memory sqlite)', () => {
     em = orm.em.fork();
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
-    service = new TasksService(em, taskDao, projectDao);
+    events = new TaskEventBus();
+    changes = [];
+    events.allChanges().subscribe((e) => changes.push(e));
+    service = new TasksService(em, taskDao, projectDao, events);
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-tasks-spec',
@@ -95,6 +102,68 @@ describe('TasksService (in-memory sqlite)', () => {
 
     // And the losing move changed nothing — the point of refusing it.
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  it('emits on the task bus after a create, with the fixed board payload', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'backlog' },
+    ]);
+  });
+
+  it('emits on the task bus after a status move, naming the NEW status', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+    changes.length = 0; // the create above emits too; isolate the move
+
+    await service.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+  });
+
+  it('does not emit on a no-op move — nothing changed for a board to redraw', async () => {
+    const task = await service.create({ projectId, title: 'idempotent' });
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'backlog', to: 'backlog' });
+
+    expect(changes).toEqual([]);
+  });
+
+  it('does not emit on a refused (stale) move', async () => {
+    const task = await service.create({ projectId, title: 'run me' });
+    await service.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
+    changes.length = 0;
+
+    await expect(
+      service.moveStatus(task.id, { from: 'backlog', to: 'in_progress' }),
+    ).rejects.toThrow();
+
+    expect(changes).toEqual([]);
+  });
+
+  it('emits on the task bus after a field update, naming its unchanged status', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+    changes.length = 0;
+
+    await service.update(task.id, { title: 'renamed' });
+
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'backlog' },
+    ]);
+  });
+
+  it('emits on the task bus after a delete, naming the status it held', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'to delete',
+      status: 'todo',
+    });
+    changes.length = 0;
+
+    await service.remove(task.id);
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
   });
 
   it('accepts a move to the status the task is already in, as a no-op', async () => {

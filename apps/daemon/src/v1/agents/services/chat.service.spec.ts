@@ -2270,6 +2270,161 @@ describe('ChatService', () => {
     });
   });
 
+  describe('retry reopens a conversation without replaying it', () => {
+    it('refuses a run that is WORKING before it closes anything', async () => {
+      // Order is the whole finding. `sessions.close` is unconditional and kills
+      // the process group — the live CLI, its MCP servers and every delegate
+      // still out — so a refusal that fires after it has already destroyed the
+      // work it was meant to rescue. An error row is durable, so Retry stays
+      // pressable on an old row while a later turn runs.
+      const { service, registry, sessions } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      const closed = vi.spyOn(sessions, 'close');
+      registry.tryClaim(run.id);
+
+      await expect(service.retry(run.id)).rejects.toThrow(/still working/);
+      expect(closed).not.toHaveBeenCalled();
+    });
+
+    it('refuses a CLI that cannot reopen a conversation without prompting', async () => {
+      // `AgentTurnInput.resumeOnly` is read by the ACP driver alone, so claude
+      // would run the retry as an ordinary turn — spending a billed turn on the
+      // EMPTY prompt a retry composes, under a row saying nothing was re-sent.
+      // Declared as an adapter fact rather than branched on the agent's name.
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+
+      await expect(service.retry(run.id)).rejects.toThrow(
+        /cannot reopen a conversation without sending a message/,
+      );
+    });
+
+    it('refuses a chat that has no agent session to reopen', async () => {
+      const { service } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+
+      // Left to run, the turn opens a FRESH session and settles at once on the
+      // load reply — a recovery reported for a thread that is still exactly as
+      // stuck, and a `system` row saying so in its transcript.
+      await expect(service.retry(run.id)).rejects.toThrow(
+        /no agent session to reopen/,
+      );
+    });
+
+    it('refuses a run that is still working, and writes nothing into it', async () => {
+      // Found by the security reviewer while tracing the route's "no prompt
+      // goes out" guarantee. A busy run takes `sendMessage`'s pre-claim branch,
+      // which never consulted this mode: it delivered the turn's EMPTY text as
+      // a follow-up — a blank user message in the transcript, and on ACP a
+      // second `session/prompt`, which cancels the turn in flight. So the press
+      // destroyed the work it was meant to rescue.
+      const { service, registry } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      registry.tryClaim(run.id);
+
+      await expect(
+        service.sendMessage(run.id, '', [], { resumeOnly: true }),
+      ).rejects.toThrow(/still working/);
+
+      // The half that separates the fix from the defect: the refusal has to
+      // leave the transcript untouched, not merely report an error after
+      // writing to it.
+      expect(await service.getHistory(run.id, -1)).toEqual([]);
+    });
+
+    it('refuses an archived chat, as sending a message does', async () => {
+      // Shelving cancels the turn a chat had. A retry that started one anyway
+      // would be the thing archiving exists to prevent, reached by another
+      // route — and on a row the desk does not show.
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.archive(run.id);
+
+      await expect(service.retry(run.id)).rejects.toThrow(/archived/);
+    });
+
+    it('writes a SYSTEM row where the message would go, and sends no prompt', async () => {
+      // The two halves of what `resumeOnly` changes about a turn, and neither
+      // is visible from the route's own answer. No user message is written —
+      // the user typed nothing — and the row that IS written is the only
+      // evidence the recovery happened, since the agent answers nothing.
+      const { service, nodeDao, cursor, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      nodeDao.preset('sess-1');
+
+      await service.retry(run.id);
+
+      const startArg = cursor.start.mock.calls[0]?.[0] as AgentTurnInput;
+      expect(startArg.resumeOnly).toBe(true);
+      expect(startArg.prompt).toBe('');
+      expect(startArg.resumeSessionId).toBe('sess-1');
+      const rows = itemDao.items.filter((row) => row.runId === run.id);
+      expect(rows.map((row) => row.kind)).toEqual(['system']);
+      expect(rows[0]?.payload).toContain('Reopened this conversation');
+
+      cursor.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      cursor.finish();
+      await drain();
+    });
+
+    it('leaves a carried summary standing for the next REAL message', async () => {
+      // `takePendingContext` is read-and-CLEAR, so reaching it on a turn that
+      // sends no prompt consumes the summary a geniro compaction put aside and
+      // delivers it nowhere — leaving the next real message to open on an agent
+      // that has forgotten the conversation it just summarised.
+      const { service, nodeDao, cursor, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      nodeDao.preset('sess-1');
+      await runDao.setPendingContext(run.id, 'we agreed on plan B');
+
+      await service.retry(run.id);
+      cursor.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      cursor.finish();
+      await drain();
+
+      expect((await runDao.getById(run.id))?.pendingContext).toBe(
+        'we agreed on plan B',
+      );
+
+      // …and it is still delivered, by the turn that can actually carry it.
+      await service.sendMessage(run.id, 'now do it');
+      const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+      expect(next.prompt).toContain('we agreed on plan B');
+      expect(next.prompt.endsWith('now do it')).toBe(true);
+
+      cursor.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      cursor.finish();
+      await drain();
+    });
+  });
+
   describe('archive', () => {
     it('shelves a chat out of the listing and unarchive puts it back', async () => {
       const { service } = setup();

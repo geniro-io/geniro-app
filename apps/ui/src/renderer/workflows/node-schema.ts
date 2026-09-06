@@ -204,15 +204,14 @@ export const NODE_CONNECTION_RULES: Record<
     ],
   },
   trigger: {
-    // Triggers are pure entry points: nothing may feed one, and firing fans
-    // out to any number of agents. Call wires never touch triggers.
+    // Triggers are pure entry points: nothing may feed one, and firing starts
+    // exactly ONE agent. Call wires never touch triggers.
     inputs: [],
     outputs: [
       {
         edge: 'data',
         kind: 'agent',
-        multiple: true,
-        description: 'fires the connected agents with the run prompt.',
+        description: 'fires the connected agent with the run prompt.',
       },
     ],
   },
@@ -329,6 +328,108 @@ export function connectionEdgeKind(
 }
 
 /**
+ * The shape both connection predicates read.
+ *
+ * `multiple` is part of it because ARITY is part of the rule — the daemon's
+ * `validateEdgeRules` reads the same flag off the same records, and a type here
+ * that omitted it would let this side silently permit a wire that side refuses.
+ * ABSENT means single, which is the daemon's own reading; nothing here defaults
+ * it to true.
+ */
+type ConnectionRuleSet = Record<
+  string,
+  {
+    inputs: readonly { edge: string; kind: string; multiple?: boolean }[];
+    outputs: readonly { edge: string; kind: string; multiple?: boolean }[];
+  }
+>;
+
+/**
+ * How many such edges each END of this connection allows.
+ *
+ * Separate from {@link canConnect} because the two questions need different
+ * inputs: compatibility is answered by the kinds alone, while arity needs the
+ * edges already on the canvas — which only the caller holds. An unknown kind
+ * answers `false` on both sides, matching `canConnect`'s refuse-rather-than-
+ * throw stance for a live drag predicate.
+ */
+export function connectionArity(
+  edgeKind: EdgeKind,
+  sourceKind: string,
+  targetKind: string,
+  rules: ConnectionRuleSet = NODE_CONNECTION_RULES,
+): { manyFromSource: boolean; manyIntoTarget: boolean } {
+  const out = rules[sourceKind]?.outputs.find(
+    (r) => r.edge === edgeKind && r.kind === targetKind,
+  );
+  const inp = rules[targetKind]?.inputs.find(
+    (r) => r.edge === edgeKind && r.kind === sourceKind,
+  );
+  return {
+    manyFromSource: out?.multiple === true,
+    manyIntoTarget: inp?.multiple === true,
+  };
+}
+
+/**
+ * Whether ANOTHER edge of this kind may be added between these two nodes,
+ * given what the canvas already holds.
+ *
+ * The counterpart to {@link canConnect}, which asks whether this PAIR of kinds
+ * may be wired at all. It lives here rather than inside the builder's drag
+ * predicate because the counting is the half nothing else catches: without it
+ * the canvas draws an edge the daemon then refuses, and the refusal lands on
+ * the autosave PUT — so the failure surfaces as a dirty canvas and an error
+ * strip some seconds later, attached to no gesture. `Workflows.tsx` has no spec
+ * of its own, so a predicate left inline is a predicate nothing pins.
+ *
+ * Counted per (node, edge kind, other END's KIND), which is the grain the
+ * daemon's `validateEdgeRules` counts on — an agent may take one trigger AND
+ * one agent's data on the same in-side, so counting the side as a whole would
+ * refuse a wire that is legal.
+ *
+ * An unknown kind refuses, matching {@link canConnect}'s refuse-rather-than-
+ * throw stance for a live drag predicate.
+ */
+export function arityAllowsConnection(
+  edgeKind: EdgeKind,
+  connection: { source: string; target: string },
+  graph: {
+    kindOf: (id: string) => string | undefined;
+    edges: readonly { source: string; target: string; type?: string }[];
+  },
+  rules: ConnectionRuleSet = NODE_CONNECTION_RULES,
+): boolean {
+  const sourceKind = graph.kindOf(connection.source);
+  const targetKind = graph.kindOf(connection.target);
+  if (sourceKind === undefined || targetKind === undefined) {
+    return false;
+  }
+  const { manyFromSource, manyIntoTarget } = connectionArity(
+    edgeKind,
+    sourceKind,
+    targetKind,
+    rules,
+  );
+  const alreadyFromSource = graph.edges.filter(
+    (edge) =>
+      edge.source === connection.source &&
+      flowEdgeKind(edge) === edgeKind &&
+      graph.kindOf(edge.target) === targetKind,
+  ).length;
+  const alreadyIntoTarget = graph.edges.filter(
+    (edge) =>
+      edge.target === connection.target &&
+      flowEdgeKind(edge) === edgeKind &&
+      graph.kindOf(edge.source) === sourceKind,
+  ).length;
+  return (
+    (manyFromSource || alreadyFromSource === 0) &&
+    (manyIntoTarget || alreadyIntoTarget === 0)
+  );
+}
+
+/**
  * Whether an edge of `edge` kind `source → target` is legal under the
  * connection rules: the source kind must list (edge, target kind) in its
  * `outputs` AND the target kind must list (edge, source kind) in its
@@ -341,13 +442,7 @@ export function canConnect(
   edgeKind: EdgeKind,
   sourceKind: string,
   targetKind: string,
-  rules: Record<
-    string,
-    {
-      inputs: readonly { edge: string; kind: string }[];
-      outputs: readonly { edge: string; kind: string }[];
-    }
-  > = NODE_CONNECTION_RULES,
+  rules: ConnectionRuleSet = NODE_CONNECTION_RULES,
 ): boolean {
   const out = rules[sourceKind]?.outputs.some(
     (r) => r.edge === edgeKind && r.kind === targetKind,

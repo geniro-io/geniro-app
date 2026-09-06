@@ -293,6 +293,13 @@ export class ClaudeAdapter extends AgentAdapter {
       ],
       /** Null: the list above is non-empty, so there is nothing to explain. */
       effortsUnavailableReason: null,
+      // This CLI has no reopen-without-prompting mechanism wired here: the
+      // resume-only turn is an ACP frame (`session/load` with the prompt
+      // branched away), and a stream-json turn has no equivalent — its prompt
+      // IS how a turn opens. Left unhandled it would send the retry's empty
+      // string as an ordinary user message and bill a turn for it.
+      resumeOnlyUnavailableReason:
+        'claude cannot reopen a conversation without sending a message — send your next message and it continues from where it left off',
       /**
        * True: this vocabulary belongs to the BINARY, not to a model — the same
        * words work under every `--model`. So a level outside it is one the CLI

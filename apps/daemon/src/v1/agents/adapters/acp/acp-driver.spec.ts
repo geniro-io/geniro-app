@@ -763,6 +763,179 @@ describe('AcpSession session resume', () => {
   });
 });
 
+describe('AcpSession — the files a tool call names', () => {
+  it('carries the paths through, and a line only where the agent set one', () => {
+    // Measured on cursor-agent 2026.08.31-4057e58: six kinds carry `locations`
+    // on the OPENING frame, and `read` is the only one that ever sets a line —
+    // from `args.offset`, and only when that offset is above zero.
+    const h = harness();
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-1',
+          title: 'Read File',
+          locations: [
+            { path: '/repo/src/a.ts', line: 42 },
+            { path: '/repo/src/b.ts' },
+          ],
+        }),
+      ),
+    ).toMatchObject([
+      {
+        type: 'tool_call',
+        locations: [
+          { path: '/repo/src/a.ts', line: 42 },
+          { path: '/repo/src/b.ts', line: null },
+        ],
+      },
+    ]);
+  });
+
+  it('omits the key entirely when the agent named no files', () => {
+    // ABSENT is not the same as empty here, and the difference is the agent's:
+    // it drops the field rather than sending `[]`, so an empty array would put
+    // "this call touched nothing" in its mouth. Every claude row is this case.
+    const h = harness();
+    const [event] = h.feed(
+      update({ sessionUpdate: 'tool_call', toolCallId: 't-2', title: 'Bash' }),
+    );
+
+    expect(event).toMatchObject({ type: 'tool_call' });
+    expect(event).not.toHaveProperty('locations');
+  });
+
+  it('drops a location that names no file rather than emitting a blank path', () => {
+    const h = harness();
+    const [event] = h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-3',
+        title: 'Glob',
+        locations: [{ line: 3 }, { path: '/repo/src/c.ts' }],
+      }),
+    );
+
+    expect(event).toMatchObject({
+      locations: [{ path: '/repo/src/c.ts', line: null }],
+    });
+  });
+});
+
+describe('AcpSession — the agent naming its own conversation', () => {
+  it('draws no row for it, and records nothing', () => {
+    // The name reaches geniro already: this CLI writes it into its own session
+    // store BEFORE emitting the frame, and `readSessionTitle` reads that store.
+    // So the frame buys only TIMING — and collecting that needs a consumer able
+    // to reach `ChatTitleService`, which owns the guard keeping a manual rename
+    // permanent and which no driver can call. Handling it without that consumer
+    // is state nobody reads.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'session_info_update',
+          title: 'Bloom Filters',
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('AcpSession — a resume-only turn', () => {
+  const reopening = {
+    input: { ...BASE_INPUT, resumeSessionId: 'prior-7', resumeOnly: true },
+  };
+
+  it('settles from the load reply, having sent no prompt', () => {
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+    expect(h.sentMethod('session/load')).toBeDefined();
+
+    const events = h.feed({ id: 2, result: {} });
+
+    // The load reply IS the settle here, and nothing else could be: no prompt
+    // is in flight to earn a stop reason, so an unbranched turn would wait out
+    // the transport's silence deadline and settle as a failure having done
+    // exactly what it was asked to.
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+    expect(
+      events.find((event) => event.type === 'turn_complete'),
+    ).toMatchObject({ stopReason: null, finalText: null });
+  });
+
+  it('still sends the prompt on an ordinary resume', () => {
+    // The control. Without it the pin above passes just as well against a
+    // driver that never sends a prompt on any resumed session at all.
+    const h = harness({ input: { ...BASE_INPUT, resumeSessionId: 'prior-7' } });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({ id: 2, result: {} });
+
+    expect(h.sentMethod('session/prompt')).toBeDefined();
+    expect(events.map((event) => event.type)).not.toContain('turn_complete');
+  });
+
+  it('reports a refused load as a failure instead of opening a fresh session', () => {
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({
+      id: 2,
+      error: { code: -32602, message: 'Session "prior-7" not found' },
+    });
+
+    // The ordinary turn's degrade — a notice, then `session/new` on the same
+    // process — is right when there is a prompt to run without the history.
+    // This turn's only product IS the reopened conversation, so taking that
+    // path would report success while discarding it.
+    expect(h.sentMethod('session/new')).toBeUndefined();
+    expect(events).toEqual([
+      {
+        type: 'error',
+        message:
+          'agent could not reopen this conversation: Session "prior-7" not found',
+      },
+    ]);
+  });
+
+  it('sends no prompt when opened on a session the process already holds', () => {
+    // The SECOND opener. `onSessionReady`'s branch covers a turn that shook
+    // hands; a turn opened on a KEPT session goes `openOnLiveSession` →
+    // `beginTurn` → `sendPrompt` and never passes through it. `ChatService.retry`
+    // closes a kept session first, which is what makes this unreachable in
+    // production — but that is a cross-module invariant this file cannot
+    // enforce, and the guard in `sendPrompt` is what holds if it ever breaks.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+    const before = h.sentAll('session/prompt').length;
+
+    h.openTurn({ ...BASE_INPUT, resumeSessionId: 'sess-1', resumeOnly: true });
+
+    expect(h.sentAll('session/prompt')).toHaveLength(before);
+  });
+
+  it('has no session to write a follow-up into before its load reply', () => {
+    // Not a guard of its own: a follow-up is a second `session/prompt`, and the
+    // existing null-session check already refuses one for the whole life of
+    // this turn — the id arrives with the load reply, which is also what
+    // settles it. Pinned so a later change that sets the id earlier has to come
+    // back here and decide deliberately.
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    expect(h.driver.sendFollowUp({ text: 'while you are back, do X' })).toBe(
+      false,
+    );
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+  });
+});
+
 describe('AcpSession model selection', () => {
   const WANTED = 'claude-opus-5[thinking=true]';
   const wanting = { input: { ...BASE_INPUT, model: WANTED } };
@@ -2639,7 +2812,49 @@ describe('AcpSession permissions', () => {
       status: null,
       rawInput: { path: 'a.ts' },
       rawOutput: null,
+      // Null rather than absent: `readToolCall` always produces the key, and a
+      // permission request's toolCall stub names no files. The policy decides
+      // on `kind`, so this is shape rather than signal — asserted exactly so
+      // the day it becomes signal is a day this test has to be revisited.
+      locations: null,
     });
+  });
+
+  it('restores the cached NAME and KIND onto a stub request, and never its locations', () => {
+    // The merge exists so a stubbed request is decided and drawn on what the
+    // opening frame announced. `locations` is deliberately left out of it:
+    // nothing on this path consults one — the policy decides on `kind`, the
+    // card shows the name and arguments — so merging it would cache a value
+    // with no reader. This is the assertion that goes red if it is added.
+    const autoDecide = vi.fn(() => null);
+    const h = harness({ autoDecide });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        name: 'write_file',
+        kind: 'edit',
+        locations: [{ path: '/repo/src/a.ts', line: 42 }],
+      }),
+    );
+
+    h.feed({
+      id: 5,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's',
+        toolCall: { toolCallId: 't-1' },
+        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    });
+
+    expect(autoDecide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'write_file',
+        kind: 'edit',
+        locations: null,
+      }),
+    );
   });
 
   it('parks the request as an approval card when the policy defers', () => {

@@ -84,6 +84,7 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
+import { ChatActionProviders } from './chat-action-providers';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
@@ -92,7 +93,6 @@ import { chatToMarkdown } from './chat-markdown';
 import { ChatMetricsLoaderContext } from './chat-metrics';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
-import { CliLoginContext } from './cli-login-context';
 import {
   compactionOnlyTurnEnds,
   endsContextHistory,
@@ -6072,6 +6072,32 @@ export function Chats({
   }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
   /**
+   * Reopen the ACTIVE run's conversation after a failed turn — the transcript's
+   * Retry, bound the way its sign-in neighbour is.
+   *
+   * Null when there is no open run, or no daemon to ask. Whether the reopen can
+   * SUCCEED is deliberately not decided here (see `RetryContext`): the daemon
+   * refuses a chat with no session to resume, an archived one and a busy one,
+   * and it writes a real sentence for each — which is what `daemonErrorDetail`
+   * puts on screen, on the same rule the approval chip follows for RUN_BUSY.
+   */
+  const retryActiveRun = useMemo(() => {
+    const runId = activeRun?.id;
+    // A WORKFLOW run has no single conversation to reopen, and the route says
+    // so with a 400 (`assertChatRun`) — so offering the button there could only
+    // ever produce an error strip. The sidebar lists both kinds in one surface,
+    // which is what makes this reachable.
+    if (runId === undefined || !chatApi || activeRun?.workflowId) {
+      return null;
+    }
+    return () => {
+      void chatApi.retryChat({ runId }).catch((err: unknown) => {
+        setError(daemonErrorDetail(err) ?? String(err));
+      });
+    };
+  }, [activeRun?.id, chatApi]);
+
+  /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
    * header's "something in here is working" cannot contradict the rows under
    * it.
@@ -6336,7 +6362,7 @@ export function Chats({
   // panel's own resizable width drives it).
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <CliLoginContext.Provider value={signInToActiveCli}>
+      <ChatActionProviders signIn={signInToActiveCli} retry={retryActiveRun}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -7210,7 +7236,9 @@ export function Chats({
                                       )}
                                       {...(startSeq === null
                                         ? {}
-                                        : { 'data-transcript-seq': startSeq })}>
+                                        : {
+                                            'data-transcript-seq': startSeq,
+                                          })}>
                                       {children}
                                     </div>
                                   );
@@ -8273,7 +8301,7 @@ export function Chats({
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
-      </CliLoginContext.Provider>
+      </ChatActionProviders>
     </CardBackedRequestsContext.Provider>
   );
 }

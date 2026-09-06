@@ -96,6 +96,7 @@ import {
 } from './node-palette';
 import type { NodeKind } from './node-schema';
 import {
+  arityAllowsConnection,
   canConnect,
   connectionEdgeKind,
   flowEdgeType,
@@ -659,14 +660,27 @@ export function Workflows({
         connection.sourceHandle,
         connection.targetHandle,
       );
-      return (
-        sourceKind !== undefined &&
-        targetKind !== undefined &&
-        canConnect(edgeKind, sourceKind, targetKind) &&
-        !edges.some(
+      if (
+        sourceKind === undefined ||
+        targetKind === undefined ||
+        !canConnect(edgeKind, sourceKind, targetKind) ||
+        edges.some(
           (e) =>
             e.id === edgeId(connection.source, connection.target, edgeKind),
         )
+      ) {
+        return false;
+      }
+      // ARITY, which the compatibility check above cannot answer: it decides
+      // whether this PAIR of kinds may be wired at all, while this decides
+      // whether ANOTHER such wire may be added to the ones already here. That
+      // divergence is not new with the single-trigger rule: the agent's own
+      // `{ edge: 'data', kind: 'trigger' }` input has always been single-arity,
+      // so two triggers into one agent already drew fine here.
+      return arityAllowsConnection(
+        edgeKind,
+        { source: connection.source, target: connection.target },
+        { kindOf, edges },
       );
     },
     [nodes, edges],

@@ -190,8 +190,11 @@ describe('NodePalette', () => {
 
     const rules = container.querySelector('[aria-label="Connection rules"]');
     expect(rules?.textContent).toContain('None — nothing can feed a trigger');
-    // Its single output rule fans out to agents.
-    expect(rules?.textContent).toContain('multiple');
+    // Its one output rule starts ONE agent — the palette is where a user reads
+    // that arity before they drag, so it is the surface the breaking change has
+    // to reach. `multiple` here would mean the flip never got past the daemon.
+    expect(rules?.textContent).toContain('single');
+    expect(rules?.textContent).not.toContain('multiple');
   });
 
   it('closes the info dialog on ✕', () => {

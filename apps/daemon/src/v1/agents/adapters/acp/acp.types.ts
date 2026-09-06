@@ -161,9 +161,16 @@ export interface AcpSetModelParams {
  * `configId` succeeds. `value` is one of the `value`s the matching
  * {@link AcpConfigOption} listed.
  *
- * The reply carries the agent's FULL config-option list back, because setting
- * one option may change another's available values. We discard it: nothing in a
- * turn re-reads the vocabulary after the prompt has gone out.
+ * The REPLY is handled, under the pending kind the frame went out as — there is
+ * no `set_config_option` kind of its own, so `set_model` and
+ * `set_model_parameter` are the whole of it (`acp-driver.ts`'s `onReply` /
+ * `onErrorReply`). The first is the ONLY signal that the agent took a model and
+ * is recorded as such; the second may be the frame this turn's prompt is held
+ * behind, so it releases it.
+ *
+ * What is discarded is the reply's BODY — the agent's full config-option list,
+ * re-sent because setting one option may change another's available values, and
+ * re-read by nothing once the prompt has gone out.
  */
 export interface AcpSetConfigOptionParams {
   sessionId: string;
@@ -269,6 +276,30 @@ export interface AcpToolCall {
    */
   rawInput: unknown;
   rawOutput: unknown;
+  /**
+   * The files this call touches, when the agent named them — ACP's
+   * `ToolCallLocation[]`.
+   *
+   * Null is ABSENT rather than empty, and the two are different on the wire:
+   * cursor-agent omits the field entirely for an empty set (its
+   * `pathsToLocations` returns undefined), so an empty array here would report
+   * the agent saying "no files" where it said nothing at all.
+   */
+  locations: AcpToolLocation[] | null;
+}
+
+/**
+ * One file an ACP tool call names, and the line inside it when there is one.
+ *
+ * Measured on cursor-agent 2026.08.31-4057e58: six tool kinds carry these on
+ * the OPENING frame (`edit`, `delete`, `ls`, `read`, `readLints`, `glob`),
+ * `applyAgentDiff` alone carries them on the completing frame, and `read` is
+ * the only kind that ever sets a line — from `args.offset`, and only when that
+ * offset is greater than zero.
+ */
+export interface AcpToolLocation {
+  path: string;
+  line: number | null;
 }
 
 /** Token/cost accounting as ACP reports it, across both of its carriers. */

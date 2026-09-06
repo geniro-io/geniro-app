@@ -825,21 +825,43 @@ function setup(
 }
 
 /**
- * Prepend a manual trigger wired to every root: runs may only enter through a
- * trigger, so every fixture below goes through this before startRun. The
- * trigger spawns no CLI, so `claude.starts[0]` is still the first AGENT turn.
+ * Prepend a manual trigger PER ROOT: runs may only enter through a trigger, so
+ * every fixture below goes through this before startRun. The triggers spawn no
+ * CLI, so `claude.starts[0]` is still the first AGENT turn.
+ *
+ * One trigger EACH rather than one fanning out to all of them, because a
+ * trigger starts exactly one agent — so a multi-root fixture wired the other
+ * way is refused at `startRun` before any of these tests can observe what they
+ * are about. The roots still all launch together, which is what the parallelism
+ * cases here measure.
+ *
+ * The FIRST root keeps the id `start`, since fixtures that build their own
+ * edges name it.
  */
 function triggered(workflow: Workflow): Workflow {
   const hasIncoming = new Set(workflow.edges.map((e) => e.to));
   const roots = workflow.nodes.filter((n) => !hasIncoming.has(n.id));
+  const triggerFor = (index: number, id: string): string =>
+    index === 0 ? 'start' : `start-${id}`;
   return {
     ...workflow,
     nodes: [
-      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      ...roots.map(
+        (r, index) =>
+          ({
+            id: triggerFor(index, r.id),
+            kind: 'trigger',
+            trigger: 'manual',
+          }) as const,
+      ),
       ...workflow.nodes,
     ],
     edges: [
-      ...roots.map((r) => ({ from: 'start', to: r.id, kind: 'data' as const })),
+      ...roots.map((r, index) => ({
+        from: triggerFor(index, r.id),
+        to: r.id,
+        kind: 'data' as const,
+      })),
       ...workflow.edges,
     ],
   };
@@ -2230,6 +2252,7 @@ describe('GraphExecutorService — agent calls', () => {
       name: 'dual',
       nodes: [
         { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-worker', kind: 'trigger', trigger: 'manual' },
         { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
         {
           id: 'worker',
@@ -2241,7 +2264,10 @@ describe('GraphExecutorService — agent calls', () => {
       ],
       edges: [
         { from: 'start', to: 'orch', kind: 'data' as const },
-        { from: 'start', to: 'worker', kind: 'data' as const },
+        // Its own trigger, not a second wire off `start`: a trigger starts one
+        // agent. Both still enter the run at once, which is what this case is
+        // about — the callee also being a DAG node in its own right.
+        { from: 'start-worker', to: 'worker', kind: 'data' as const },
         { from: 'orch', to: 'worker', kind: 'call' as const },
       ],
     };

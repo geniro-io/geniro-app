@@ -370,6 +370,21 @@ export class CancelledDto extends createZodDto(
 ) {}
 
 /**
+ * Acknowledgement that a failed turn's conversation was reopened.
+ *
+ * A bare ack rather than the run or the row it wrote: what the caller does next
+ * is watch the transcript, which the reopened turn is already streaming into,
+ * and a second copy of that state here is one more thing to keep in step.
+ */
+export class RetriedDto extends createZodDto(
+  z.object({
+    retried: z
+      .boolean()
+      .describe('True when the conversation was reopened without re-prompting'),
+  }),
+) {}
+
+/**
  * How many runs had their snapshotted custom instructions forgotten.
  *
  * A COUNT rather than a bare ack because the action is silent otherwise: the

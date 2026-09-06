@@ -101,10 +101,15 @@ export const NODE_CONNECTION_RULES: Record<
     ],
   },
   trigger: {
-    // Triggers are pure entry points: nothing may feed one, and firing fans
-    // out to any number of agents. Call wires never touch triggers.
+    // Triggers are pure entry points: nothing may feed one, and firing starts
+    // exactly ONE agent. Call wires never touch triggers.
+    //
+    // Single-arity by OMITTING `multiple` rather than spelling `false`, which
+    // is how every other single-arity rule here reads — including the agent's
+    // own `{ edge: 'data', kind: 'trigger' }` input, the mirror of this rule
+    // from the other end.
     inputs: [],
-    outputs: [{ edge: 'data', kind: 'agent', multiple: true }],
+    outputs: [{ edge: 'data', kind: 'agent' }],
   },
   instruction: {
     // An instruction block is written, never produced: nothing may feed one,

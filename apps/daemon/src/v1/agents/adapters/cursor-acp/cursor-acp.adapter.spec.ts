@@ -85,6 +85,7 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
     kind: 'edit',
     rawInput: null,
     rawOutput: null,
+    locations: null,
     ...overrides,
   };
 }

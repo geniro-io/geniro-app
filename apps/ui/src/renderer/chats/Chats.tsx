@@ -118,7 +118,6 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
-import { ConversationTimeline } from './conversation-timeline';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
@@ -5056,6 +5055,21 @@ export function Chats({
     latestUserSeq,
   );
   /**
+   * The timeline as the agents panel takes it — its markers plus the jump.
+   *
+   * Memoized rather than built inline at the call site: the panel draws this
+   * control twice (the row and the folded rail), and a fresh object per render
+   * would churn both on every streamed token.
+   */
+  const timelinePanel = useMemo(
+    () => ({
+      markers: timeline.markers,
+      partialReason: timeline.partialReason,
+      onJump: jumpToSeq,
+    }),
+    [timeline.markers, timeline.partialReason, jumpToSeq],
+  );
+  /**
    * What the header states about the thread as a WHOLE — the daemon's answer
    * where it has one, this component's fold where it does not.
    *
@@ -7250,18 +7264,6 @@ export function Chats({
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
-                        // The conversation as a vertical timeline, behind an
-                        // icon beside the search one. Both are about the whole
-                        // conversation rather than the next message, which is
-                        // what puts them on this row.
-                        timeline={
-                          <ConversationTimeline
-                            markers={timeline.markers}
-                            partialReason={timeline.partialReason}
-                            onJump={jumpToSeq}
-                          />
-                        }
-                        onSearch={openChatSearch}
                       />
                     ) : null}
 
@@ -8197,6 +8199,12 @@ export function Chats({
                       // to prevent, merely moved to the second chat.
                       key={activeRun?.id ?? 'no-run'}
                       agents={agents}
+                      // Both act on the WHOLE conversation, which is what the
+                      // panel's own control row is already for — and being on
+                      // its rail is what keeps them reachable with the column
+                      // folded.
+                      onSearch={openChatSearch}
+                      timeline={timelinePanel}
                       artifacts={artifacts}
                       pullRequests={activePullRequests}
                       threadPullRequests={openedByActiveThread}

@@ -70,12 +70,19 @@ import {
  * A null spend never renders `$0.00`, and that is the whole rule the figures
  * obey end to end: a thread on a CLI that reports no cost has not spent
  * nothing — it has not been measured, and writing a zero there would be the app
- * inventing a number the CLI refused to give. It used to render NOTHING, which
- * kept the rule and lost the reader: REPORTED as "I dont see how much i spend
- * for thread - i should see it", on a `kimi-k3` thread where an empty slot said
- * the same as a header with no such readout at all. So a thread whose turns
- * were summed and priced none of them draws {@link UNPRICED} instead, with the
- * reason on the row's hover.
+ * inventing a number the CLI refused to give.
+ *
+ * WHAT AN UNMEASURED THREAD DRAWS has been decided twice, and it is nothing.
+ * It was nothing, then an em dash — REPORTED as "I dont see how much i spend
+ * for thread - i should see it" on a `kimi-k3` thread, where an empty slot read
+ * the same as a header with no such readout at all — and now nothing again, on
+ * the report that closed it: a dash where no price can ever be shown is a mark
+ * that answers nothing ("если мы не можем показать цену, там вообще дефис не
+ * нужен"). The reading that survives both is that the ROW is for figures: a
+ * mark standing in for one has to earn its place against the price beside it,
+ * and on cursor — which reports no cost on any channel — it never can. The
+ * explanation is not lost, it moved: the row's hover still says why, and the
+ * context readout states the thread's spend in full.
  */
 /**
  * The "nothing is running" default, hoisted so it is one identity: a `[]`
@@ -112,10 +119,10 @@ function ThreadMetrics({
   const turns = turnCount + openTurns.length;
   const worked = totalMs > 0 ? formatDuration(totalMs) : null;
   // A thread the daemon HAS summed, whose turns carried no price between them.
-  // Not the same as having nothing to say, which is what it used to render as.
+  // It draws NOTHING on the row and only reaches the hover — see the note on
+  // `threadMetricsTitle`'s `unpriced` clause.
   const unpriced = costUsd === null && costedTurns === 0 && turnCount > 0;
-  const spend =
-    costUsd === null ? (unpriced ? UNPRICED : null) : formatExactUsd(costUsd);
+  const spend = costUsd === null ? null : formatExactUsd(costUsd);
   if (worked === null && spend === null) {
     return null;
   }
@@ -173,11 +180,12 @@ function threadMetricsTitle(
     );
   }
   if (unpriced) {
-    // The one clause that says something the row cannot: the dash is an
-    // ABSENCE of measurement, and the reader's next thought is "so is it free,
-    // or is it broken?". Neither — nothing this thread ran was priced. It is
-    // worded from the COUNT rather than by naming the CLI, so it stays true
-    // when a priced agent has an unpriced turn and when a new agent is added.
+    // The one clause that says something the row cannot, and now the ONLY
+    // place it is said: the row draws nothing, so a reader wondering whether
+    // the thread was free or the readout is broken has this to find. Neither —
+    // nothing this thread ran was priced. Worded from the COUNT rather than by
+    // naming the CLI, so it stays true when a priced agent has an unpriced turn
+    // and when a new agent is added.
     parts.push(
       turns === 1
         ? "No cost reported — this thread's one turn did not tell geniro what it cost"
@@ -188,24 +196,6 @@ function threadMetricsTitle(
   }
   return parts.join('. ');
 }
-
-/**
- * The spend slot on a thread nothing has priced.
- *
- * REPORTED as "I dont see how much i spend for thread - i should see it",
- * against a header that was behaving exactly as designed: a null spend renders
- * nothing rather than `$0.00`, since an unmeasured thread has not spent
- * nothing. What that rule never covered is that an EMPTY slot is indis-
- * tinguishable from a header that simply has no such readout — the figure is
- * missing either way, and the user's own reading of it was "it is not there".
- * A dash keeps the rule (it claims no amount) and answers the question the
- * blank could not, with the sentence behind it on the row's hover.
- *
- * An em dash rather than `$—` or `n/a`: the slot's neighbours are a duration
- * and a price, both of which read as figures, and a dash is what a table of
- * figures already uses for one that was not taken.
- */
-const UNPRICED = '—';
 
 /**
  * The three facts fixed for this run's whole life — the agent, the folder and

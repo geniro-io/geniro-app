@@ -143,7 +143,7 @@ export function Tasks({
             down the left edge and the row held a single button, so the board
             paid 224px of its width for a choice made rarely and still read as
             having an empty line above it. */}
-        <header className="flex items-center gap-2 border-b border-border px-4 py-3">
+        <header className="flex items-center gap-2 border-b border-border px-4 py-4">
           <ProjectPicker
             projects={board.projects}
             selectedProjectId={board.selectedProjectId}
@@ -165,14 +165,13 @@ export function Tasks({
                 setNewTaskStatus(null);
                 setNewTaskOpen(true);
               }}>
-              {/* Lifted for the reason `project-picker` states: `items-center`
-                  centres boxes, so a glyph beside a descender-free label lands
-                  low. Two pixels rather than the picker's one, measured: the
-                  plus sits dead centre of the button box while "New task",
-                  having no descender, sits 4 device px above it — so the glyph
-                  has further to travel here than beside a bare label. 5.0
-                  device px before, 1.0 after. */}
-              <Plus className="size-4 -translate-y-[2px]" aria-hidden />
+              {/* NOT lifted. Measured in the running app: the glyph already
+                  lands on the button's own centre, and the label's ink sits
+                  0.9px above it — a font's own asymmetry, since "New task" has
+                  no descender. A 2px lift therefore overshot by more than the
+                  gap it was closing and took the glyph 1.1px ABOVE the label,
+                  which is what the whole content reading high actually was. */}
+              <Plus className="size-4" aria-hidden />
               New task
             </Button>
           </div>
@@ -263,6 +262,9 @@ export function Tasks({
           }}
           onSave={(patch) => {
             void board.updateTask(openTask.id, patch);
+          }}
+          onMove={(to) => {
+            void board.moveTask(openTask.id, to);
           }}
           report={report}
           starting={board.startingTaskId === openTask.id}

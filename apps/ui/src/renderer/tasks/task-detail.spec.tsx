@@ -127,8 +127,14 @@ describe('TaskDetail', () => {
     expect(el.textContent).toContain('geniro/task-t1');
   });
 
-  it('invites a description rather than showing an empty pane', () => {
-    expect(detail().textContent).toContain('No description yet');
+  it('invites a description, and SAYS the region is editable', () => {
+    const el = detail();
+
+    expect(el.textContent).toContain('Add a description');
+    // The affordance, not just the placeholder: the prose used to sit in a
+    // transparent box whose only hint was a border on hover, and it was
+    // reported as a description that could not be edited at all.
+    expect(el.querySelector('[aria-label="Edit description"]')).not.toBeNull();
   });
 
   it('renders an existing description as markdown, not as raw text', () => {
@@ -152,7 +158,7 @@ describe('priority and due date', () => {
     const el = detail();
 
     const trigger = el.querySelector(
-      '[data-menu-trigger]',
+      '[data-menu-trigger][aria-label="Priority"]',
     ) as HTMLButtonElement;
     act(() => {
       trigger.click();
@@ -169,7 +175,11 @@ describe('priority and due date', () => {
     const el = detailWith({ onSave });
 
     act(() => {
-      (el.querySelector('[data-menu-trigger]') as HTMLButtonElement).click();
+      (
+        el.querySelector(
+          '[data-menu-trigger][aria-label="Priority"]',
+        ) as HTMLButtonElement
+      ).click();
     });
     const urgent = [...document.body.querySelectorAll('[role="option"]')].find(
       (node) => node.textContent === 'Urgent',
@@ -258,5 +268,74 @@ describe('priority and due date', () => {
     // Including the HEADING, which would otherwise promise a report the panel
     // has nothing to put under it.
     expect(el.textContent).not.toContain('Report');
+  });
+});
+
+describe('status', () => {
+  /** Mounts the panel with a move handler, which `detail` does not offer. */
+  function withMove(
+    onMove: (to: string) => void,
+    over: Partial<TaskDto> = {},
+  ): HTMLDivElement {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <TaskDetail
+          task={task(over)}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          onMove={onMove}
+        />,
+      );
+    });
+    return container;
+  }
+
+  const statusTrigger = (el: HTMLElement): HTMLButtonElement =>
+    el.querySelector(
+      '[data-menu-trigger][aria-label="Status"]',
+    ) as HTMLButtonElement;
+
+  it('moves the card from the panel, which used to need a drag', () => {
+    const onMove = vi.fn();
+    const el = withMove(onMove, { status: 'todo' as TaskDto['status'] });
+
+    act(() => {
+      statusTrigger(el).click();
+    });
+    const done = [...document.body.querySelectorAll('[role="option"]')].find(
+      (node) => node.textContent === 'Done',
+    ) as HTMLElement;
+    act(() => {
+      done.click();
+    });
+
+    expect(onMove).toHaveBeenCalledWith('done');
+  });
+
+  it('does not move a card re-picked into the column it is already in', () => {
+    // `moveTaskStatus` is a compare-and-set the daemon answers 400 to when
+    // `from` equals `to`, so a no-op pick must never reach it.
+    const onMove = vi.fn();
+    const el = withMove(onMove, { status: 'todo' as TaskDto['status'] });
+
+    act(() => {
+      statusTrigger(el).click();
+    });
+    const same = [...document.body.querySelectorAll('[role="option"]')].find(
+      (node) => node.textContent === 'To do',
+    ) as HTMLElement;
+    act(() => {
+      same.click();
+    });
+
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it('locks the picker when the board cannot move the card', () => {
+    // Same rule the Run button follows: shown-and-disabled, never withheld.
+    expect(statusTrigger(detail()).disabled).toBe(true);
   });
 });

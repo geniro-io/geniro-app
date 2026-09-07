@@ -516,24 +516,23 @@ describe('the column surface', () => {
     ).toBe(false);
   });
 
-  // `items-center` centres BOXES, and a descender-free label sits high in its
-  // own line box, so a square glyph beside it lands visibly low — measured on
-  // the running app at 5.5 device px for the picker and 5.0 for the button.
-  // jsdom computes no layout, so the class IS the correction, not a proxy.
-  it('lifts the header glyphs off the box centre', async () => {
+  // NO header glyph is lifted, and this is the reverse of what an earlier pass
+  // pinned. `items-center` on a flex row centres the glyph's own BOX, which is
+  // already the answer; the `-translate-y-[2px]` added on top of it was then
+  // reported as content sitting high inside the New task button. Measured in
+  // the running app: with the lift, the plus centred at y=72.83 in a button
+  // centred at 74.83 — 2.0px above centre, exactly the correction's own size;
+  // without it the two agree to the pixel (78.578 both). jsdom computes no
+  // layout, so the absence of the class IS the rule, not a proxy for it.
+  it('leaves the header glyphs on the box centre', async () => {
     const el = await board();
 
     const icons = [...el.querySelectorAll('header svg')];
     expect(icons.length).toBeGreaterThan(0);
-    // The chevron is the menu's own affordance and centres on the box, not on
-    // the label — only the two LEADING glyphs are corrected.
     const lifted = icons.filter((node) =>
       (node.getAttribute('class') ?? '').includes('-translate-y-'),
     );
-    // ONE, not two: the picker's glyph sits beside a two-line block and
-    // centres on it, so only the button's plus — beside a single
-    // descender-free baseline — needs the correction.
-    expect(lifted.length).toBe(1);
+    expect(lifted).toEqual([]);
   });
 
   // Side by side, a long pair truncated BOTH halves —

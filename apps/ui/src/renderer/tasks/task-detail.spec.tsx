@@ -55,7 +55,9 @@ describe('TaskDetail', () => {
     const run = buttonNamed(el, 'Run task');
 
     expect(run.disabled).toBe(true);
-    expect(el.textContent).toContain('not built yet');
+    // The spec asks the control to say WHEN it arrives, not merely that it is
+    // off — a disabled button with no horizon reads as broken.
+    expect(el.textContent).toContain('milestone 3');
   });
 
   it('invites a description rather than showing an empty pane', () => {

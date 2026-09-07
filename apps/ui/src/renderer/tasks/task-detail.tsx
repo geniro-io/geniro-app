@@ -141,7 +141,7 @@ export function TaskDetail({
             Run task
           </Button>
           <span className="text-xs text-muted-foreground">
-            Running a task from the board is not built yet.
+            Running a task from the board arrives in milestone 3.
           </span>
         </div>
       </aside>

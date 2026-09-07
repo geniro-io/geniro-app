@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -2374,10 +2375,24 @@ describe('CursorAcpAdapter misuse', () => {
       const blobs = join(source, 'blobs');
       mkdirSync(blobs);
       writeFileSync(join(blobs, 'blob-1'), 'x');
+      // BOUND on a short path, then MOVED into place. macOS caps a unix
+      // socket path at 104 bytes (`sun_path`) and `os.tmpdir()` is
+      // `/var/folders/…` there, which puts `…/blobs/live.sock` at 111 —
+      // measured, not estimated. `listen` then never calls its callback, so
+      // this case TIMED OUT rather than failing: red on every Mac, green on
+      // Linux CI, where `/tmp` leaves the same path at 67.
+      //
+      // Renaming is sound because what `fs.cp` refuses is the inode's TYPE —
+      // `ERR_FS_CP_SOCKET` is decided by `isSocket()`, not by whether anything
+      // is still listening on the path it was bound at.
+      const socketDir = mkdtempSync(join(tmpdir(), 'sock-'));
+      dirs.push(socketDir);
+      const bound = join(socketDir, 's');
       const uncopyable = createServer();
       await new Promise<void>((resolve) => {
-        uncopyable.listen(join(blobs, 'live.sock'), resolve);
+        uncopyable.listen(bound, resolve);
       });
+      renameSync(bound, join(blobs, 'live.sock'));
 
       try {
         await expect(importSession(home, store)).rejects.toThrow();

@@ -19,6 +19,8 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
+import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import { isBreakerOpen } from '../../projects/utils/breaker';
 import { Item } from '../../runs/entity/item.entity';
 import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
@@ -80,7 +82,15 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     taskEvents.allChanges().subscribe((event) => changes.push(event));
     tasks = new TasksService(em, taskDao, projectDao, taskEvents);
     bus = new AgentEventBus();
-    service = new TaskSettleService(em, bus, runDao, itemDao, taskDao, tasks);
+    service = new TaskSettleService(
+      em,
+      bus,
+      runDao,
+      itemDao,
+      taskDao,
+      projectDao,
+      tasks,
+    );
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-task-settle-spec',
@@ -308,6 +318,108 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     );
     // The contested card is left exactly where the failed move found it.
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  // ── The failure breaker ────────────────────────────────────────────────────
+
+  /**
+   * Read the project back through a FRESH fork.
+   *
+   * `settle` writes on its own fork, so the shared EM's identity map still
+   * holds the row as it was before — a read through it would assert against a
+   * copy the service never touched.
+   */
+  const freshProject = async (): Promise<Project> => {
+    const fork = orm.em.fork() as EntityManager;
+    return (await new ProjectDao(fork).getById(projectId, fork)) as Project;
+  };
+
+  const streak = async (): Promise<number> =>
+    (await freshProject()).autopilotFailureStreak;
+
+  const armProject = async (patch: {
+    enabled?: boolean;
+    streak?: number;
+  }): Promise<void> => {
+    const project = await projectDao.getById(projectId, em);
+    if (patch.enabled !== undefined) {
+      (project as Project).autopilotEnabled = patch.enabled;
+    }
+    if (patch.streak !== undefined) {
+      (project as Project).autopilotFailureStreak = patch.streak;
+    }
+    await em.flush();
+  };
+
+  it('counts a failed run against an armed project', async () => {
+    await armProject({ enabled: true });
+    const task = await working();
+
+    await service.settle('run-1', 'failed');
+
+    expect(await streak()).toBe(1);
+    expect((await taskDao.getById(task.id))?.status).toBe('failed');
+  });
+
+  it('opens the breaker at the threshold, and not one failure sooner', async () => {
+    await armProject({
+      enabled: true,
+      streak: PROJECT_FAILURE_BREAKER_THRESHOLD - 2,
+    });
+
+    await working('run-a');
+    await service.settle('run-a', 'failed');
+    expect(isBreakerOpen(await freshProject())).toBe(false);
+
+    await working('run-b');
+    await service.settle('run-b', 'failed');
+    expect(await streak()).toBe(PROJECT_FAILURE_BREAKER_THRESHOLD);
+    expect(isBreakerOpen(await freshProject())).toBe(true);
+  });
+
+  it('clears the streak on a success', async () => {
+    await armProject({
+      enabled: true,
+      streak: PROJECT_FAILURE_BREAKER_THRESHOLD,
+    });
+    await working();
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(0);
+  });
+
+  // A success is evidence the thing works, whoever pressed it — so it clears
+  // the count even on a project nobody has armed.
+  it('clears the streak on a success even while disarmed', async () => {
+    await armProject({ enabled: false, streak: 2 });
+    await working();
+
+    await service.settle('run-1', 'completed');
+
+    expect(await streak()).toBe(0);
+  });
+
+  // The streak is a claim about UNATTENDED work. A person re-running something
+  // they know is broken, on a project nobody armed, is not building evidence
+  // for a breaker that is guarding nothing.
+  it('does not count a failure on a disarmed project', async () => {
+    await armProject({ enabled: false, streak: 0 });
+    await working();
+
+    await service.settle('run-1', 'failed');
+
+    expect(await streak()).toBe(0);
+  });
+
+  // Neither a fault to count nor a success to clear one.
+  it('leaves the streak alone when the user cancels', async () => {
+    await armProject({ enabled: true, streak: 2 });
+    await working();
+
+    await service.settle('run-1', 'cancelled');
+
+    expect(await streak()).toBe(2);
   });
 
   it('names the SETTLE as the reason the card moved', async () => {

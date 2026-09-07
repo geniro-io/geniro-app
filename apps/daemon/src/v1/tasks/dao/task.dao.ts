@@ -1,4 +1,5 @@
-import { EntityManager } from '@mikro-orm/sqlite';
+import type { EntityData } from '@mikro-orm/core';
+import { EntityManager, type FilterQuery } from '@mikro-orm/sqlite';
 import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
@@ -95,6 +96,37 @@ export class TaskDao extends BaseDao<Task> {
       txEm,
     );
     return (last?.position ?? -1) + 1;
+  }
+
+  /**
+   * Move one card between columns in a single conditional UPDATE, reporting
+   * whether it landed.
+   *
+   * The `status` in the WHERE clause is the entire mechanism. Two callers that
+   * both read the card in `todo` both send `from: 'todo'`, and the database
+   * applies exactly one of them — the loser matches no row and gets `false`.
+   * Comparing in JavaScript instead cannot hold that line: the position lookup
+   * between the read and the write is an `await`, and the autopilot's sweep is
+   * precisely a caller that starts several moves inside one tick.
+   *
+   * `deletedAt` is named explicitly because a native update runs beneath the
+   * `softDelete` filter; without it this would move a card someone deleted.
+   * `updatedAt` likewise — the `onUpdate` hook belongs to the UnitOfWork and
+   * does not fire here.
+   */
+  async compareAndSetStatus(
+    taskId: string,
+    from: TaskStatus,
+    to: TaskStatus,
+    position: number,
+    at: Date,
+    txEm?: EntityManager,
+  ): Promise<boolean> {
+    const affected = await this.getRepo(txEm).nativeUpdate(
+      { id: taskId, status: from, deletedAt: null } as FilterQuery<Task>,
+      { status: to, position, updatedAt: at } as EntityData<Task>,
+    );
+    return affected === 1;
   }
 
   /**

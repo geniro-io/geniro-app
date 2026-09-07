@@ -14,9 +14,11 @@ import {
   CreateProjectDto,
   ProjectDeletedDto,
   ProjectDto,
+  ProjectQueueDto,
   UpdateProjectDto,
 } from '../dto/project.dto';
-import type { ProjectWire } from '../projects.types';
+import type { ProjectQueue, ProjectWire } from '../projects.types';
+import { ProjectQueueService } from '../services/project-queue.service';
 import { ProjectsService } from '../services/projects.service';
 
 /**
@@ -27,7 +29,10 @@ import { ProjectsService } from '../services/projects.service';
 @ApiTags('projects')
 @ApiBearerAuth()
 export class ProjectsController {
-  constructor(private readonly projects: ProjectsService) {}
+  constructor(
+    private readonly projects: ProjectsService,
+    private readonly queue: ProjectQueueService,
+  ) {}
 
   @Get()
   @ApiOperation({ operationId: 'listProjects' })
@@ -48,6 +53,28 @@ export class ProjectsController {
   @ZodResponse({ status: 200, type: ProjectDto })
   read(@Param('projectId') projectId: string): Promise<ProjectWire> {
     return this.projects.get(projectId);
+  }
+
+  /**
+   * What this project's autopilot may start right now — already narrowed to
+   * the free slots, so a conductor never has to count for itself.
+   */
+  @Get(':projectId/queue')
+  @ApiOperation({ operationId: 'readProjectQueue' })
+  @ZodResponse({ status: 200, type: ProjectQueueDto })
+  readQueue(@Param('projectId') projectId: string): Promise<ProjectQueue> {
+    return this.queue.read(projectId);
+  }
+
+  /**
+   * Close a tripped breaker. Its own route rather than a field on the patch:
+   * the count exists to make resuming deliberate.
+   */
+  @Post(':projectId/rearm')
+  @ApiOperation({ operationId: 'rearmProjectAutopilot' })
+  @ZodResponse({ status: 200, type: ProjectDto })
+  rearm(@Param('projectId') projectId: string): Promise<ProjectWire> {
+    return this.projects.rearmAutopilot(projectId);
   }
 
   @Patch(':projectId')

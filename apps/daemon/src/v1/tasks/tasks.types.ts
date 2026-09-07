@@ -171,10 +171,24 @@ export interface TaskStatusMove {
  * project's standing answers, so a board that sends nothing still runs the
  * setup the user chose for that project.
  */
+/**
+ * Who pressed it.
+ *
+ * The autopilot's starts are bounded by the project's cap and stopped by its
+ * breaker; a person's are not. The cap protects the machine from a TIMER that
+ * would otherwise fan out as fast as the queue allows, and the breaker exists
+ * to stop unattended work — a user pressing Run is attending, and refusing
+ * them is how they would be prevented from checking whether the thing that
+ * broke is fixed before re-arming.
+ */
+export type TaskRunStarter = 'user' | 'autopilot';
+
 export interface StartTaskRun {
   cwd: string;
   branch: string;
   from: TaskStatus;
+  /** Defaults to `user`: only a caller that says otherwise is capped. */
+  startedBy?: TaskRunStarter;
   startSha?: string;
   startDirty?: boolean;
   agentKind?: AgentKind;

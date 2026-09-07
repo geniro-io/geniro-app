@@ -7,7 +7,6 @@ import { ConfirmDialog } from '../components/confirm-dialog';
 import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { Card } from '../components/ui/card';
-
 export function ProjectsPane({
   projects,
   error,
@@ -41,30 +40,32 @@ export function ProjectsPane({
         />
       ) : null}
       {projects.map((project) => (
-        <Card
-          key={project.id}
-          className="flex flex-row items-center justify-between gap-3 p-3">
-          <div className="flex min-w-0 flex-col">
-            <span className="truncate text-sm font-medium">{project.name}</span>
-            <span
-              className="truncate font-mono text-xs text-muted-foreground"
-              title={project.folder}>
-              {shortenPath(project.folder)}
-            </span>
+        <Card key={project.id} className="flex flex-col gap-3 p-3">
+          <div className="flex flex-row items-center justify-between gap-3">
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium">
+                {project.name}
+              </span>
+              <span
+                className="truncate font-mono text-xs text-muted-foreground"
+                title={project.folder}>
+                {shortenPath(project.folder)}
+              </span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label={`Delete ${project.name}`}
+              // Deleting a project deletes its tasks with it, and there is no
+              // trash — so the label names the project rather than saying
+              // "Delete", which in a list is a press with no subject.
+              title={`Delete ${project.name} and its tasks`}
+              onClick={() => {
+                setConfirming(project);
+              }}>
+              <Trash2 className="size-4" aria-hidden />
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`Delete ${project.name}`}
-            // Deleting a project deletes its tasks with it, and there is no
-            // trash — so the label names the project rather than saying
-            // "Delete", which in a list is a press with no subject.
-            title={`Delete ${project.name} and its tasks`}
-            onClick={() => {
-              setConfirming(project);
-            }}>
-            <Trash2 className="size-4" aria-hidden />
-          </Button>
         </Card>
       ))}
       <ConfirmDialog

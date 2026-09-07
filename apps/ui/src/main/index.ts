@@ -6,7 +6,9 @@ import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
+import { AutopilotConductor } from './autopilot-conductor';
 import { installContextMenu } from './context-menu';
+import { DaemonKeepAlive } from './daemon-keepalive';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
 import { registerIpc } from './ipc';
@@ -25,7 +27,11 @@ import {
   isRealLoadFailure,
   reportMainLog,
 } from './window-diagnostics';
-import { reapOrphanedWorktrees } from './worktree-service';
+import {
+  prepareWorktree,
+  pruneWorktreeForTask,
+  reapOrphanedWorktrees,
+} from './worktree-service';
 
 /**
  * Product display name. Set before anything reads it: it drives
@@ -85,6 +91,65 @@ const supervisor = new DaemonSupervisor();
 const updates = createUpdateService((level, message, context) => {
   void reportMainLog(supervisor.getHandle(), level, message, context);
 });
+/**
+ * The autopilot's two halves, both owned by main.
+ *
+ * The keep-alive holds one authenticated client so the daemon cannot idle out
+ * between two tasks; the conductor is the recurring tick that starts them.
+ * Neither needs an IPC channel of its own: arming a project is an ordinary
+ * PATCH the renderer already has a generated client for, and the tick reads it
+ * back from the daemon — so the two windows and the timer all learn the same
+ * answer from the same row.
+ */
+const keepAlive = new DaemonKeepAlive((message) => {
+  void reportMainLog(supervisor.getHandle(), 'info', message, {
+    source: 'autopilot-keepalive',
+  });
+});
+
+const autopilot = new AutopilotConductor({
+  handle: () => supervisor.getHandle(),
+  armedProjects: readArmedProjects,
+  prepareWorktree,
+  discardWorktree: pruneWorktreeForTask,
+  log: (message) => {
+    void reportMainLog(supervisor.getHandle(), 'info', message, {
+      source: 'autopilot',
+    });
+  },
+});
+
+/**
+ * Which projects are armed, and — as a side effect the name says out loud —
+ * whether the daemon must be held open for them.
+ *
+ * One read answers both questions, and doing it here rather than on a timer of
+ * the keep-alive's own is what keeps them from disagreeing: the socket is
+ * released in the same pass that finds nothing armed.
+ */
+async function readArmedProjects(): Promise<{ id: string; folder: string }[]> {
+  const handle = supervisor.getHandle();
+  if (handle === null) {
+    return [];
+  }
+  keepAlive.useDaemon(handle);
+  const res = await fetch(`http://${handle.host}:${handle.port}/v1/projects`, {
+    headers: { authorization: `Bearer ${handle.token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) {
+    throw new Error(`GET /v1/projects answered ${res.status}`);
+  }
+  const projects = (await res.json()) as {
+    id: string;
+    folder: string;
+    autopilotEnabled?: boolean;
+  }[];
+  const armed = projects.filter((project) => project.autopilotEnabled === true);
+  keepAlive.setArmed(armed.length > 0);
+  return armed.map((project) => ({ id: project.id, folder: project.folder }));
+}
+
 let mainWindow: BrowserWindow | null = null;
 let teardownDone = false;
 
@@ -395,6 +460,9 @@ function main(): void {
       // A reaper that cannot run costs disk and nothing else; a launch that
       // fails because of one would cost the user their app.
     });
+    // AFTER the reaper: a tick that started a task while leftovers were still
+    // being cleared could have its own fresh worktree reaped out from under it.
+    autopilot.start();
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -437,6 +505,10 @@ function main(): void {
     // including the relaunch an installed update triggers, which quits through
     // exactly this path.
     updates.stop();
+    // Quitting is not an armed state — the daemon goes back to its ordinary
+    // idle window rather than being held open by a process that is ending.
+    autopilot.stop();
+    keepAlive.dispose();
     event.preventDefault();
     void supervisor.stop().finally(() => {
       teardownDone = true;

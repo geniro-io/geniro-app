@@ -10,6 +10,7 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
+import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -48,6 +49,23 @@ export class TaskRunsService {
    */
   private readonly starting = new Set<string>();
 
+  /**
+   * One project's starts, serialized.
+   *
+   * The `starting` Set above stops one CARD being started twice; this stops
+   * one PROJECT exceeding its cap, which is a different race and is not
+   * covered by it. Two conductors picking two DIFFERENT eligible tasks both
+   * count the running runs, both find a slot free, and both start — the cap is
+   * exceeded without either card being touched twice, so neither the Set nor
+   * the status compare-and-set can see it.
+   *
+   * In-process serialization is sufficient because there is exactly one
+   * daemon per userData dir, which `utils/instance-lock.ts` enforces — every
+   * window's conductor reaches this one map. A second daemon would defeat it,
+   * and is refused at boot for its own reasons.
+   */
+  private readonly perProject = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
@@ -55,6 +73,7 @@ export class TaskRunsService {
     private readonly runDao: RunDao,
     private readonly tasks: TasksService,
     private readonly chats: ChatService,
+    private readonly queue: ProjectQueueService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -66,10 +85,50 @@ export class TaskRunsService {
     }
     this.starting.add(taskId);
     try {
-      return await this.startClaimed(taskId, input);
+      const projectId = await this.projectIdOf(taskId);
+      return await this.queued(projectId, () =>
+        this.startClaimed(taskId, input),
+      );
     } finally {
       this.starting.delete(taskId);
     }
+  }
+
+  /**
+   * Run `fn` after every start already queued for this project.
+   *
+   * The chain is kept on failures too — a start that threw still finished, and
+   * dropping the tail there would let the next caller run beside one still in
+   * flight. The entry is deleted only when this call is still the tail, so a
+   * later start that has already chained onto it is never orphaned.
+   */
+  private async queued<T>(projectId: string, fn: () => Promise<T>): Promise<T> {
+    const prior = this.perProject.get(projectId) ?? Promise.resolve();
+    const mine = prior.then(fn, fn);
+    this.perProject.set(
+      projectId,
+      mine.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    try {
+      return await mine;
+    } finally {
+      const tail = this.perProject.get(projectId);
+      if (tail !== undefined) {
+        void tail.then(() => {
+          if (this.perProject.get(projectId) === tail) {
+            this.perProject.delete(projectId);
+          }
+        });
+      }
+    }
+  }
+
+  private async projectIdOf(taskId: string): Promise<string> {
+    const em = this.em.fork();
+    return (await this.require(taskId, em)).projectId;
   }
 
   private async startClaimed(
@@ -87,6 +146,7 @@ export class TaskRunsService {
       );
     }
     await this.assertNotAlreadyRunning(task, em);
+    await this.assertAutopilotMayStart(project, input);
 
     // The MOVE is the reservation, which is why it happens before the chat
     // exists rather than after: a card sitting in `in_progress` is what a
@@ -210,6 +270,42 @@ export class TaskRunsService {
    * review must be runnable again, and a bare `runId !== null` would refuse
    * every card that had ever run once.
    */
+  /**
+   * The cap and the breaker, enforced where the run is actually made.
+   *
+   * `GET /v1/projects/:id/queue` already narrows its handout to the free
+   * slots, and that is a convenience rather than the guard: it answers a
+   * conductor that asked, and nothing obliges a conductor to ask. This is the
+   * line — the daemon refusing, over the rows, inside the per-project gate, so
+   * two windows that polled in the same instant cannot both get past it.
+   *
+   * Only an autopilot start is bounded. A person pressing Run has decided to
+   * spend the disk, and the breaker exists to stop UNATTENDED work — refusing
+   * them is how they would be prevented from checking that the thing which
+   * broke is fixed before they re-arm.
+   */
+  private async assertAutopilotMayStart(
+    project: Project,
+    input: StartTaskRun,
+  ): Promise<void> {
+    if ((input.startedBy ?? 'user') !== 'autopilot') {
+      return;
+    }
+    const queue = await this.queue.read(project.id);
+    if (queue.breakerOpen) {
+      throw new ConflictException(
+        'AUTOPILOT_BREAKER_OPEN',
+        `project ${project.id} has ${queue.failureStreak} failed runs in a row — re-arm it before the autopilot starts another`,
+      );
+    }
+    if (queue.running >= queue.cap) {
+      throw new ConflictException(
+        'AUTOPILOT_AT_CAP',
+        `project ${project.id} is already running ${queue.running} of ${queue.cap} tasks`,
+      );
+    }
+  }
+
   private async assertNotAlreadyRunning(
     task: Task,
     em: EntityManager,

@@ -18,6 +18,7 @@ import type {
   CreateProjectDto,
   ProjectDeletedDto,
   ProjectDto,
+  ProjectQueueDto,
   UpdateProjectDto,
 } from '../models/index';
 
@@ -30,6 +31,14 @@ export interface ProjectsApiDeleteProjectRequest {
 }
 
 export interface ProjectsApiReadProjectRequest {
+    projectId: string;
+}
+
+export interface ProjectsApiReadProjectQueueRequest {
+    projectId: string;
+}
+
+export interface ProjectsApiRearmProjectAutopilotRequest {
     projectId: string;
 }
 
@@ -214,6 +223,96 @@ export class ProjectsApi extends runtime.BaseAPI {
      */
     async readProject(requestParameters: ProjectsApiReadProjectRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectDto> {
         const response = await this.readProjectRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readProjectQueueRaw(requestParameters: ProjectsApiReadProjectQueueRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ProjectQueueDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling readProjectQueue().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/projects/{projectId}/queue`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readProjectQueue(requestParameters: ProjectsApiReadProjectQueueRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectQueueDto> {
+        const response = await this.readProjectQueueRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async rearmProjectAutopilotRaw(requestParameters: ProjectsApiRearmProjectAutopilotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ProjectDto>> {
+        if (requestParameters['projectId'] == null) {
+            throw new runtime.RequiredError(
+                'projectId',
+                'Required parameter "projectId" was null or undefined when calling rearmProjectAutopilot().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/projects/{projectId}/rearm`;
+        urlPath = urlPath.replace(`{${"projectId"}}`, encodeURIComponent(String(requestParameters['projectId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async rearmProjectAutopilot(requestParameters: ProjectsApiRearmProjectAutopilotRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ProjectDto> {
+        const response = await this.rearmProjectAutopilotRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

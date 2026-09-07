@@ -75,6 +75,21 @@ export interface BoardApi {
   dismissError: () => void;
   /** Re-read the project list — the board calls this when it becomes visible. */
   refreshProjects: () => void;
+  /**
+   * Disarm the open project's autopilot.
+   *
+   * Intake only: a task already running is left working. Stopping one is a
+   * different act with a different cost and has its own control on the run.
+   */
+  stopAutopilot: () => Promise<void>;
+  /** Write the open project's autopilot policy — switch, intake column, cap. */
+  updateAutopilot: (patch: {
+    autopilotEnabled?: boolean;
+    autopilotIntakeStatus?: TaskDto['status'];
+    autopilotMaxConcurrent?: number;
+  }) => Promise<void>;
+  /** Close a tripped breaker so the autopilot resumes. */
+  rearmAutopilot: () => Promise<void>;
 }
 
 function describe(err: unknown): string {
@@ -424,6 +439,58 @@ export function useBoard(
     setError(null);
   }, []);
 
+  /**
+   * Both autopilot controls, written straight to the project row.
+   *
+   * The conductor reads that row on its next tick, so there is nothing to
+   * tell it and no IPC channel between them — the board, Settings and the
+   * timer all learn the same answer from the same place.
+   */
+  const patchProject = useCallback(
+    async (patch: {
+      autopilotEnabled?: boolean;
+      autopilotIntakeStatus?: TaskDto['status'];
+      autopilotMaxConcurrent?: number;
+    }): Promise<void> => {
+      const projectId = selectedRef.current;
+      if (!apis || projectId === null) {
+        return;
+      }
+      try {
+        const saved = await apis.projects.updateProject({
+          projectId,
+          updateProjectDto: patch,
+        });
+        setProjects((current) =>
+          current.map((row) => (row.id === saved.id ? saved : row)),
+        );
+      } catch (err: unknown) {
+        setError(describe(err));
+      }
+    },
+    [apis],
+  );
+
+  const stopAutopilot = useCallback(
+    () => patchProject({ autopilotEnabled: false }),
+    [patchProject],
+  );
+
+  const rearmAutopilot = useCallback(async (): Promise<void> => {
+    const projectId = selectedRef.current;
+    if (!apis || projectId === null) {
+      return;
+    }
+    try {
+      const saved = await apis.projects.rearmProjectAutopilot({ projectId });
+      setProjects((current) =>
+        current.map((row) => (row.id === saved.id ? saved : row)),
+      );
+    } catch (err: unknown) {
+      setError(describe(err));
+    }
+  }, [apis]);
+
   return {
     projects,
     selectedProjectId,
@@ -440,5 +507,8 @@ export function useBoard(
     loadReport,
     dismissError,
     refreshProjects,
+    stopAutopilot,
+    updateAutopilot: patchProject,
+    rearmAutopilot,
   };
 }

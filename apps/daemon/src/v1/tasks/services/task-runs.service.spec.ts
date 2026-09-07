@@ -23,6 +23,8 @@ import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
+import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
+import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
@@ -136,16 +138,18 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and
     // wave every second start through.
+    let runSeq = 0;
     createChat = vi.fn(async (input: { taskId?: string }) => {
+      const id = `run-${(runSeq += 1)}`;
       await runDao.create({
-        id: 'run-1',
+        id,
         workflowId: null,
         status: 'running',
         agentKind: 'claude',
         cwd: worktree,
         taskId: input.taskId ?? null,
       });
-      return runWire('run-1');
+      return runWire(id);
     });
     sendMessage = vi.fn(async () => undefined);
     deleteChat = vi.fn(async () => ({ deleted: true }));
@@ -161,6 +165,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       runDao,
       tasks,
       chats,
+      new ProjectQueueService(em, projectDao, taskDao, runDao),
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -363,6 +368,94 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     release?.();
     await first.catch(() => undefined);
     expect(createChat).toHaveBeenCalledTimes(1);
+  });
+
+  // ── The autopilot's own bounds ─────────────────────────────────────────────
+  //
+  // The queue route narrows its handout to the free slots, and that is a
+  // convenience: nothing obliges a conductor to ask. These pin the refusal at
+  // the place the run is actually made.
+
+  const arm = async (patch: {
+    cap?: number;
+    streak?: number;
+  }): Promise<void> => {
+    const project = await projectDao.getById(projectId, em);
+    if (patch.cap !== undefined) {
+      (project as Project).autopilotMaxConcurrent = patch.cap;
+    }
+    if (patch.streak !== undefined) {
+      (project as Project).autopilotFailureStreak = patch.streak;
+    }
+    await em.flush();
+  };
+
+  it('refuses an autopilot start once the project is at its cap', async () => {
+    await arm({ cap: 1 });
+    const working = await seed({ title: 'working' });
+    await service.start(working.id, start());
+    const next = await seed({ title: 'next' });
+
+    await expect(
+      service.start(next.id, { ...start(), startedBy: 'autopilot' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('is already running 1 of 1'),
+    });
+  });
+
+  // The cap bounds a TIMER, not the person. Refusing them here would also mean
+  // they could not run anything while the autopilot held every slot.
+  it('lets a person start past the cap the autopilot is held to', async () => {
+    await arm({ cap: 1 });
+    const working = await seed({ title: 'working' });
+    await service.start(working.id, start());
+    const next = await seed({ title: 'next' });
+
+    const started = await service.start(next.id, start());
+
+    expect(started.status).toBe('in_progress');
+  });
+
+  it('refuses an autopilot start while the breaker is open', async () => {
+    await arm({ streak: PROJECT_FAILURE_BREAKER_THRESHOLD });
+    const task = await seed();
+
+    await expect(
+      service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('re-arm it'),
+    });
+  });
+
+  // How a user checks that whatever broke is fixed, before re-arming.
+  it('lets a person start while the breaker is open', async () => {
+    await arm({ streak: PROJECT_FAILURE_BREAKER_THRESHOLD });
+    const task = await seed();
+
+    const started = await service.start(task.id, start());
+
+    expect(started.status).toBe('in_progress');
+  });
+
+  // The race neither the per-card claim nor the status compare-and-set can
+  // see: two conductors picking two DIFFERENT cards, both counting a free
+  // slot, both starting. Only serializing a project's starts closes it.
+  it('keeps two simultaneous autopilot starts inside a cap of one', async () => {
+    await arm({ cap: 1 });
+    const first = await seed({ title: 'first' });
+    const second = await seed({ title: 'second' });
+
+    const settled = await Promise.allSettled([
+      service.start(first.id, { ...start(), startedBy: 'autopilot' }),
+      service.start(second.id, { ...start(), startedBy: 'autopilot' }),
+    ]);
+
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(createChat).toHaveBeenCalledTimes(1);
+    const inProgress = (await taskDao.listForProject(projectId)).filter(
+      (task) => task.status === 'in_progress',
+    );
+    expect(inProgress).toHaveLength(1);
   });
 
   it('takes the run down with the card when a start fails after creating it', async () => {

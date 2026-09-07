@@ -588,4 +588,101 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(await dao.searchByText('run-a', ['bloom'], 50)).toHaveLength(1);
     });
   });
+
+  describe('the timeline pair', () => {
+    /** A message row with a role — the timeline's whole discriminator. */
+    async function say(
+      runId: string,
+      seq: number,
+      role: string,
+      text: string,
+    ): Promise<void> {
+      await dao.create({
+        runId,
+        seq,
+        kind: 'message',
+        role,
+        payload: JSON.stringify({ text }),
+      });
+    }
+
+    it('gives the spine every row of the run, and none of their payloads', async () => {
+      // The PROJECTION is the whole reason this method exists rather than
+      // `getByRun`: `payload` is the TEXT column and a long transcript is most
+      // of the database, so a lost `fields` list loads every diff and tool
+      // result in the run to answer a question about none of them. The service
+      // spec's fake DAO cannot catch that — it hands back whatever it was
+      // given.
+      await say('run-a', 0, 'user', 'the ask');
+      await say('run-a', 1, 'assistant', 'the reply');
+      await insert('run-a', 2, 'tool_call', JSON.stringify({ name: 'ls' }));
+      await say('run-b', 0, 'user', 'another run');
+
+      const spine = await dao.timelineSpine('run-a');
+
+      expect(spine.map((row) => [row.seq, row.kind, row.role])).toEqual([
+        [0, 'message', 'user'],
+        [1, 'message', 'assistant'],
+        [2, 'tool_call', null],
+      ]);
+      // Loaded, it would be the message text — so this goes red on a widened
+      // projection rather than merely on a missing column.
+      for (const row of spine) {
+        expect((row as Partial<Item>).payload).toBeUndefined();
+      }
+    });
+
+    it('takes only USER messages and finished turns into the payload read', async () => {
+      // The `$or` is what bounds the expensive half of the pair. An arm lost to
+      // a widened OR reads every agent message's payload too, and one lost to a
+      // dropped `runId` reads another conversation's — neither of which fails
+      // anything the service spec asserts.
+      await say('run-a', 0, 'user', 'the ask');
+      await say('run-a', 1, 'assistant', 'the reply');
+      await insert(
+        'run-a',
+        2,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.1 } }),
+      );
+      await insert('run-a', 3, 'tool_result', JSON.stringify({ out: 'x' }));
+      await say('run-b', 0, 'user', 'another run');
+
+      const rows = await dao.timelinePayloadRows('run-a');
+
+      expect(rows.map((row) => [row.seq, row.kind])).toEqual([
+        [0, 'message'],
+        [2, 'turn_complete'],
+      ]);
+      expect(JSON.parse(rows[0]!.payload)).toEqual({ text: 'the ask' });
+    });
+
+    it('orders both reads by seq, which is what the fold walks', async () => {
+      // The fold is two forward walks over these two lists and advances a
+      // pointer through the second. Insertion (rowid) order here is deliberately
+      // the reverse, so an ordering that came from the table rather than the
+      // query files every turn against the wrong segment.
+      await insert(
+        'run-a',
+        4,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.2 } }),
+      );
+      await say('run-a', 3, 'user', 'second ask');
+      await insert(
+        'run-a',
+        2,
+        'turn_complete',
+        JSON.stringify({ usage: { costUsd: 0.1 } }),
+      );
+      await say('run-a', 1, 'user', 'first ask');
+
+      expect((await dao.timelineSpine('run-a')).map((r) => r.seq)).toEqual([
+        1, 2, 3, 4,
+      ]);
+      expect(
+        (await dao.timelinePayloadRows('run-a')).map((r) => r.seq),
+      ).toEqual([1, 2, 3, 4]);
+    });
+  });
 });

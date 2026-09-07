@@ -9,6 +9,7 @@ import {
   ChatListScopeSchema,
   ChatMetricsWireSchema,
   ChatSearchResultSchema,
+  ChatTimelineWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
   ItemWireSchema,
@@ -486,3 +487,6 @@ export class ChatMetricsDto extends createZodDto(ChatMetricsWireSchema) {}
 
 /** The thread's spend alone — see `ChatTotalsResponseSchema` for why wrapped. */
 export class ChatTotalsDto extends createZodDto(ChatTotalsResponseSchema) {}
+
+/** The conversation as a rail of user messages — see `ChatTimelineWireSchema`. */
+export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}

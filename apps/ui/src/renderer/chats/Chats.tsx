@@ -239,6 +239,7 @@ import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
+import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
@@ -5023,6 +5024,52 @@ export function Chats({
     client,
   );
   /**
+   * The newest user message the loaded window holds — the timeline rail's
+   * second refresh trigger.
+   *
+   * It moves when a message is SENT and at no other time: the items arrive in
+   * seq order, so paging older history in prepends rows whose seqs are all
+   * lower and this figure is unchanged. That is what lets the rail follow the
+   * conversation without a fetch every time the reader scrolls up.
+   */
+  const latestUserSeq = useMemo(
+    () =>
+      items.reduce(
+        (seq, item) =>
+          item.kind === 'message' && item.role === 'user' ? item.seq : seq,
+        0,
+      ),
+    [items],
+  );
+  /**
+   * Every user message in the thread, whatever the loaded window holds.
+   *
+   * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
+   * rail built from `items` would draw the tail of the conversation and present
+   * it as the whole of it — see `use-chat-timeline.ts`.
+   */
+  const timeline = useChatTimeline(
+    chatApi,
+    activeRunId,
+    threadWorked.turns,
+    latestUserSeq,
+  );
+  /**
+   * The timeline as the agents panel takes it — its markers plus the jump.
+   *
+   * Memoized rather than built inline at the call site: the panel draws this
+   * control twice (the row and the folded rail), and a fresh object per render
+   * would churn both on every streamed token.
+   */
+  const timelinePanel = useMemo(
+    () => ({
+      markers: timeline.markers,
+      partialReason: timeline.partialReason,
+      onJump: jumpToSeq,
+    }),
+    [timeline.markers, timeline.partialReason, jumpToSeq],
+  );
+  /**
    * What the header states about the thread as a WHOLE — the daemon's answer
    * where it has one, this component's fold where it does not.
    *
@@ -7217,7 +7264,6 @@ export function Chats({
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
-                        onSearch={openChatSearch}
                       />
                     ) : null}
 
@@ -8153,6 +8199,12 @@ export function Chats({
                       // to prevent, merely moved to the second chat.
                       key={activeRun?.id ?? 'no-run'}
                       agents={agents}
+                      // Both act on the WHOLE conversation, which is what the
+                      // panel's own control row is already for — and being on
+                      // its rail is what keeps them reachable with the column
+                      // folded.
+                      onSearch={openChatSearch}
+                      timeline={timelinePanel}
                       artifacts={artifacts}
                       pullRequests={activePullRequests}
                       threadPullRequests={openedByActiveThread}

@@ -370,6 +370,17 @@ class FakeItemDao {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
   }
+  async latestUserMessage(
+    runId: string,
+  ): Promise<Pick<Item, 'seq' | 'payload'> | null> {
+    const rows = this.items
+      .filter(
+        (i) => i.runId === runId && i.kind === 'message' && i.role === 'user',
+      )
+      .sort((a, b) => a.seq - b.seq);
+    const row = rows[rows.length - 1];
+    return row ? { seq: row.seq, payload: row.payload } : null;
+  }
   async subagentInfoRows(runId: string): Promise<Pick<Item, 'payload'>[]> {
     return this.items
       .filter((i) => i.runId === runId && i.kind === 'subagent_info')
@@ -2542,31 +2553,75 @@ describe('ChatService', () => {
       expect(closed).not.toHaveBeenCalled();
     });
 
-    it('refuses a CLI that cannot reopen a conversation without prompting', async () => {
-      // `AgentTurnInput.resumeOnly` is read by the ACP driver alone, so claude
-      // would run the retry as an ordinary turn — spending a billed turn on the
-      // EMPTY prompt a retry composes, under a row saying nothing was re-sent.
-      // Declared as an adapter fact rather than branched on the agent's name.
-      const { service } = setup();
+    it('RE-SENDS the interrupted message on a CLI that cannot reopen without a prompt', async () => {
+      // claude has no resume-only turn — its prompt IS how a turn opens — so
+      // the button used to be drawn on every claude error row and could only
+      // ever refuse. REPORTED as "retry doesnt work". It now carries on the way
+      // that CLI actually can: resume the session and send the message the
+      // interrupted turn was answering.
+      const { service, nodeDao, claude, itemDao } = setup();
       const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      nodeDao.preset('sess-1');
+      await service.sendMessage(run.id, 'the interrupted ask');
+      claude.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      claude.finish();
+      await drain();
+
+      await service.retry(run.id);
+
+      const startArg = claude.start.mock.calls.at(-1)?.[0] as AgentTurnInput;
+      expect(startArg.prompt).toBe('the interrupted ask');
+      expect(startArg.resumeSessionId).toBe('sess-1');
+      // NOT the resume-only turn — that flag reaches the ACP driver alone, so
+      // setting it here would send the empty prompt this branch exists to avoid.
+      expect(startArg.resumeOnly).toBeFalsy();
+      // Written as what it is: a second send. The transcript shows the message
+      // twice rather than implying the agent replied to nothing.
+      const said = itemDao.items.filter(
+        (row) => row.runId === run.id && row.role === 'user',
+      );
+      expect(said).toHaveLength(2);
+    });
+
+    it('refuses when there is no message to send again', async () => {
+      // A session with nothing said in it. Re-sending an empty prompt is the
+      // billed no-op the resume-only guard exists to prevent, reached from the
+      // other branch.
+      const { service, nodeDao } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      nodeDao.preset('sess-1');
 
       await expect(service.retry(run.id)).rejects.toThrow(
-        /cannot reopen a conversation without sending a message/,
+        /no message to send again/,
       );
     });
 
-    it('refuses a chat that has no agent session to reopen', async () => {
+    it('refuses a chat that has no agent session, whichever CLI it is on', async () => {
+      // Checked BEFORE the per-CLI branch, because neither answer works without
+      // one: the resume-only turn would open a FRESH session and settle at once
+      // — a recovery reported for a thread still exactly as stuck — and the
+      // re-send would start a brand-new conversation carrying the old message,
+      // losing every earlier turn still on screen above the button.
       const { service } = setup();
-      const run = await service.createChat({
+      const cursorRun = await service.createChat({
         agentKind: 'cursor-agent',
         cwd: dir,
       });
+      const claudeRun = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+      });
 
-      // Left to run, the turn opens a FRESH session and settles at once on the
-      // load reply — a recovery reported for a thread that is still exactly as
-      // stuck, and a `system` row saying so in its transcript.
-      await expect(service.retry(run.id)).rejects.toThrow(
-        /no agent session to reopen/,
+      await expect(service.retry(cursorRun.id)).rejects.toThrow(
+        /no agent session to carry on from/,
+      );
+      await expect(service.retry(claudeRun.id)).rejects.toThrow(
+        /no agent session to carry on from/,
       );
     });
 

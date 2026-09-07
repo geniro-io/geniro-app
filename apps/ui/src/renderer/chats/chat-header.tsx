@@ -3,7 +3,6 @@ import {
   FileWarning,
   FolderOpen,
   IdCard,
-  Search,
   Timer,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
@@ -398,7 +397,6 @@ export function ChatHeader({
   costUsd = null,
   costedTurns = null,
   openTurns = EMPTY_OPEN_TURNS,
-  onSearch,
 }: {
   label: string;
   isWorkflow: boolean;
@@ -501,7 +499,6 @@ export function ChatHeader({
    * one would state that this thread can be searched and that something is
    * wrong, where the truth is that nothing here has anything to search.
    */
-  onSearch?: () => void;
   // The "what changed since this chat started" control was HERE, beside search
   // and export, and is now the shelf's leftmost chip (`FolderChangesChip` in
   // `composer-shelf.tsx`) — reported as belonging with the pull requests above
@@ -617,23 +614,13 @@ export function ChatHeader({
             What is left here is the split this header was redesigned around —
             what the thread IS on the left, what it has WORKED and SPENT on the
             right — and the row is three controls shorter for it. */}
-        {/* The ACTIONS end this row: everything to their left is a reading, so a
-            control among them would read as one more of those. Both are about
-            the whole conversation rather than the next message, which is why
-            they belong here and not on the composer. Each is OMITTED, never
-            disabled, where there is nothing for it to act on — a greyed control
-            states that a feature exists and is broken, where the truth is that
-            this thread has nothing to search or nothing to compare against. */}
-        {onSearch ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Search this conversation"
-            title="Search this conversation"
-            onClick={onSearch}>
-            <Search aria-hidden="true" />
-          </Button>
-        ) : null}
+        {/* This row carries NO control now. Search and the conversation
+            timeline both ended it until they were moved to the agents panel,
+            which already holds the other two things that act on the whole
+            thread (its folder's terminal, its export) and keeps them reachable
+            from the folded rail. What is left here is what the split was always
+            for: what the thread IS on the left, and the numbers about it on the
+            right — every one of them a reading. */}
       </div>
     </div>
   );

@@ -1246,6 +1246,81 @@ export interface ChatSearchResultDto {
 /**
  * 
  * @export
+ * @interface ChatTimelineDto
+ */
+export interface ChatTimelineDto {
+    /**
+     * 
+     * @type {Array<ChatTimelineMarker>}
+     * @memberof ChatTimelineDto
+     */
+    markers: Array<ChatTimelineMarker>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineDto
+     */
+    partialReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ChatTimelineMarker
+ */
+export interface ChatTimelineMarker {
+    /**
+     * Where in the run this is — the jump target
+     * @type {number}
+     * @memberof ChatTimelineMarker
+     */
+    seq: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatTimelineMarker
+     */
+    createdAt: string;
+    /**
+     * the message's own opening words, cut to a label's length
+     * @type {string}
+     * @memberof ChatTimelineMarker
+     */
+    preview: string;
+    /**
+     * 
+     * @type {ChatTimelineSegment}
+     * @memberof ChatTimelineMarker
+     */
+    segment: ChatTimelineSegment;
+}
+/**
+ * 
+ * @export
+ * @interface ChatTimelineSegment
+ */
+export interface ChatTimelineSegment {
+    /**
+     * every non-user message row before the next user message — a delegate's output included, since it rides the same kind and role and only the payload tells them apart
+     * @type {number}
+     * @memberof ChatTimelineSegment
+     */
+    aiMessages: number;
+    /**
+     * 
+     * @type {number}
+     * @memberof ChatTimelineSegment
+     */
+    elapsedMs: number | null;
+    /**
+     * 
+     * @type {ChatTotals}
+     * @memberof ChatTimelineSegment
+     */
+    totals: ChatTotals;
+}
+/**
+ * 
+ * @export
  * @interface ChatTotals
  */
 export interface ChatTotals {

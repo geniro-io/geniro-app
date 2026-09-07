@@ -498,6 +498,76 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /**
+   * Every row of one run as (seq, kind, role, createdAt) — the conversation's
+   * SHAPE, with none of its content.
+   *
+   * The projection is the point. The timeline needs to know where each user
+   * message sits, how many agent messages follow it and when the stretch ended,
+   * and none of those questions is about what was said — while `payload` is the
+   * TEXT column and a long transcript is most of the database. Reading it here
+   * would mean loading every diff and tool result in the run to count rows.
+   */
+  async timelineSpine(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'kind' | 'role' | 'createdAt'>[]> {
+    return this.getRepo(txEm).find(
+      { runId },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'kind', 'role', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * The payloads {@link timelineSpine} deliberately leaves out — the two kinds
+   * the timeline actually reads: a user message, for its opening words, and a
+   * finished turn, for its usage figures.
+   */
+  async timelinePayloadRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'kind' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        $or: [{ kind: 'message', role: 'user' }, { kind: 'turn_complete' }],
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'kind', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * The newest thing the USER said in this run — what a retry re-sends on a CLI
+   * that cannot reopen a conversation without a prompt.
+   *
+   * `role: 'user'` is the whole filter and needs no delegate exclusion: a
+   * delegate's output is written under the agent's role, so no row it produces
+   * can be mistaken for something the person typed.
+   */
+  async latestUserMessage(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'seq' | 'payload'> | null> {
+    const [row] = await this.getRepo(txEm).find(
+      { runId, kind: 'message', role: 'user' },
+      {
+        orderBy: { seq: 'desc' },
+        limit: 1,
+        fields: ['seq', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+    return row ?? null;
+  }
+
   /** Fill in one row's flattened search text. */
   async rememberSearchText(
     id: string,

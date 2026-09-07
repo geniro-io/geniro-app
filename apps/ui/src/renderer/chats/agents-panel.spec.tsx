@@ -723,6 +723,91 @@ describe('AgentsPanel', () => {
     expect(el.querySelector('[data-slot="rail-divider"]')).not.toBeNull();
   });
 
+  it('searches the conversation from the heading and from the rail', () => {
+    // It moved here from the chat header on report. The rail half is the part
+    // that matters: putting the column away must not take the only way to
+    // search the thread with it.
+    const onSearch = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        onSearch={onSearch}
+      />,
+    );
+    const selector = 'button[aria-label="Search this conversation"]';
+    click(el.querySelector(selector));
+    expect(onSearch).toHaveBeenCalledTimes(1);
+
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    click(el.querySelector(selector));
+    expect(onSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it('offers the conversation timeline from the heading and from the rail', () => {
+    const onJump = vi.fn();
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+        timeline={{
+          markers: [
+            {
+              seq: 7,
+              createdAt: '2026-09-07T12:00:00.000Z',
+              preview: 'the ask',
+              segment: {
+                aiMessages: 1,
+                elapsedMs: 1_000,
+                totals: {
+                  turns: 1,
+                  costedTurns: 0,
+                  costUsd: null,
+                  inputTokens: null,
+                  outputTokens: null,
+                  cacheReadTokens: null,
+                  cacheCreationTokens: null,
+                  thinkingTokens: null,
+                  workedMs: null,
+                },
+              },
+            },
+          ],
+          partialReason: null,
+          onJump,
+        }}
+      />,
+    );
+    const selector = 'button[aria-label="Conversation timeline"]';
+    expect(el.querySelector(selector)).not.toBeNull();
+
+    // Folded, the trigger is still there — and still opens onto the same
+    // timeline, which is what a rail control is for.
+    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
+    click(el.querySelector(selector));
+    click(document.body.querySelector('[data-slot="timeline-marker"]'));
+    expect(onJump).toHaveBeenCalledWith(7);
+  });
+
+  it('draws neither navigation control when the owner supplies neither', () => {
+    // Omitted rather than disabled, the rule this row already follows.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(
+      el.querySelector('button[aria-label="Search this conversation"]'),
+    ).toBeNull();
+    expect(
+      el.querySelector('button[aria-label="Conversation timeline"]'),
+    ).toBeNull();
+  });
+
   it('draws no terminal control for a run with no folder', () => {
     // The owner withholds the callback for a run with no `cwd`; the panel must
     // then draw nothing rather than a button over a folder that is not there.

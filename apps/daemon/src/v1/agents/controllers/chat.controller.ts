@@ -17,6 +17,7 @@ import type {
   ChatExportWire,
   ChatMetricsWire,
   ChatSearchResult,
+  ChatTimelineWire,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
@@ -30,6 +31,7 @@ import {
   ChatExportDto,
   ChatMetricsDto,
   ChatSearchResultDto,
+  ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
   ForgottenInstructionsDto,
@@ -55,6 +57,7 @@ import { ChatService } from '../services/chat.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
+import { ChatTimelineService } from '../services/chat-timeline.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
@@ -77,6 +80,7 @@ export class ChatController {
     private readonly metrics: ChatMetricsService,
     private readonly search: ChatSearchService,
     private readonly shellOutput: ShellOutputService,
+    private readonly timeline: ChatTimelineService,
   ) {}
 
   @Post()
@@ -230,6 +234,21 @@ export class ChatController {
     @Query() query: SearchChatQueryDto,
   ): Promise<ChatSearchResult> {
     return this.search.search(runId, query.query, query.limit);
+  }
+
+  /**
+   * The conversation as a rail of its user messages, with what each one cost.
+   *
+   * A route for `:runId/search`'s reason: the client holds at most
+   * `HISTORY_PAGE` items, so a rail folded there would describe the loaded
+   * window and report a shorter, cheaper conversation than the one that
+   * happened — with nothing on screen saying which.
+   */
+  @Get(':runId/timeline')
+  @ApiOperation({ operationId: 'readChatTimeline' })
+  @ZodResponse({ status: 200, type: ChatTimelineDto })
+  readTimeline(@Param('runId') runId: string): Promise<ChatTimelineWire> {
+    return this.timeline.read(runId);
   }
 
   /**

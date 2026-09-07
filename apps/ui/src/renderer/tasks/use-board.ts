@@ -393,7 +393,12 @@ export function useBoard(
       try {
         const made = await window.geniro.prepareTaskWorktree({
           taskId,
-          folder: project.folder,
+          // The CARD's folder if it names one, else the project's — a project's
+          // folder is the default for its board and not the law, since one
+          // board routinely holds work across several checkouts. The same
+          // resolution the daemon does for the autopilot's handout; here it is
+          // one line because both rows are already in hand.
+          folder: task.folder ?? project.folder,
         });
         if (!made.ok || made.path === null || made.branch === null) {
           setError(made.error ?? 'the worktree could not be created');

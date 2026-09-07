@@ -167,29 +167,35 @@ export function Tasks({
               }}
             />
           ) : null}
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <Button
-              size="sm"
-              // Disabled rather than withheld: there is no board to add to yet,
-              // and the empty state directly below says so in words — which is
-              // the explanation a disabled button cannot carry itself, since
-              // `buttonVariants` sets `disabled:pointer-events-none` and no
-              // tooltip of its own would ever be hovered.
-              disabled={projectId === null}
-              onClick={() => {
-                setNewTaskStatus(null);
-                setNewTaskOpen(true);
-              }}>
-              {/* NOT lifted. Measured in the running app: the glyph already
-                  lands on the button's own centre, and the label's ink sits
-                  0.9px above it — a font's own asymmetry, since "New task" has
-                  no descender. A 2px lift therefore overshot by more than the
-                  gap it was closing and took the glyph 1.1px ABOVE the label,
-                  which is what the whole content reading high actually was. */}
-              <Plus className="size-4" aria-hidden />
-              New task
-            </Button>
-          </div>
+          {/* OMITTED, never disabled, while there is no board to add to. It
+              shipped disabled on the reading that the empty state below
+              explains it — and it was reported straight back: with no project,
+              the only action on screen was a greyed one for the thing that
+              cannot be done, while the thing that CAN be done had no control at
+              all. A control drawn to be refused states that a feature exists
+              and is broken; the truth is that this board has nothing to add to
+              yet, which is the empty state's own sentence and now its own
+              button. The same rule the chat header's actions follow. */}
+          {projectId === null ? null : (
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setNewTaskStatus(null);
+                  setNewTaskOpen(true);
+                }}>
+                {/* NOT lifted. Measured in the running app: the glyph already
+                    lands on the button's own centre, and the label's ink sits
+                    0.9px above it — a font's own asymmetry, since "New task"
+                    has no descender. A 2px lift therefore overshot by more than
+                    the gap it was closing and took the glyph 1.1px ABOVE the
+                    label, which is what the whole content reading high actually
+                    was. */}
+                <Plus className="size-4" aria-hidden />
+                New task
+              </Button>
+            </div>
+          )}
         </header>
 
         {board.error !== null ? (
@@ -200,10 +206,29 @@ export function Tasks({
           />
         ) : null}
 
-        {board.selectedProjectId === null ? (
+        {/* The empty state CARRIES the one thing to do here. It was a sentence
+            alone, which named the next step and then left the user to find the
+            control for it inside a picker labelled `No projects yet` — the
+            board's own screen offering no way onto it. Keyed on the PROJECT
+            LIST rather than on the selection, because that is the fact the
+            words state; the two cannot disagree, since `useBoard` fills an
+            empty selection from the list in the same write that sets it. */}
+        {board.projects.length === 0 ? (
           <EmptyState>
-            Create a project to start a board. A project binds a folder; its
-            tasks are the cards.
+            <div className="flex max-w-sm flex-col items-center gap-4">
+              <p>
+                No projects yet. A project is a board of tasks, with a default
+                folder its agents work in — each task can name its own.
+              </p>
+              <Button
+                size="sm"
+                onClick={() => {
+                  setNewProjectOpen(true);
+                }}>
+                <Plus className="size-4" aria-hidden />
+                New project
+              </Button>
+            </div>
           </EmptyState>
         ) : (
           <>
@@ -289,6 +314,7 @@ export function Tasks({
           // carries the previous card's text and blur writes it onto this one.
           key={openTask.id}
           task={openTask}
+          projectFolder={openProject?.folder ?? null}
           onClose={() => {
             setOpenTaskId(null);
           }}
@@ -316,9 +342,10 @@ export function Tasks({
           void board.createProject(input);
         }}
       />
-      {projectId !== null ? (
+      {projectId !== null && openProject !== null ? (
         <NewTaskDialog
           open={newTaskOpen}
+          projectFolder={openProject.folder}
           onClose={() => {
             setNewTaskOpen(false);
           }}
@@ -328,6 +355,9 @@ export function Tasks({
               projectId,
               title: input.title,
               description: input.description || undefined,
+              // Omitted rather than sent blank: an absent folder is what makes
+              // the card take the project's, and the daemon reads it that way.
+              folder: input.folder || undefined,
               // Omitted rather than null when the board-level New task was
               // used: the daemon defaults an unstated status to `backlog`.
               ...(newTaskStatus === null

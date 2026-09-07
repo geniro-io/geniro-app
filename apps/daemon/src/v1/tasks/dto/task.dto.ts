@@ -59,6 +59,8 @@ export const createTaskSchema = z.object({
   labels: labelsSchema.optional(),
   priority: TaskPrioritySchema.optional(),
   dueDate: z.iso.date().optional(),
+  /** Omitted = run in the project's folder. See `Task.folder`. */
+  folder: z.string().min(1).optional(),
   source: TaskSourceSchema.optional(),
   sourceRef: z.string().min(1).max(TASK_SOURCE_REF_MAX).optional(),
 });
@@ -87,6 +89,13 @@ export const updateTaskSchema = z
     labels: labelsSchema.optional(),
     priority: TaskPrioritySchema.optional(),
     dueDate: z.iso.date().nullable().optional(),
+    /**
+     * Explicit null hands the card back to the project's folder; an omitted key
+     * leaves it alone. NULLABLE where create's is merely optional, because
+     * "inherit again" is a thing a user does to a card that already names one
+     * and there is no other way to say it.
+     */
+    folder: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) => Object.values(dto).some((value) => value !== undefined),

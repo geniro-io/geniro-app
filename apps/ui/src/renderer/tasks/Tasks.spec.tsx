@@ -455,12 +455,16 @@ describe('the column surface', () => {
 
     expect(
       [...document.querySelectorAll('label')].some((node) =>
-        node.textContent?.includes('Folder'),
+        node.textContent?.includes('Default folder'),
       ),
     ).toBe(true);
   });
 
-  it('still offers a new project, and refuses a new task, with none at all', async () => {
+  it('offers a new project and NO new task at all, with none at all', async () => {
+    // The New task button shipped DISABLED here and was reported: the only
+    // control on an empty board was a greyed one for the thing that cannot be
+    // done, while the thing that can be done had none. Withheld, never
+    // refused — the rule the chat header's actions follow.
     mocks.listProjects.mockResolvedValue([]);
     const el = await board();
 
@@ -471,10 +475,35 @@ describe('the column surface', () => {
       'New project…',
     ]);
 
-    const add = [...el.querySelectorAll('button')].find((node) =>
-      node.textContent?.includes('New task'),
+    expect(
+      [...el.querySelectorAll('button')].some((node) =>
+        node.textContent?.includes('New task'),
+      ),
+    ).toBe(false);
+  });
+
+  // A sentence naming the next step, with the control for it hidden inside a
+  // picker labelled `No projects yet`, is a screen that says what to do and
+  // offers no way to do it.
+  it('makes the empty board its own way onto a first project', async () => {
+    mocks.listProjects.mockResolvedValue([]);
+    const el = await board();
+
+    // NOT asserted on the words: the picker's own trigger already reads `No
+    // projects yet`, so a text check would pass with this control deleted.
+    const start = [...el.querySelectorAll('button')].find((node) =>
+      node.textContent?.includes('New project'),
     );
-    expect(add?.disabled).toBe(true);
+    expect(start).toBeDefined();
+    await act(async () => {
+      start!.click();
+    });
+
+    expect(
+      [...document.querySelectorAll('label')].some((node) =>
+        node.textContent?.includes('Default folder'),
+      ),
+    ).toBe(true);
   });
 
   // Every other picker in the app sits near the FOOT of the window, so `Menu`
@@ -622,6 +651,25 @@ describe('the column surface', () => {
     // Moving the prune into a `finally` would destroy the worktree on every
     // SUCCESSFUL start, and both run tests would stay green without this.
     expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
+  });
+
+  // A project's folder is the DEFAULT for its board, not the law: one board
+  // routinely holds work across several checkouts. A card that names its own
+  // is cut from that one, and the project's is what an unnamed card takes —
+  // the test above is the other half of this pair.
+  it('cuts from the folder the CARD names, not the project one', async () => {
+    mocks.reconcileTasks.mockResolvedValue([card({ folder: '/elsewhere' })]);
+    const el = await board();
+    await openDetail(el);
+
+    await act(async () => {
+      runButton(el).click();
+    });
+
+    expect(window.geniro.prepareTaskWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/elsewhere',
+    });
   });
 
   it('removes the worktree it just made when the run cannot be started', async () => {

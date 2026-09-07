@@ -118,6 +118,30 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     expect(queue.cap).toBe(2);
   });
 
+  // The handout is what the conductor cuts a worktree from, and it runs in
+  // another process with only this reply in hand — so the inheritance is
+  // resolved HERE. A card that names no folder takes the project's; one that
+  // names its own keeps it, which is the whole point of the column.
+  it('hands out the folder each CARD names, else the project one', async () => {
+    const own = mkdtempSync(join(tmpdir(), 'geniro-card-'));
+    try {
+      const inherits = await addTask('inherits', 'todo', 0);
+      const names = await addTask('names its own', 'todo', 1);
+      names.folder = own;
+      await em.flush();
+
+      const queue = await service.read(projectId);
+
+      expect(
+        Object.fromEntries(
+          queue.eligible.map((task) => [task.id, task.folder]),
+        ),
+      ).toEqual({ [inherits.id]: folder, [names.id]: own });
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+    }
+  });
+
   it('narrows the handout to the free slots', async () => {
     const run = await addRun('running');
     await addTask('working', 'in_progress', 0, run.id);

@@ -97,6 +97,11 @@ export const QueuedTaskSchema = z
     title: z.string(),
     status: TaskStatusSchema,
     position: z.number().int(),
+    folder: z
+      .string()
+      .describe(
+        "The folder to cut this card's worktree from — the card's own if it names one, else the project's. RESOLVED here rather than sent as two fields, because the conductor is a timer in another process and the inheritance rule belongs to whoever owns the two rows",
+      ),
   })
   .meta({ id: 'QueuedTask' });
 export type QueuedTask = z.infer<typeof QueuedTaskSchema>;

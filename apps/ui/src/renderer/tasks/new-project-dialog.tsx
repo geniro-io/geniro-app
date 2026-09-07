@@ -40,8 +40,12 @@ export function NewProjectDialog({
             }}
           />
         </div>
+        {/* DEFAULT, not the law: a card may name a folder of its own, and one
+            board routinely holds work across several checkouts. The label says
+            so, since a field reading `Folder` on the project reads as the one
+            place the answer is given. */}
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-project-folder">Folder</Label>
+          <Label htmlFor="new-project-folder">Default folder</Label>
           <div className="flex gap-2">
             <Input
               id="new-project-folder"

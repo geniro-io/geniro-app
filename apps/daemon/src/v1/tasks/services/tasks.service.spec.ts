@@ -324,6 +324,56 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(released.worktreePath).toBeNull();
   });
 
+  // A card's folder is the project's DEFAULT overridden, so null is the
+  // ordinary state and means INHERIT — never "nowhere". A snapshot of the
+  // project's folder taken at create would look identical here and turn the
+  // project's setting into a one-time seed the moment it was changed.
+  it('leaves a new task inheriting its project folder', async () => {
+    const task = await service.create({ projectId, title: 'ordinary' });
+
+    expect(task.folder).toBeNull();
+  });
+
+  it('takes a folder of its own, canonicalized like every stored path', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'elsewhere',
+      folder: worktree,
+    });
+
+    expect(task.folder).toBe(worktree);
+  });
+
+  it('refuses a task folder that is not a directory on disk', async () => {
+    // The same rule the worktree path follows, and for a sharper reason: this
+    // one is what a worktree is CUT FROM, so an unchecked value fails minutes
+    // later in another process, as a git error about a path nobody typed here.
+    await expect(
+      service.create({
+        projectId,
+        title: 'nowhere',
+        folder: '/no/such/folder/anywhere',
+      }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('does not exist'),
+    });
+  });
+
+  it('hands a card back to the project folder on an explicit null', async () => {
+    // Inheriting AGAIN is a thing a user does to a card that already names a
+    // folder, and there is no other way to say it — hence nullable on the
+    // patch where create's field is merely optional.
+    const task = await service.create({
+      projectId,
+      title: 'elsewhere',
+      folder: worktree,
+    });
+
+    const back = await service.update(task.id, { folder: null });
+
+    expect(back.folder).toBeNull();
+  });
+
   it('refuses a task naming a project that does not exist', async () => {
     await expect(
       service.create({ projectId: 'no-such-project', title: 'orphan' }),

@@ -22,6 +22,14 @@ interface QueuedTask {
   id: string;
   title: string;
   status: string;
+  /**
+   * Where to cut this card's worktree from, ALREADY RESOLVED by the daemon
+   * against the project's folder — see `QueuedTaskSchema`. Read as given: the
+   * inheritance rule belongs to the process that holds both rows, and a second
+   * reading of it here is how a timer and a board come to work in two
+   * different repositories.
+   */
+  folder: string;
 }
 
 interface ProjectQueue {
@@ -31,9 +39,16 @@ interface ProjectQueue {
   eligible: QueuedTask[];
 }
 
+/**
+ * Which projects are armed — the ID and nothing else.
+ *
+ * It carried the project's FOLDER until a card could name one of its own. Now
+ * that where to cut a worktree from is a per-task answer, resolved by the
+ * daemon and handed out with the queue, a folder here would be a second source
+ * for the same question and the only one that cannot see the card.
+ */
 interface ArmedProject {
   id: string;
-  folder: string;
 }
 
 export interface ConductorDeps {
@@ -144,20 +159,24 @@ export class AutopilotConductor {
     // worktree, and a refusal partway through should leave the ones already
     // running alone rather than being answered by a batch that half-failed.
     for (const task of queue.eligible) {
-      await this.startOne(handle, project, task);
+      await this.startOne(handle, task);
     }
   }
 
   private async startOne(
     handle: DaemonHandle,
-    project: ArmedProject,
     task: QueuedTask,
   ): Promise<void> {
     let worktree: { path: string; branch: string };
     try {
       worktree = await this.deps.prepareWorktree({
         taskId: task.id,
-        folder: project.folder,
+        // The CARD's folder, which the daemon has already resolved against the
+        // project's — a card may name a checkout of its own, and the project's
+        // is only its default. Reading `project.folder` here would run every
+        // autopilot start in the project's repository while a hand-pressed Run
+        // on the same card used the one it names.
+        folder: task.folder,
       });
     } catch (error) {
       this.deps.log(

@@ -104,6 +104,12 @@ export const TaskWireSchema = z.object({
     .describe(
       "The id this task carries in the system it came from — null for a task made here, since geniro's own id is the one above",
     ),
+  folder: z
+    .string()
+    .nullable()
+    .describe(
+      "The folder this task's agent works in; null means take the project's, which is the default rather than the law",
+    ),
   branch: z
     .string()
     .nullable()

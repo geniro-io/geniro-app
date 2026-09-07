@@ -61,6 +61,25 @@ export class Task extends TimestampsEntity {
   @Property({ type: 'string', nullable: true })
   sourceRef: string | null = null;
 
+  /**
+   * The folder this card's agent works in — null to take the project's.
+   *
+   * A project's folder is the DEFAULT and not the law: one board routinely
+   * holds work across several checkouts, and before this column a card could
+   * only ever run where its project pointed. Null means INHERIT rather than
+   * "none", so moving a project's folder moves every card that never named one
+   * of its own — which is what makes the project's field a default at all. A
+   * snapshot taken at create would freeze it and quietly turn the project's
+   * setting into a one-time seed.
+   *
+   * Canonicalized and checked to exist when it is SET (`TasksService`), on
+   * `Project.folder`'s own rule: a card pointing at a folder that is not there
+   * could never run, and the failure would surface as a worktree that cannot
+   * be cut, minutes later and one process away.
+   */
+  @Property({ type: 'text', nullable: true })
+  folder: string | null = null;
+
   /** The branch an agent works this task on — null until one runs. */
   @Property({ type: 'string', nullable: true })
   branch: string | null = null;

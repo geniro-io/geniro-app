@@ -127,7 +127,7 @@ const autopilot = new AutopilotConductor({
  * the keep-alive's own is what keeps them from disagreeing: the socket is
  * released in the same pass that finds nothing armed.
  */
-async function readArmedProjects(): Promise<{ id: string; folder: string }[]> {
+async function readArmedProjects(): Promise<{ id: string }[]> {
   const handle = supervisor.getHandle();
   if (handle === null) {
     return [];
@@ -142,12 +142,14 @@ async function readArmedProjects(): Promise<{ id: string; folder: string }[]> {
   }
   const projects = (await res.json()) as {
     id: string;
-    folder: string;
     autopilotEnabled?: boolean;
   }[];
   const armed = projects.filter((project) => project.autopilotEnabled === true);
   keepAlive.setArmed(armed.length > 0);
-  return armed.map((project) => ({ id: project.id, folder: project.folder }));
+  // The FOLDER is deliberately not read here: a card may name a checkout of
+  // its own, so where a run is cut from is a per-task answer the queue handout
+  // already carries, resolved against the project's default by the daemon.
+  return armed.map((project) => ({ id: project.id }));
 }
 
 let mainWindow: BrowserWindow | null = null;

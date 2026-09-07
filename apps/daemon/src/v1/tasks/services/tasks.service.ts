@@ -54,6 +54,8 @@ export class TasksService {
     labels?: string[];
     priority?: TaskPriority;
     dueDate?: string;
+    /** Absent = run in the project's folder. See {@link Task.folder}. */
+    folder?: string;
     source?: TaskSource;
     sourceRef?: string;
   }): Promise<TaskWire> {
@@ -76,6 +78,8 @@ export class TasksService {
         labels: JSON.stringify(input.labels ?? []),
         priority: input.priority ?? 'none',
         dueDate: input.dueDate ?? null,
+        folder:
+          input.folder === undefined ? null : resolveTaskFolder(input.folder),
         source: input.source ?? 'geniro',
         sourceRef: input.sourceRef ?? null,
         // Appended to the end of its column, never inserted: a new card is the
@@ -108,6 +112,7 @@ export class TasksService {
       labels?: string[];
       priority?: TaskPriority;
       dueDate?: string | null;
+      folder?: string | null;
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
@@ -134,6 +139,13 @@ export class TasksService {
     }
     if (patch.labels !== undefined) {
       task.labels = JSON.stringify(patch.labels);
+    }
+    if (patch.folder !== undefined) {
+      // `null` hands the card back to the project's folder; a path is checked
+      // and canonicalized here, at the seam furthest from the worktree it will
+      // be cut from — the same rule `worktreePath` below states in full.
+      task.folder =
+        patch.folder === null ? null : resolveTaskFolder(patch.folder);
     }
     if (patch.branch !== undefined) {
       task.branch = patch.branch;
@@ -299,6 +311,7 @@ function toWire(task: Task): TaskWire {
     labels: parseLabels(task.labels),
     source: task.source,
     sourceRef: task.sourceRef,
+    folder: task.folder,
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,
@@ -309,6 +322,21 @@ function toWire(task: Task): TaskWire {
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString(),
   };
+}
+
+/**
+ * A card's own folder, canonicalized and checked to exist.
+ *
+ * Its own helper because BOTH writes need it and they are far apart in this
+ * file — a create that resolved and an update that did not would let a card be
+ * edited into a folder no worktree can be cut from, which is exactly the state
+ * the check exists to prevent.
+ */
+function resolveTaskFolder(folder: string): string {
+  return resolveValidDirectory(folder, {
+    errorCode: 'INVALID_TASK_FOLDER',
+    noun: 'task folder',
+  });
 }
 
 /**

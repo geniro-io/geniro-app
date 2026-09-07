@@ -15,8 +15,21 @@ interface QueueBody {
   projectId: string;
   enabled?: boolean;
   breakerOpen?: boolean;
-  eligible?: { id: string; title: string; status: string }[];
+  /**
+   * `folder` is what the real route always sends — the card's own resolved
+   * against its project's — so the stand-in fills one rather than letting a
+   * test omit the field the conductor cuts every worktree from.
+   */
+  eligible?: {
+    id: string;
+    title: string;
+    status: string;
+    folder?: string;
+  }[];
 }
+
+/** The folder the stand-in daemon resolves a card to unless a test says. */
+const QUEUE_FOLDER = '/repo';
 
 /**
  * A stand-in daemon, answering the two routes a tick uses.
@@ -50,8 +63,11 @@ function daemon(queues: Record<string, QueueBody>) {
         json: async () => ({
           enabled: true,
           breakerOpen: false,
-          eligible: [],
           ...queue,
+          eligible: (queue.eligible ?? []).map((task) => ({
+            folder: QUEUE_FOLDER,
+            ...task,
+          })),
         }),
       } as Response;
     },
@@ -62,7 +78,7 @@ function daemon(queues: Record<string, QueueBody>) {
 function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
   return {
     handle: () => handle,
-    armedProjects: async () => [{ id: 'p1', folder: '/repo' }],
+    armedProjects: async () => [{ id: 'p1' }],
     prepareWorktree: vi.fn(async ({ taskId }: { taskId: string }) => ({
       path: `/wt/${taskId}`,
       branch: `geniro/${taskId}`,
@@ -140,6 +156,33 @@ describe('AutopilotConductor', () => {
       from: 'todo',
       cwd: '/wt/t1',
       branch: 'geniro/t1',
+    });
+  });
+
+  // A card may name a checkout of its own, and the project's folder is only
+  // its default — resolved by the daemon, which holds both rows. The conductor
+  // used to read the PROJECT's, which is the same answer right up until a task
+  // names one, and then runs every autopilot start in the wrong repository.
+  it('cuts the worktree from the folder the HANDOUT names', async () => {
+    const { fetchMock } = daemon({
+      p1: {
+        projectId: 'p1',
+        eligible: [
+          { id: 't1', title: 'elsewhere', status: 'todo', folder: '/other' },
+        ],
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const prepareWorktree = vi.fn(async () => ({
+      path: '/wt/t1',
+      branch: 'geniro/t1',
+    }));
+
+    await new AutopilotConductor(deps({ prepareWorktree })).tick();
+
+    expect(prepareWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/other',
     });
   });
 
@@ -221,10 +264,7 @@ describe('AutopilotConductor', () => {
 
     await new AutopilotConductor(
       deps({
-        armedProjects: async () => [
-          { id: 'missing', folder: '/a' },
-          { id: 'p2', folder: '/b' },
-        ],
+        armedProjects: async () => [{ id: 'missing' }, { id: 'p2' }],
       }),
     ).tick();
 
@@ -272,7 +312,7 @@ describe('AutopilotConductor', () => {
         armedProjects: () =>
           new Promise((resolve) => {
             release = () => {
-              resolve([{ id: 'p1', folder: '/repo' }]);
+              resolve([{ id: 'p1' }]);
             };
           }),
       }),

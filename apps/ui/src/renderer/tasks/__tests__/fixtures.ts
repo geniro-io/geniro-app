@@ -25,6 +25,7 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     labels: [],
     source: TaskSource.Geniro,
     sourceRef: null,
+    folder: null,
     branch: null,
     worktreePath: null,
     runId: null,

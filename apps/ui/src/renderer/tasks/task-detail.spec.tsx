@@ -65,16 +65,23 @@ const saveSpy = (): ReturnType<typeof vi.fn<SaveHandler>> =>
 function detailWith({
   onSave = saveSpy(),
   task: over = {},
+  projectFolder = null,
 }: {
   onSave?: ReturnType<typeof saveSpy>;
   task?: Partial<TaskDto>;
+  projectFolder?: string | null;
 }): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
     root!.render(
-      <TaskDetail task={task(over)} onClose={vi.fn()} onSave={onSave} />,
+      <TaskDetail
+        task={task(over)}
+        onClose={vi.fn()}
+        onSave={onSave}
+        projectFolder={projectFolder}
+      />,
     );
   });
   return container;
@@ -86,6 +93,38 @@ const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
   ) as HTMLButtonElement;
 
 describe('TaskDetail', () => {
+  // "No folder" is not a state a card can be in — an unset one runs in the
+  // project's — so the row SHOWS the inherited path rather than sitting empty.
+  // A reader deciding whether to override has to see what they are overriding.
+  it('shows the project folder on a card that names none', () => {
+    const el = detailWith({ projectFolder: '/repo', task: { folder: null } });
+
+    const row = el.querySelector('[data-slot="task-folder"]');
+    expect(row?.textContent).toBe('/repo');
+    expect(buttonNamed(el, 'Use project folder')).toBeUndefined();
+  });
+
+  it('offers a way back to the project folder, and clears with null', () => {
+    // `null` is the ONLY way to say "inherit again": a card holding its own
+    // path has no other route back, which is why the patch field is nullable
+    // where the create field is merely optional.
+    const onSave = saveSpy();
+    const el = detailWith({
+      onSave,
+      projectFolder: '/repo',
+      task: { folder: '/elsewhere' },
+    });
+
+    expect(el.querySelector('[data-slot="task-folder"]')?.textContent).toBe(
+      '/elsewhere',
+    );
+    act(() => {
+      buttonNamed(el, 'Use project folder').click();
+    });
+
+    expect(onSave).toHaveBeenCalledWith({ folder: null });
+  });
+
   it('runs the task when there is a handler for it', () => {
     const onRun = vi.fn();
     const el = detail({ onRun });

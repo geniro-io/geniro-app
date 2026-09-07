@@ -60,7 +60,7 @@ export class ProjectQueueService {
             .slice()
             .sort((a, b) => a.position - b.position)
             .slice(0, free)
-            .map(toQueued)
+            .map((task) => toQueued(task, project.folder))
         : [],
     };
   }
@@ -109,16 +109,25 @@ export class ProjectQueueService {
   }
 }
 
-function toQueued(task: {
-  id: string;
-  title: string;
-  status: QueuedTask['status'];
-  position: number;
-}): QueuedTask {
+function toQueued(
+  task: {
+    id: string;
+    title: string;
+    status: QueuedTask['status'];
+    position: number;
+    folder: string | null;
+  },
+  projectFolder: string,
+): QueuedTask {
   return {
     id: task.id,
     title: task.title,
     status: task.status,
     position: task.position,
+    // The inheritance is resolved HERE and nowhere downstream: the conductor
+    // runs in the Electron process off this handout alone, and a second copy
+    // of "null means the project's" is how the timer and the board come to cut
+    // worktrees from two different repositories.
+    folder: task.folder ?? projectFolder,
   };
 }

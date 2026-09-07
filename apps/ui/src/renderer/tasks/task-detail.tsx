@@ -62,6 +62,7 @@ export function TaskDetail({
   onRun,
   starting = false,
   report = null,
+  projectFolder = null,
 }: {
   task: TaskDto;
   onClose: () => void;
@@ -73,12 +74,19 @@ export function TaskDetail({
   starting?: boolean;
   /** The transcript row holding the agent's closing report, if it wrote one. */
   report?: ItemDto | null;
+  /**
+   * The project's own folder — what this card's runs use while it names none.
+   * Null only while no project is open, where the row states nothing rather
+   * than guessing.
+   */
+  projectFolder?: string | null;
   onSave: (patch: {
     title?: string;
     description?: string;
     labels?: string[];
     priority?: TaskDto['priority'];
     dueDate?: string | null;
+    folder?: string | null;
   }) => void;
 }): React.JSX.Element {
   const [editingTitle, setEditingTitle] = useState(false);
@@ -303,6 +311,51 @@ export function TaskDetail({
               }}
             />
           </PropertyRow>
+
+          {/* WHERE this card is worked, which is the card's own answer and only
+              DEFAULTS to the project's. A run is cut from it as a git
+              worktree, so changing it here changes the next run and never the
+              checkout an agent is already working in. The inherited value is
+              shown rather than left blank — "no folder" is not a state a card
+              can be in, and a reader deciding whether to override needs to see
+              what they would be overriding. */}
+          {task.folder !== null || projectFolder !== null ? (
+            <PropertyRow name="Folder">
+              <button
+                type="button"
+                data-slot="task-folder"
+                className="min-w-0 cursor-pointer truncate rounded-md px-1.5 py-0.5 text-left font-mono text-xs text-muted-foreground hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+                title={
+                  task.folder === null
+                    ? `${projectFolder ?? ''}\nThe project's folder — this task names none of its own. Click to choose one.`
+                    : `${task.folder}\nClick to choose another folder.`
+                }
+                onClick={() => {
+                  void window.geniro.pickProjectFolder().then((chosen) => {
+                    if (chosen) {
+                      onSave({ folder: chosen });
+                    }
+                  });
+                }}>
+                {task.folder ?? projectFolder}
+              </button>
+              {task.folder === null ? (
+                <span className="shrink-0 text-[10px] tracking-wide text-muted-foreground/70 uppercase">
+                  project
+                </span>
+              ) : (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-1.5 text-[11px]"
+                  onClick={() => {
+                    onSave({ folder: null });
+                  }}>
+                  Use project folder
+                </Button>
+              )}
+            </PropertyRow>
+          ) : null}
 
           {task.branch !== null ? (
             <PropertyRow name="Branch">

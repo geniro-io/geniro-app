@@ -1849,6 +1849,12 @@ export interface CreateTaskDto {
     dueDate?: string;
     /**
      * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    folder?: string;
+    /**
+     * 
      * @type {TaskSource}
      * @memberof CreateTaskDto
      */
@@ -2940,6 +2946,12 @@ export interface QueuedTask {
      * @memberof QueuedTask
      */
     position: number;
+    /**
+     * The folder to cut this card's worktree from — the card's own if it names one, else the project's. RESOLVED here rather than sent as two fields, because the conductor is a timer in another process and the inheritance rule belongs to whoever owns the two rows
+     * @type {string}
+     * @memberof QueuedTask
+     */
+    folder: string;
 }
 
 
@@ -3806,6 +3818,12 @@ export interface TaskDto {
      * @type {string}
      * @memberof TaskDto
      */
+    folder: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
     branch: string | null;
     /**
      * 
@@ -4135,6 +4153,12 @@ export interface UpdateTaskDto {
      * @memberof UpdateTaskDto
      */
     dueDate?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    folder?: string | null;
 }
 
 

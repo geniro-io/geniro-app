@@ -60,10 +60,32 @@ describe('ProjectsPane', () => {
     expect(button?.getAttribute('title')).toContain('and its tasks');
   });
 
-  it('deletes the project the row belongs to', () => {
+  it('asks before deleting, and names what goes', () => {
+    // Deleting a project destroys its whole board and there is no trash. This
+    // app confirms DELETE GROUP, which keeps every chat in it — so the
+    // strictly more destructive action confirms too.
     const { el, onDelete } = pane([project({ id: 'p2', name: 'Other' })]);
 
-    (el.querySelector('button') as HTMLButtonElement).click();
+    act(() => {
+      (el.querySelector('button') as HTMLButtonElement).click();
+    });
+
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('cannot be undone');
+  });
+
+  it('deletes the project the row belongs to once confirmed', () => {
+    const { el, onDelete } = pane([project({ id: 'p2', name: 'Other' })]);
+    act(() => {
+      (el.querySelector('button') as HTMLButtonElement).click();
+    });
+
+    const confirm = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Delete project',
+    ) as HTMLButtonElement;
+    act(() => {
+      confirm.click();
+    });
 
     expect(onDelete).toHaveBeenCalledWith('p2');
   });

@@ -9,7 +9,7 @@ import { Input } from '../components/ui/input';
 import { MdEditor } from '../components/ui/md-editor';
 import { MenuAnchorContext } from '../components/ui/menu';
 import { cn } from '../components/ui/utils';
-import { TASK_STATUS_META } from './task-status';
+import { taskStatusMeta } from './task-status';
 
 /** Height of the description editor, in px — `MdEditor` takes a number. */
 const EDITOR_HEIGHT = 320;
@@ -27,7 +27,7 @@ export function TaskDetail({
   const [title, setTitle] = useState(task.title);
   const [editingBody, setEditingBody] = useState(false);
   const [body, setBody] = useState(task.description ?? '');
-  const meta = TASK_STATUS_META[task.status];
+  const meta = taskStatusMeta(task.status);
 
   return (
     // The pane scrolls, so it CLIPS — and a box that scrolls vertically cannot
@@ -129,16 +129,21 @@ export function TaskDetail({
           </button>
         )}
 
-        <Button
-          disabled
-          // Present but disabled, per this app's disabled-never-hidden
-          // convention: a control that vanishes teaches nothing, while one that
-          // is visibly off says the capability exists and is not ready.
-          title="Running a task arrives in milestone 3"
-          className="self-start">
-          <Play className="size-4" aria-hidden />
-          Run task
-        </Button>
+        {/* Present but disabled, per this app's disabled-never-hidden
+          convention: a control that vanishes teaches nothing, while one that is
+          visibly off says the capability exists and is not ready. The reason
+          sits BESIDE it rather than in a `title`, because `buttonVariants`
+          carries `disabled:pointer-events-none` — a disabled button receives no
+          hover, so its tooltip can never be read. */}
+        <div className="flex flex-col gap-1">
+          <Button disabled className="self-start">
+            <Play className="size-4" aria-hidden />
+            Run task
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Running a task from the board is not built yet.
+          </span>
+        </div>
       </aside>
     </MenuAnchorContext.Provider>
   );

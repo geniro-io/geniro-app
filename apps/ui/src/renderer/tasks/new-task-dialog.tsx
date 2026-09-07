@@ -19,8 +19,15 @@ export function NewTaskDialog({
   const [description, setDescription] = useState('');
   const ready = title.trim().length > 0;
 
+  // Same reason as the new-project dialog: visibility-toggled, not remounted.
+  const close = (): void => {
+    setTitle('');
+    setDescription('');
+    onClose();
+  };
+
   return (
-    <Dialog open={open} onClose={onClose} title="New task">
+    <Dialog open={open} onClose={close} title="New task">
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="new-task-title">Title</Label>
@@ -44,12 +51,11 @@ export function NewTaskDialog({
           />
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button
             disabled={!ready}
-            title={ready ? undefined : 'A task needs a title'}
             onClick={() => {
               onCreate({
                 title: title.trim(),

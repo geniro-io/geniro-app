@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   CircleCheck,
   CircleDot,
+  CircleHelp,
   CircleX,
   Eye,
   Inbox,
@@ -53,3 +54,27 @@ export const TASK_STATUS_META: Record<
     className: 'text-destructive',
   },
 };
+
+/**
+ * The presentation for a status, including one this build has never heard of.
+ *
+ * The daemon owns this vocabulary, so a newer daemon can send a value outside
+ * the union — `parseTaskChanged` deliberately passes such an event through
+ * rather than dropping it. A bare `TASK_STATUS_META[status]` index answers
+ * `undefined` there and every reader of `.label` throws, taking the whole board
+ * down over one unrecognised card. This degrades instead: the card shows the
+ * raw status and stays inert.
+ */
+export function taskStatusMeta(status: string): {
+  label: string;
+  icon: LucideIcon;
+  className: string;
+} {
+  return (
+    TASK_STATUS_META[status as TaskStatus] ?? {
+      label: status,
+      icon: CircleHelp,
+      className: 'text-muted-foreground',
+    }
+  );
+}

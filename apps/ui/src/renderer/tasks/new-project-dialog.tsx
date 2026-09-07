@@ -18,8 +18,17 @@ export function NewProjectDialog({
   const [folder, setFolder] = useState('');
   const ready = name.trim().length > 0 && folder.trim().length > 0;
 
+  // The dialog is visibility-toggled rather than remounted, so a draft
+  // abandoned with Cancel, Escape or the backdrop is still sitting there on the
+  // next open unless every exit clears it.
+  const close = (): void => {
+    setName('');
+    setFolder('');
+    onClose();
+  };
+
   return (
-    <Dialog open={open} onClose={onClose} title="New project">
+    <Dialog open={open} onClose={close} title="New project">
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="new-project-name">Name</Label>
@@ -56,15 +65,15 @@ export function NewProjectDialog({
           </div>
         </div>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={close}>
             Cancel
           </Button>
           <Button
             disabled={!ready}
-            // Disabled rather than hidden, and disabled rather than
-            // validating on submit: the two fields ARE the requirement, so the
-            // button says so before the press instead of after it.
-            title={ready ? undefined : 'A project needs a name and a folder'}
+            // Disabled rather than validating on submit: the two fields ARE
+            // the requirement. No `title` to explain it - `buttonVariants` sets
+            // `disabled:pointer-events-none`, so a disabled button never
+            // receives the hover its tooltip would need.
             onClick={() => {
               onCreate({ name: name.trim(), folder: folder.trim() });
               setName('');

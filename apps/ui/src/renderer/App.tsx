@@ -401,7 +401,11 @@ export function App(): React.JSX.Element {
             </div>
             <div className={cn('min-h-0 flex-1', view !== 'tasks' && 'hidden')}>
               {tasksMounted ? (
-                <Tasks handle={handle} client={clientRef.current} />
+                <Tasks
+                  handle={handle}
+                  client={clientRef.current}
+                  active={view === 'tasks'}
+                />
               ) : null}
             </div>
             {/* Unmounted when hidden, like Settings and unlike Chats/Workflows:

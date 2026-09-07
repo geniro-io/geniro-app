@@ -688,11 +688,18 @@ export interface TaskChangedEvent {
 /**
  * Read a `task_changed` payload, or null when it is not one.
  *
+ * TWIN PARSER: mirrors the daemon's `TaskChangedEvent`
+ * (`apps/daemon/src/v1/tasks/tasks.types.ts`). Change one and change the other.
+ *
  * `status` is NOT validated against the union: the daemon owns that vocabulary
  * and a build of it newer than this renderer may legitimately send a status
  * this one has never heard of. Dropping the event would leave the board showing
- * a card in a column it has left; passing it through lands it in a column the
- * board renders as unknown, which is visible and recoverable.
+ * a card in a column it has left. Passing it through is only safe because the
+ * board draws a column for any status present in its data (`boardColumns` in
+ * `tasks/use-board.ts`) and looks its presentation up through `taskStatusMeta`,
+ * which answers for a value outside the union — an earlier revision of this
+ * comment promised that degradation before either existed, and an unknown
+ * status crashed the card instead.
  */
 export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   if (typeof data !== 'object' || data === null) {

@@ -38,7 +38,7 @@ import { ProgressBar } from '../components/ui/progress-bar';
 import { Select, type SelectGroup } from '../components/ui/select';
 import { Switch } from '../components/ui/switch';
 import { cn } from '../components/ui/utils';
-import { createDaemonApis } from '../daemon-api';
+import { createDaemonApis, daemonErrorDetail } from '../daemon-api';
 import { setThemePreference } from '../theme/apply-theme';
 import { updateStatusText } from '../updates/update-status';
 import { useUpdateState } from '../updates/use-update-state';
@@ -218,6 +218,7 @@ export function Settings({
    * is reachable without ever opening Tasks.
    */
   const [projects, setProjects] = useState<ProjectDto[]>([]);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
   /** The CLI whose own updater is running right now — at most one at a time. */
   const [updatingCli, setUpdatingCli] = useState<CliKind | null>(null);
   /**
@@ -364,7 +365,15 @@ export function Settings({
             current.filter((row) => row.id !== projectId),
           );
         })
-        .catch(() => undefined);
+        .catch((err: unknown) => {
+          // The row stays on screen either way, so a refused delete is
+          // otherwise indistinguishable from a slow one and invites a second
+          // press at the one control here that cannot be undone.
+          setProjectsError(
+            daemonErrorDetail(err) ??
+              (err instanceof Error ? err.message : String(err)),
+          );
+        });
     },
     [apis],
   );
@@ -1110,7 +1119,14 @@ export function Settings({
           </header>
 
           {section === 'projects' ? (
-            <ProjectsPane projects={projects} onDelete={deleteProject} />
+            <ProjectsPane
+              projects={projects}
+              error={projectsError}
+              onDelete={deleteProject}
+              onDismissError={() => {
+                setProjectsError(null);
+              }}
+            />
           ) : section === 'fast-actions' ? (
             <FastActionsPane
               actions={fastActions}

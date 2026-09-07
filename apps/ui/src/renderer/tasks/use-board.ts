@@ -22,6 +22,26 @@ import type { DaemonClient } from '../daemon-client';
  */
 export const BOARD_COLUMNS: readonly TaskStatus[] = Object.values(TaskStatus);
 
+/**
+ * The columns to draw for a given set of tasks: the known vocabulary, plus any
+ * status present in the data that this build does not know, appended in the
+ * order first seen.
+ *
+ * Without the second half a card whose status came from a newer daemon matches
+ * no column and is silently absent from the board — worse than an unfamiliar
+ * column, because nothing tells the user the card exists at all.
+ */
+export function boardColumns(tasks: TaskDto[]): string[] {
+  const known = new Set<string>(BOARD_COLUMNS);
+  const extra: string[] = [];
+  for (const task of tasks) {
+    if (!known.has(task.status) && !extra.includes(task.status)) {
+      extra.push(task.status);
+    }
+  }
+  return [...BOARD_COLUMNS, ...extra];
+}
+
 export interface BoardApi {
   projects: ProjectDto[];
   selectedProjectId: string | null;
@@ -33,9 +53,10 @@ export interface BoardApi {
   createProject: (dto: CreateProjectDto) => Promise<ProjectDto | null>;
   createTask: (dto: CreateTaskDto) => Promise<TaskDto | null>;
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
-  moveTask: (taskId: string, to: TaskStatus) => Promise<void>;
+  moveTask: (taskId: string, to: string) => Promise<void>;
   dismissError: () => void;
-  reload: () => void;
+  /** Re-read the project list — the board calls this when it becomes visible. */
+  refreshProjects: () => void;
 }
 
 function describe(err: unknown): string {
@@ -57,10 +78,18 @@ export function useBoard(
   const [tasks, setTasks] = useState<TaskDto[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [nonce, setNonce] = useState(0);
+  // TWO counters, not one. A task write echoes its own broadcast back, and a
+  // single counter both effects keyed on turned every card move into a
+  // `listProjects` as well as a `listTasks` of the whole board.
+  const [projectsNonce, setProjectsNonce] = useState(0);
+  const [tasksNonce, setTasksNonce] = useState(0);
 
   const reload = useCallback(() => {
-    setNonce((n) => n + 1);
+    setTasksNonce((n) => n + 1);
+  }, []);
+
+  const refreshProjects = useCallback(() => {
+    setProjectsNonce((n) => n + 1);
   }, []);
 
   useEffect(() => {
@@ -75,10 +104,20 @@ export function useBoard(
           return;
         }
         setProjects(rows);
-        // Only ever fills an EMPTY selection. Re-selecting on every refresh
-        // would drag the user off the project they picked every time another
-        // window created one.
-        setSelectedProjectId((current) => current ?? rows[0]?.id ?? null);
+        setSelectedProjectId((current) => {
+          // A selection pointing at a project that is no longer here has to
+          // GO, not merely be left alone: Settings can delete the project this
+          // board is showing, and the screen is latch-mounted so it never
+          // remounts to notice. Holding the id would keep a dead project's
+          // cards on screen and fail every write against them.
+          if (current !== null && !rows.some((row) => row.id === current)) {
+            return rows[0]?.id ?? null;
+          }
+          // Otherwise only ever FILL an empty selection — re-selecting on
+          // every refresh would drag the user off the project they picked
+          // each time another window created one.
+          return current ?? rows[0]?.id ?? null;
+        });
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -88,7 +127,7 @@ export function useBoard(
     return () => {
       cancelled = true;
     };
-  }, [apis, nonce]);
+  }, [apis, projectsNonce]);
 
   useEffect(() => {
     if (!apis || selectedProjectId === null) {
@@ -117,7 +156,7 @@ export function useBoard(
     return () => {
       cancelled = true;
     };
-  }, [apis, selectedProjectId, nonce]);
+  }, [apis, selectedProjectId, tasksNonce]);
 
   // Stable for the subscribe effect, so re-subscribing does not depend on the
   // render that produced the callback.
@@ -199,7 +238,7 @@ export function useBoard(
   );
 
   const moveTask = useCallback(
-    async (taskId: string, to: TaskStatus): Promise<void> => {
+    async (taskId: string, to: string): Promise<void> => {
       const before = tasks.find((row) => row.id === taskId);
       if (!apis || before === undefined || before.status === to) {
         return;
@@ -210,22 +249,31 @@ export function useBoard(
       // read instead of overwriting whoever moved it first.
       setTasks((current) =>
         current.map((row) =>
-          row.id === taskId ? { ...row, status: to } : row,
+          row.id === taskId ? { ...row, status: to as TaskStatus } : row,
         ),
       );
       try {
         const moved = await apis.tasks.moveTaskStatus({
           taskId,
-          moveTaskStatusDto: { from: before.status, to },
+          // The daemon owns the status vocabulary, so `to` is whatever the
+          // column carries — including one this build does not know.
+          moveTaskStatusDto: { from: before.status, to: to as TaskStatus },
         });
         setTasks((current) =>
           current.map((row) => (row.id === taskId ? moved : row)),
         );
       } catch (err: unknown) {
-        // Put it back where the user took it from, and say so. A silent
-        // snap-back reads as the app losing the drag.
+        // Put it back where the user took it from, and say so — a silent
+        // snap-back reads as the app losing the drag. Restore ONLY if the row
+        // still holds the value this call wrote: a refusal usually means
+        // someone else moved the card, and a reload racing this request may
+        // already have fetched their newer status. Overwriting that would
+        // leave the board disagreeing with the daemon and every later move
+        // refused for the same reason.
         setTasks((current) =>
-          current.map((row) => (row.id === taskId ? before : row)),
+          current.map((row) =>
+            row.id === taskId && row.status === to ? before : row,
+          ),
         );
         setError(describe(err));
       }
@@ -253,6 +301,6 @@ export function useBoard(
     updateTask,
     moveTask,
     dismissError,
-    reload,
+    refreshProjects,
   };
 }

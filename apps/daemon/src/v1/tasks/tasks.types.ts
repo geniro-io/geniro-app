@@ -131,6 +131,10 @@ export interface TaskStatusMove {
  * a board draws a card by, and the renderer already holds the rest from its
  * own fetch — a wider payload would be a second, driftable copy of the row.
  */
+/**
+ * TWIN PARSER: mirrored by the renderer's `parseTaskChanged`
+ * (`apps/ui/src/renderer/daemon-client.ts`). Change one and change the other.
+ */
 export interface TaskChangedEvent {
   taskId: string;
   projectId: string;

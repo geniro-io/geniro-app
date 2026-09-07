@@ -1844,6 +1844,9 @@ describe('withLiveText', () => {
     thinkingStretch: null,
     contextTokens: null,
     contextWindowTokens: null,
+    spentInputTokens: null,
+    spentOutputTokens: null,
+    spentCacheReadTokens: null,
     ...over,
   });
 

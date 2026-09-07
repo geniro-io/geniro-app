@@ -221,9 +221,12 @@ export function ThinkingRow({
 export function WorkingRow({
   since = null,
   waitingOn = null,
+  spend = null,
 }: {
   /** Epoch ms this agent last showed something, or null if it never has. */
   since?: number | null;
+  /** This turn's running token bill, formatted, or null when unmeasured. */
+  spend?: string | null;
   /**
    * The open call this agent is BLOCKED on, when it is — what it is waiting
    * for rather than what it is doing.
@@ -256,6 +259,7 @@ export function WorkingRow({
     <LiveRow
       text={waiting ?? activity ?? STANDING_ACTIVITY}
       elapsed={formatElapsed(Date.now() - (since ?? mountedAt))}
+      spend={spend}
     />
   );
 }
@@ -292,11 +296,22 @@ export function WorkingRow({
 function LiveRow({
   text,
   elapsed,
+  spend = null,
 }: {
   /** What is happening — arbitrary length, so this is the half that gives way. */
   text: string;
   /** The clock, always shown in full. */
   elapsed: string;
+  /**
+   * What this turn has spent so far, already formatted, or null when nothing
+   * has reported.
+   *
+   * NULL IS THE COMMON CASE and must draw nothing: cursor reports no token
+   * accounting a client can reach, so half the app's agents will never fill
+   * this. A `0` in its place would be a figure nobody measured, on the row
+   * whose whole job is to say what is happening right now.
+   */
+  spend?: string | null;
 }): React.JSX.Element {
   return (
     // `w-full` so the cap below has a definite width to be half OF: the note
@@ -313,6 +328,14 @@ function LiveRow({
           {text}
         </span>
         <span className="shrink-0">· {elapsed}</span>
+        {/* AFTER the clock, and `shrink-0` like it: the phrase is the only
+            part of this row allowed to give way, so a long activity name
+            truncates rather than pushing the figures off. */}
+        {spend === null ? null : (
+          <span data-slot="live-row-spend" className="shrink-0 tabular-nums">
+            · {spend}
+          </span>
+        )}
       </div>
     </MessageBubble>
   );

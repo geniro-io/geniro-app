@@ -16,6 +16,9 @@ function live(
     thinkingStretch: null,
     contextTokens,
     contextWindowTokens,
+    spentInputTokens: null,
+    spentOutputTokens: null,
+    spentCacheReadTokens: null,
   };
 }
 

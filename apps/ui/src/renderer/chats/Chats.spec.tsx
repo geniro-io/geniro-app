@@ -344,6 +344,9 @@ const LIVE_DELTA_REST = {
   thinkingStretch: null,
   contextTokens: null,
   contextWindowTokens: null,
+  spentInputTokens: null,
+  spentOutputTokens: null,
+  spentCacheReadTokens: null,
 };
 
 const roots: Root[] = [];
@@ -8612,6 +8615,9 @@ describe('Chats sidebar list', () => {
         thinkingStretch: null,
         contextTokens: 120_000,
         contextWindowTokens: 200_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
     });
     expect(
@@ -8719,6 +8725,9 @@ describe('Chats sidebar list', () => {
         thinkingStretch: null,
         contextTokens: 500_000,
         contextWindowTokens: 1_000_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
     });
     expect(

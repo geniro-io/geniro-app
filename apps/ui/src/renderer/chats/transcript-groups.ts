@@ -9,7 +9,12 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
-import { CHAT_LIVE_KEY, type LiveState, ownerOfKey } from './live-text';
+import {
+  CHAT_LIVE_KEY,
+  formatLiveSpend,
+  type LiveState,
+  ownerOfKey,
+} from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
   type BackgroundOutcome,
@@ -3098,6 +3103,18 @@ function nodeIdOf(key: string): string | null {
  * completely silent between a tool batch and the next words, leaving the chat
  * header as the only place saying anything was happening.
  */
+/**
+ * The `spend` key for a synthetic live row, or nothing at all.
+ *
+ * Spread rather than assigned so an unmeasured turn leaves the key ABSENT: the
+ * row's renderer reads it with `payloadString`, and a present-but-empty value
+ * would draw the separator with no figure after it.
+ */
+function spendPayload(state: LiveState | null): { spend?: string } {
+  const spend = state === null ? null : formatLiveSpend(state);
+  return spend === null ? {} : { spend };
+}
+
 export function withLiveText(
   blocks: readonly TranscriptEntry[],
   liveText: ReadonlyMap<string, LiveState>,
@@ -3192,6 +3209,12 @@ export function withLiveText(
         payload: {
           live: 'working',
           ...(since === null ? {} : { workingSince: since }),
+          // This turn's running token bill, formatted at the FOLD because that
+          // is where the live state is in hand — the row's own renderer holds a
+          // payload and no live plane. Omitted entirely when nothing reported,
+          // so the row's `payloadString` reads null and draws nothing rather
+          // than an empty figure.
+          ...spendPayload(liveText.get(key) ?? null),
           ...(waitingOn === null
             ? {}
             : {

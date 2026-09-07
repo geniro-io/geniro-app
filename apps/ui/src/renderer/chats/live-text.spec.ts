@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyLiveText,
   CHAT_LIVE_KEY,
+  formatLiveSpend,
   type LiveState,
   type LiveTextEvent,
   liveTextKey,
@@ -23,6 +24,9 @@ const event = (over: Partial<LiveTextEvent> = {}): LiveTextEvent => ({
   thinkingStretch: null,
   contextTokens: null,
   contextWindowTokens: null,
+  spentInputTokens: null,
+  spentOutputTokens: null,
+  spentCacheReadTokens: null,
   ...over,
 });
 
@@ -38,6 +42,9 @@ describe('parseLiveText', () => {
         thinkingStretch: 2,
         contextTokens: 45_200,
         contextWindowTokens: 200_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       }),
     ).toEqual({
       runId: 'run-1',
@@ -50,6 +57,9 @@ describe('parseLiveText', () => {
       thinkingStretch: 2,
       contextTokens: 45_200,
       contextWindowTokens: 200_000,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
     });
   });
 
@@ -93,6 +103,9 @@ describe('parseLiveText', () => {
       thinkingStretch: 0,
       contextTokens: 0,
       contextWindowTokens: 0,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
     });
     expect(parsed).toEqual({
       runId: 'run-1',
@@ -105,6 +118,9 @@ describe('parseLiveText', () => {
       thinkingStretch: null,
       contextTokens: null,
       contextWindowTokens: null,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
     });
   });
 
@@ -260,5 +276,55 @@ describe('liveTextKey', () => {
     expect(
       ownerOfKey(liveTextKey('node-a', partialOwnerKey('node-a', 'c1'))),
     ).toBe('node-a');
+  });
+});
+
+describe('formatLiveSpend', () => {
+  const unmeasured = {
+    spentInputTokens: null,
+    spentOutputTokens: null,
+    spentCacheReadTokens: null,
+  };
+
+  it('draws NOTHING when neither half was measured', () => {
+    // Every cursor turn, and every claude turn before its first request lands.
+    // A `↑0 ↓0` there would be a figure nobody took.
+    expect(formatLiveSpend(unmeasured)).toBeNull();
+  });
+
+  it('folds cache reads into the input side', () => {
+    // The split is priced apart and reported apart, and it decides a BILL. On
+    // this row it would be a third figure competing with the activity phrase
+    // for one line, so the glance gets two arrows and the wire keeps three
+    // fields.
+    expect(
+      formatLiveSpend({
+        spentInputTokens: 1_200,
+        spentOutputTokens: 340,
+        spentCacheReadTokens: 58_800,
+      }),
+    ).toBe('↑60k ↓340');
+  });
+
+  it('draws a measured ZERO — it is what a turn that has produced nothing says', () => {
+    // The distinction the whole plane is built on: 0 was measured, null was
+    // not. A turn thinking its way through a long prompt has spent input and
+    // produced nothing, and saying so is the point of a live row.
+    expect(
+      formatLiveSpend({
+        spentInputTokens: 4_000,
+        spentOutputTokens: 0,
+        spentCacheReadTokens: null,
+      }),
+    ).toBe('↑4k ↓0');
+  });
+
+  it('states the half it has when the other is unmeasured', () => {
+    expect(formatLiveSpend({ ...unmeasured, spentOutputTokens: 12 })).toBe(
+      '↓12',
+    );
+    expect(formatLiveSpend({ ...unmeasured, spentInputTokens: 12 })).toBe(
+      '↑12',
+    );
   });
 });

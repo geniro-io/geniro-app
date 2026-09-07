@@ -1367,6 +1367,13 @@ export class GraphExecutorService {
             );
             return;
           }
+          if (event.type === 'usage_progress') {
+            // The node's own running bill for this turn — the graph twin of
+            // `ChatService`'s site, and ephemeral for the same reason: the
+            // turn's `turn_complete` usage is the durable copy.
+            this.partials.spend(runId, ownerKey, node.id, event);
+            return;
+          }
           if (event.type === 'context_progress') {
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next

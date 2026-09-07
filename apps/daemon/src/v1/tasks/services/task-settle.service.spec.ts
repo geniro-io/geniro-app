@@ -34,6 +34,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let runDao: RunDao;
   let itemDao: ItemDao;
   let em: EntityManager;
+  let bus: AgentEventBus;
   let projectId: string;
   let seq = 0;
 
@@ -64,14 +65,8 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     runDao = new RunDao(em);
     itemDao = new ItemDao(em);
     tasks = new TasksService(em, taskDao, projectDao, new TaskEventBus());
-    service = new TaskSettleService(
-      em,
-      new AgentEventBus(),
-      runDao,
-      itemDao,
-      taskDao,
-      tasks,
-    );
+    bus = new AgentEventBus();
+    service = new TaskSettleService(em, bus, runDao, itemDao, taskDao, tasks);
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-task-settle-spec',
@@ -220,5 +215,73 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await service.reconcileProject(projectId);
 
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  it('settles from the LIVE bus, which is how every card moves', async () => {
+    const task = await working();
+    const last = await row('run-1', 'message', 'assistant', '{"text":"done"}');
+    const run = await runDao.getById('run-1');
+    if (run) {
+      run.status = 'completed';
+      await em.flush();
+    }
+    service.onModuleInit();
+
+    bus.publishRunStatus({
+      runId: 'run-1',
+      status: 'completed',
+      at: new Date().toISOString(),
+    });
+    // The subscriber detaches its work, so let the microtask queue drain.
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const stored = await taskDao.getById(task.id);
+    expect(stored?.status).toBe('in_review');
+    expect(stored?.reportItemId).toBe(last.id);
+  });
+
+  it('ignores an activity announce, which asserts nothing about settling', async () => {
+    const task = await working();
+    service.onModuleInit();
+
+    // A null status says only what the run is DOING.
+    bus.publishRunStatus({
+      runId: 'run-1',
+      status: null,
+      at: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  it('settles a card ONCE, so a follow-up turn cannot drag it back', async () => {
+    const task = await working();
+    await settleRun('run-1', 'completed');
+    // The run is an ordinary chat: the user reviews, moves the card on, then
+    // asks the agent one more thing in that same conversation.
+    await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
+
+    await settleRun('run-1', 'completed');
+
+    expect((await taskDao.getById(task.id))?.status).toBe('done');
+  });
+
+  it('one contested card does not cost the board its whole listing', async () => {
+    const task = await working();
+    const other = await tasks.create({ projectId, title: 'untouched' });
+    const run = await runDao.getById('run-1');
+    if (run) {
+      run.status = 'completed';
+      await em.flush();
+    }
+    // `settle` ends in a compare-and-set that throws when the row moved since
+    // it was read; `reconcileTasks` is the board's ONLY listing call.
+    await tasks.update(task.id, { runId: 'run-1' });
+    await taskDao.getById(task.id);
+
+    const board = await service.reconcileProject(projectId);
+
+    expect(board.map((r) => r.id)).toContain(other.id);
   });
 });

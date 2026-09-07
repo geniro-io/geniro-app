@@ -5,6 +5,7 @@ import {
   ChatApprovalModeSchema,
   CustomInstructionsSchema,
 } from '../../agents/chat.types';
+import { commitShaSchema } from '../../agents/dto/chat.dto';
 import { AgentKindSchema } from '../../runs/runs.types';
 import { TaskStatusSchema } from '../tasks.types';
 
@@ -45,7 +46,7 @@ export const startTaskRunSchema = z.object({
    * What `cwd` had checked out at this moment, read by the CLIENT — the fixed
    * point the diff view measures against, exactly as chat create takes it.
    */
-  startSha: z.string().min(1).optional(),
+  startSha: commitShaSchema.optional(),
   startDirty: z.boolean().optional(),
   /**
    * The run configuration for this one press.

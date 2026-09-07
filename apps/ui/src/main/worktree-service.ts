@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
 import { app } from 'electron';
@@ -119,6 +119,28 @@ function forget(path: string): void {
   writeRegistry(readRegistry().filter((row) => row.path !== path));
 }
 
+/**
+ * Whether a path sits strictly under the directory this app owns.
+ *
+ * The registry is a plain JSON file, and it is the ONLY thing that authorizes
+ * the recursive delete below — so a row whose `path` names somewhere else,
+ * however it came to (a corrupted file, a hand edit, a build with a different
+ * layout), would point that delete at whatever it named. Bounding the sink is
+ * what makes the delete safe by construction rather than by what the file says.
+ *
+ * Segment-wise rather than a bare `startsWith`, which would admit a sibling
+ * directory whose name merely begins with the root's. The daemon states the
+ * same predicate in `v1/agents/utils/path-within.ts`; it is restated here
+ * because Electron main imports no daemon source — doing so would pull the
+ * Nest graph into the main bundle.
+ */
+function isInsideWorktreesRoot(path: string): boolean {
+  const root = resolve(worktreesRoot());
+  const target = resolve(path);
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return target.startsWith(prefix);
+}
+
 async function git(cwd: string, args: string[]): Promise<void> {
   await execFileAsync('git', [...SAFE_CONFIG, ...args], {
     cwd,
@@ -139,8 +161,23 @@ async function git(cwd: string, args: string[]): Promise<void> {
  * would make every future reaper pass retry it forever.
  */
 export async function removeWorktree(record: WorktreeRecord): Promise<void> {
+  if (!isInsideWorktreesRoot(record.path)) {
+    // Drop the row so it stops being offered to this function, and delete
+    // nothing: a path outside the worktrees directory is not this app's to
+    // remove, whatever the registry claims.
+    forget(record.path);
+    return;
+  }
   try {
-    await git(record.folder, ['worktree', 'remove', '--force', record.path]);
+    // `--` so a path beginning with `-` is a path rather than an option. An
+    // argv array stops a shell reading it; it does not stop git doing so.
+    await git(record.folder, [
+      'worktree',
+      'remove',
+      '--force',
+      '--',
+      record.path,
+    ]);
   } catch {
     // Fall through to the directory removal below: a worktree whose repository
     // has itself been deleted cannot be removed by git, and the directory is
@@ -155,17 +192,65 @@ export async function removeWorktree(record: WorktreeRecord): Promise<void> {
 }
 
 /**
+ * Whether anything in a worktree is unsaved.
+ *
+ * Null means UNCONFIRMABLE — git is missing, the directory is not a worktree,
+ * the command failed. Every caller reads null as "assume there is work here",
+ * because the alternative is deleting on a question nobody could answer.
+ */
+async function isDirty(path: string): Promise<boolean | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [...SAFE_CONFIG, 'status', '--porcelain'],
+      { cwd: path, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+    );
+    return stdout.trim() !== '';
+  } catch {
+    return null;
+  }
+}
+
+/** Whether the repository already holds this task's branch. */
+async function branchExists(folder: string, branch: string): Promise<boolean> {
+  try {
+    await execFileAsync(
+      'git',
+      [
+        ...SAFE_CONFIG,
+        'rev-parse',
+        '--verify',
+        '--quiet',
+        `refs/heads/${branch}`,
+      ],
+      { cwd: folder, timeout: GIT_TIMEOUT_MS },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Make the worktree and branch a task's agent will work in.
  *
- * `git worktree add -b <branch> <path>` in the project's own folder. Every
- * argument travels as an argv ENTRY rather than inside a shell string, so a
- * folder or branch name cannot become an argument of its own.
+ * Every argument travels as an argv ENTRY rather than inside a shell string,
+ * so a folder or branch name cannot become an argument of its own.
  *
- * A stale path from a previous crash is the failure this retries once for: the
- * reaper runs at boot and clears the ones it can confirm, but a worktree
- * created and then orphaned inside a single session is not in its reach. So a
- * first failure prunes THIS task's own registered path and tries again — never
- * a path the registry does not name.
+ * Two states a second press routinely finds, and neither may destroy work:
+ *
+ * A LEFTOVER WORKTREE from an earlier run of this same task — the path is per
+ * task, so every run of one card wants the same directory. It is cleared only
+ * when it holds nothing; one with uncommitted changes refuses the press and
+ * says where it is. That is the rule `reapOrphanedWorktrees` already states,
+ * and it has to hold here too: a checkout an agent is working in right now
+ * looks exactly like a leftover from this side of the boundary, since the
+ * claim that knows otherwise lives in the daemon and is consulted after.
+ *
+ * A LEFTOVER BRANCH with no worktree — the ordinary state after any failed
+ * start or any boot reap, because removing a worktree deliberately keeps its
+ * branch. `-b` refuses to create a branch that exists, so the branch is
+ * re-used rather than re-created when it is already there.
  */
 export async function prepareWorktree(input: {
   taskId: string;
@@ -175,19 +260,17 @@ export async function prepareWorktree(input: {
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
 
-  const create = async (): Promise<void> => {
-    await git(input.folder, ['worktree', 'add', '-b', branch, path]);
-  };
-
-  try {
-    await create();
-  } catch (error) {
-    const stale = readRegistry().find((row) => row.path === path);
-    if (stale === undefined && !existsSync(path)) {
-      throw error;
+  if (existsSync(path)) {
+    const dirty = await isDirty(path);
+    if (dirty !== false) {
+      throw new Error(
+        dirty === true
+          ? `this task's worktree at ${path} has uncommitted changes — commit or clear them before running it again`
+          : `a directory already exists at ${path} and git cannot say what is in it — clear it before running this task again`,
+      );
     }
     await removeWorktree(
-      stale ?? {
+      readRegistry().find((row) => row.path === path) ?? {
         taskId: input.taskId,
         path,
         branch,
@@ -195,12 +278,14 @@ export async function prepareWorktree(input: {
         createdAt: '',
       },
     );
-    // A branch left behind by the previous attempt would make `-b` fail on its
-    // own terms, so the retry re-uses it rather than insisting on creating it.
-    await git(input.folder, ['worktree', 'add', path, branch]).catch(async () =>
-      create(),
-    );
   }
+
+  await git(
+    input.folder,
+    (await branchExists(input.folder, branch))
+      ? ['worktree', 'add', path, branch]
+      : ['worktree', 'add', '-b', branch, path],
+  );
 
   remember({
     taskId: input.taskId,
@@ -235,12 +320,7 @@ async function inspect(
     if (!registered) {
       return { registered: false, dirty: false };
     }
-    const { stdout: status } = await execFileAsync(
-      'git',
-      [...SAFE_CONFIG, 'status', '--porcelain'],
-      { cwd: record.path, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
-    );
-    return { registered: true, dirty: status.trim() !== '' };
+    return { registered: true, dirty: (await isDirty(record.path)) !== false };
   } catch {
     return null;
   }
@@ -301,6 +381,12 @@ export async function reapOrphanedWorktrees(): Promise<{
 export async function pruneWorktreeForTask(taskId: string): Promise<boolean> {
   const record = readRegistry().find((row) => row.taskId === taskId);
   if (record === undefined) {
+    return false;
+  }
+  // Keeps a worktree holding unsaved work, on `reapOrphanedWorktrees`'s rule
+  // and for its reason. This runs when a run SETTLES, and an agent that
+  // finished without committing has left the only copy of its work here.
+  if (existsSync(record.path) && (await isDirty(record.path)) !== false) {
     return false;
   }
   await removeWorktree(record);

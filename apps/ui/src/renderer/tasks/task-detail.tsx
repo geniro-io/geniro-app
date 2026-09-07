@@ -258,21 +258,9 @@ export function TaskDetail({
           {reason !== null ? (
             <span className="text-xs text-muted-foreground">{reason}</span>
           ) : null}
-          {task.branch !== null ? (
-            <span className="text-xs text-muted-foreground">
-              Working on <code className="font-mono">{task.branch}</code>
-            </span>
-          ) : null}
         </div>
 
-        {report !== null ? (
-          <div className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              Report
-            </span>
-            <TaskReport item={report} />
-          </div>
-        ) : null}
+        {report !== null ? <TaskReport item={report} /> : null}
       </aside>
     </MenuAnchorContext.Provider>
   );

@@ -97,6 +97,10 @@ export class TaskRunsService {
       to: 'in_progress',
     });
 
+    // Held so `abandon` can take the run down with the rest. Without it a
+    // failure after creation leaves a chat whose `taskId` points at a card that
+    // no longer names it, working directory already pruned by the caller.
+    let runId: string | null = null;
     try {
       const run = await this.chats.createChat({
         agentKind,
@@ -118,6 +122,7 @@ export class TaskRunsService {
         groupId: project.groupId,
       });
 
+      runId = run.id;
       const wire = await this.tasks.update(taskId, {
         runId: run.id,
         branch: input.branch,
@@ -129,7 +134,7 @@ export class TaskRunsService {
       await this.chats.sendMessage(run.id, composeTaskPrompt(task));
       return wire;
     } catch (error) {
-      await this.abandon(taskId, input.from);
+      await this.abandon(taskId, input.from, runId);
       throw error;
     }
   }
@@ -141,8 +146,19 @@ export class TaskRunsService {
    * stopped the run, and a card someone else moved in the meantime is not this
    * request's to drag back.
    */
-  private async abandon(taskId: string, from: Task['status']): Promise<void> {
+  private async abandon(
+    taskId: string,
+    from: Task['status'],
+    runId: string | null,
+  ): Promise<void> {
     try {
+      // The run goes with the card. `Run.taskId` and `Task.runId` are two ends
+      // of one edge, and leaving a chat behind that names a card the card does
+      // not name back is exactly the disagreement `run.entity.ts` says nothing
+      // writes.
+      if (runId !== null) {
+        await this.chats.delete(runId);
+      }
       await this.tasks.update(taskId, {
         runId: null,
         branch: null,

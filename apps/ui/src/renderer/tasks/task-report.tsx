@@ -33,12 +33,21 @@ export function TaskReport({
   item: ItemDto;
 }): React.JSX.Element | null {
   const report = readFindingsReport(item);
-  if (report !== null) {
-    return <FindingsCard report={report} />;
-  }
-  const text = messageText(item);
-  if (text === null) {
+  const text = report === null ? messageText(item) : null;
+  if (report === null && text === null) {
     return null;
   }
-  return <MarkdownContent content={text} />;
+  // The heading belongs to this component rather than to the panel, so it
+  // cannot outlive what it labels: gated outside, a row whose payload reads as
+  // neither still printed "Report" over nothing.
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-muted-foreground">Report</span>
+      {report !== null ? (
+        <FindingsCard report={report} />
+      ) : (
+        <MarkdownContent content={text ?? ''} />
+      )}
+    </div>
+  );
 }

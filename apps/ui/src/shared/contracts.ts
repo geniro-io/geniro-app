@@ -915,7 +915,6 @@ export interface GitChanges {
   unavailableReason: string | null;
 }
 
-/** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
 /**
  * The outcome of preparing a task's worktree.
  *
@@ -934,6 +933,7 @@ export interface TaskWorktreeResult {
   error: string | null;
 }
 
+/** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
 export interface BranchSwitchResult {
   ok: boolean;
   branch: string | null;

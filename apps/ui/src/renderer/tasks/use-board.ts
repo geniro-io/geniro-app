@@ -388,7 +388,11 @@ export function useBoard(
         return null;
       }
       try {
-        const items = await apis.chats.listRunItems({ runId });
+        // A WINDOW, not the transcript. `listRunItems` without one takes the
+        // unwindowed path, whose own doc records the cost: 7,814 items are
+        // 18.9MB where the newest 1,000 are 0.63MB. The report is written at
+        // the run's tail, so the newest rows are where it is.
+        const items = await apis.chats.listRunItems({ runId, limit: 200 });
         return items.find((row) => row.id === reportItemId) ?? null;
       } catch {
         return null;
@@ -396,6 +400,28 @@ export function useBoard(
     },
     [apis],
   );
+
+  /**
+   * Take down the worktree of any card whose run has settled.
+   *
+   * Spec step 4 asks for this and nothing else was doing it: the only prune
+   * was the failed-start catch, so a finished task's whole checkout stayed on
+   * disk, and the boot reaper deliberately skips a dirty one — which is the
+   * routine end state of an agent run.
+   *
+   * Idempotent by construction, which is what lets it run off the task list
+   * rather than off a transition: pruning drops the registry row, so a second
+   * pass finds nothing and answers false. Main keeps a worktree holding
+   * unsaved work, so a card dragged out of `in_progress` while its agent is
+   * still writing does not lose it.
+   */
+  useEffect(() => {
+    for (const task of tasks) {
+      if (task.worktreePath !== null && task.status !== 'in_progress') {
+        void window.geniro.pruneTaskWorktree(task.id);
+      }
+    }
+  }, [tasks]);
 
   const dismissError = useCallback(() => {
     setError(null);

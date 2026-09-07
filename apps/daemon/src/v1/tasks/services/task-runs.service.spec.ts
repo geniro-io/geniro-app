@@ -56,13 +56,13 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let worktree: string;
   let createChat: ReturnType<typeof vi.fn>;
   let sendMessage: ReturnType<typeof vi.fn>;
+  let deleteChat: ReturnType<typeof vi.fn>;
 
   /**
    * A complete run row on the wire.
    *
-   * Written out in full and ANNOTATED rather than cast: a cast would let this
-   * fixture drop a field the schema requires and still compile, which is the
-   * exact defect a milestone-2 review found in this board's other specs.
+   * Annotated rather than cast, so a field the schema requires cannot go
+   * missing here and still compile.
    */
   const runWire = (id: string): RunWire => ({
     id,
@@ -148,7 +148,12 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       return runWire('run-1');
     });
     sendMessage = vi.fn(async () => undefined);
-    const chats = { createChat, sendMessage } as unknown as ChatService;
+    deleteChat = vi.fn(async () => ({ deleted: true }));
+    const chats = {
+      createChat,
+      sendMessage,
+      delete: deleteChat,
+    } as unknown as ChatService;
     service = new TaskRunsService(
       em,
       taskDao,
@@ -327,5 +332,49 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       message: expect.stringContaining('names an agent to run'),
     });
     expect(createChat).not.toHaveBeenCalled();
+  });
+
+  it('refuses a SECOND start that arrives while the first is still in flight', async () => {
+    const task = await seed();
+    // `moveStatus` reads and then writes across an await, so two requests
+    // arriving together can both find the card in `todo` and both pass it.
+    // The synchronous claim is what closes that window, and losing the race
+    // means two agents in two worktrees on one card.
+    let release: (() => void) | undefined;
+    createChat.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          release = () => {
+            resolve(runWire('run-1'));
+          };
+        }),
+    );
+
+    const first = service.start(task.id, start());
+    await expect(service.start(task.id, start())).rejects.toMatchObject({
+      message: expect.stringContaining('already starting a run'),
+    });
+
+    // Release only once the first start has actually reached `createChat` —
+    // it awaits the card read and the status move before it gets there.
+    while (createChat.mock.calls.length === 0) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    release?.();
+    await first.catch(() => undefined);
+    expect(createChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the run down with the card when a start fails after creating it', async () => {
+    const task = await seed();
+    sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+    await expect(service.start(task.id, start())).rejects.toThrow(
+      'agent refused',
+    );
+
+    // Otherwise the chat survives naming a card that no longer names it back,
+    // with its working directory already pruned by the caller.
+    expect(deleteChat).toHaveBeenCalledWith('run-1');
   });
 });

@@ -602,6 +602,9 @@ describe('the column surface', () => {
         }),
       }),
     );
+    // Moving the prune into a `finally` would destroy the worktree on every
+    // SUCCESSFUL start, and both run tests would stay green without this.
+    expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
   });
 
   it('removes the worktree it just made when the run cannot be started', async () => {

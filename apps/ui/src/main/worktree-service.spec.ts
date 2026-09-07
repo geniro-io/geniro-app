@@ -244,4 +244,118 @@ describe('reapOrphanedWorktrees', () => {
     const raw = readFileSync(join(mocks.userData, 'worktrees.json'), 'utf8');
     expect(() => JSON.parse(raw) as unknown).not.toThrow();
   });
+
+  it('never deletes a registry path that sits OUTSIDE the worktrees directory', async () => {
+    // The registry is a plain JSON file in the userData dir, and it is the ONLY
+    // thing that authorizes a delete. `readRegistry` checks that its fields are
+    // strings and nothing more, so a row whose `path` names somewhere else —
+    // corrupted, hand-edited, or written by an older build with a different
+    // layout — points `rmSync(recursive, force)` at that path instead.
+    const outside = join(mocks.userData, 'not-a-worktree');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'precious.txt'), 'do not delete\n');
+    writeFileSync(
+      join(mocks.userData, 'worktrees.json'),
+      JSON.stringify([
+        {
+          taskId: 't1',
+          path: outside,
+          branch: 'b',
+          folder: repo,
+          createdAt: '',
+        },
+      ]),
+    );
+
+    await pruneWorktreeForTask('t1');
+
+    expect(existsSync(join(outside, 'precious.txt'))).toBe(true);
+  });
+
+  it(
+    'REFUSES a re-run over a worktree holding uncommitted work',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'in-progress.txt'), 'not committed\n');
+
+      // Same rule the reaper states, and it has to hold here too: from this side
+      // of the boundary a checkout an agent is working in right now looks exactly
+      // like a leftover, since the claim that knows otherwise is in the daemon
+      // and is consulted after.
+      await expect(
+        prepareWorktree({ taskId: 't1', folder: repo }),
+      ).rejects.toThrow(/uncommitted changes/);
+      expect(existsSync(join(made.path, 'in-progress.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    're-runs over a CLEAN leftover worktree, replacing it',
+    async () => {
+      const first = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      const again = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(again.path).toBe(first.path);
+      expect(existsSync(again.path)).toBe(true);
+      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'RE-USES a branch left behind by an earlier run',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      // Removing a worktree deliberately keeps its branch, so this is the state
+      // after any failed start and after every boot reap. `-b` refuses a branch
+      // that exists, so without the re-use the card could never run again.
+      await pruneWorktreeForTask('t1');
+      expect(git(repo, 'branch', '--list', 'geniro/task-t1')).toContain(
+        'geniro/task-t1',
+      );
+
+      const again = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(again.branch).toBe('geniro/task-t1');
+      expect(again.path).toBe(made.path);
+      expect(existsSync(again.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'prune KEEPS a worktree holding uncommitted work',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'unsaved.txt'), 'the only copy\n');
+
+      // Prune now runs when a run SETTLES, and an agent that finished without
+      // committing has left the only copy of its work in here.
+      await expect(pruneWorktreeForTask('t1')).resolves.toBe(false);
+      expect(existsSync(join(made.path, 'unsaved.txt'))).toBe(true);
+      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'leaves an unregistered directory alone even with a real entry beside it',
+    async () => {
+      // The neighbouring empty-registry cases cannot reach the reap loop at all,
+      // so this one seeds a genuine entry first: the loop runs, and the stranger
+      // still has to survive it.
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      const stranger = join(mocks.userData, 'worktrees', 'not-ours');
+      mkdirSync(stranger, { recursive: true });
+      writeFileSync(join(stranger, 'keep.txt'), 'mine\n');
+
+      const { removed } = await reapOrphanedWorktrees();
+
+      expect(removed).toEqual([made.path]);
+      expect(existsSync(join(stranger, 'keep.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
 });

@@ -552,19 +552,17 @@ export class ItemDao extends BaseDao<Item> {
   async latestOfKind(
     runId: string,
     kind: ItemKind,
-    options: { role?: string } = {},
+    role?: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'id' | 'seq' | 'payload'> | null> {
+  ): Promise<Pick<Item, 'id'> | null> {
     const [row] = await this.getRepo(txEm).find(
-      {
-        runId,
-        kind,
-        ...(options.role === undefined ? {} : { role: options.role }),
-      },
+      { runId, kind, ...(role === undefined ? {} : { role }) },
       {
         orderBy: { seq: 'desc' },
         limit: 1,
-        fields: ['id', 'seq', 'payload'],
+        // The id alone: `payload` is the TEXT column, and a `report_findings`
+        // row can be many KB read for a value no caller looks at.
+        fields: ['id'],
         disableIdentityMap: true,
       },
     );

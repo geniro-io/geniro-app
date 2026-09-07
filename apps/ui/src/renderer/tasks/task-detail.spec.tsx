@@ -99,10 +99,9 @@ describe('TaskDetail', () => {
 
   it('is disabled with a VISIBLE reason when there is no way to run', () => {
     // Disabled, never hidden: a control that vanishes teaches nothing. The
-    // reason cannot live in a `title` — `buttonVariants` sets
+    // reason must be VISIBLE text — `buttonVariants` sets
     // `disabled:pointer-events-none`, so a disabled button never receives the
-    // hover its tooltip would need, and an earlier version of this test
-    // asserted exactly that unreachable tooltip.
+    // hover a tooltip would need.
     const el = detail();
 
     expect(buttonNamed(el, 'Run task').disabled).toBe(true);
@@ -255,7 +254,9 @@ describe('priority and due date', () => {
   it('draws nothing for a row whose payload reads as neither', () => {
     const el = detail({ report: anItem({ payload: { nothing: true } }) });
 
-    // The heading would promise a report the panel cannot actually show.
     expect(el.querySelector('[data-slot="findings-card"]')).toBeNull();
+    // Including the HEADING, which would otherwise promise a report the panel
+    // has nothing to put under it.
+    expect(el.textContent).not.toContain('Report');
   });
 });

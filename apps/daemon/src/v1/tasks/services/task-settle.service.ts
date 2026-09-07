@@ -98,7 +98,12 @@ export class TaskSettleService implements OnModuleInit {
     if (!task || task.runId !== runId) {
       return;
     }
-    if (task.status === to) {
+    // Settle a card ONCE. The run is an ordinary chat, so a follow-up message
+    // after review settles it again — and without this, a card the user had
+    // moved to `done` would be dragged back to `in_review` by a conversation
+    // they deliberately continued. Only a card still reading as worked is a
+    // card this has anything to say about.
+    if (task.status !== 'in_progress') {
       return;
     }
 
@@ -132,7 +137,17 @@ export class TaskSettleService implements OnModuleInit {
       if (!run || !isTerminalRunStatus(run.status)) {
         continue;
       }
-      await this.settle(task.runId, run.status);
+      // Per card, on the subscriber's own terms: `settle` ends in a
+      // compare-and-set that throws when the row moved since it was read, and
+      // `reconcileTasks` is the board's ONLY listing call — so one contested
+      // card must not cost the user every other one.
+      await this.settle(task.runId, run.status).catch((error: unknown) => {
+        this.logger.warn(
+          `could not reconcile task ${task.id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
     }
     return this.tasks.listForProject(projectId);
   }
@@ -153,7 +168,7 @@ export class TaskSettleService implements OnModuleInit {
     const findings = await this.itemDao.latestOfKind(
       runId,
       'report_findings',
-      {},
+      undefined,
       em,
     );
     if (findings) {
@@ -162,7 +177,7 @@ export class TaskSettleService implements OnModuleInit {
     const message = await this.itemDao.latestOfKind(
       runId,
       'message',
-      { role: 'assistant' },
+      'assistant',
       em,
     );
     return message?.id ?? null;

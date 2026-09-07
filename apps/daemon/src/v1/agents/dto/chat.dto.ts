@@ -32,6 +32,18 @@ import {
  * responses pointing at a component that does not exist (guarded in
  * `setupSwagger`). Ids belong on the nested/shared schemas in `chat.types.ts`.
  */
+/**
+ * A commit id on its way to a `Run.startSha` column.
+ *
+ * The SHAPE is checked at the edge because the value later becomes argv to
+ * `git`: one that is not a commit id names nothing, and refusing it here keeps
+ * every reader downstream from having to wonder.
+ *
+ * Exported so the task-run route writing the same column states the same
+ * bound — the two had drifted, with one route admitting any non-empty string.
+ */
+export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
+
 export const createChatSchema = z.object({
   agentKind: AgentKindSchema,
   cwd: z.string().min(1),
@@ -49,10 +61,7 @@ export const createChatSchema = z.object({
    * value that is not a commit id names nothing, and refusing it at the edge
    * keeps every reader downstream from having to wonder.
    */
-  startSha: z
-    .string()
-    .regex(/^[0-9a-f]{40}$/)
-    .optional(),
+  startSha: commitShaSchema.optional(),
   startDirty: z.boolean().optional(),
   model: z.string().min(1).optional(),
   title: z.string().min(1).optional(),

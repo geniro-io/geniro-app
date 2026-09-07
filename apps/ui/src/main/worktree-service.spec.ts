@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -24,6 +25,7 @@ import {
   pruneWorktreeForTask,
   readRegistry,
   reapOrphanedWorktrees,
+  settleWorktreeForTask,
   taskBranchName,
 } from './worktree-service';
 
@@ -274,6 +276,101 @@ describe('pruneWorktreeForTask', () => {
     },
     TIMEOUT_MS,
   );
+});
+
+describe('settleWorktreeForTask', () => {
+  it(
+    'COMMITS what the agent left, then removes the worktree',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'work.txt'), 'the agent wrote this\n');
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: true,
+        committed: true,
+      });
+
+      // The whole justification for removing a dirty worktree: the work is on
+      // the branch, which is never removed with it.
+      expect(git(repo, 'show', 'geniro/task-t1:work.txt')).toBe(
+        'the agent wrote this\n',
+      );
+      expect(existsSync(made.path)).toBe(false);
+      expect(readRegistry()).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'removes a CLEAN worktree without putting an empty commit on the branch',
+    async () => {
+      await prepareWorktree({ taskId: 't1', folder: repo });
+      const before = git(repo, 'rev-parse', 'geniro/task-t1').trim();
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: true,
+        committed: false,
+      });
+
+      // A rescue commit on every settled task would say nothing happened, on
+      // every branch where nothing did.
+      expect(git(repo, 'rev-parse', 'geniro/task-t1').trim()).toBe(before);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS the worktree when the repository refuses the commit',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'work.txt'), 'the only copy\n');
+      // A worktree shares its repository's hooks, and this app runs them
+      // rather than passing `--no-verify`. A repository whose hooks reject an
+      // agent's half-finished tree must therefore keep the directory: it is
+      // the only place that work still exists.
+      const hook = join(repo, '.git', 'hooks', 'pre-commit');
+      writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+      chmodSync(hook, 0o755);
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: false,
+        committed: false,
+      });
+
+      expect(existsSync(join(made.path, 'work.txt'))).toBe(true);
+      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'never deletes a registry path that sits OUTSIDE the worktrees directory',
+    async () => {
+      // The sibling bound, on the path that is allowed to clear a DIRTY tree —
+      // so it is the one where an unbounded row would cost the most.
+      const outside = join(mocks.userData, 'not-a-worktree');
+      cleanRepoAt(outside, 'precious.txt');
+      writeFileSync(join(outside, 'uncommitted.txt'), 'do not touch\n');
+      registerRow(outside);
+
+      await expect(settleWorktreeForTask('t1')).resolves.toEqual({
+        removed: false,
+        committed: false,
+      });
+
+      expect(existsSync(join(outside, 'precious.txt'))).toBe(true);
+      expect(existsSync(join(outside, 'uncommitted.txt'))).toBe(true);
+      expect(readRegistry()).toEqual([]);
+    },
+    TIMEOUT_MS,
+  );
+
+  it('answers removed:false for a task this app never made a worktree for', async () => {
+    await expect(settleWorktreeForTask('never')).resolves.toEqual({
+      removed: false,
+      committed: false,
+    });
+  });
 });
 
 describe('reapOrphanedWorktrees', () => {

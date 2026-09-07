@@ -43,7 +43,11 @@ import { revealPath } from './reveal-path';
 import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
 import type { UpdateService } from './update-service';
-import { prepareWorktree, pruneWorktreeForTask } from './worktree-service';
+import {
+  prepareWorktree,
+  pruneWorktreeForTask,
+  settleWorktreeForTask,
+} from './worktree-service';
 
 /**
  * Register every privileged channel the renderer can invoke. The renderer has
@@ -229,6 +233,10 @@ export function registerIpc(
 
   ipcMain.handle(IPC.pruneTaskWorktree, (_event, taskId: unknown) =>
     pruneWorktreeForTask(taskIdSchema.parse(taskId)),
+  );
+
+  ipcMain.handle(IPC.settleTaskWorktree, (_event, taskId: unknown) =>
+    settleWorktreeForTask(taskIdSchema.parse(taskId)),
   );
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>

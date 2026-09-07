@@ -13,6 +13,7 @@ import {
   type PullRequestsResult,
   type Settings,
   type TaskWorktreeResult,
+  type TaskWorktreeSettleResult,
   type UpdateState,
 } from '../../shared/contracts';
 
@@ -220,6 +221,10 @@ export function createPreloadStub(
     pruneTaskWorktree: (): Promise<boolean> => {
       note('pruneTaskWorktree');
       return Promise.resolve(true);
+    },
+    settleTaskWorktree: (): Promise<TaskWorktreeSettleResult> => {
+      note('settleTaskWorktree');
+      return Promise.resolve({ removed: true, committed: true });
     },
     switchBranch: (
       _dir: string,

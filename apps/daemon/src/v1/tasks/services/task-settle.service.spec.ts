@@ -24,6 +24,7 @@ import { Run } from '../../runs/entity/run.entity';
 import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
+import type { TaskChangedEvent } from '../tasks.types';
 import { TaskEventBus } from './task-events.bus';
 import { TaskSettleService } from './task-settle.service';
 import { TasksService } from './tasks.service';
@@ -43,6 +44,8 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let itemDao: ItemDao;
   let em: EntityManager;
   let bus: AgentEventBus;
+  let taskEvents: TaskEventBus;
+  let changes: TaskChangedEvent[];
   let projectId: string;
   let seq = 0;
 
@@ -72,7 +75,10 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     projectDao = new ProjectDao(em);
     runDao = new RunDao(em);
     itemDao = new ItemDao(em);
-    tasks = new TasksService(em, taskDao, projectDao, new TaskEventBus());
+    taskEvents = new TaskEventBus();
+    changes = [];
+    taskEvents.allChanges().subscribe((event) => changes.push(event));
+    tasks = new TasksService(em, taskDao, projectDao, taskEvents);
     bus = new AgentEventBus();
     service = new TaskSettleService(em, bus, runDao, itemDao, taskDao, tasks);
     const project = await projectDao.create({
@@ -302,5 +308,72 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     );
     // The contested card is left exactly where the failed move found it.
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  it('names the SETTLE as the reason the card moved', async () => {
+    const task = await working();
+
+    await settleRun('run-1', 'completed');
+
+    // The client cannot derive this: a card's column is written optimistically
+    // the moment it is dragged, so only the daemon can say an agent stopped —
+    // and the renderer collects the worktree off exactly this field.
+    expect(
+      changes.filter((event) => event.taskId === task.id).at(-1),
+    ).toMatchObject({ status: 'in_review', reason: 'run-settled' });
+  });
+
+  it('gives NO reason for a move the user made themselves', async () => {
+    const task = await working();
+
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    // A drag reaches the same broadcast. Were it to carry the reason, the
+    // renderer would remove the worktree of an agent still working in it.
+    expect(changes.at(-1)?.reason).toBeUndefined();
+  });
+
+  it('releases a card whose run was deleted, and lets it be run again', async () => {
+    const task = await working();
+    await tasks.update(task.id, { reportItemId: 'item-1' });
+    service.onModuleInit();
+
+    bus.publishRunDeleted('run-1');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const stored = await taskDao.getById(task.id);
+    // The run is gone, so the card names a conversation nothing can answer
+    // for. Left holding it, it sits in `in_progress` for good with Run
+    // disabled — the button asks the RUN, and a missing run is not a settled
+    // one.
+    expect(stored?.runId).toBeNull();
+    expect(stored?.status).toBe('todo');
+    // The row it pointed at was hard-deleted with the transcript.
+    expect(stored?.reportItemId).toBeNull();
+  });
+
+  it('leaves a REVIEWED card in its column when its run is deleted', async () => {
+    const task = await working();
+    await settleRun('run-1', 'completed');
+    service.onModuleInit();
+
+    bus.publishRunDeleted('run-1');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const stored = await taskDao.getById(task.id);
+    // Only a card that was being WORKED has to be sent back — one already
+    // reviewed has moved on, and dragging it backwards would undo the user.
+    expect(stored?.status).toBe('in_review');
+    expect(stored?.runId).toBeNull();
+  });
+
+  it('ignores a deleted run no card ever held', async () => {
+    const task = await working();
+    service.onModuleInit();
+
+    bus.publishRunDeleted('some-other-run');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect((await taskDao.getById(task.id))?.runId).toBe('run-1');
   });
 });

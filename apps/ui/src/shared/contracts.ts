@@ -933,6 +933,20 @@ export interface TaskWorktreeResult {
   error: string | null;
 }
 
+/**
+ * What became of a settled run's worktree.
+ *
+ * Two facts rather than one, because "kept" has two causes a caller may want
+ * to tell apart: nothing could be committed (hooks refused it, or the machine
+ * has no git identity), or git could not say what was in there at all.
+ */
+export interface TaskWorktreeSettleResult {
+  /** Whether the directory is gone. False means it is still on disk. */
+  removed: boolean;
+  /** Whether a rescue commit was made first. False on an already-clean tree. */
+  committed: boolean;
+}
+
 /** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
 export interface BranchSwitchResult {
   ok: boolean;
@@ -1300,6 +1314,20 @@ export interface GeniroApi {
    * reachable from here.
    */
   pruneTaskWorktree(taskId: string): Promise<boolean>;
+  /**
+   * Collect the worktree of a run that has SETTLED, keeping what is in it.
+   *
+   * Commits whatever the agent left uncommitted onto the task's own branch and
+   * then removes the directory, so the routine end state of a run stops being
+   * a checkout nothing ever collects. A commit that could not be made keeps
+   * the worktree instead — the branch is the only place the work would
+   * survive, so nothing is removed until it is on there.
+   *
+   * Separate from `pruneTaskWorktree`, which is the FAILED-START path and must
+   * never commit: there is nothing of the agent's to rescue, and the only
+   * changes in that directory would be the user's own.
+   */
+  settleTaskWorktree(taskId: string): Promise<TaskWorktreeSettleResult>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
@@ -1445,6 +1473,7 @@ export const IPC = {
   getChangesSince: 'geniro:getChangesSince',
   prepareTaskWorktree: 'geniro:prepareTaskWorktree',
   pruneTaskWorktree: 'geniro:pruneTaskWorktree',
+  settleTaskWorktree: 'geniro:settleTaskWorktree',
   openInTerminal: 'geniro:openInTerminal',
   openTerminalAt: 'geniro:openTerminalAt',
   saveChatExport: 'geniro:saveChatExport',

@@ -7,6 +7,7 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type {
+  TaskChangeReason,
   TaskPriority,
   TaskSource,
   TaskStatus,
@@ -184,7 +185,11 @@ export class TasksService {
    * re-sending it is not a conflict, and failing it would make a retried
    * request look like a lost race.
    */
-  async moveStatus(taskId: string, move: TaskStatusMove): Promise<TaskWire> {
+  async moveStatus(
+    taskId: string,
+    move: TaskStatusMove,
+    reason?: TaskChangeReason,
+  ): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
 
@@ -209,6 +214,7 @@ export class TasksService {
       taskId: task.id,
       projectId: task.projectId,
       status: task.status,
+      reason,
     });
     return toWire(task);
   }

@@ -5,7 +5,11 @@ import {
   TASK_SOURCE_REF_MAX,
   TASK_TITLE_MAX,
 } from '../tasks.types';
-import { createTaskSchema, listTasksQuerySchema } from './task.dto';
+import {
+  createTaskSchema,
+  listTasksQuerySchema,
+  updateTaskSchema,
+} from './task.dto';
 
 /**
  * The schemas rather than the route, deliberately: what a controller binds is
@@ -86,5 +90,42 @@ describe('createTaskSchema bounds', () => {
     expect(createTaskSchema.safeParse({ ...valid, title: '   ' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('updateTaskSchema — the run edge is not a client’s to write', () => {
+  it('DROPS every field of the run<->task edge', () => {
+    const parsed = updateTaskSchema.parse({
+      title: 'still a real patch',
+      runId: 'run-1',
+      worktreePath: '/tmp/somewhere',
+      branch: 'geniro/task-t1',
+      reportItemId: 'item-1',
+    });
+
+    // `TaskRunsService` guards every write to these — a synchronous claim, a
+    // compare-and-set, and a question put to the RUN rather than to the id.
+    // Accepting them here bypassed all three at once: clearing `runId` on a
+    // card whose agent was live re-opened the start path against the same
+    // worktree.
+    expect(parsed).toEqual({ title: 'still a real patch' });
+  });
+
+  it('still refuses a patch that changes nothing', () => {
+    // The edge fields used to be able to satisfy this on their own, so the
+    // guard has to be checked against what is LEFT of the schema.
+    expect(updateTaskSchema.safeParse({ runId: 'run-1' }).success).toBe(false);
+  });
+
+  it('accepts the fields a card actually owns', () => {
+    expect(
+      updateTaskSchema.safeParse({
+        title: 'renamed',
+        description: null,
+        labels: ['ui'],
+        priority: 'high',
+        dueDate: null,
+      }).success,
+    ).toBe(true);
   });
 });

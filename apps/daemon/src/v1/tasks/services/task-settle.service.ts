@@ -71,6 +71,48 @@ export class TaskSettleService implements OnModuleInit {
         );
       });
     });
+
+    this.bus.allDeleted().subscribe((runId) => {
+      void this.releaseDeletedRun(runId).catch((error: unknown) => {
+        this.logger.warn(
+          `could not release the task holding deleted run ${runId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+    });
+  }
+
+  /**
+   * Let go of a run that has been deleted out from under its card.
+   *
+   * A task's run is an ordinary chat, so it can be deleted from the chat
+   * sidebar like any other — and the card holding it then names a run nothing
+   * can answer for. Left alone it sits in `in_progress` for good with Run
+   * disabled, because the button asks the RUN whether an agent is working and
+   * a missing run is not a settled one.
+   *
+   * So the edge is cleared and a card that was being worked goes back to the
+   * column it can be started from. Its report reference goes with it: the row
+   * it named was hard-deleted with the transcript, so keeping the id would
+   * leave the detail panel fetching a report that cannot exist.
+   *
+   * The WORKTREE is deliberately untouched — the branch and the directory are
+   * main's, they outlive the conversation, and the agent's work is in them.
+   */
+  private async releaseDeletedRun(runId: string): Promise<void> {
+    const em = this.em.fork();
+    const task = await this.taskDao.findByRunId(runId, em);
+    if (!task) {
+      return;
+    }
+    await this.tasks.update(task.id, { runId: null, reportItemId: null });
+    if (task.status === 'in_progress') {
+      await this.tasks.moveStatus(task.id, {
+        from: 'in_progress',
+        to: 'todo',
+      });
+    }
   }
 
   /**
@@ -111,7 +153,14 @@ export class TaskSettleService implements OnModuleInit {
     if (reportItemId !== null) {
       await this.tasks.update(task.id, { reportItemId });
     }
-    await this.tasks.moveStatus(task.id, { from: task.status, to });
+    // The reason rides the broadcast because the CLIENT cannot derive it: a
+    // card's column is written optimistically the moment it is dragged, so
+    // "settled" is a claim only this service is in a position to make.
+    await this.tasks.moveStatus(
+      task.id,
+      { from: task.status, to },
+      'run-settled',
+    );
   }
 
   /**

@@ -403,11 +403,104 @@ export async function pruneWorktreeForTask(taskId: string): Promise<boolean> {
     return false;
   }
   // Keeps a worktree holding unsaved work, on `reapOrphanedWorktrees`'s rule
-  // and for its reason. This runs when a run SETTLES, and an agent that
-  // finished without committing has left the only copy of its work here.
+  // and for its reason: this is the FAILED-START path, where the only copy of
+  // anything in there would be the user's own. `settleWorktreeForTask` is the
+  // one that commits first and therefore may clear a dirty tree.
   if (existsSync(record.path) && (await isDirty(record.path)) !== false) {
     return false;
   }
   await removeWorktree(record);
   return true;
+}
+
+/**
+ * The subject line of the commit that rescues an agent's unfinished work.
+ *
+ * CONVENTIONAL, because the repository is the USER's and a `commit-msg` hook
+ * running commitlint is ordinary in the repositories this app is pointed at —
+ * this one included. A message that cannot be committed is work that cannot be
+ * rescued.
+ */
+function rescueCommitMessage(taskId: string): string {
+  return `chore(geniro): unfinished work from task ${taskId}`;
+}
+
+/**
+ * Commit whatever the agent left uncommitted, onto the branch it worked on.
+ *
+ * `git add -A` honours the repository's own `.gitignore`, so build output and
+ * secrets the user already excludes stay excluded — what lands is the edits.
+ *
+ * The hooks are RUN rather than skipped. `--no-verify` is refused project-wide
+ * and it would be the wrong trade here anyway: a repository whose hooks reject
+ * an agent's half-finished tree is one where this returns false and the
+ * worktree is KEPT, which is exactly the behaviour that existed before this
+ * function and loses nothing. The same is true of a machine with no git
+ * identity configured — one is never invented here, since a commit authored as
+ * somebody the user did not choose is worse than a directory left on disk.
+ */
+async function commitUnfinishedWork(
+  path: string,
+  taskId: string,
+): Promise<boolean> {
+  try {
+    await git(path, ['add', '-A']);
+    await git(path, ['commit', '-m', rescueCommitMessage(taskId)]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Collect the worktree of a run that has SETTLED, keeping what is in it.
+ *
+ * The worktree is per task and the branch is per task, so an agent that
+ * finished without committing has left the only copy of its work in a
+ * directory nothing else collects — which is why `pruneWorktreeForTask` and
+ * the boot reaper both refuse a dirty one, and why, before this, the routine
+ * end state of a run was a checkout that stayed on disk for good.
+ *
+ * Committing first is what makes the removal safe rather than merely bounded:
+ * the branch is the whole point of the run and it is never removed with the
+ * worktree, so once the work is on it there is nothing left in the directory
+ * that the user could not get back.
+ *
+ * A commit that could not be made is NOT a reason to remove anyway — the
+ * worktree is kept and the caller is told which of the two happened.
+ */
+export async function settleWorktreeForTask(taskId: string): Promise<{
+  removed: boolean;
+  committed: boolean;
+}> {
+  const record = readRegistry().find((row) => row.taskId === taskId);
+  if (record === undefined) {
+    return { removed: false, committed: false };
+  }
+  // Refused at the LOOKUP, before anything runs git in the path — the same
+  // bound, and the same reason, as its sibling above.
+  if (!isInsideWorktreesRoot(record.path)) {
+    forget(record.path);
+    return { removed: false, committed: false };
+  }
+  if (!existsSync(record.path)) {
+    await removeWorktree(record);
+    return { removed: true, committed: false };
+  }
+  const dirty = await isDirty(record.path);
+  if (dirty === null) {
+    // Unconfirmable — git cannot say what is in there, so neither committing
+    // nor removing is a thing to do on a guess.
+    return { removed: false, committed: false };
+  }
+  // A CLEAN tree needs no rescue commit: an empty one would put a commit on
+  // every task branch saying nothing happened.
+  const committed = dirty
+    ? await commitUnfinishedWork(record.path, taskId)
+    : false;
+  if (dirty && !committed) {
+    return { removed: false, committed: false };
+  }
+  await removeWorktree(record);
+  return { removed: true, committed };
 }

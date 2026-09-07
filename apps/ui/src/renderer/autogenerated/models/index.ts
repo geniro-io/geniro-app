@@ -3928,30 +3928,6 @@ export interface UpdateTaskDto {
      * @memberof UpdateTaskDto
      */
     dueDate?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    branch?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    worktreePath?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    runId?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    reportItemId?: string | null;
 }
 
 

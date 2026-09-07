@@ -201,4 +201,19 @@ export interface TaskChangedEvent {
   taskId: string;
   projectId: string;
   status: TaskStatus;
+  /**
+   * Present only when the DAEMON moved this card because the run working it
+   * reached a terminal status — `TaskSettleService`, and nothing else, sets it.
+   *
+   * It exists because the card's COLUMN cannot answer "has the agent stopped".
+   * The board writes a status optimistically the moment a card is dragged, so
+   * a client keying a destructive act on the column alone acts on a card whose
+   * agent may still be working — which is what an earlier cut of the worktree
+   * collection did. This says the daemon OBSERVED the run settle, which is the
+   * claim a client cannot make for itself.
+   */
+  reason?: TaskChangeReason;
 }
+
+/** Why a card moved, where the reason is one a client has to act on. */
+export type TaskChangeReason = 'run-settled';

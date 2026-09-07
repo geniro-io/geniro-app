@@ -127,6 +127,10 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.pruneTaskWorktree, taskId) as ReturnType<
       GeniroApi['pruneTaskWorktree']
     >,
+  settleTaskWorktree: (taskId) =>
+    ipcRenderer.invoke(IPC.settleTaskWorktree, taskId) as ReturnType<
+      GeniroApi['settleTaskWorktree']
+    >,
   switchBranch: (dir, branch) =>
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']

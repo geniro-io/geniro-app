@@ -193,6 +193,25 @@ export function useBoard(
       return;
     }
     return client.onTaskChanged((event) => {
+      // The daemon OBSERVED this card's run reach a terminal status, which is
+      // the one moment its worktree is finished with. Main commits whatever
+      // the agent left onto the task's own branch and then removes the
+      // directory — the routine end state of a run, and the only thing that
+      // ever collected it before was a boot reaper that skips a dirty one.
+      //
+      // Keyed on the daemon's REASON rather than on the card's column, which
+      // is written optimistically the moment a card is dragged: an earlier cut
+      // read the column and would have collected the worktree of an agent
+      // still working in it.
+      //
+      // Deliberately NOT scoped to the open board. A worktree belongs to the
+      // task, not to the project being looked at, and main answers with
+      // `removed: false` for a task it never made one for — so the unscoped
+      // call is a registry lookup, and scoping it would leave every other
+      // project's worktrees uncollected for as long as this board is open.
+      if (event.reason === 'run-settled') {
+        void window.geniro.settleTaskWorktree(event.taskId);
+      }
       // The broadcast is client-wide, so most events belong to a board this
       // one is not showing.
       if (event.projectId === selectedRef.current) {

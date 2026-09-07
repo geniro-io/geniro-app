@@ -1,6 +1,5 @@
 import type { ChildProcess, execFile, spawn } from 'node:child_process';
 import {
-  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -11,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -85,6 +85,7 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
     kind: 'edit',
     rawInput: null,
     rawOutput: null,
+    locations: null,
     ...overrides,
   };
 }
@@ -2360,13 +2361,23 @@ describe('CursorAcpAdapter misuse', () => {
       // good, with a notice as the only trace.
       const { home, store, source } = stores();
       writeFileSync(join(source, 'store.db'), 'the whole conversation');
-      // A subdirectory the copy cannot read, so `cp` throws mid-walk. Which
-      // entry it reaches first does not matter — either way the copy is
-      // incomplete when it fails.
-      const locked = join(source, 'blobs');
-      mkdirSync(locked);
-      writeFileSync(join(locked, 'blob-1'), 'x');
-      chmodSync(locked, 0o000);
+      // An entry `cp` REFUSES to copy, so it throws mid-walk. Which entry it
+      // reaches first does not matter — either way the copy is incomplete when
+      // it fails.
+      //
+      // A unix socket rather than an unreadable directory, and the difference
+      // is the whole reason this reads oddly: a permission bit does not
+      // restrict uid 0, so a `chmod 0o000` version of this passes SILENTLY
+      // whenever the suite runs as root — the copy succeeds and the rejection
+      // this asserts never happens. `ERR_FS_CP_SOCKET` is refused for every
+      // user, so the failure is one the test can actually rely on.
+      const blobs = join(source, 'blobs');
+      mkdirSync(blobs);
+      writeFileSync(join(blobs, 'blob-1'), 'x');
+      const uncopyable = createServer();
+      await new Promise<void>((resolve) => {
+        uncopyable.listen(join(blobs, 'live.sock'), resolve);
+      });
 
       try {
         await expect(importSession(home, store)).rejects.toThrow();
@@ -2376,7 +2387,12 @@ describe('CursorAcpAdapter misuse', () => {
         // would accumulate one directory per failed import.
         expect(readdirSync(store)).toEqual([]);
       } finally {
-        chmodSync(locked, 0o755);
+        await new Promise<void>((resolve) => {
+          uncopyable.close(() => resolve());
+        });
+        // `close` does not unlink the socket file, and the retry below has to
+        // find a source it can copy whole.
+        rmSync(join(blobs, 'live.sock'), { force: true });
       }
 
       // Now that the source can be read, the SAME id imports whole — which the

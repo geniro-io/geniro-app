@@ -141,9 +141,20 @@ describe('DisclosureRow', () => {
   });
 
   describe('the recovery action', () => {
-    const TITLE =
-      'Sign this agent back in — it runs here and opens your browser';
-    const signInButton = (): HTMLButtonElement =>
+    // The row no longer knows WHICH recovery this is — the caller owns the
+    // wording, the glyph and the action — so these specs pin the seam with a
+    // stand-in. Which recovery is offered for which failure is
+    // `transcript-item`'s decision and is pinned there.
+    const TITLE = 'Do the thing that fixes this';
+    const recovery = (
+      onClick: () => void,
+    ): {
+      label: string;
+      icon: React.ReactNode;
+      title: string;
+      onClick: () => void;
+    } => ({ label: 'Fix it', icon: null, title: TITLE, onClick });
+    const recoveryButton = (): HTMLButtonElement =>
       container.querySelector<HTMLButtonElement>(`button[title="${TITLE}"]`)!;
     const expanded = (): string | null =>
       container
@@ -166,13 +177,13 @@ describe('DisclosureRow', () => {
           <DisclosureRow
             caption="error"
             message={MESSAGE}
-            onSignIn={() => {}}
+            recovery={recovery(() => {})}
           />,
         ),
       );
 
       expect(expanded()).toBe('false');
-      expect(signInButton().textContent).toContain('Sign in');
+      expect(recoveryButton().textContent).toContain('Fix it');
     });
 
     it('fires its own handler without also toggling the row', () => {
@@ -184,13 +195,13 @@ describe('DisclosureRow', () => {
           <DisclosureRow
             caption="error"
             message={MESSAGE}
-            onSignIn={() => void (fired += 1)}
+            recovery={recovery(() => void (fired += 1))}
           />,
         ),
       );
 
       act(() => {
-        signInButton().dispatchEvent(
+        recoveryButton().dispatchEvent(
           new MouseEvent('click', { bubbles: true }),
         );
       });

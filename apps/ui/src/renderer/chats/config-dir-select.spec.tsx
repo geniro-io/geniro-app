@@ -42,6 +42,21 @@ function options(el: HTMLElement): HTMLElement[] {
   return [...el.querySelectorAll<HTMLElement>('[role="option"]')];
 }
 
+/**
+ * Each row as its two lines. Asserted separately rather than through the row's
+ * joined `textContent`, which cannot tell `work` over `…/me/profiles/work` from
+ * a single line reading `work…/me/profiles/work`.
+ */
+function rowLines(
+  el: HTMLElement,
+): { label: string; subLabel: string | null }[] {
+  return options(el).map((o) => ({
+    label: o.querySelector('[data-slot="menu-item-label"]')?.textContent ?? '',
+    subLabel:
+      o.querySelector('[data-slot="menu-item-sublabel"]')?.textContent ?? null,
+  }));
+}
+
 const RECENTS = ['/Users/me/profiles/work', '/Users/me/profiles/personal'];
 
 describe('ConfigDirSelect', () => {
@@ -55,14 +70,15 @@ describe('ConfigDirSelect', () => {
         onBrowse={() => {}}
       />,
     );
-    expect(options(el).map((o) => o.textContent)).toEqual([
-      '…/me/profiles/work',
-      '…/me/profiles/personal',
-      'Default profile',
-      'Choose config directory…',
+    expect(rowLines(el)).toEqual([
+      { label: 'work', subLabel: '…/me/profiles/work' },
+      { label: 'personal', subLabel: '…/me/profiles/personal' },
+      { label: 'Default profile', subLabel: null },
+      { label: 'Choose config directory…', subLabel: null },
     ]);
     // The chip is compact where the rows are not: two profiles can
-    // share a leaf, so the ROWS carry enough path to tell them apart.
+    // share a leaf, so the ROWS carry enough path to tell them apart —
+    // on the second line now, which is what lets the first one be the leaf.
     expect(trigger(el)!.textContent).toContain('work');
   });
 
@@ -91,13 +107,16 @@ describe('ConfigDirSelect', () => {
         onBrowse={() => {}}
       />,
     );
-    expect(options(el).map((o) => o.textContent)).toEqual([
+    expect(rowLines(el)).toEqual([
       // `Default profile` LEADS them: with named profiles on screen it is one
       // of the same kind of choice — the CLI's own account — rather than a
-      // neighbour of the browse row it used to sit beside.
-      'Default profile',
-      'claude-work',
-      'Choose config directory…',
+      // neighbour of the browse row it used to sit beside. It names no
+      // directory, so it carries no second line.
+      { label: 'Default profile', subLabel: null },
+      // The NAME on the first line, the directory it stands for under it —
+      // both, where the row used to have room for only one.
+      { label: 'claude-work', subLabel: '…/me/lab/.claude' },
+      { label: 'Choose config directory…', subLabel: null },
     ]);
   });
 
@@ -151,13 +170,16 @@ describe('ConfigDirSelect', () => {
         onBrowse={() => {}}
       />,
     );
-    expect(options(el).map((o) => o.textContent)).toEqual([
-      'Default profile',
-      'claude-work',
-      '…/me/profiles/work',
-      '…/me/profiles/personal',
-      'Choose config directory…',
+    expect(rowLines(el)).toEqual([
+      { label: 'Default profile', subLabel: null },
+      { label: 'claude-work', subLabel: '…/me/lab/.claude' },
+      { label: 'work', subLabel: '…/me/profiles/work' },
+      { label: 'personal', subLabel: '…/me/profiles/personal' },
+      { label: 'Choose config directory…', subLabel: null },
     ]);
+    // The assertion above already fixes every row's two lines: the named row
+    // and the unnamed ones are ONE kind of row, a short identifier over the
+    // directory it stands for.
     // And the CHIP says the name too — the leaf is what naming it was meant to
     // stop you reading, and two accounts routinely both live in `.claude`.
     expect(trigger(el)!.textContent).toContain('claude-work');
@@ -254,9 +276,10 @@ describe('ConfigDirSelect', () => {
         onBrowse={() => {}}
       />,
     );
-    expect(options(el).map((o) => o.textContent)).toContain(
-      '…/me/profiles/fresh',
-    );
+    expect(rowLines(el)).toContainEqual({
+      label: 'fresh',
+      subLabel: '…/me/profiles/fresh',
+    });
   });
 
   it('says who it is choosing FOR, so the builder does not claim to speak for chats', () => {

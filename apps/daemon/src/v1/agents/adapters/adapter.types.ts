@@ -618,6 +618,42 @@ type AgentEventBody =
       contextWindowTokens?: number | null;
       contextModel?: string | null;
     }
+  | {
+      /**
+       * What ONE request SPENT, as soon as it lands — the live counterpart of
+       * the `turn_complete` usage's token halves.
+       *
+       * A SIBLING of `context_progress` rather than more fields on it, because
+       * the two are different facts about the same line: that one reports a
+       * LEVEL (how full the window is now, which does not accumulate), this
+       * one reports a COST (what this request added, which does). Folding them
+       * together would leave a reader unable to tell a window that grew by
+       * 12k from a turn that spent 12k, and the accumulator downstream would
+       * have to guess which of the two it was handed.
+       *
+       * Claude carries all of it on every `assistant` line and geniro was
+       * dropping everything but the prompt-side sum. Cursor carries NONE of it:
+       * measured 2026-09-06 on 2026.08.31-4057e58 — no `usage_update` emitter
+       * on its ACP wire (the name appears once, inside the schema union), no
+       * token field anywhere in its session store, `afterAgentResponse` and
+       * `stop` hooks that do not fire, and a `sessionEnd` hook plus JSONL
+       * transcript carrying neither. So this event is claude-only today, and
+       * the shape is the ACP `usage_update` one so that adopting theirs, when
+       * they ship it, is a mapping rather than a redesign.
+       *
+       * EPHEMERAL like `context_progress`: never persisted, never replayed —
+       * the durable copy is the turn's own `turn_complete` usage.
+       */
+      type: 'usage_progress';
+      /** Fresh input tokens for this request — cache traffic excluded. */
+      inputTokens?: number | null;
+      /** What the model produced on this request. */
+      outputTokens?: number | null;
+      /** Cache reads, kept apart because they are priced apart. */
+      cacheReadTokens?: number | null;
+      /** Newly written cache, likewise. */
+      cacheCreationTokens?: number | null;
+    }
   | { type: 'reasoning'; text: string }
   | {
       type: 'tool_call';
@@ -639,6 +675,18 @@ type AgentEventBody =
        * already speaks it on the wire, so only the other side needs a mapping.
        */
       kind?: string;
+      /**
+       * WHICH FILES this call touches, when the agent named them — ACP's
+       * `ToolCallLocation[]`, carried in the same shared vocabulary as
+       * {@link kind} and for the same reason: one agent already speaks it on
+       * the wire, so only the other side would need a mapping.
+       *
+       * Absent when the agent named none, and deliberately NOT an empty array —
+       * the two are distinguishable on the wire, and what each means is on
+       * `AcpToolCall.locations` (`acp/acp.types.ts`) with the measurement behind
+       * it. A `line` rides only where the agent set one.
+       */
+      locations?: { path: string; line: number | null }[];
     }
   | {
       type: 'tool_result';
@@ -2379,6 +2427,28 @@ export interface AgentTurnInput {
    */
   commandListProbe?: boolean;
   /**
+   * This turn REOPENS the conversation and sends no prompt.
+   *
+   * What the user pressed is Retry on a failed turn: the conversation is intact
+   * and the work is not, so the turn re-establishes the session and stops —
+   * without paying for the prompt a second time, and without asking the agent
+   * to answer a question it may already have answered.
+   *
+   * Says what the turn IS, never what a CLI should do about it, on
+   * {@link commandListProbe}'s rule. An adapter whose CLI reopens a
+   * conversation by resuming a session id reads it as its cue to withhold the
+   * prompt; one whose reopen is the prompt has nothing to withhold and ignores
+   * it. Meaningless without {@link resumeSessionId} — there is no conversation
+   * to reopen — and a caller that sets it alone gets a turn that opens a fresh
+   * session and ends, which is why the chat service refuses that pairing rather
+   * than leaving it to each adapter.
+   *
+   * NOT a probe: {@link internalProbe} withholds the host preamble because a
+   * probe's output reaches no transcript, while this turn's whole purpose is
+   * the surface the NEXT message lands on.
+   */
+  resumeOnly?: boolean;
+  /**
    * The caller's "May call" awareness block, naming each callee reachable
    * through `mcpEndpoint`'s tools. Kept SEPARATE from `systemPrompt` because
    * it is only true while the call tools are actually registered: an adapter
@@ -3104,6 +3174,22 @@ export interface AdapterConfig {
    * the answer that helps is where the value actually lives.
    */
   readonly effortsUnavailableReason: string | null;
+  /**
+   * Why this CLI cannot REOPEN a failed turn's conversation without replaying
+   * its prompt, or `null` when it can.
+   *
+   * A per-CLI fact, declared here rather than inferred, because the mechanism
+   * is one: `AgentTurnInput.resumeOnly` is read by the ACP driver alone, so an
+   * adapter that does not read it runs the turn as an ordinary one — and a
+   * retry's prompt is the EMPTY string, which every other path refuses
+   * (`SendMessageDto`) and which this one would spend a real turn on while the
+   * transcript said nothing was sent again.
+   *
+   * A SENTENCE for the reason its neighbours are: `ChatService.retry` refuses
+   * with it and the row shows it, so it has to say what the user CAN do rather
+   * than only that this cannot.
+   */
+  readonly resumeOnlyUnavailableReason: string | null;
   /**
    * Whether {@link efforts} is the WHOLE vocabulary, or only the part of it a
    * static list can hold.

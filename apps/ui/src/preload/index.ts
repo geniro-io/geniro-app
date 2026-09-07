@@ -91,6 +91,14 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getGitInfo, dir) as ReturnType<
       GeniroApi['getGitInfo']
     >,
+  getGitStamp: (dir) =>
+    ipcRenderer.invoke(IPC.getGitStamp, dir) as ReturnType<
+      GeniroApi['getGitStamp']
+    >,
+  getChangesSince: (dir, sha) =>
+    ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
+      GeniroApi['getChangesSince']
+    >,
   getPullRequests: (dir) =>
     ipcRenderer.invoke(IPC.getPullRequests, dir) as ReturnType<
       GeniroApi['getPullRequests']

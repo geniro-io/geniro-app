@@ -1,13 +1,156 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  arityAllowsConnection,
   canConnect,
+  connectionArity,
   connectionEdgeKind,
   flowEdgeKind,
   flowEdgeType,
   makeHandleId,
   NODE_TYPE_SCHEMAS,
 } from './node-schema';
+
+describe('connectionArity (real registry)', () => {
+  it('holds a trigger to ONE agent, at both ends of the wire', () => {
+    // The breaking change this shipped with: a trigger starts exactly one
+    // agent. Both ends are single here — the agent's own trigger input has
+    // always been — so the canvas refuses a second wire whichever end the user
+    // drags from.
+    expect(connectionArity('data', 'trigger', 'agent')).toEqual({
+      manyFromSource: false,
+      manyIntoTarget: false,
+    });
+  });
+
+  it('still lets an agent fan out to several agents', () => {
+    // The control, and the reason this is not simply "everything is single":
+    // an agent's data output and its call output are both many, so a predicate
+    // that refused a second wire everywhere would break the DAG this app is
+    // for.
+    expect(connectionArity('data', 'agent', 'agent')).toMatchObject({
+      manyFromSource: true,
+    });
+    expect(connectionArity('call', 'agent', 'agent')).toMatchObject({
+      manyFromSource: true,
+    });
+  });
+
+  it('answers single for a pair the rules do not describe', () => {
+    // An unknown kind refuses rather than throwing, matching `canConnect`'s
+    // stance for a live drag predicate — and it must not answer `true`, which
+    // would permit an unlimited number of a wire nothing has a rule for.
+    expect(connectionArity('data', 'nonesuch', 'agent')).toEqual({
+      manyFromSource: false,
+      manyIntoTarget: false,
+    });
+  });
+});
+
+describe('arityAllowsConnection (real registry)', () => {
+  // A tiny canvas: one trigger, three agents. `kindOf` is what the builder
+  // supplies from its node list; the edges are React Flow's own shape, whose
+  // ABSENT `type` reads as `data` — which is how every edge drawn before the
+  // annotation kinds existed still counts.
+  const kindOf = (id: string): string | undefined =>
+    ({ t1: 'trigger', a1: 'agent', a2: 'agent', a3: 'agent' })[id];
+
+  it('lets the FIRST wire out of a trigger through, and refuses the second', () => {
+    // The breaking change this shipped with, from the end the user drags from.
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 't1', target: 'a1' },
+        {
+          kindOf,
+          edges: [],
+        },
+      ),
+    ).toBe(true);
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 't1', target: 'a2' },
+        {
+          kindOf,
+          edges: [{ source: 't1', target: 'a1' }],
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a SECOND trigger into an agent that already has one', () => {
+    // The other end, which was single-arity long before this change and drew
+    // fine anyway — the canvas simply never counted.
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 't1', target: 'a1' },
+        {
+          kindOf,
+          edges: [{ source: 't1', target: 'a1' }],
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it('counts per (node, edge kind, other END’s kind), never per side', () => {
+    // The grain is the whole of it: an agent takes one trigger AND one agent's
+    // data on the same in-side, so a count of the side as a whole would refuse
+    // a wire the daemon accepts.
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 'a2', target: 'a1' },
+        {
+          kindOf,
+          edges: [{ source: 't1', target: 'a1' }],
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('still lets an agent fan out to several agents', () => {
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 'a1', target: 'a3' },
+        {
+          kindOf,
+          edges: [{ source: 'a1', target: 'a2' }],
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('ignores edges of another KIND between the same two nodes', () => {
+    // `call` and `data` are counted separately, so a call edge already drawn
+    // must not consume the data edge's single slot.
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 't1', target: 'a1' },
+        {
+          kindOf,
+          edges: [{ source: 't1', target: 'a1', type: 'call' }],
+        },
+      ),
+    ).toBe(true);
+  });
+
+  it('refuses a node the canvas does not hold', () => {
+    expect(
+      arityAllowsConnection(
+        'data',
+        { source: 't1', target: 'gone' },
+        {
+          kindOf,
+          edges: [],
+        },
+      ),
+    ).toBe(false);
+  });
+});
 
 describe('canConnect (real registry)', () => {
   it('allows data agent → agent and data trigger → agent', () => {

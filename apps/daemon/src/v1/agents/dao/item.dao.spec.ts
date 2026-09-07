@@ -461,4 +461,131 @@ describe('ItemDao (in-memory sqlite)', () => {
       expect(await dao.firstUserMessageText('run-a')).toBeNull();
     });
   });
+
+  /**
+   * The transcript search, against the real driver.
+   *
+   * Its service spec runs a hand-written double whose `searchByText` ignores the
+   * terms it is handed and returns a fixed slice — so it pins the service's
+   * plumbing and asserts nothing whatever about the predicate. Everything below
+   * is the part only real SQL can answer.
+   */
+  describe('searchByText', () => {
+    /** A row carrying the lowercased index form the write path stores. */
+    async function indexed(
+      runId: string,
+      seq: number,
+      searchText: string,
+    ): Promise<void> {
+      await dao.create({
+        runId,
+        seq,
+        kind: 'message',
+        payload: JSON.stringify({ text: searchText }),
+        searchText,
+      });
+    }
+
+    it('AND-s the terms, so more words narrow rather than widen', async () => {
+      // The regression this exists for: `$and` widened to `$or` returns both
+      // rows, and the service spec's double stays green either way because it
+      // never reads the terms at all.
+      //
+      // The second row carries ONE of the two terms and not the other — which
+      // is the whole discriminating power of this case. With two rows that each
+      // match both terms or neither, `$or` returns the same set as `$and` and
+      // the test passes against the regression it names.
+      await indexed('run-a', 0, 'sizing the bloom filter');
+      await indexed('run-a', 1, 'a kalman filter, no relation');
+
+      const hits = await dao.searchByText('run-a', ['bloom', 'filter'], 50);
+
+      expect(hits.map((hit) => hit.seq)).toEqual([0]);
+    });
+
+    it('answers the NEWEST matches first', async () => {
+      await indexed('run-a', 0, 'bloom filter, first mention');
+      await indexed('run-a', 1, 'bloom filter, second mention');
+
+      const hits = await dao.searchByText('run-a', ['bloom'], 50);
+
+      expect(hits.map((hit) => hit.seq)).toEqual([1, 0]);
+    });
+
+    it('carries the PAYLOAD, which the snippet is cut from', async () => {
+      // The projection is a `fields` list; dropping `payload` from it would
+      // leave every hit with an empty quote and no test would notice.
+      await indexed('run-a', 0, 'sizing the bloom filter');
+
+      expect(await dao.searchByText('run-a', ['bloom'], 50)).toEqual([
+        expect.objectContaining({ payload: expect.any(String) }),
+      ]);
+    });
+
+    it('honours the limit, and never leaves the run', async () => {
+      await indexed('run-a', 0, 'bloom one');
+      await indexed('run-a', 1, 'bloom two');
+      await indexed('run-b', 2, 'bloom elsewhere');
+
+      expect(await dao.searchByText('run-a', ['bloom'], 1)).toHaveLength(1);
+      expect(await dao.searchByText('run-a', ['bloom'], 50)).toHaveLength(2);
+    });
+
+    it('matches a row the index holds and skips one it does not', async () => {
+      // A row written before the column existed carries null, and must simply
+      // not match — never throw, and never match everything.
+      await indexed('run-a', 0, 'sizing the bloom filter');
+      await insert('run-a', 1);
+
+      expect(await dao.searchByText('run-a', ['bloom'], 50)).toHaveLength(1);
+    });
+  });
+
+  describe('the backfill helpers', () => {
+    it('finds only the rows with no index text, and stops finding one once filled', async () => {
+      // The sweep's predicate is self-draining, so this pair is what makes it
+      // terminate: `missingSearchText` must shrink as `rememberSearchText`
+      // writes, or the loop reads the same batch forever.
+      const first = await insert('run-a', 0);
+      await insert('run-a', 1);
+
+      expect(await dao.missingSearchText(10)).toHaveLength(2);
+
+      await dao.rememberSearchText(first.id, 'now indexed');
+      const left = await dao.missingSearchText(10);
+
+      expect(left).toHaveLength(1);
+      expect(left[0]?.id).not.toBe(first.id);
+    });
+
+    it('resumes AFTER the cursor it is given', async () => {
+      // The `$gt` half of the paging predicate, which nothing else drives: the
+      // cursor is the whole reason `missingSearchText` is linear rather than
+      // re-scanning the filled prefix on every batch, and without this the
+      // operator could be dropped with every other test still green.
+      const first = await insert('run-a', 0);
+      const second = await insert('run-a', 1);
+      const [lower, upper] = [first.id, second.id].sort();
+
+      const after = await dao.missingSearchText(10, lower);
+
+      expect(after.map((row) => row.id)).toEqual([upper]);
+    });
+
+    it('honours its batch size', async () => {
+      await insert('run-a', 0);
+      await insert('run-a', 1);
+      await insert('run-a', 2);
+
+      expect(await dao.missingSearchText(2)).toHaveLength(2);
+    });
+
+    it('writes text a later search can match', async () => {
+      // The two halves joined: what the backfill stores is what the query reads.
+      const row = await insert('run-a', 0);
+      await dao.rememberSearchText(row.id, 'sizing the bloom filter');
+
+      expect(await dao.searchByText('run-a', ['bloom'], 50)).toHaveLength(1);
+    });
+  });
 });

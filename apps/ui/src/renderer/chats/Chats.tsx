@@ -64,7 +64,7 @@ import {
 import { DaemonClient } from '../daemon-client';
 import { openResolvedTarget as openResolvedHandoff } from '../handoff-open';
 import { useRunNotifications } from '../notifications/use-run-notifications';
-import { followTail, jumpToBottom } from '../scroll-to-bottom';
+import { followTail } from '../scroll-to-bottom';
 import type { SettingsSection } from '../settings/Settings';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';
@@ -72,6 +72,7 @@ import {
   type AgentActivity,
   type AgentDisplay,
   type AgentThread,
+  type AgentWork,
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
@@ -83,12 +84,16 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { chatExportFileName } from './chat-export-name';
+import { type CalleeContext, resolveCalleeContext } from './call-context';
+import { ChatChangesDialog } from './chat-changes-dialog';
+import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
+import { chatToMarkdown } from './chat-markdown';
 import { ChatMetricsLoaderContext } from './chat-metrics';
+import { ChatProviders } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
-import { CliLoginContext } from './cli-login-context';
+import { ChatSearchDialog } from './chat-search-dialog';
 import {
   compactionOnlyTurnEnds,
   endsContextHistory,
@@ -99,6 +104,7 @@ import { ComposerBottomRow, ComposerTopRow } from './composer-rows';
 import {
   ActiveWorkflowChips,
   ComposerShelf,
+  FolderChangesChip,
   RunningShellChips,
   RunningSubagentChips,
   TaskListChip,
@@ -151,7 +157,11 @@ import {
   isWorkingRunStatus,
   type RunStatusKind,
 } from './run-status';
-import { isScrolledToBottom, nextFollowState } from './scroll-follow';
+import {
+  isScrolledToBottom,
+  nextFollowState,
+  shouldLoadOlder,
+} from './scroll-follow';
 import { SenderRow } from './sender-row';
 import { SessionPicker } from './session-picker';
 import type {
@@ -193,6 +203,7 @@ import {
   buildTurnBlocks,
   buildWorkflowCards,
   collectSubagentBlocks,
+  entryStartSeq,
   groupTranscript,
   pullFileChangesOutOfGroups,
   type RunSettleAt,
@@ -225,15 +236,18 @@ import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
 import { useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
+import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
+import { useChatSearch } from './use-chat-search';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
-import { useNodeContextReadings } from './use-node-context';
+import { useNodeDurableReadings } from './use-node-context';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import {
   threadPullRequestsOf,
   useThreadPullRequests,
 } from './use-thread-pull-requests';
+import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
 import { rootAgentOf } from './workflow-root';
 
@@ -248,17 +262,6 @@ import { rootAgentOf } from './workflow-root';
  * a send is in flight, so an index captured at render time addresses a
  * different message by the time the user clicks.
  */
-/**
- * How far up the loaded window a reader has to be before the page BEFORE it is
- * fetched — 0.3 of the scrollable range, i.e. 70% of the way to the top.
- *
- * REPORTED as "где-то на 70% подгружать все остальные сообщения". A fraction
- * rather than a pixel distance: the window is a thousand rows whose heights
- * range from a one-line tool row to a screenful of diff, so the same pixel
- * budget is half a screen on one thread and thirty on another.
- */
-const OLDER_PAGE_AT = 0.3;
-
 /**
  * The panel's pull-request list for a run that has no folder, or none read yet.
  * Module scope so its identity is stable — a fresh `[]` per render would be a
@@ -400,6 +403,31 @@ async function currentRunSettings(): Promise<{
     // switched Max Mode off must not be indistinguishable from one who never
     // touched it.
     ...(cursorMaxMode === undefined ? {} : { cursorMaxMode }),
+  };
+}
+
+/**
+ * Where the run's folder stands right now, as a spreadable create-payload
+ * fragment — the fixed point the chat's diff view later measures against.
+ *
+ * Read at creation for the reason {@link currentRunSettings} is, and kept
+ * SEPARATE from it because the third caller of that helper starts a WORKFLOW
+ * run, whose payload has no stamp: a workflow's folder is whatever one of its
+ * nodes named, so a commit stamped beside it would describe no particular
+ * agent's tree.
+ *
+ * Each field is omitted rather than sent null when there is nothing to say — a
+ * plain folder, a checkout with no commits — so an unstamped run is one shape
+ * on the wire whatever failed to answer.
+ */
+async function chatGitStamp(cwd: string): Promise<{
+  startSha?: string;
+  startDirty?: boolean;
+}> {
+  const { sha, dirty } = await window.geniro.getGitStamp(cwd);
+  return {
+    ...(sha === null ? {} : { startSha: sha }),
+    ...(dirty === null ? {} : { startDirty: dirty }),
   };
 }
 
@@ -841,6 +869,9 @@ export function Chats({
     hasOlder,
     loadingOlder,
     loadOlder,
+    loadAround,
+    returnToTail,
+    awayFromTail,
     namingRunIds,
     markRenamed,
     liveText,
@@ -1638,11 +1669,16 @@ export function Chats({
         try {
           const doc = await chatApi.exportChat({ runId });
           await window.geniro.saveChatExport({
-            suggestedName: chatExportFileName(runLabel(run, workflowNames)),
+            suggestedName: chatExportBaseName(runLabel(run, workflowNames)),
             // Indented rather than compact: this file exists to be read and
             // pasted into a bug report, and two spaces is the difference
             // between a diffable document and one very long line.
-            content: JSON.stringify(doc, null, 2),
+            json: JSON.stringify(doc, null, 2),
+            // Rendered up front rather than after the pick, because the format
+            // is chosen inside a native panel main owns — see
+            // `main/save-chat-export.ts`. Both are strings over a document
+            // already in memory.
+            markdown: chatToMarkdown(doc),
           });
         } catch (err) {
           setError(String(err));
@@ -2051,10 +2087,15 @@ export function Chats({
     // control starts hidden rather than flashing on until the first scroll.
     setAboveTail(false);
     const onScroll = (): void => {
+      // Read ONCE, up front: both decisions below are about the direction this
+      // scroll moved, and the ref is overwritten a few lines down. Passing the
+      // ref itself to the second reader hands it `scrollTop === previous`,
+      // which reads as "did not move" and silently disables the guard.
+      const previousScrollTop = lastScrollTopRef.current;
       followingRef.current = nextFollowState(
         followingRef.current,
         scroller,
-        lastScrollTopRef.current,
+        previousScrollTop,
       );
       lastScrollTopRef.current = scroller.scrollTop;
       // Deliberately NOT `!followingRef.current`: the follow is sticky through
@@ -2062,17 +2103,15 @@ export function Chats({
       // when the tail runs away from them — the button is about where the
       // viewport IS, not about what the transcript intends to do next.
       setAboveTail(!isScrolledToBottom(scroller));
-      // …and PAGE, once the reader is most of the way up. A chat opens on its
-      // newest 1,000 items (see `HISTORY_PAGE`), so the rest is fetched only if
-      // somebody actually goes looking for it.
-      //
-      // The threshold is a fraction rather than a pixel count on purpose: what
-      // matters is how much of the loaded window is still ahead of the reader,
-      // and that window is a thousand rows of wildly different heights.
+      // …and PAGE, once the reader is most of the way up AND still heading
+      // that way. A chat opens on its newest 1,000 items (see `HISTORY_PAGE`),
+      // so the rest is fetched only if somebody actually goes looking for it —
+      // which a viewport travelling DOWN is not doing. See `shouldLoadOlder`
+      // for the threshold, and for what reading position alone did to the
+      // "Latest" button.
       if (
         loadOlderRef.current !== null &&
-        scroller.scrollTop <=
-          (scroller.scrollHeight - scroller.clientHeight) * OLDER_PAGE_AT
+        shouldLoadOlder(scroller, previousScrollTop)
       ) {
         // Hold the reader's place. Prepending a page inserts rows ABOVE the
         // viewport, which pushes everything they were reading down by exactly
@@ -2117,6 +2156,23 @@ export function Chats({
           });
     const repoint = (): void => {
       observer?.disconnect();
+      // The scroller's OWN box first, and it is not redundant beside its
+      // children: the tail can be pushed off-screen by the VIEWPORT shrinking
+      // just as easily as by the content growing, and that half had no watcher
+      // at all. Everything below this box in the column takes its height from
+      // content — the composer growing as a message is typed, the attachment
+      // strip appearing, an approval card opening, the fast-action bar — and
+      // each of them shortens the transcript by exactly that much.
+      //
+      // Nothing else notices. No child resizes, so the child observations do
+      // not fire; `scrollTop` does not move, so no `scroll` event is emitted;
+      // and the commit-time effect is keyed on items and live text, neither of
+      // which changed. The distance to the bottom simply grows and the newest
+      // message slides out of view under the composer, with `aboveTail` still
+      // reading false so the "Latest" button does not even offer a way back.
+      // The next streamed token hides it again by re-following — which is what
+      // made it "sometimes".
+      observer?.observe(scroller);
       for (const child of Array.from(scroller.children)) {
         observer?.observe(child);
       }
@@ -2188,15 +2244,51 @@ export function Chats({
     setAboveTail(!isScrolledToBottom(scroller));
   }, []);
 
-  const jumpToLatest = useCallback((): void => {
-    const scroller = transcriptEndRef.current?.parentElement;
-    if (!scroller) {
-      return;
-    }
-    followingRef.current = true;
-    setAboveTail(false);
-    jumpToBottom(scroller);
-  }, []);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const chatSearch = useChatSearch(activeRunId, chatApi);
+
+  // The jump state machine — reveal, mark, fetch-around, and what "Latest"
+  // means once a jump has taken the reader off the tail. Its own module beside
+  // `use-chat-search.ts`, the sibling half of the same feature; the scroll state
+  // it acts on (`followingRef`, `aboveTail`) stays owned here, because a second
+  // copy of "is the reader at the bottom" is how the Latest control and the
+  // transcript come to disagree.
+  const { markedSeq, jumpToSeq, jumpToLatest, backToTail } = useTranscriptJump({
+    items,
+    endRef: transcriptEndRef,
+    followingRef,
+    setAboveTail,
+    loadAround,
+    returnToTail,
+  });
+
+  const openChatSearch = useCallback((): void => setSearchOpen(true), []);
+  const openChatChanges = useCallback((): void => setChangesOpen(true), []);
+  const closeChatChanges = useCallback((): void => setChangesOpen(false), []);
+
+  /**
+   * Close the search and forget what it found.
+   *
+   * The query is dropped rather than kept for the next opening, because it is
+   * scoped to ONE conversation: a thread switch while the dialog is shut would
+   * otherwise reopen it showing the previous thread's hits under a field the
+   * user has to clear before the surface means anything.
+   */
+  const resetChatSearch = chatSearch.reset;
+  const closeChatSearch = useCallback((): void => {
+    setSearchOpen(false);
+    resetChatSearch();
+  }, [resetChatSearch]);
+
+  /** Land on the hit, then get out of the way — the answer is the place. */
+  const jumpToHit = useCallback(
+    (seq: number): void => {
+      closeChatSearch();
+      jumpToSeq(seq);
+    },
+    [closeChatSearch, jumpToSeq],
+  );
 
   // Persist a chosen folder as the last-used default for the next new chat,
   // and remember it among the recent-folder suggestions (most recent first).
@@ -2312,6 +2404,7 @@ export function Chats({
           // start the chat on instructions the settings screen no longer
           // shows. Omitted when empty so the daemon stores null.
           ...(await currentRunSettings()),
+          ...(await chatGitStamp(cwd)),
           // Omitted entirely when the composer is on the CLI default — the
           // daemon only passes `--model` when a run names one.
           ...(models[agentKind] ? { model: models[agentKind] } : {}),
@@ -2655,8 +2748,10 @@ export function Chats({
             cwd: session.cwd,
             resumeSessionId: session.id,
             // An imported conversation is a new run like any other, so it gets
-            // the same snapshot — read now, for the same freshness reason.
+            // the same snapshot — read now, for the same freshness reason. The
+            // stamp is taken against the SESSION's folder, like the run itself.
             ...(await currentRunSettings()),
+            ...(await chatGitStamp(session.cwd)),
             ...(session.title ? { title: session.title } : {}),
             ...(models[sessionAgent] ? { model: models[sessionAgent] } : {}),
             ...(efforts[sessionAgent] ? { effort: efforts[sessionAgent] } : {}),
@@ -2959,6 +3054,16 @@ export function Chats({
       if (runId === activeRunIdRef.current) {
         setError(null);
         setStreaming(true);
+        // A message goes to the END of the conversation, so the reader has to be
+        // AT the end to see it. Parked on a window fetched around a search hit,
+        // the append is suppressed (`useChatRun`'s `awayFromTail`, which exists
+        // so a live row is never drawn under one from hours earlier) — and that
+        // is right for a row the daemon pushes and wrong for the row the user
+        // just wrote: they would get a Stop button over an old transcript with
+        // nothing saying where their message went. Awaited BEFORE the send, so
+        // the row lands in a window that can hold it. `returnToTail` is
+        // idempotent, so this costs nothing when the reader is already there.
+        await returnToTail();
       }
       const before =
         runsRef.current.find((run) => run.id === runId)?.status ??
@@ -3781,13 +3886,26 @@ export function Chats({
    * that made `NodeState.contextTokens` reach a client at all.
    *
    * Asked on open and on reconnect; everything in between arrives as a live
-   * delta, which outranks it. See {@link useNodeContextReadings}.
+   * delta, which outranks it. See {@link useNodeDurableReadings}.
    */
-  const nodeReadings = useNodeContextReadings(
+  const nodeReadings = useNodeDurableReadings(
     activeRunId,
     activeRun?.workflowId != null,
     workflowApi,
     reconnectNonce,
+  );
+  /**
+   * The same two ranks, handed to every call block in the transcript.
+   *
+   * A block can fold only its callee's SETTLED turns, so without this its ring
+   * is empty for the whole of a call and fills at the settle — REPORTED against
+   * a running cursor call. See `CalleeContextResolverContext` for why it travels
+   * as a context, and `ChatProviders` for why it is provided there.
+   */
+  const resolveCallReading = useCallback(
+    (calleeNodeId: string, callId: string): CalleeContext =>
+      resolveCalleeContext(liveText, nodeReadings, calleeNodeId, callId),
+    [liveText, nodeReadings],
   );
   /**
    * The open thread is shelved, so its composer is inert.
@@ -3799,6 +3917,32 @@ export function Chats({
    * accepted text only to have it bounced is the shape this exists to avoid.
    */
   const activeRunArchived = activeRun?.archivedAt != null;
+
+  // ONE read of the run's folder, feeding the header's changes chip AND the
+  // dialog behind it. Kept here rather than inside the dialog because the chip
+  // states the figures without anything being opened — see `useChatChanges`.
+  const chatChanges = useChatChanges(
+    activeRun?.cwd ?? null,
+    activeRun?.startSha ?? null,
+  );
+  const refreshChatChanges = chatChanges.refresh;
+  // What the DIALOG asks for when it opens: past the freshness floor, because
+  // the reader is looking at it now — which is exactly the distinction the floor
+  // exists to draw against the ambient turn-settle refresh below.
+  const readChangesNow = useCallback(
+    (): void => refreshChatChanges(true),
+    [refreshChatChanges],
+  );
+
+  // A turn ENDING is the moment the folder can have changed — it is what the
+  // agent was doing. Bounded by the hook's own freshness floor, so a thread
+  // settling several turns a minute (a delegate reporting back opens a
+  // continuation turn of its own) does not spend its life running `git diff`.
+  useEffect(() => {
+    if (!streaming) {
+      refreshChatChanges();
+    }
+  }, [streaming, refreshChatChanges]);
 
   /**
    * Every distinct folder the chat list names, so pull requests are read once
@@ -4929,6 +5073,23 @@ export function Chats({
       ),
     [turnScan.open, holding, activeRunId],
   );
+  /**
+   * The open turns any LIVE readout may count — the header's total and each
+   * agent card's alike.
+   *
+   * Both guards belong HERE rather than at either call site, on the rule
+   * `shellsByAgent` below already follows: two readouts of one figure that
+   * apply different guards are two answers to one question. `parkWhileHeld`
+   * because a hold is the run NOT working, so a card that kept climbing through
+   * one would out-count the header and then jump backwards at the settle; and
+   * the settled check because `scanTurns` emits an open turn for any thread
+   * with a start and no terminal row — a daemon that died mid-turn leaves
+   * exactly that, and a clock reading off the rows alone ticks for days on a
+   * thread nothing is working on.
+   */
+  const openTurnsShown = isSettledRunStatus(activeRunStatus)
+    ? undefined
+    : openTurnForHeader;
   // A 1:1 chat has exactly one agent, so the transcript needs no per-turn
   // identity: avatars and `claude · 18:43` lines only earn their space when
   // several agents share a flow. Keyed on the RUN (a workflow run always keeps
@@ -5028,28 +5189,40 @@ export function Chats({
       ];
     }
     /**
-     * One node's call threads, each carrying its OWN context reading — read off
-     * the per-call owner key the daemon publishes it under (`partialOwnerKey`).
+     * One node's call threads, each carrying its OWN context reading — the live
+     * one off the per-call owner key the daemon publishes it under
+     * (`partialOwnerKey`), and below it the daemon's durable `call_context` row.
+     *
+     * The durable half is what makes these rings survive: the live plane is
+     * dropped the moment a run settles and never exists at all for a window
+     * that reloaded, so a per-call ring drawn from it alone shows nothing
+     * outside a running turn.
+     *
+     * The pair itself lives in `resolveCalleeContext`, shared with the call
+     * block's own ring on the very rule `cardContextOf` states below — an order
+     * written down twice is an order two surfaces eventually disagree on.
      */
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
-    ): AgentThread[] =>
-      threadsOf(nodeActivity).map((thread) => {
+    ): AgentThread[] => {
+      return threadsOf(nodeActivity).map((thread) => {
         if (thread.kind !== 'call') {
           return thread;
         }
-        const live = liveText.get(partialOwnerKey(nodeId, thread.id));
         return {
           ...thread,
-          contextTokens: live?.contextTokens ?? null,
-          contextWindowTokens: live?.contextWindowTokens ?? null,
+          ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
         };
       });
+    };
     /**
-     * WHICH reading a node's CARD states — a SOURCE rather than two fields,
-     * because a count from one turn over a window from another is a percentage
-     * of nothing, so both figures come from whichever of these answers first.
+     * WHICH reading a node's CARD states — resolved as ONE source per rank, so
+     * a count from one turn is not drawn over a window from another. The count
+     * and the window can still come from different PLANES within one call
+     * thread (`callThreadsOf` prefers live per figure), which is safe because a
+     * window is a property of the model and does not move between that call's
+     * turns.
      *
      * The node's own key is a DAG-scheduled turn, and LIVE beats durable for
      * the reason the 1:1 branch above gives: a delta reports the node's context
@@ -5080,11 +5253,34 @@ export function Chats({
       if ((own?.contextTokens ?? null) !== null) {
         return own!;
       }
+      // Asked of the live plane DIRECTLY rather than of the thread's own
+      // figure, which now falls back to the durable row: without that the two
+      // ranks below collapse into one, and a stale-but-newer call thread would
+      // outrank the one actually streaming.
       const liveThread = [...callThreads]
         .reverse()
-        .find((thread) => (thread.contextTokens ?? null) !== null);
+        .find(
+          (thread) =>
+            (liveText.get(partialOwnerKey(nodeId, thread.id))?.contextTokens ??
+              null) !== null,
+        );
       if (liveThread !== undefined) {
         return liveThread;
+      }
+      // Then the newest call thread carrying a DURABLE reading — but only for a
+      // node that runs nothing BUT calls. `node_state` is written on every
+      // reading while `call_context` is written only under a call, so for a node
+      // whose own DAG turn ran after its last call the row below holds the newer
+      // figure and this rank would hand back a staler one. `threadsOf` emits a
+      // `main` thread exactly when that turn happened, which is the test.
+      const ownTurn = callThreads.some((thread) => thread.kind === 'main');
+      const durableThread = ownTurn
+        ? undefined
+        : [...callThreads]
+            .reverse()
+            .find((thread) => (thread.contextTokens ?? null) !== null);
+      if (durableThread !== undefined) {
+        return durableThread;
       }
       // The daemon's own `node_state` row, which outranks the transcript for
       // the reason the run row outranks it on a chat: it moves with every
@@ -5160,6 +5356,12 @@ export function Chats({
     // without it the meter could only move when a durable item landed, which is
     // the "context never grows" complaint this panel exists to answer. There is
     // no react-hooks eslint plugin in this repo to catch the omission.
+    //
+    // `nodeReadings` for the same reason and a sharper case: it publishes a new
+    // Map only when its own fetch resolves, and a settled workflow run reopened
+    // — or a reconnect whose replay is empty — moves nothing else afterwards,
+    // so without it the durable rings stay blank on exactly the reload they
+    // exist for.
   }, [
     activeRun,
     activeRunStatus,
@@ -5168,6 +5370,7 @@ export function Chats({
     streaming,
     wfNodes,
     liveText,
+    nodeReadings,
     subagentThreads,
   ]);
 
@@ -5175,9 +5378,13 @@ export function Chats({
    * What the composer's ring shows — this chat's own context, and never
    * another's.
    *
-   * A CHAT only: a workflow run's nodes each hold a window of their own, so
-   * `agents[0]` there is one node among several and the ring is withheld
-   * exactly as it was.
+   * A workflow run has no single context of its own — its nodes each hold a
+   * window — so the ring draws its ROOT agent's, which is the one the user
+   * prompted and the one the run is about. `agents[0]` is not that node: it is
+   * whichever happens to be first. A graph with no single root (none,
+   * or several) leaves it withheld, as does a workflow whose definition has not
+   * arrived yet — `wfNodes.rootId` is null in all three, and a run-level figure
+   * invented for them would be a number about nothing.
    *
    * Three sources, freshest first. The live delta is this turn's latest
    * REQUEST, the RUN ROW is the last reading the daemon filed (one per
@@ -5205,8 +5412,20 @@ export function Chats({
    * under a name that had already changed.
    */
   const chatContext = useMemo(() => {
-    if (activeRun === null || activeRun.workflowId) {
+    if (activeRun === null) {
       return { tokens: null, window: null };
+    }
+    if (activeRun.workflowId) {
+      // Already resolved through `cardContextOf`'s own four-tier chain, so the
+      // root's ring here and its card in the panel cannot disagree.
+      const root =
+        wfNodes.rootId === null
+          ? undefined
+          : agents.find((agent) => agent.id === wfNodes.rootId);
+      return {
+        tokens: root?.contextTokens ?? null,
+        window: root?.contextWindowTokens ?? null,
+      };
     }
     const live = liveText.get(CHAT_LIVE_KEY);
     const tokens =
@@ -5236,7 +5455,14 @@ export function Chats({
     return recalled === null
       ? { tokens: null, window }
       : { tokens: recalled.tokens, window: recalled.window };
-  }, [activeRun, agents, items.length, liveText, recallContextReading]);
+  }, [
+    activeRun,
+    agents,
+    items.length,
+    liveText,
+    recallContextReading,
+    wfNodes.rootId,
+  ]);
   /**
    * Why the ring has no figure, when the reason is worth drawing — see
    * `ContextMeter`'s `awaitingReading`.
@@ -5347,6 +5573,90 @@ export function Chats({
     }
     return byAgent;
   }, [agents, handle.startedAt, items]);
+  /**
+   * Worked time and tool count per agent — the pair each card draws under its
+   * spend line, keyed like `shellsByAgent` above.
+   *
+   * DURABLE OUTRANKS THE TRANSCRIPT, and that order is the whole point. A fold
+   * over `items` can only see the window this client loaded (`HISTORY_PAGE`), so
+   * on a long thread it is a fraction of the answer presented as the whole of
+   * it. The daemon totals both figures across every turn instead — on the NODE
+   * row for a workflow node, and on the RUN row for a 1:1 chat, which is the
+   * same split `contextTokens` already follows. The fold stays underneath as the
+   * first-turn answer, before either row has been written.
+   *
+   * A delegate's rows are excluded, on `shell-activity.ts`'s rule — a
+   * sub-agent has its own card, and folding its toolbelt into its launcher's
+   * would report a fan-out's total as one agent's.
+   */
+  const workByAgent = useMemo(() => {
+    const byAgent = new Map<string, AgentWork>();
+    const entryFor = (key: string): AgentWork => {
+      const found = byAgent.get(key);
+      if (found !== undefined) {
+        return found;
+      }
+      const fresh = { workedMs: null, toolCalls: null };
+      byAgent.set(key, fresh);
+      return fresh;
+    };
+    for (const item of items) {
+      if (subagentIdOf(item) !== null) {
+        continue;
+      }
+      const key = item.nodeId ?? CHAT_AGENT_KEY;
+      const settled = turnDurations.get(item.id);
+      if (settled !== undefined) {
+        const entry = entryFor(key);
+        entry.workedMs = (entry.workedMs ?? 0) + settled.ms;
+      }
+      if (item.kind === 'tool_call') {
+        const entry = entryFor(key);
+        entry.toolCalls = (entry.toolCalls ?? 0) + 1;
+      }
+    }
+    for (const [nodeId, reading] of nodeReadings) {
+      if (reading.workedMs === null && reading.toolCalls === null) {
+        continue;
+      }
+      const entry = entryFor(nodeId);
+      // The LARGER of the two, never a straight replace. `nodeReadings` is a
+      // SNAPSHOT — fetched on run open and on reconnect and never again — so
+      // replacing would freeze a reopened run's tool count at whatever the
+      // snapshot held, and make `workedMs` climb through a turn and then SNAP
+      // BACK by the whole of it at the settle. Durable still outranks the fold
+      // where it matters, because on a long thread it IS the larger figure by
+      // construction: the fold can only see the loaded window.
+      if (reading.workedMs !== null) {
+        entry.workedMs = Math.max(entry.workedMs ?? 0, reading.workedMs);
+      }
+      if (reading.toolCalls !== null) {
+        entry.toolCalls = Math.max(entry.toolCalls ?? 0, reading.toolCalls);
+      }
+    }
+    // A 1:1 CHAT's durable totals are on the RUN row rather than a node row —
+    // the same split `contextTokens` follows — so they arrive with the run this
+    // window already holds and cost no second fetch. The row is kept current by
+    // the SETTLE announce (`RunStatusEvent.workedMs` / `.toolCalls`), which had
+    // to be added for this: without it the copy fetched at open never moved, and
+    // since a durable total outranks the fold on any chat past `HISTORY_PAGE`
+    // items, the card's clock climbed through a turn and then dropped back by
+    // the whole of it the moment that turn settled.
+    //
+    // Still merged as the LARGER of the two rather than replacing, because the
+    // announce lands only on a settle: mid-turn the fold is the fresher of the
+    // pair, holding this turn's own rows before any durable write has happened.
+    if (activeRun !== null && activeRun.workflowId == null) {
+      const entry = entryFor(CHAT_AGENT_KEY);
+      if (activeRun.workedMs !== null) {
+        entry.workedMs = Math.max(entry.workedMs ?? 0, activeRun.workedMs);
+      }
+      if (activeRun.toolCalls !== null) {
+        entry.toolCalls = Math.max(entry.toolCalls ?? 0, activeRun.toolCalls);
+      }
+    }
+    return byAgent;
+  }, [items, turnDurations, nodeReadings, activeRun]);
   /**
    * What the side panel is holding RIGHT NOW, as two numbers for the header
    * beside its toggle: delegates still working, and tasks still outstanding.
@@ -5908,6 +6218,32 @@ export function Chats({
   }, [activeRun?.agentKind, activeRun?.configDir, signInToCli]);
 
   /**
+   * Reopen the ACTIVE run's conversation after a failed turn — the transcript's
+   * Retry, bound the way its sign-in neighbour is.
+   *
+   * Null when there is no open run, or no daemon to ask. Whether the reopen can
+   * SUCCEED is deliberately not decided here (see `RetryContext`): the daemon
+   * refuses a chat with no session to resume, an archived one and a busy one,
+   * and it writes a real sentence for each — which is what `daemonErrorDetail`
+   * puts on screen, on the same rule the approval chip follows for RUN_BUSY.
+   */
+  const retryActiveRun = useMemo(() => {
+    const runId = activeRun?.id;
+    // A WORKFLOW run has no single conversation to reopen, and the route says
+    // so with a 400 (`assertChatRun`) — so offering the button there could only
+    // ever produce an error strip. The sidebar lists both kinds in one surface,
+    // which is what makes this reachable.
+    if (runId === undefined || !chatApi || activeRun?.workflowId) {
+      return null;
+    }
+    return () => {
+      void chatApi.retryChat({ runId }).catch((err: unknown) => {
+        setError(daemonErrorDetail(err) ?? String(err));
+      });
+    };
+  }, [activeRun?.id, chatApi]);
+
+  /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
    * header's "something in here is working" cannot contradict the rows under
    * it.
@@ -6172,7 +6508,10 @@ export function Chats({
   // panel's own resizable width drives it).
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <CliLoginContext.Provider value={signInToActiveCli}>
+      <ChatProviders
+        signIn={signInToActiveCli}
+        retry={retryActiveRun}
+        callContext={resolveCallReading}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -6873,15 +7212,12 @@ export function Chats({
                         // days on a thread nothing is working on. The status
                         // is the authority on whether work is in flight; the
                         // rows only say what it started from.
-                        openTurns={
-                          isSettledRunStatus(activeRunStatus)
-                            ? undefined
-                            : openTurnForHeader
-                        }
+                        openTurns={openTurnsShown}
                         // The delegate, task and terminal counters that used to
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
+                        onSearch={openChatSearch}
                       />
                     ) : null}
 
@@ -6988,17 +7324,97 @@ export function Chats({
                               <SubagentDetailContext.Provider
                                 value={openSubagentDetail}>
                                 {transcriptEntries.map((entry) => {
+                                  const key =
+                                    entry.type === 'item'
+                                      ? entry.item.id
+                                      : entry.id;
+                                  const startSeq = entryStartSeq(entry);
+                                  // The seq ANCHOR, which is what makes a search
+                                  // hit reachable: `revealSeq` finds the last
+                                  // anchor at or below the hit's seq and scrolls
+                                  // to it. Here rather than inside
+                                  // `TranscriptEntryView`, because that component
+                                  // returns a different root per entry kind and
+                                  // this is the one place they are all one list.
+                                  //
+                                  // `empty:hidden` is load-bearing twice over. An
+                                  // entry CAN render nothing (`TranscriptItem`
+                                  // answers null for ten kinds), and an empty flex
+                                  // child would still consume the container's
+                                  // `gap-2.5` — a stray 10px wherever one of those
+                                  // rows falls. It is also exactly the condition
+                                  // `revealSeq`'s `:not(:empty)` filters on, so
+                                  // what is skipped and what is invisible cannot
+                                  // drift apart.
+                                  const wrap = (
+                                    children: React.ReactNode,
+                                  ): React.JSX.Element => (
+                                    <div
+                                      key={key}
+                                      // `flex flex-col` is LOAD-BEARING, not
+                                      // decoration: `align-self` resolves only
+                                      // against a flex parent, and a bare
+                                      // `MessageBubble` relies on it — the
+                                      // `note` variant is `self-center`, which
+                                      // is how the `✓ done · 21s` row at the
+                                      // end of every turn is centred. As a plain
+                                      // block wrapper this displaced every one
+                                      // of them left; a one-child flex column
+                                      // hands the alignment back untouched.
+                                      // `display: contents` would too, and is
+                                      // wrong — it generates no box, so the mark
+                                      // below would not paint and `revealSeq`
+                                      // would have nothing to measure.
+                                      //
+                                      // The landing mark is a WASH, and it was a
+                                      // ring first — reported as not liked, and
+                                      // the reason is visible the moment a user
+                                      // message is the hit: this wrapper spans
+                                      // the transcript's whole width while a
+                                      // bubble is `self-end`, so an OUTLINE
+                                      // draws a box around the empty half and
+                                      // reads as a stray rectangle rather than
+                                      // as "this row". A fill reads as the row
+                                      // either way, which is also why the mark
+                                      // stays on the wrapper rather than moving
+                                      // onto the bubble: a tool group, a card
+                                      // and a `note` are not bubbles and have no
+                                      // one element to tint.
+                                      //
+                                      // The ring was chosen because it is a
+                                      // box-shadow and costs no layout, and that
+                                      // reasoning was right about padding and
+                                      // wrong about the conclusion: `-my-1 py-1`
+                                      // is net ZERO — the padding grows the
+                                      // painted box, the negative margin takes
+                                      // the same amount back off the margin box
+                                      // flex actually lays out — so the wash
+                                      // breathes without moving a single
+                                      // neighbouring row. Both are in the marked
+                                      // arm, so an unmarked row is untouched.
+                                      // Only the colour transitions; the
+                                      // geometry is instant, which is the right
+                                      // way round for a flash.
+                                      className={cn(
+                                        'flex flex-col empty:hidden rounded-md transition-colors duration-500',
+                                        startSeq !== null &&
+                                          startSeq === markedSeq &&
+                                          '-mx-2 -my-1 bg-accent/60 px-2 py-1',
+                                      )}
+                                      {...(startSeq === null
+                                        ? {}
+                                        : {
+                                            'data-transcript-seq': startSeq,
+                                          })}>
+                                      {children}
+                                    </div>
+                                  );
                                   if (
                                     entry.type !== 'item' ||
                                     entry.item.kind !== 'approval_request'
                                   ) {
-                                    const key =
-                                      entry.type === 'item'
-                                        ? entry.item.id
-                                        : entry.id;
-                                    return (
+                                    return wrap(
                                       <TranscriptEntryView
-                                        key={key}
                                         entry={entry}
                                         nodes={nodeMeta}
                                         chatAgentName={
@@ -7006,7 +7422,7 @@ export function Chats({
                                         }
                                         soloAgent={soloAgent}
                                         soloNodeId={wfNodes.rootId}
-                                      />
+                                      />,
                                     );
                                   }
                                   const item = entry.item;
@@ -7019,14 +7435,12 @@ export function Chats({
                                   // one-shot verdict channel; leaving nothing would silently
                                   // drop a row out of the conversation's order.
                                   if (openRequestId(item) !== null) {
-                                    return (
-                                      <MessageBubble
-                                        key={item.id}
-                                        variant="note">
+                                    return wrap(
+                                      <MessageBubble variant="note">
                                         {pinnedRequest?.id === item.id
                                           ? '❓ waiting on your answer — the card is pinned below'
                                           : '❓ waiting on your answer — its card opens below once the pinned one is answered'}
-                                      </MessageBubble>
+                                      </MessageBubble>,
                                     );
                                   }
                                   const askerName =
@@ -7040,16 +7454,17 @@ export function Chats({
                                     </div>
                                   );
                                   // A solo agent's card needs no identity frame either.
-                                  return soloAgent ? (
-                                    <div key={item.id}>{card}</div>
-                                  ) : (
-                                    <SenderRow
-                                      key={item.id}
-                                      name={askerName}
-                                      colorKey={item.nodeId ?? undefined}
-                                      time={formatClockTime(item.createdAt)}>
-                                      {card}
-                                    </SenderRow>
+                                  return wrap(
+                                    soloAgent ? (
+                                      card
+                                    ) : (
+                                      <SenderRow
+                                        name={askerName}
+                                        colorKey={item.nodeId ?? undefined}
+                                        time={formatClockTime(item.createdAt)}>
+                                        {card}
+                                      </SenderRow>
+                                    ),
                                   );
                                 })}
                               </SubagentDetailContext.Provider>
@@ -7064,7 +7479,16 @@ export function Chats({
                   the transcript from a zero-height row — see
                   `jump-to-latest.tsx` for why it cannot take part in the
                   column's sizing. */}
-                    <JumpToLatest visible={aboveTail} onJump={jumpToLatest} />
+                    {/* Offered whenever the newest message is not what is on
+                    screen, which is TWO states rather than one. `aboveTail` is
+                    the scroll position; `awayFromTail` is a window fetched
+                    around a search hit, whose own bottom is somewhere in the
+                    middle of the conversation — there the button is the only way
+                    back, and it has to FETCH rather than scroll. */}
+                    <JumpToLatest
+                      visible={aboveTail || awayFromTail}
+                      onJump={awayFromTail ? backToTail : jumpToLatest}
+                    />
 
                     {/* OUTSIDE the scroller, not `sticky` inside it: a sticky row
                   still belongs to the scrolled content, so it can be scrolled
@@ -7239,9 +7663,24 @@ export function Chats({
                           {/* The readings run DURABLE → VOLATILE, left to
                               right, and that is the whole of the ordering
                               rule: a chip that comes and goes must never shift
-                              one that stays. Pull requests outlive the thread;
-                              the task list outlives the turn; a workflow, a
-                              delegate and a command each end within one. */}
+                              one that stays. The working TREE outlives every
+                              pull request opened from it, so it leads; pull
+                              requests outlive the thread; the task list
+                              outlives the turn; a workflow, a delegate and a
+                              command each end within one.
+
+                              Only where there is something to compare: a run
+                              without a folder, and one this app never stamped a
+                              commit for (a plain folder, a checkout with no
+                              commits, a chat that predates the stamp), have no
+                              "since" to answer about. */}
+                          {activeRun?.cwd !== null &&
+                          activeRun?.startSha !== null ? (
+                            <FolderChangesChip
+                              summary={chatChanges.summary}
+                              onOpen={openChatChanges}
+                            />
+                          ) : null}
                           <ThreadPullRequestChips
                             results={openedByActiveThread}
                           />
@@ -7665,12 +8104,33 @@ export function Chats({
                         nodes each carry their own model, effort and approval in
                         the graph), so the chip costs the row nothing and the
                         band above the card goes away entirely. */
-                              <Chip>
-                                <Zap />
-                                <span className="max-w-52 truncate">
-                                  {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
-                                </span>
-                              </Chip>
+                              <>
+                                <Chip>
+                                  <Zap />
+                                  <span className="max-w-52 truncate">
+                                    {`${wfNodes.triggers[0]!.name ?? wfNodes.triggers[0]!.id} · ${wfNodes.triggers[0]!.trigger} trigger`}
+                                  </span>
+                                </Chip>
+                                {/* The run-level ring, drawn from the ROOT
+                          agent — the node the user prompted. `chatContext`
+                          resolves it and answers nulls where the graph names no
+                          single root, so this draws nothing rather than a
+                          figure about no particular node.
+
+                          `runId` is null: that prop opens the full breakdown,
+                          which is a question put to ONE live process, and a
+                          workflow run holds one per node. */}
+                                {chatContext.tokens === null ? null : (
+                                  <ContextMeter
+                                    className="ml-1.5"
+                                    runId={null}
+                                    contextTokens={chatContext.tokens}
+                                    contextWindowTokens={chatContext.window}
+                                    live={isWorkingRunStatus(activeRunStatus)}
+                                    side="top"
+                                  />
+                                )}
+                              </>
                             ) : null}
                           </ComposerBottomRow>
                         </ComposerCard>
@@ -7700,6 +8160,11 @@ export function Chats({
                       onRevealWorkflow={revealWorkflow}
                       tasksByAgent={tasksByAgent}
                       shellsByAgent={shellsByAgent}
+                      workByAgent={workByAgent}
+                      // The SAME guarded list the header counts — keyed per
+                      // agent by `scanTurns`, so each card adds the turn in
+                      // flight that belongs to it.
+                      openTurns={openTurnsShown}
                       onOpenShell={setOpenShell}
                       // Withheld for a run with no working directory, so the
                       // panel cannot draw a control over a folder that is not
@@ -7967,11 +8432,43 @@ export function Chats({
                   onClose={() => setSessionPickerOpen(false)}
                   onResume={(row) => void resumeSession(row)}
                 />
+                {/* Beside the session picker because they are the same kind of
+                    surface — a search whose answer is a place to go — and the
+                    two must not grow different ideas of what one looks like.
+                    Rendered only with a thread open: without one there is no
+                    conversation to search. */}
+                {activeRunId === null ? null : (
+                  <ChatSearchDialog
+                    open={searchOpen}
+                    search={chatSearch}
+                    onClose={closeChatSearch}
+                    onJump={jumpToHit}
+                  />
+                )}
+                {/* Mounted only while OPEN — but it no longer READS: the header
+                    chip states the same figures, so one `useChatChanges` feeds
+                    both and the two cannot disagree about a folder they are
+                    describing at the same instant. Opening still asks for a
+                    fresh read (`refresh(true)`, past the freshness floor), which
+                    is the behaviour the dialog documented for itself. */}
+                {changesOpen && activeRun ? (
+                  <ChatChangesDialog
+                    open
+                    startSha={activeRun.startSha}
+                    changes={chatChanges.changes}
+                    truncated={chatChanges.truncated}
+                    unavailableReason={chatChanges.unavailableReason}
+                    error={chatChanges.error}
+                    loading={chatChanges.loading}
+                    onRefresh={readChangesNow}
+                    onClose={closeChatChanges}
+                  />
+                ) : null}
               </div>
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
-      </CliLoginContext.Provider>
+      </ChatProviders>
     </CardBackedRequestsContext.Provider>
   );
 }

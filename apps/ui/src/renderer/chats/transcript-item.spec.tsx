@@ -10,6 +10,7 @@ import type {
 import {
   cardBackedRequestIds,
   CardBackedRequestsContext,
+  errorRecovery,
   TranscriptItem,
   type TranscriptNodeMeta,
   unanswerableRequestIds,
@@ -62,6 +63,33 @@ function render(el: React.ReactNode): void {
 }
 
 describe('TranscriptItem — agent-call rows', () => {
+  it('RENDERS the silence advisory the call broker writes', () => {
+    // The payload key is the whole of this pin. `system` rows are read for
+    // `message` and draw NOTHING when it is absent, so a producer writing the
+    // sentence under any other key ships a row that exists in the database,
+    // survives the transcript fold, and puts nothing on screen — which is
+    // exactly what the first cut of the watchdog did. The daemon's own twin
+    // block names this reader for that reason.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          stalledCall: true,
+          severity: 'info',
+          message: "'helper' has produced nothing for 10 minutes.",
+        })}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('has produced nothing for 10 minutes');
+    // `info`, not the red failure chrome an absent severity resolves to — the
+    // call is still open and nothing has failed.
+    expect(text).not.toContain('system');
+  });
+
   it('renders call_started with the callee and message — no wire plumbing (mode, call id)', () => {
     render(
       <TranscriptItem
@@ -858,5 +886,43 @@ describe('TranscriptItem — an error row carries what the failure reported', ()
     expect(
       container.querySelector('button[aria-label="Copy the error report"]'),
     ).not.toBeNull();
+  });
+});
+
+describe('errorRecovery — which cure an error row offers', () => {
+  const signIn = (): void => {};
+  const retry = (): void => {};
+
+  it('prefers the daemon-recognised cure over the general one', () => {
+    // Sign-in is the cure for THIS failure; retry is the one any failed turn
+    // has. Offering both would put the weaker answer beside the right one.
+    expect(errorRecovery('cli-login', signIn, retry)).toMatchObject({
+      label: 'Sign in',
+      onClick: signIn,
+    });
+  });
+
+  it('offers NOTHING for a lapsed session it cannot sign in, never retry', () => {
+    // The loop guard: reopening the conversation does not renew an account
+    // session, so the reopened one fails on its next turn for the same reason.
+    // A button that looks like progress and is not is worse than no button.
+    expect(errorRecovery('cli-login', null, retry)).toBeUndefined();
+  });
+
+  it('offers retry for a failure with no recognised cure', () => {
+    expect(errorRecovery(null, signIn, retry)).toMatchObject({
+      label: 'Retry',
+      onClick: retry,
+    });
+  });
+
+  it('says the prompt is not sent again, which "retry" alone does not', () => {
+    // The one thing about this action a user cannot guess from its label — and
+    // the whole reason the feature exists rather than re-sending the message.
+    expect(errorRecovery(null, null, retry)?.title).toContain('not sent again');
+  });
+
+  it('offers nothing when the chat can do neither', () => {
+    expect(errorRecovery(null, null, null)).toBeUndefined();
   });
 });

@@ -6,10 +6,13 @@ import { CHAT_LIVE_KEY, type LiveState } from './live-text';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
+  callBlockActivity,
+  callBlockContext,
   type CallBlockEntry,
   callBlockSummary,
   collectSubagentBlocks,
   countTools,
+  entryStartSeq,
   groupTranscript,
   pullFileChangesOutOfGroups,
   type SubagentBlockEntry,
@@ -57,6 +60,101 @@ const result = (
   value: unknown = 'ok',
   nodeId: string | null = 'orch',
 ): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
+
+describe('entryStartSeq', () => {
+  it('answers a plain row with its own seq', () => {
+    const row = item('message', { text: 'hi' });
+    expect(entryStartSeq({ type: 'item', item: row })).toBe(row.seq);
+  });
+
+  it('answers a BLOCK with where it begins, not where it ends', () => {
+    // The lookup that uses this is nearest-at-or-below, so a block spanning
+    // several rows has to answer for every one of them. Reporting its LAST seq
+    // would send a hit in the middle of a turn to whatever came after it.
+    const first = item('message', { text: 'starting' });
+    const last = item('message', { text: 'done' });
+    const block: TurnBlockEntry = {
+      type: 'turn-block',
+      id: 'b1',
+      createdAt: 'now',
+      nodeId: 'orch',
+      subagentId: null,
+      entries: [
+        { type: 'item', item: last },
+        { type: 'item', item: first },
+      ],
+    };
+    // Asserted against the LOWER seq even though it is listed second, so the
+    // case cannot pass by reading whichever entry happens to come first.
+    expect(entryStartSeq(block)).toBe(first.seq);
+  });
+
+  it('answers a tool group with the CALL, never the result', () => {
+    // A backgrounded command's result lands thousands of rows later; the group
+    // is drawn where it was invoked.
+    const invoked = call('Bash', 'c1');
+    const answered = result('c1');
+    const entries = groupTranscript([invoked, answered]);
+    const group = entries.flatMap((entry) =>
+      entry.type === 'turn-block' ? entry.entries : [entry],
+    );
+    const tools = group.find((entry) => entry.type === 'tools');
+    expect(tools).toBeDefined();
+    expect(entryStartSeq(tools!)).toBe(invoked.seq);
+  });
+
+  it('is NOT monotonic across the rendered list — a delegate block starts late', () => {
+    // The premise the transcript's seq anchors are looked up under. A sub-agent
+    // block is placed where its delegate was LAUNCHED but encloses rows the
+    // delegate wrote later, so its start seq can exceed that of the entry drawn
+    // after it. Anything picking "the last anchor at or below the target" by
+    // DOCUMENT POSITION therefore lands in the wrong place for a hit inside a
+    // delegate's thread; the pick has to compare seq VALUES.
+    const launch = item('tool_call', {
+      id: 'toolu_d',
+      name: 'Task',
+      input: { description: 'go' },
+    });
+    const answered = item('tool_result', {
+      id: 'toolu_d',
+      name: null,
+      result: 'launched',
+    });
+    const mainSaid = item('message', { text: 'carrying on' }, 'orch');
+    const delegateSaid = item(
+      'message',
+      { text: 'on it', parentToolUseId: 'toolu_d' },
+      'orch',
+      'assistant',
+    );
+    const entries = buildSubagentBlocks(
+      groupTranscript([launch, answered, mainSaid, delegateSaid]),
+      [launch, answered, mainSaid, delegateSaid],
+    );
+
+    const starts = entries
+      .map((entry) => entryStartSeq(entry))
+      .filter((seq): seq is number => seq !== null);
+    const ascending = starts.every(
+      (seq, index) => index === 0 || seq >= starts[index - 1]!,
+    );
+    expect(ascending).toBe(false);
+  });
+
+  it('answers null for a block that encloses nothing', () => {
+    // Not zero: a caller emitting an anchor for it would claim the whole
+    // transcript begins there, and every jump would land on it.
+    const empty: TurnBlockEntry = {
+      type: 'turn-block',
+      id: 'empty',
+      createdAt: 'now',
+      nodeId: null,
+      subagentId: null,
+      entries: [],
+    };
+    expect(entryStartSeq(empty)).toBeNull();
+  });
+});
 
 describe('groupTranscript', () => {
   it('collapses consecutive same-node tool calls into ONE group and pairs results by id', () => {
@@ -386,17 +484,17 @@ describe('groupTranscript', () => {
     });
   });
 
-  describe('callBlockSummary', () => {
-    function callBlockOf(items: ChatItem[]): CallBlockEntry {
-      const found = groupTranscript(items).find(
-        (entry) => entry.type === 'call-block',
-      );
-      if (found?.type !== 'call-block') {
-        throw new Error('expected a call block');
-      }
-      return found;
+  function callBlockOf(items: ChatItem[]): CallBlockEntry {
+    const found = groupTranscript(items).find(
+      (entry) => entry.type === 'call-block',
+    );
+    if (found?.type !== 'call-block') {
+      throw new Error('expected a call block');
     }
+    return found;
+  }
 
+  describe('callBlockSummary', () => {
     it('is the callee’s newest words while the call runs', () => {
       // What a COLLAPSED card shows as its current state — asked for with the
       // fold itself ("we always should see last message there").
@@ -461,6 +559,234 @@ describe('groupTranscript', () => {
         ),
       ]);
       expect(callBlockSummary(block)).toBeNull();
+    });
+
+    it('is STILL null over a callee that has only used tools', () => {
+      // The gap this suite had: every case above feeds it a `message`, so
+      // nothing pinned what happens over the rows a real callee produces
+      // FIRST. Reproduced on a live cursor call — six rows of reasoning and
+      // tool work before the first word, 16.3s of a 16.3s call.
+      //
+      // It stays null on purpose: what the callee DID is a different question,
+      // answered by `callBlockActivity`. Folding tools into this one would
+      // render a tool name where the callee's own words go.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'reasoning',
+          { text: 'I should look first', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Find', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_result',
+          { id: 't1', name: null, result: 'ok', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockSummary(block)).toBeNull();
+    });
+  });
+
+  describe('a call the daemon says has gone quiet', () => {
+    const stallItems = (): ChatItem[] => [
+      item('call_started', {
+        callId: 'call-1',
+        calleeNodeId: 'poet',
+        message: 'Count them.',
+      }),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'system',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          stalledCall: true,
+          severity: 'info',
+          message: "'poet' has produced nothing for 10 minutes.",
+        },
+        'orch',
+      ),
+    ];
+
+    it('flags the block, and LEAVES the advisory in the caller’s main flow', () => {
+      const items = stallItems();
+
+      expect(callBlockOf(items).stalled).toBe(true);
+
+      // The row must not claim into the block: a warning folded inside a
+      // collapsed card is a warning nobody reads.
+      const loose = groupTranscript(items).filter(
+        (entry) => entry.type === 'item' && entry.item.kind === 'system',
+      );
+      expect(loose).toHaveLength(1);
+    });
+
+    it('is not flagged by an ordinary system row of the same call', () => {
+      // `stalledCall` is the discriminator, never the kind: a callee's own
+      // system rows carry this call's id too.
+      const items = stallItems();
+      items[2] = item(
+        'system',
+        { callId: 'call-1', severity: 'info', message: 'something else' },
+        'orch',
+      );
+
+      expect(callBlockOf(items).stalled).toBe(false);
+    });
+  });
+
+  describe('callBlockActivity — what a wordless callee is DOING', () => {
+    it('names the newest tool the callee called', () => {
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Find', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_result',
+          { id: 't1', name: null, result: 'ok', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't2', name: 'Read File', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      // The NEWEST, not the first: the band is a readout of where the callee
+      // has got to, so a name that froze on its opening tool would be as
+      // uninformative as the placeholder it replaces.
+      expect(callBlockActivity(block)).toBe('Read File');
+    });
+
+    it('finds a tool nested inside the callee’s own delegate block', () => {
+      // `buildCallBlock` folds a callee's delegates into blocks of their own,
+      // so the newest tool routinely sits one level down. A flat scan would
+      // report `is thinking...` over a callee three tools deep.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'subagent_info',
+          { subagentId: 's1', label: 'Reader', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          {
+            id: 'd1',
+            name: 'Task',
+            input: {},
+            callId: 'call-1',
+          },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          {
+            id: 'd2',
+            name: 'Grep',
+            input: {},
+            callId: 'call-1',
+            parentToolUseId: 'd1',
+          },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).not.toBeNull();
+    });
+
+    it('skips a tool whose name is blank and keeps scanning older ones', () => {
+      // A call that discloses no name must not blank the readout — the older
+      // named tool is still the truest thing to say.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count them.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't1', name: 'Read File', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'tool_call',
+          { id: 't2', name: '   ', input: {}, callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).toBe('Read File');
+    });
+
+    it('is null while the callee has done nothing either', () => {
+      // Which is what keeps `<callee> is thinking...` as the honest line for
+      // the one state it was ever true of.
+      const block = callBlockOf([
+        item('call_started', {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          message: 'Count the scripts.',
+        }),
+        item(
+          'status',
+          { status: 'running', nodeId: 'poet', callId: 'call-1' },
+          'poet',
+        ),
+        item(
+          'reasoning',
+          { text: 'thinking about it', callId: 'call-1' },
+          'poet',
+        ),
+      ]);
+
+      expect(callBlockActivity(block)).toBeNull();
     });
   });
 
@@ -884,6 +1210,85 @@ describe('groupTranscript — call blocks', () => {
     expect(JSON.stringify((entries[0] as CallBlockEntry).entries)).toContain(
       'CALLEE_FAILED',
     );
+  });
+});
+
+describe('callBlockContext', () => {
+  /** A call block holding the callee's own settled turns. */
+  function callWith(turns: readonly unknown[]): CallBlockEntry {
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          mode: 'async',
+          message: 'Write a haiku about the sea.',
+        },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      ...turns.map((usage) =>
+        item('turn_complete', { usage, callId: 'call-1' }, 'poet'),
+      ),
+    ]);
+    const block = entries.find((entry) => entry.type === 'call-block');
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    return block;
+  }
+
+  it('reads the callee’s own reading off its turns', () => {
+    expect(
+      callBlockContext(
+        callWith([{ contextTokens: 42_000, contextWindowTokens: 200_000 }]),
+      ),
+    ).toEqual({ contextTokens: 42_000, contextWindowTokens: 200_000 });
+  });
+
+  it('takes the LAST turn’s level rather than summing them', () => {
+    // The difference from `callBlockUsage` beside it: spend accumulates, a
+    // context reading is a level. Summing would report a figure the callee
+    // never held, and over its window would draw a ring past full.
+    expect(
+      callBlockContext(
+        callWith([
+          { contextTokens: 42_000, contextWindowTokens: 200_000 },
+          { contextTokens: 51_000, contextWindowTokens: 200_000 },
+        ]),
+      ),
+    ).toEqual({ contextTokens: 51_000, contextWindowTokens: 200_000 });
+  });
+
+  it('carries each figure independently, so a later turn omitting the window keeps it', () => {
+    expect(
+      callBlockContext(
+        callWith([
+          { contextTokens: 42_000, contextWindowTokens: 200_000 },
+          { contextTokens: 51_000, contextWindowTokens: null },
+        ]),
+      ),
+    ).toEqual({ contextTokens: 51_000, contextWindowTokens: 200_000 });
+  });
+
+  it('rejects a non-positive figure — a reported 0 measured nothing', () => {
+    expect(
+      callBlockContext(
+        callWith([{ contextTokens: 0, contextWindowTokens: 200_000 }]),
+      ),
+    ).toEqual({ contextTokens: null, contextWindowTokens: 200_000 });
+  });
+
+  it('answers nulls for a call whose turns reported no usage at all', () => {
+    expect(callBlockContext(callWith([null]))).toEqual({
+      contextTokens: null,
+      contextWindowTokens: null,
+    });
   });
 });
 
@@ -1439,6 +1844,9 @@ describe('withLiveText', () => {
     thinkingStretch: null,
     contextTokens: null,
     contextWindowTokens: null,
+    spentInputTokens: null,
+    spentOutputTokens: null,
+    spentCacheReadTokens: null,
     ...over,
   });
 

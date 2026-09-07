@@ -12,6 +12,7 @@ import type { ItemDao } from '../dao/item.dao';
 import type { AgentEventBus } from '../services/agent-events.bus';
 import { readModelParameters } from './model-parameters';
 import { readRunPullRequests } from './pull-request-capture';
+import { searchIndexText } from './searchable-text';
 import { readRunTaskList } from './task-list-fold';
 
 /**
@@ -42,6 +43,11 @@ export async function persistItemAndEmit(
       kind: row.kind,
       role: row.role,
       payload: JSON.stringify(row.payload),
+      // Computed at the insert rather than at query time: the search is a
+      // daemon route precisely because the client holds only the newest page,
+      // and scanning JSON payloads across a long transcript is what the column
+      // exists to avoid.
+      searchText: searchIndexText(row.payload),
     },
     em,
   );
@@ -136,6 +142,8 @@ export function runToWire(
     agentKind: run.agentKind,
     workflowId: run.workflowId,
     cwd: run.cwd,
+    startSha: run.startSha,
+    startDirty: run.startDirty,
     model: run.model,
     approval: run.approval,
     effort: run.effort,
@@ -143,6 +151,8 @@ export function runToWire(
     modelParameters: readModelParameters(run.modelParameters),
     contextTokens: run.contextTokens,
     contextWindowTokens: run.contextWindowTokens,
+    workedMs: run.workedMs,
+    toolCalls: run.toolCalls,
     configDir: run.configDir,
     configDirPin,
     groupId: run.groupId,

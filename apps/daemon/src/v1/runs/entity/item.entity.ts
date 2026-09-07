@@ -44,4 +44,21 @@ export class Item extends TimestampsEntity {
   /** JSON-encoded payload (shape depends on `kind`). */
   @Property({ type: 'text' })
   payload!: string;
+
+  /**
+   * The payload's text flattened for search — see `utils/searchable-text.ts`.
+   *
+   * NULL means "never flattened", which is exactly what the one-shot backfill
+   * sweeps on: the column is added additively to a table that already holds
+   * every row this app has ever written. A row that WAS flattened and had
+   * nothing to match carries an empty string instead, so the two stay
+   * distinguishable and a swept row is never swept twice.
+   *
+   * Deliberately NOT indexed. The search is a `$like` with a leading wildcard,
+   * which no B-tree can serve, so an index here would cost every insert and be
+   * used by nothing — the query rides the `(runId, seq)` index above for its
+   * range and ordering, with the match as a residual filter.
+   */
+  @Property({ type: 'text', nullable: true })
+  searchText: string | null = null;
 }

@@ -23,6 +23,9 @@ function pr(
     author: 'someone',
     url: `https://github.com/o/r/pull/${number}`,
     updatedAt,
+    added: null,
+    removed: null,
+    changedFiles: null,
   };
 }
 

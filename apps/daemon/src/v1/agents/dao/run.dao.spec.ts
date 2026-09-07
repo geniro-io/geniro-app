@@ -295,4 +295,95 @@ describe('RunDao (in-memory sqlite)', () => {
       expect(await stored(theirs.id)).toBeNull();
     });
   });
+
+  describe('rememberWork', () => {
+    const readBack = async (id: string) =>
+      new RunDao(orm.em.fork()).getById(id);
+
+    it('SUMS across turns rather than replacing — the whole difference from rememberContext', async () => {
+      // A chat's totals have to cover the CONVERSATION, not its newest turn:
+      // under a replacing writer this reads 300/2, which is what the transcript
+      // fold already gives and what the durable column exists to beat.
+      const run = await dao.create({});
+
+      await dao.rememberWork(run.id, 500, 3);
+      await dao.rememberWork(run.id, 300, 2);
+
+      expect(await readBack(run.id)).toMatchObject({
+        workedMs: 800,
+        toolCalls: 5,
+      });
+    });
+
+    it('a turn reporting no timing leaves the time already counted alone', async () => {
+      // The ordinary case on every ACP agent — it reports no duration at all,
+      // so the tool count must keep accumulating while the clock stands.
+      const run = await dao.create({});
+      await dao.rememberWork(run.id, 500, 3);
+
+      await dao.rememberWork(run.id, null, 2);
+
+      expect(await readBack(run.id)).toMatchObject({
+        workedMs: 500,
+        toolCalls: 5,
+      });
+    });
+
+    it('leaves both figures null when the turn carries nothing positive', async () => {
+      const run = await dao.create({});
+
+      await dao.rememberWork(run.id, 0, 0);
+
+      expect(await readBack(run.id)).toMatchObject({
+        workedMs: null,
+        toolCalls: null,
+      });
+    });
+
+    it('writes nothing for a run id that does not exist, and does not throw', async () => {
+      await expect(
+        dao.rememberWork('missing-run', 500, 3),
+      ).resolves.toBeUndefined();
+
+      expect(await readBack('missing-run')).toBeNull();
+    });
+  });
+
+  describe('readWork', () => {
+    it('reads back what rememberWork just wrote, THROUGH the identity map', async () => {
+      // The whole reason this method exists rather than a `getById` at the call
+      // site: `rememberWork` lands as a `nativeUpdate`, which the identity map
+      // never sees, so a DAO that has already loaded this run answers with the
+      // totals as they stood BEFORE the turn. The settle announce is built from
+      // this read, so a stale answer would broadcast last turn's figures as
+      // this turn's and freeze every client that trusts them.
+      const run = await dao.create({});
+      // Load the row first, so the identity map is holding the pre-write copy.
+      await dao.getById(run.id);
+      await dao.rememberWork(run.id, 500, 3);
+
+      expect(await dao.readWork(run.id)).toEqual({
+        workedMs: 500,
+        toolCalls: 3,
+      });
+    });
+
+    it('answers nulls for a run that has never been measured', async () => {
+      // Distinct from the missing-run case below: the run EXISTS and its
+      // figures are null, which the announce must carry as null rather than as
+      // a zero nobody measured.
+      const run = await dao.create({});
+
+      expect(await dao.readWork(run.id)).toEqual({
+        workedMs: null,
+        toolCalls: null,
+      });
+    });
+
+    it('answers null for a run id that does not exist, and does not throw', async () => {
+      // The settle path reads this AFTER writing the status, so a run torn down
+      // underneath it must cost the announce its figures and never the settle.
+      await expect(dao.readWork('missing-run')).resolves.toBeNull();
+    });
+  });
 });

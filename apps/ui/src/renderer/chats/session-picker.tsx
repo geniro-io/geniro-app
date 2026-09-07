@@ -1,13 +1,16 @@
-import { Folder, Search } from 'lucide-react';
+import { Folder } from 'lucide-react';
 import * as React from 'react';
 
 import type { CliKind } from '../../shared/contracts';
 import { CLI_KINDS } from '../../shared/contracts';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
-import { NoteBox } from '../components/note-box';
+import {
+  SearchField,
+  SearchResultList,
+  SearchSnippet,
+} from '../components/search-panel';
 import { Dialog } from '../components/ui/dialog';
-import { Input } from '../components/ui/input';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -128,19 +131,13 @@ export function SessionPicker({
               ]}
             />
           </div>
-          <label className="relative flex min-w-[12rem] flex-1 items-center">
-            <Search
-              className="pointer-events-none absolute left-2 size-4 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <Input
-              aria-label="Search sessions"
-              className="pl-8"
-              placeholder="Search by what was said, or by folder…"
-              value={query}
-              onChange={(event) => onQueryChange(event.target.value)}
-            />
-          </label>
+          <SearchField
+            className="min-w-[12rem] flex-1"
+            label="Search sessions"
+            placeholder="Search by what was said, or by folder…"
+            value={query}
+            onValueChange={onQueryChange}
+          />
         </div>
 
         {/*
@@ -180,17 +177,23 @@ export function SessionPicker({
           so the list showed fewer sessions than it could AND the leftover
           content gave the dialog body a second scrollbar beside this one.
         */}
-        <div className="min-h-[16rem] flex-1 overflow-y-auto rounded-md border border-border">
-          {loading ? (
-            <div className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-              <Spinner />{' '}
-              {query === ''
-                ? `Asking ${agent} what it has…`
-                : `Searching ${agent}’s conversations…`}
-            </div>
-          ) : listing?.unavailableReason ? (
-            <EmptyState>{listing.unavailableReason}</EmptyState>
-          ) : rows.length === 0 ? (
+        {/*
+          `partialReason` is passed rather than rendered here: the listing is
+          complete for the store it reached and this CLI may keep another, so it
+          is true whether the list is full or empty — which is exactly why the
+          shared list draws it UNDER the rows rather than in place of them.
+        */}
+        <SearchResultList
+          loading={loading}
+          loadingLabel={
+            query === ''
+              ? `Asking ${agent} what it has…`
+              : `Searching ${agent}’s conversations…`
+          }
+          unavailableReason={listing?.unavailableReason}
+          partialReason={listing?.partialReason}
+          isEmpty={rows.length === 0}
+          empty={
             <EmptyState className="flex-col gap-1">
               <span className="text-foreground">
                 {query === ''
@@ -203,32 +206,20 @@ export function SessionPicker({
                   : 'Try fewer words, or clear the search.'}
               </span>
             </EmptyState>
-          ) : (
-            <ul className="m-0 flex list-none flex-col p-1">
-              {rows.map((row) => (
-                <SessionRow
-                  key={`${row.configDir ?? ''}:${row.session.id}`}
-                  row={row}
-                  showProfile={profiles.length > 1}
-                  busy={busyId === row.session.id}
-                  disabled={busyId !== null && busyId !== row.session.id}
-                  onResume={onResume}
-                />
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/*
-          The listing is complete for the store it reached and this CLI may keep
-          another. Said UNDER the rows rather than in place of them, because it
-          is true whether the list is full or empty — and a user whose terminal
-          history is all in that other store would otherwise read a short,
-          correct list as a broken feature.
-        */}
-        {listing?.partialReason ? (
-          <NoteBox className="shrink-0">{listing.partialReason}</NoteBox>
-        ) : null}
+          }>
+          <ul className="m-0 flex list-none flex-col p-1">
+            {rows.map((row) => (
+              <SessionRow
+                key={`${row.configDir ?? ''}:${row.session.id}`}
+                row={row}
+                showProfile={profiles.length > 1}
+                busy={busyId === row.session.id}
+                disabled={busyId !== null && busyId !== row.session.id}
+                onResume={onResume}
+              />
+            ))}
+          </ul>
+        </SearchResultList>
       </div>
     </Dialog>
   );
@@ -278,11 +269,7 @@ function SessionRow({
           is what keeps an unsearched list looking exactly as it did.
         */}
         {session.snippet === null ? null : (
-          <span
-            data-slot="session-snippet"
-            className="line-clamp-2 w-full border-l-2 border-border pl-2 text-xs text-muted-foreground italic">
-            {session.snippet}
-          </span>
+          <SearchSnippet>{session.snippet}</SearchSnippet>
         )}
         <span className="flex w-full items-center gap-1.5 text-xs text-muted-foreground">
           {busy ? <Spinner /> : <Folder className="size-3 shrink-0" />}

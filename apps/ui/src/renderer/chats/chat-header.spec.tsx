@@ -3,6 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { CHAT_AGENT_KEY } from './agent-activity';
 import { ChatHeader } from './chat-header';
 
 (
@@ -152,6 +153,7 @@ describe('ChatHeader — how long this turn has been running', () => {
         lastActivityAt="2026-08-04T00:00:00.000Z"
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -388,12 +390,14 @@ describe('ChatHeader — how long this thread WORKED', () => {
     expect(el.textContent).not.toContain('0s');
   });
 
-  it('marks an UNPRICED thread with a dash, and says why behind it', () => {
-    // REPORTED as "I dont see how much i spend for thread - i should see it",
-    // on a cursor thread. The daemon was right to send no figure — probed on
-    // cursor-agent 2026.08.11-e8db854, a completed turn sends no `usage_update`
-    // at all, so nothing prices it — but an EMPTY slot reads as a header with
-    // no spend readout rather than as a thread nothing measured.
+  it('says NOTHING on the row for an unpriced thread, and why behind it', () => {
+    // Decided twice. It drew nothing, then an em dash — REPORTED as "I dont
+    // see how much i spend for thread - i should see it" on a cursor thread,
+    // where an empty slot read as a header with no spend readout — and now
+    // nothing again, on the report that closed it: "если мы не можем показать
+    // цену, там вообще дефис не нужен". The daemon was right to send no figure
+    // either way; cursor reports no cost on any channel, so a mark standing in
+    // for a price there can never become one.
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -405,17 +409,22 @@ describe('ChatHeader — how long this thread WORKED', () => {
       />,
     );
 
-    expect(metrics(el)).toContain('—');
-    // Never a fabricated zero: that is the rule the dash exists to keep.
+    // The worked figure still draws — only the spend slot is empty.
+    expect(metrics(el)).toContain('4m 12s');
+    expect(metrics(el)).not.toContain('—');
+    // Never a fabricated zero: the rule that outlived both renderings.
     expect(metrics(el)).not.toContain('$');
+    // Not lost, moved: the hover is where "free or broken?" is answered.
     expect(metricsTitle(el)).toContain('No cost reported');
     expect(metricsTitle(el)).toContain('6 turns');
   });
 
-  it('draws NO dash while the totals have simply not been read yet', () => {
-    // A thread whose read failed, or has not landed, knows nothing about its
-    // turns — claiming none of them was priced would be an answer invented out
-    // of a missing one. `costedTurns` null, not zero, is what separates them.
+  it('claims nothing while the totals have simply not been read yet', () => {
+    // Two ways to have no price, and only one of them is a fact about the
+    // thread. A read that failed or has not landed knows nothing about its
+    // turns, so the hover must NOT say none of them was priced — that would be
+    // an answer invented out of a missing one. `costedTurns` null, not zero, is
+    // what separates them, and the hover is now the only place it shows.
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -431,7 +440,7 @@ describe('ChatHeader — how long this thread WORKED', () => {
     expect(metricsTitle(el)).not.toContain('No cost reported');
   });
 
-  it('shows the PRICE, not the dash, on a thread that reported one', () => {
+  it('shows the PRICE on a thread that reported one', () => {
     const el = render(
       <ChatHeader
         {...baseProps}
@@ -483,6 +492,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -512,6 +522,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],
@@ -536,6 +547,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={5}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [Date.parse('2026-08-04T00:00:20.000Z')],
@@ -587,6 +599,7 @@ describe('ChatHeader — the worked total while a turn is in flight', () => {
         turnCount={0}
         openTurns={[
           {
+            agentKey: CHAT_AGENT_KEY,
             startedAt: Date.parse('2026-08-04T00:00:00.000Z'),
             parkedMs: 0,
             openSince: [],

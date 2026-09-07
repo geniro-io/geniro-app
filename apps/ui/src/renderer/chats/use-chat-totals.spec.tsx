@@ -193,13 +193,72 @@ describe('useChatTotals', () => {
   it('shows no spend rather than the previous thread’s while switching', async () => {
     // The figure is per-thread, and a stale one under a new title is worse than
     // none: it is wrong and it looks authoritative.
+    //
+    // Read BEFORE the fetch settles, which is the whole of the test: the effect
+    // that replaces the figures runs AFTER the render that switched threads, so
+    // that one render is where the previous thread's spend would be drawn under
+    // the new thread's name. A re-render to a NULL runId does not reach it —
+    // that lands in the effect's own early-return arm, which clears everything
+    // regardless, so it would pass with the stamp deleted.
     const api = apiReturning(1.25);
     const el = mount({ api, runId: 'run-1', settledTurns: 0 });
     await settle();
+    expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('1.25');
 
-    rerender({ api, runId: null, settledTurns: 0 });
+    rerender({ api, runId: 'run-2', settledTurns: 0 });
 
     expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('none');
+  });
+
+  it('clears the figures when the daemon connection goes away', async () => {
+    // The half of the effect's early-return arm the render-time guard cannot
+    // reach: the runId is UNCHANGED, so the guard hands back the state it holds
+    // and only `forget()` can clear it. Pointing this at a `null` runId instead
+    // would pass with `forget()` deleted, the guard already answering that case.
+    const api = apiReturning(1.25);
+    const el = mount({ api, runId: 'run-1', settledTurns: 0 });
+    await settle();
+    expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('1.25');
+
+    rerender({ api: null, runId: 'run-1', settledTurns: 0 });
+
+    expect(el.querySelector('[data-slot="spend"]')?.textContent).toBe('none');
+  });
+
+  it('does not let one thread’s spend marker swallow another’s announce', async () => {
+    // The marker only ever moves FORWARD within a thread, so one left behind by
+    // a busy conversation makes the NEXT conversation's announce look like old
+    // news — its poll stamp being unrelated and routinely older. That thread
+    // then shows a spend that never updates until it is reopened.
+    const api = apiReturning(1.25);
+    const { client, announce } = announcingClient();
+    mount({ api, runId: 'run-1', settledTurns: 0, client });
+    await settle();
+    await announce({ runId: 'run-1', spendUpdatedAt: 2_000 });
+
+    rerender({ api, runId: 'run-2', settledTurns: 0, client });
+    await settle();
+    const asked = api.readChatTotals.mock.calls.length;
+
+    await announce({ runId: 'run-2', spendUpdatedAt: 1_000 });
+
+    expect(api.readChatTotals.mock.calls.length).toBe(asked + 1);
+  });
+
+  it('costs one fetch when two announces carry the same marker', async () => {
+    // The forward-only half of the same comparison. Two announces about one
+    // poll cannot happen today and would the moment a second producer appears,
+    // so the marker moves only on a LATER stamp — within a thread.
+    const api = apiReturning(1.25);
+    const { client, announce } = announcingClient();
+    mount({ api, runId: 'run-1', settledTurns: 0, client });
+    await settle();
+    const asked = api.readChatTotals.mock.calls.length;
+
+    await announce({ runId: 'run-1', spendUpdatedAt: 2_000 });
+    await announce({ runId: 'run-1', spendUpdatedAt: 2_000 });
+
+    expect(api.readChatTotals.mock.calls.length).toBe(asked + 1);
   });
 
   it('answers a failed read with no spend, never an error', async () => {

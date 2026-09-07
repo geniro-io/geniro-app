@@ -101,10 +101,15 @@ export const NODE_CONNECTION_RULES: Record<
     ],
   },
   trigger: {
-    // Triggers are pure entry points: nothing may feed one, and firing fans
-    // out to any number of agents. Call wires never touch triggers.
+    // Triggers are pure entry points: nothing may feed one, and firing starts
+    // exactly ONE agent. Call wires never touch triggers.
+    //
+    // Single-arity by OMITTING `multiple` rather than spelling `false`, which
+    // is how every other single-arity rule here reads — including the agent's
+    // own `{ edge: 'data', kind: 'trigger' }` input, the mirror of this rule
+    // from the other end.
     inputs: [],
-    outputs: [{ edge: 'data', kind: 'agent', multiple: true }],
+    outputs: [{ edge: 'data', kind: 'agent' }],
   },
   instruction: {
     // An instruction block is written, never produced: nothing may feed one,
@@ -452,6 +457,32 @@ export const NodeStateWireSchema = z.object({
    */
   contextTokens: z.number().nullable(),
   contextWindowTokens: z.number().nullable(),
+  /**
+   * The same reading per agent-to-agent CALL this node ran (from `call_context`
+   * rows). The node figures above collapse to whichever call wrote last, so a
+   * node called several times needs these to draw one ring per call thread
+   * rather than one flickering between windows.
+   *
+   * Nested, so it carries a `.meta({ id })` of its own to land as a named
+   * component, exactly as `AgentCount` above does.
+   */
+  calls: z.array(
+    z
+      .object({
+        callId: z.string(),
+        contextTokens: z.number().nullable(),
+        contextWindowTokens: z.number().nullable(),
+      })
+      .meta({ id: 'CallContextReading' }),
+  ),
+  /**
+   * This node's worked milliseconds and tool count, TOTALLED across its turns
+   * (see `NodeState` for why these accumulate where the pair above replaces).
+   * Null means never measured — separately, since an ACP agent reports no
+   * timing while still using tools.
+   */
+  workedMs: z.number().nullable(),
+  toolCalls: z.number().nullable(),
   startedAt: z.number().nullable(),
   endedAt: z.number().nullable(),
   error: z.string().nullable(),

@@ -303,6 +303,9 @@ describe('ChatListItem', () => {
             author: 'someone',
             url: 'https://github.com/o/r/pull/70',
             updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
           },
         })}
       />,
@@ -396,6 +399,9 @@ describe('ChatListItem', () => {
             author: 'someone',
             url: 'https://github.com/o/r/pull/70',
             updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
           },
         })}
       />,

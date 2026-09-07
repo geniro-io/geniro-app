@@ -66,6 +66,29 @@ export class NodeState extends TimestampsEntity {
   contextWindowTokens: number | null = null;
 
   /**
+   * How long this node's agent has WORKED and how many tool calls it has made,
+   * both totalled across every turn the node has taken.
+   *
+   * They are durable for the reason the pair above is — `HISTORY_PAGE` bounds
+   * the transcript a client loads, so any figure folded from loaded items
+   * describes the loaded part rather than the thread — but they ACCUMULATE
+   * where that pair is replaced. A context reading is a level: the newest one
+   * is the whole truth and an older one is worthless. These are totals, so the
+   * newest reading is a fraction of the answer, which is why the writer sums
+   * (`NodeStateDao.rememberWork`) rather than following `rememberContext`.
+   *
+   * Null means never measured, never zero: an agent that has taken no turn
+   * shows no figure rather than `0s · 0 tools`, which claims a measurement
+   * nobody took. A CLI that reports no timing leaves `workedMs` null while
+   * still counting its tools, so the two are independently nullable.
+   */
+  @Property({ type: 'integer', nullable: true })
+  workedMs: number | null = null;
+
+  @Property({ type: 'integer', nullable: true })
+  toolCalls: number | null = null;
+
+  /**
    * The newest cursor usage event already folded into this run's recorded
    * spend, as epoch millis — the watermark that makes `Run.cursorCostCents` an
    * ACCUMULATOR rather than a snapshot of one window.

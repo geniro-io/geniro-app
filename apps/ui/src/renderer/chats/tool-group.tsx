@@ -12,6 +12,7 @@ import {
   formatToolName,
   shortenPath,
   toolInputBody,
+  toolLocationsBody,
   toolResultBody,
 } from './tool-render';
 import {
@@ -88,7 +89,9 @@ function ToolRow({
   const name = payloadString(payload, 'name') ?? 'tool';
   const summary = toolCallSummary(pair.call);
   const input = (payload as { input?: unknown } | null)?.input;
-  const body = toolInputBody(name, input);
+  // Falls back to the files the call NAMED: an ACP agent discloses no
+  // arguments, so the row would otherwise render empty.
+  const body = toolInputBody(name, input) ?? toolLocationsBody(payload);
   const result = pair.result
     ? ((pair.result.payload as { result?: unknown } | null)?.result ?? null)
     : null;
@@ -183,7 +186,9 @@ function FileChangeBlock({
   const payload: unknown = pair.call.payload;
   const name = payloadString(payload, 'name') ?? 'tool';
   const input = (payload as { input?: unknown } | null)?.input;
-  const body = toolInputBody(name, input);
+  // Falls back to the files the call NAMED: an ACP agent discloses no
+  // arguments, so the row would otherwise render empty.
+  const body = toolInputBody(name, input) ?? toolLocationsBody(payload);
   const result = pair.result
     ? ((pair.result.payload as { result?: unknown } | null)?.result ?? null)
     : null;

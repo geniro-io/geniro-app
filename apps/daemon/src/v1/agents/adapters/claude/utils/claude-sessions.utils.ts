@@ -17,7 +17,11 @@ import type {
   AgentSessionHistory,
   AgentSessionRecord,
 } from '../../adapter.types';
-import { searchTerms, unmatchedTerms } from '../../utils/session-search.utils';
+import {
+  searchTerms,
+  snippetAround,
+  unmatchedTerms,
+} from '../../utils/session-search.utils';
 import {
   CLAUDE_SESSION_FILE_SUFFIX,
   CLAUDE_SESSION_HEAD_BUDGET_BYTES,
@@ -378,7 +382,7 @@ async function searchSessionBody(
     // line completing the last term is not more relevant, and a snippet that
     // moves as the read goes on is one the user cannot predict.
     if (hit !== null && snippet === null) {
-      snippet = toSnippet(text, hit);
+      snippet = snippetAround(text, hit, CLAUDE_SESSION_SNIPPET_MAX_CHARS);
     }
     return outstanding.size > 0;
   });
@@ -401,31 +405,6 @@ function spokenText(line: Record<string, unknown>): string | null {
     (message as Record<string, unknown>).content,
   ).trim();
   return text === '' ? null : text;
-}
-
-/**
- * One matching line, short enough for a picker row and WINDOWED ON THE MATCH.
- *
- * Not the line's first 160 characters, which is what it was: measured against
- * the real profile, a search for `asar` quoted a paragraph whose match sat 400
- * characters in, so the row displayed a sentence with no visible connection to
- * what had been typed — a quote that does not show the searched word explains
- * a match no better than no quote at all. A third of the budget is kept ahead
- * of the term so the result reads as a sentence rather than starting on it.
- */
-function toSnippet(text: string, term: string): string {
-  const line = text.replace(/\s+/g, ' ').trim();
-  if (line.length <= CLAUDE_SESSION_SNIPPET_MAX_CHARS) {
-    return line;
-  }
-  const at = line.toLowerCase().indexOf(term);
-  const lead =
-    at < 0
-      ? 0
-      : Math.max(0, at - Math.floor(CLAUDE_SESSION_SNIPPET_MAX_CHARS / 3));
-  const cut = line.slice(lead, lead + CLAUDE_SESSION_SNIPPET_MAX_CHARS).trim();
-  const tail = lead + CLAUDE_SESSION_SNIPPET_MAX_CHARS < line.length ? '…' : '';
-  return `${lead > 0 ? '…' : ''}${cut}${tail}`;
 }
 
 /**

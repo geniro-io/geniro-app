@@ -234,7 +234,7 @@ export function validateRunnableGraph(
   if (!nodes.some((n) => n.kind === 'trigger')) {
     throw new BadRequestException(
       'GRAPH_NO_TRIGGER',
-      'Workflow has no trigger — add a Manual trigger and connect it to your first agent(s)',
+      'Workflow has no trigger — add a Manual trigger and connect it to your first agent',
     );
   }
   // An incoming DATA or CALL edge legalizes a node: a data edge puts it on a

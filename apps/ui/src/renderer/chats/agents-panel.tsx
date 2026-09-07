@@ -27,9 +27,11 @@ import { Button } from '../components/ui/button';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
 import { usePersistedFlag } from '../components/use-persisted-flag';
+import { useSecondTick } from '../components/use-second-tick';
 import {
   type AgentDisplay,
   type AgentThread,
+  type AgentWork,
   CHAT_AGENT_KEY,
   formatTokens,
   formatUsd,
@@ -48,6 +50,11 @@ import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
 import type { WorkflowEntry } from './transcript-groups';
+import {
+  formatDuration,
+  type OpenTurn,
+  openTurnWorkedMs,
+} from './turn-duration';
 import { type AgentMcpScope, mcpScopeKey } from './use-agent-mcp';
 import { WorkflowPanelRow } from './workflow-block';
 
@@ -368,7 +375,21 @@ function ThreadRow({
 }
 
 /**
- * What one agent has SPENT — its tokens and its price, under the model.
+ * A figure worth drawing: a real number above zero.
+ *
+ * The renderer twin of the daemon's own `positive()`, which every durable write
+ * is already gated on — so a zero arriving here came from somewhere that never
+ * measured one, and drawing it would put a reading on the card that nothing took.
+ */
+function measured(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
+}
+
+/**
+ * What one agent has SPENT and what it has DONE — tokens and price on one line,
+ * worked time and tool count on the next, under the model.
  *
  * ASKED FOR as "I should see spent tokens and price for each agent in the
  * list". The cost already existed on this card and was reachable only by
@@ -390,22 +411,63 @@ function ThreadRow({
  * which claims a measurement nobody took. The two halves are independent:
  * cursor-agent reports no cost at all (probed), so its cards show the tokens
  * alone rather than nothing.
+ *
+ * The WORK line follows the same omit-when-unmeasured rule and is its own line
+ * rather than more of the spend: one answers what this agent cost and the other
+ * what it did, and four figures separated by the same dot read as one list of
+ * four. Its worked time is the durable total PLUS the turn in flight belonging
+ * to this card — the caller passes an already-guarded list, so a held or
+ * finished run contributes nothing here.
  */
 function AgentSpend({
   agent,
+  work,
+  openTurns,
 }: {
   agent: AgentDisplay;
+  work?: AgentWork;
+  openTurns?: readonly OpenTurn[];
 }): React.JSX.Element | null {
-  const worked =
+  // THIS agent's turn in flight, not the thread's — which is the whole of what
+  // keying the open turns bought. A card ticks only while it is the one
+  // working, so an idle fan-out of twenty repaints nothing.
+  const liveTurns = (openTurns ?? []).filter(
+    (turn) => turn.agentKey === agent.id,
+  );
+  useSecondTick(liveTurns.length > 0);
+  // A NON-POSITIVE figure is not a measurement — the same rule the daemon
+  // applies at every write (`positive()`), carried through to the one place it
+  // is read. Null is the obvious unmeasured value, but a zero reaches this same
+  // path and `worked 0s · 0 tools` claims a reading nobody took just as loudly.
+  const settledMs = measured(work?.workedMs);
+  const liveMs =
+    liveTurns.length > 0 ? openTurnWorkedMs(liveTurns, Date.now()) : 0;
+  const workedMs =
+    settledMs === null && liveMs <= 0 ? null : (settledMs ?? 0) + liveMs;
+  const toolCalls = measured(work?.toolCalls);
+  // Named for what it is — TOKENS — because the line below now also carries
+  // worked TIME, and one `worked` meaning both is how the two get swapped.
+  const tokens =
     agent.inputTokens === null && agent.outputTokens === null
       ? null
       : (agent.inputTokens ?? 0) + (agent.outputTokens ?? 0);
-  if (worked === null && agent.spentUsd === null) {
+  if (
+    tokens === null &&
+    agent.spentUsd === null &&
+    workedMs === null &&
+    toolCalls === null
+  ) {
     return null;
   }
   const parts = [
-    worked === null ? null : `${formatTokens(worked)} tokens`,
+    tokens === null ? null : `${formatTokens(tokens)} tokens`,
     agent.spentUsd === null ? null : formatUsd(agent.spentUsd),
+  ].filter((part): part is string => part !== null);
+  const effort = [
+    workedMs === null ? null : `worked ${formatDuration(workedMs)}`,
+    toolCalls === null
+      ? null
+      : `${toolCalls} ${toolCalls === 1 ? 'tool' : 'tools'}`,
   ].filter((part): part is string => part !== null);
   const breakdown = [
     agent.inputTokens === null ? null : `${formatTokens(agent.inputTokens)} in`,
@@ -417,12 +479,26 @@ function AgentSpend({
       : `${formatTokens(agent.cacheTokens)} cached`,
   ].filter((part): part is string => part !== null);
   return (
-    <span
-      data-slot="agent-spend"
-      title={breakdown.join(' \u00b7 ')}
-      className="truncate text-[11px] tabular-nums text-muted-foreground">
-      {parts.join(' \u00b7 ')}
-    </span>
+    <>
+      {parts.length === 0 ? null : (
+        <span
+          data-slot="agent-spend"
+          title={breakdown.join(' \u00b7 ')}
+          className="truncate text-[11px] tabular-nums text-muted-foreground">
+          {parts.join(' \u00b7 ')}
+        </span>
+      )}
+      {/* Its own line under the spend rather than more of it: one answers what
+          this agent COST and the other what it DID, and a single row of four
+          figures separated by the same dot reads as one list of four. */}
+      {effort.length === 0 ? null : (
+        <span
+          data-slot="agent-work"
+          className="truncate text-[11px] tabular-nums text-muted-foreground">
+          {effort.join(' \u00b7 ')}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -627,6 +703,8 @@ export function AgentsPanel({
   onRevealWorkflow,
   tasksByAgent,
   shellsByAgent,
+  workByAgent,
+  openTurns,
   onOpenShell,
   mcpByScope,
   mcpLoading = false,
@@ -819,6 +897,13 @@ export function AgentsPanel({
    * not in each of them.
    */
   shellsByAgent?: ReadonlyMap<string, readonly ShellRun[]>;
+  /** Worked time + tool count per agent — durable, so neither is windowed. */
+  workByAgent?: ReadonlyMap<string, AgentWork>;
+  /**
+   * The turns in flight, already keyed per agent by `scanTurns`, so a card can
+   * add the one belonging to IT to its settled total rather than the thread's.
+   */
+  openTurns?: readonly OpenTurn[];
   /**
    * Show one command's own output. Absent leaves the rows listed but inert —
    * the same rule the sub-agent rows follow: this panel never invents a surface
@@ -1195,8 +1280,13 @@ export function AgentsPanel({
                         {agent.model}
                       </span>
                     )}
-                    {/* What it has COST, under the model — see the component. */}
-                    <AgentSpend agent={agent} />
+                    {/* What it has cost and what it has done — see the
+                        component. */}
+                    <AgentSpend
+                      agent={agent}
+                      work={workByAgent?.get(agent.id)}
+                      openTurns={openTurns}
+                    />
                   </div>
                   {/* Line 2 — WHAT it is doing, and what you can do about it:
                     status, how full its context is, and its two controls.

@@ -43,6 +43,7 @@ import {
 import {
   type ClaudeSessionCostLedger,
   readClaudeAssistantContext,
+  readClaudeRequestSpend,
   readClaudeUsage,
 } from './claude-usage.utils';
 
@@ -842,6 +843,19 @@ function mapClaudeLine(
         parentToolUseId === null ? readClaudeAssistantContext(message) : null;
       if (contextTokens !== null) {
         events.push({ type: 'context_progress', contextTokens });
+      }
+      // WHAT THAT REQUEST COST, off the same `message.usage`. Main thread only,
+      // on the reasoning above — but for the opposite arithmetic: a delegate's
+      // context is a DIFFERENT conversation's level and must not be shown as
+      // this one's, while its spend is real money on this turn's bill. It is
+      // withheld here anyway because the live figure names the turn the user is
+      // watching, and the durable `turn_complete` roll-up already counts every
+      // request the turn made, delegates included. Reporting both would show a
+      // running total that then SHRANK at the settle.
+      const spend =
+        parentToolUseId === null ? readClaudeRequestSpend(message) : null;
+      if (spend !== null) {
+        events.push({ type: 'usage_progress', ...spend });
       }
       // WHICH MODEL a delegate is running, from the first line it speaks on.
       //

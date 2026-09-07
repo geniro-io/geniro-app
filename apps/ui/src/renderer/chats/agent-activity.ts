@@ -95,6 +95,21 @@ export interface AgentCallThread {
 export const CHAT_AGENT_KEY = '\u0000chat';
 
 /**
+ * What one agent has WORKED and how many tools it used — carried as a side map
+ * keyed by {@link AgentDisplay.id} rather than as fields on it, so the three
+ * sites that build an `AgentDisplay` need no edit.
+ *
+ * Both null until something answers, on the rule every figure in the panel
+ * follows: an agent that has taken no turn draws no line rather than
+ * `0s · 0 tools`, which claims a measurement nobody took. Separately nullable
+ * because every ACP agent reports no timing while still using tools.
+ */
+export interface AgentWork {
+  workedMs: number | null;
+  toolCalls: number | null;
+}
+
+/**
  * One agent as the agents panel displays it — workflow node metadata merged
  * with its live {@link AgentActivity}.
  */

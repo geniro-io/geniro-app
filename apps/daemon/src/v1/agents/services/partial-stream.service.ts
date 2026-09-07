@@ -41,6 +41,22 @@ interface LiveState {
   thinkingSince: number | null;
   /** Prompt-side tokens as of the turn's most recent request, or null. */
   contextTokens: number | null;
+  /**
+   * What THIS TURN has spent so far, summed over its requests.
+   *
+   * A RUNNING TOTAL where {@link LiveState.contextTokens} beside it is a level:
+   * the window does not grow by what a request cost, and the bill does not
+   * shrink when a compaction empties the window. Null until the first request
+   * reports, so "not measured" and "spent nothing" stay different readings —
+   * the rule every figure on this plane follows.
+   *
+   * Reset when a turn OPENS ({@link PartialStreamService.startTurn}), not when
+   * it ends: the process is kept across turns, so without that the second
+   * message of a conversation would open on the first one's total.
+   */
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
 }
 
 /**
@@ -303,6 +319,68 @@ export class PartialStreamService {
   }
 
   /**
+   * ADD one request's spend to this turn's running total, and publish it.
+   *
+   * Accumulating here rather than in the adapter is what makes the figure the
+   * TURN's: an adapter sees one request at a time and has no memory across
+   * them, while this plane is already keyed by the same owner the turn runs
+   * under. It also means the reset has exactly one home — {@link startTurn}.
+   *
+   * Each figure sums independently and a null part adds nothing, on the rule
+   * the whole plane follows: a request that reported no output count says
+   * nothing about output, and must not turn a real total into a smaller one.
+   */
+  spend(
+    runId: string,
+    ownerKey: string,
+    nodeId: string | null,
+    parts: {
+      inputTokens?: number | null;
+      outputTokens?: number | null;
+      cacheReadTokens?: number | null;
+    },
+  ): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      state.spentInputTokens = addSpend(
+        state.spentInputTokens,
+        parts.inputTokens,
+      );
+      state.spentOutputTokens = addSpend(
+        state.spentOutputTokens,
+        parts.outputTokens,
+      );
+      state.spentCacheReadTokens = addSpend(
+        state.spentCacheReadTokens,
+        parts.cacheReadTokens,
+      );
+      this.publish(this.eventOf(runId, ownerKey, nodeId, state));
+    } catch (err) {
+      this.warn('spend', err);
+    }
+  }
+
+  /**
+   * A turn is OPENING for this owner — zero what the last one spent.
+   *
+   * Only the spend, deliberately: the context is a LEVEL that carries over (a
+   * new turn opens on the window the last one left behind, which is what the
+   * ring should show before the first request lands), while the bill is
+   * per-turn and starting a turn on the previous one's total would show a
+   * figure that only ever climbs across a conversation.
+   */
+  startTurn(runId: string, ownerKey: string): void {
+    try {
+      const state = this.stateOf(runId, ownerKey);
+      state.spentInputTokens = null;
+      state.spentOutputTokens = null;
+      state.spentCacheReadTokens = null;
+    } catch (err) {
+      this.warn('startTurn', err);
+    }
+  }
+
+  /**
    * Remember the window the CLI reported for this owner (from a `result` line).
    *
    * Kept per OWNER rather than per turn: the window belongs to the model, and
@@ -390,6 +468,23 @@ export class PartialStreamService {
   }
 
   /**
+   * The window resolved for this owner — the denominator a DURABLE write needs.
+   *
+   * The same read {@link eventOf} puts on every live delta, so a conversation
+   * reopened after a restart shows the fraction its live plane was already
+   * showing rather than a count over nothing.
+   *
+   * An empty entry means nothing is knowable, and that is why there is no
+   * second tier behind this one: {@link useModel} has already resolved cache →
+   * store into this map, and falling back to the run's STORED window would
+   * resurrect the previous model's during a switch — the same poisoning the
+   * guard in {@link rememberWindow} exists to stop, reached from the other end.
+   */
+  windowFor(runId: string, ownerKey: string): number | null {
+    return this.windows.get(this.ownerId(runId, ownerKey)) ?? null;
+  }
+
+  /**
    * The per-model cache key, keyed by AGENT and by the turn's WINDOW CHOICE as
    * well — the exported one, so this in-memory half and the durable store
    * cannot spell it differently. See {@link contextWindowKey} for why all three
@@ -426,6 +521,9 @@ export class PartialStreamService {
       thinkingText: '',
       thinkingSince: null,
       contextTokens: null,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
     };
     byOwner.set(ownerKey, state);
     return state;
@@ -455,8 +553,10 @@ export class PartialStreamService {
       thinkingSince: reasoning ? state.thinkingSince : null,
       thinkingStretch: reasoning ? state.thinkingStretch : null,
       contextTokens: state.contextTokens,
-      contextWindowTokens:
-        this.windows.get(this.ownerId(runId, ownerKey)) ?? null,
+      contextWindowTokens: this.windowFor(runId, ownerKey),
+      spentInputTokens: state.spentInputTokens,
+      spentOutputTokens: state.spentOutputTokens,
+      spentCacheReadTokens: state.spentCacheReadTokens,
     };
   }
 
@@ -642,4 +742,27 @@ export const OWNER_KEY_SEPARATOR = '::';
 /** The live-plane owner key for one node's turn, or one of its CALL threads. */
 export function partialOwnerKey(nodeId: string, callId: string | null): string {
   return callId === null ? nodeId : `${nodeId}${OWNER_KEY_SEPARATOR}${callId}`;
+}
+
+/**
+ * Add one part to a running total, where null means UNMEASURED on both sides.
+ *
+ * A null addend leaves the total exactly as it was — including null, so a turn
+ * whose every request omitted a figure reports "not measured" rather than a
+ * zero it never saw. A real number lands on a null total as itself, which is
+ * what makes the first request start the count.
+ *
+ * A negative or non-finite part is DROPPED rather than added: these arrive from
+ * another program's JSON, and one bad line must not make a turn's bill
+ * decrease — a figure that goes backwards is read as a bug in geniro long
+ * before anyone suspects the CLI.
+ */
+function addSpend(
+  total: number | null,
+  part: number | null | undefined,
+): number | null {
+  if (typeof part !== 'number' || !Number.isFinite(part) || part < 0) {
+    return total;
+  }
+  return (total ?? 0) + part;
 }

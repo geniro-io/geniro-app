@@ -16,6 +16,7 @@ import type {
   AttachmentDataWire,
   ChatExportWire,
   ChatMetricsWire,
+  ChatSearchResult,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
@@ -28,6 +29,7 @@ import {
   ChatDeletedDto,
   ChatExportDto,
   ChatMetricsDto,
+  ChatSearchResultDto,
   ChatTotalsDto,
   CreateChatDto,
   ForgottenInstructionsDto,
@@ -37,7 +39,9 @@ import {
   LocalImageDto,
   LocalImageQueryDto,
   RenameRunDto,
+  RetriedDto,
   RunDto,
+  SearchChatQueryDto,
   SendMessageDto,
   ShellOutputDto,
   ShellOutputQueryDto,
@@ -50,6 +54,7 @@ import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
+import { ChatSearchService } from '../services/chat-search.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
 
@@ -70,6 +75,7 @@ export class ChatController {
     private readonly chatExport: ChatExportService,
     private readonly localImages: LocalImageService,
     private readonly metrics: ChatMetricsService,
+    private readonly search: ChatSearchService,
     private readonly shellOutput: ShellOutputService,
   ) {}
 
@@ -208,6 +214,25 @@ export class ChatController {
   }
 
   /**
+   * Find a message inside this conversation — including one the client has
+   * never loaded, which is the whole reason this is a route.
+   *
+   * `:runId/items` serves a WINDOW to a screen and pages behind a cursor; a
+   * search filtered over that window could only ever answer about the newest
+   * page, and would say nothing about the rest — silent by construction, and
+   * exactly wrong for the question a search box is opened to ask.
+   */
+  @Get(':runId/search')
+  @ApiOperation({ operationId: 'searchChat' })
+  @ZodResponse({ status: 200, type: ChatSearchResultDto })
+  searchChat(
+    @Param('runId') runId: string,
+    @Query() query: SearchChatQueryDto,
+  ): Promise<ChatSearchResult> {
+    return this.search.search(runId, query.query, query.limit);
+  }
+
+  /**
    * The whole conversation as one file — every setting, every transcript item
    * with its payload verbatim, the per-node execution state and the spend.
    *
@@ -317,6 +342,21 @@ export class ChatController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancel(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.chatService.cancel(runId);
+  }
+
+  /**
+   * Reopen a failed turn's conversation without replaying its prompt.
+   *
+   * Its own route rather than a flag on `sendChatMessage`: the guarantee that
+   * matters here is that NO prompt goes out, and a route whose name promises a
+   * message would bury that in a branch. 200 rather than 201 for the same
+   * reason `cancel` is — nothing is created that the caller did not have.
+   */
+  @Post(':runId/retry')
+  @ApiOperation({ operationId: 'retryChat' })
+  @ZodResponse({ status: 200, type: RetriedDto })
+  retry(@Param('runId') runId: string): Promise<{ retried: boolean }> {
+    return this.chatService.retry(runId);
   }
 
   /**

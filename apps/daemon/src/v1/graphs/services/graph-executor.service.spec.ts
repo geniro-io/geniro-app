@@ -34,6 +34,7 @@ import {
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunDeltaEvent,
 } from '../../agents/chat.types';
+import type { CallContextDao } from '../../agents/dao/call-context.dao';
 import type { ItemDao } from '../../agents/dao/item.dao';
 import type { NodeStateDao } from '../../agents/dao/node-state.dao';
 import type { RunDao } from '../../agents/dao/run.dao';
@@ -80,6 +81,22 @@ class FakeRunDao {
   private n = 0;
   async getById(id: string): Promise<Run | null> {
     return this.runs.get(id) ?? null;
+  }
+  /**
+   * Read by every SETTLE announce (`writeRunStatus`), which is why a workflow
+   * run needs it at all: a workflow keeps its figures per NODE, so both come
+   * back null here and the announce carries nulls the renderer's chat-only
+   * guard ignores. Answering `undefined` — which is what a missing method does
+   * — fails the settle and takes the whole run down with it.
+   */
+  async readWork(
+    id: string,
+  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+    const run = this.runs.get(id);
+    if (!run) {
+      return null;
+    }
+    return { workedMs: run.workedMs ?? null, toolCalls: run.toolCalls ?? null };
   }
   async hardDeleteIncludingSoftDeleted(where: { id: string }): Promise<number> {
     this.hardDeleted.push(where);
@@ -178,6 +195,8 @@ interface FakeNodeRow {
   agentSessionId: string | null;
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  workedMs: number | null;
+  toolCalls: number | null;
   startedAt: number | null;
   endedAt: number | null;
   error: string | null;
@@ -208,6 +227,29 @@ class FakeNodeStateDao {
     }
     if (contextWindowTokens !== null && contextWindowTokens > 0) {
       found.contextWindowTokens = contextWindowTokens;
+    }
+  }
+  /**
+   * The durable per-node TOTALS, following the real DAO's own rule — it ADDS
+   * where `rememberContext` above replaces, because worked time and tool count
+   * are totals rather than levels. A fake that overwrote here would let a
+   * clobbering writer pass.
+   */
+  async rememberWork(
+    runId: string,
+    nodeId: string,
+    workedMs: number | null,
+    toolCalls: number | null,
+  ): Promise<void> {
+    const found = this.row(runId, nodeId);
+    if (!found) {
+      return;
+    }
+    if (workedMs !== null && workedMs > 0) {
+      found.workedMs = (found.workedMs ?? 0) + workedMs;
+    }
+    if (toolCalls !== null && toolCalls > 0) {
+      found.toolCalls = (found.toolCalls ?? 0) + toolCalls;
     }
   }
   /** Every `hardDeleteIncludingSoftDeleted` call, so the spec can spy it. */
@@ -247,6 +289,8 @@ class FakeNodeStateDao {
       agentSessionId: null,
       contextTokens: null,
       contextWindowTokens: null,
+      workedMs: null,
+      toolCalls: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -269,6 +313,8 @@ class FakeNodeStateDao {
       agentSessionId: null,
       contextTokens: null,
       contextWindowTokens: null,
+      workedMs: null,
+      toolCalls: null,
       startedAt: null,
       endedAt: null,
       error: null,
@@ -483,6 +529,21 @@ const drain = async (): Promise<void> => {
   }
 };
 
+/** Every usage figure absent — spread over, so a case names only what it measures. */
+const NO_USAGE = {
+  inputTokens: null,
+  outputTokens: null,
+  cacheReadTokens: null,
+  cacheCreationTokens: null,
+  thinkingTokens: null,
+  contextTokens: null,
+  contextWindowTokens: null,
+  contextModel: null,
+  costUsd: null,
+  durationMs: null,
+  apiMs: null,
+} as const;
+
 function completeTurn(turn: FakeTurn, finalText: string): void {
   turn.emit({ type: 'text', text: finalText });
   turn.emit({
@@ -513,6 +574,15 @@ afterAll(() => {
   vi.unstubAllGlobals();
 });
 
+/** One row of the per-call context table, as the fake DAO keeps it. */
+interface FakeCallContextRow {
+  runId: string;
+  callId: string;
+  nodeId: string;
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
+}
+
 function setup(
   runtimePort: number | null = 4870,
   opts: {
@@ -530,6 +600,10 @@ function setup(
   runDao: FakeRunDao;
   itemDao: FakeItemDao;
   nodeDao: FakeNodeStateDao;
+  callContextDao: {
+    hardDeleted: unknown[];
+    rows: Map<string, FakeCallContextRow>;
+  };
   registry: ProcessRegistry;
   approvals: ApprovalRegistry;
   callTokens: CallTokenRegistry;
@@ -628,9 +702,44 @@ function setup(
   // Real, like its neighbours: it holds an in-memory map of CLI processes, and
   // a double would hide whether a delete actually closes the run's own.
   const sessions = new AgentSessionRegistry();
+  // The per-call context table's seat at the teardown. A spy rather than the
+  // real DAO: what this spec pins is WHICH tables a delete reaches, while
+  // `call-context.dao.spec.ts` owns the DAO's own behaviour.
+  const callContextDao = {
+    hardDeleted: [] as unknown[],
+    rows: new Map<string, FakeCallContextRow>(),
+    // Records what the executor PASSED, verbatim — its arguments are the only
+    // thing this spec can observe. Deliberately NOT a copy of the real DAO's
+    // write rules: those (zero-rejection, never clearing the half a reading
+    // omits) are pinned over a real schema in `call-context.dao.spec.ts`, and a
+    // second implementation here would only be free to disagree with them.
+    async rememberContext(
+      runId: string,
+      callId: string,
+      nodeId: string,
+      contextTokens: number | null,
+      contextWindowTokens: number | null,
+    ) {
+      this.rows.set(`${runId}:${callId}`, {
+        runId,
+        callId,
+        nodeId,
+        contextTokens,
+        contextWindowTokens,
+      });
+    },
+    async listByRun(runId: string) {
+      return [...this.rows.values()].filter((row) => row.runId === runId);
+    },
+    async hardDeleteIncludingSoftDeleted(where: { runId: string }) {
+      this.hardDeleted.push(where);
+      return 0;
+    },
+  };
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
+    callContextDao as unknown as CallContextDao,
     runDao as unknown as RunDao,
     bus,
     registry,
@@ -654,6 +763,7 @@ function setup(
     } as unknown as PullRequestCaptureService,
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
+    callContextDao as unknown as CallContextDao,
     bus,
     registry,
     // The SAME instance the teardown holds, as DI hands out: the executor opens
@@ -697,6 +807,7 @@ function setup(
     runDao,
     itemDao,
     nodeDao,
+    callContextDao,
     registry,
     approvals,
     callTokens,
@@ -714,21 +825,43 @@ function setup(
 }
 
 /**
- * Prepend a manual trigger wired to every root: runs may only enter through a
- * trigger, so every fixture below goes through this before startRun. The
- * trigger spawns no CLI, so `claude.starts[0]` is still the first AGENT turn.
+ * Prepend a manual trigger PER ROOT: runs may only enter through a trigger, so
+ * every fixture below goes through this before startRun. The triggers spawn no
+ * CLI, so `claude.starts[0]` is still the first AGENT turn.
+ *
+ * One trigger EACH rather than one fanning out to all of them, because a
+ * trigger starts exactly one agent — so a multi-root fixture wired the other
+ * way is refused at `startRun` before any of these tests can observe what they
+ * are about. The roots still all launch together, which is what the parallelism
+ * cases here measure.
+ *
+ * The FIRST root keeps the id `start`, since fixtures that build their own
+ * edges name it.
  */
 function triggered(workflow: Workflow): Workflow {
   const hasIncoming = new Set(workflow.edges.map((e) => e.to));
   const roots = workflow.nodes.filter((n) => !hasIncoming.has(n.id));
+  const triggerFor = (index: number, id: string): string =>
+    index === 0 ? 'start' : `start-${id}`;
   return {
     ...workflow,
     nodes: [
-      { id: 'start', kind: 'trigger', trigger: 'manual' },
+      ...roots.map(
+        (r, index) =>
+          ({
+            id: triggerFor(index, r.id),
+            kind: 'trigger',
+            trigger: 'manual',
+          }) as const,
+      ),
       ...workflow.nodes,
     ],
     edges: [
-      ...roots.map((r) => ({ from: 'start', to: r.id, kind: 'data' as const })),
+      ...roots.map((r, index) => ({
+        from: triggerFor(index, r.id),
+        to: r.id,
+        kind: 'data' as const,
+      })),
       ...workflow.edges,
     ],
   };
@@ -1989,6 +2122,44 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.input.customInstructions).toBeNull();
   });
 
+  it('tells the broker its callee is alive — at the turn start and on every row', async () => {
+    // The seam the silence watchdog rests on, and the one nothing else can
+    // pin: the broker launches a callee turn and then holds a promise, so
+    // this is the ONLY place a callee's output is visible to it. Delete the
+    // call and every `call-broker.service.spec.ts` case still passes while a
+    // working callee is reported silent after ten minutes.
+    const { service, claude, callBroker } = setup();
+    const note = vi.spyOn(callBroker, 'noteCalleeActivity');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'help me',
+    });
+    await drain();
+
+    // The turn BEGAN — armed from here rather than from `call_agent`, since a
+    // depth-1 call queues on the sub-turn pool and may not have started yet.
+    expect(note).toHaveBeenCalledWith(run.id, 'call-1');
+    const atStart = note.mock.calls.length;
+
+    // …and every row the callee produces re-arms it.
+    const callee = claude.starts[1]!;
+    completeTurn(callee, 'helped');
+    await envelope;
+    await drain();
+    expect(note.mock.calls.length).toBeGreaterThan(atStart);
+    expect(note.mock.calls.every(([, callId]) => callId === 'call-1')).toBe(
+      true,
+    );
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({
@@ -2119,6 +2290,7 @@ describe('GraphExecutorService — agent calls', () => {
       name: 'dual',
       nodes: [
         { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'start-worker', kind: 'trigger', trigger: 'manual' },
         { id: 'orch', kind: 'agent', agent: 'claude', approval: 'auto' },
         {
           id: 'worker',
@@ -2130,7 +2302,10 @@ describe('GraphExecutorService — agent calls', () => {
       ],
       edges: [
         { from: 'start', to: 'orch', kind: 'data' as const },
-        { from: 'start', to: 'worker', kind: 'data' as const },
+        // Its own trigger, not a second wire off `start`: a trigger starts one
+        // agent. Both still enter the run at once, which is what this case is
+        // about — the callee also being a DAG node in its own right.
+        { from: 'start-worker', to: 'worker', kind: 'data' as const },
         { from: 'orch', to: 'worker', kind: 'call' as const },
       ],
     };
@@ -3345,7 +3520,7 @@ describe('GraphExecutorService — deleting a workflow run', () => {
     expect(ctx.nodeDao.rows.size).toBe(0);
   });
 
-  it('deletes with the soft-delete filter DISABLED, in all three tables', async () => {
+  it('deletes with the soft-delete filter DISABLED, in every table it owns', async () => {
     const ctx = await setup();
     const run = await finishedRun(ctx);
     await ctx.service.deleteRun(run.id);
@@ -3355,6 +3530,7 @@ describe('GraphExecutorService — deleting a workflow run', () => {
     expect(ctx.runDao.hardDeleted).toEqual([{ id: run.id }]);
     expect(ctx.itemDao.hardDeleted).toEqual([{ runId: run.id }]);
     expect(ctx.nodeDao.hardDeleted).toEqual([{ runId: run.id }]);
+    expect(ctx.callContextDao.hardDeleted).toEqual([{ runId: run.id }]);
   });
 
   it('drops the run’s call surface, its tokens, its attachments, and announces it', async () => {
@@ -3985,6 +4161,107 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
   });
 
+  it('files the RESOLVED window on a node whose own readings carried none', async () => {
+    // The truthful denominator for a node. `turn_model` resolves a known window
+    // into the live plane and writes nothing durable, and `context_progress`
+    // routinely carries a count alone — so `node_state` kept a numerator nothing
+    // could divide, and the ring a cold client draws from that row stayed blank
+    // while the live delta beside it, reading the same map, showed a fraction.
+    const { service, claude, nodeDao } = setup();
+    await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: null,
+        contextWindowTokens: 1_000_000,
+        contextModel: 'claude-opus-5[1m]',
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    // A SECOND run on that model: the window is knowable from the store, and no
+    // reading of this run's own node ever carries one.
+    claude.starts.length = 0;
+    const second = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'again',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'context_progress',
+      contextTokens: 26_000,
+    });
+    await drain();
+
+    expect(nodeDao.row(second.id, 'a')).toMatchObject({
+      contextTokens: 26_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+
+    // A THIRD run, for the OTHER durable site: the RESULT line, naming no
+    // window of its own. It needs a run of its own to discriminate — on the
+    // second the row already carries one, so the same assertion there would
+    // hold with that site's fallback reverted.
+    claude.starts.length = 0;
+    const third = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'once more',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'turn_model', model: 'claude-opus-5[1m]' });
+    claude.starts[0]!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 30_000,
+        contextWindowTokens: null,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'done',
+    });
+    claude.starts[0]!.finish();
+    await drain();
+
+    expect(nodeDao.row(third.id, 'a')).toMatchObject({
+      contextTokens: 30_000,
+      contextWindowTokens: 1_000_000,
+    });
+  });
+
   it('keys the LIVE reading per CALL, so two calls on one node cannot overwrite each other', async () => {
     // The panel counted "2 active · 2 threads" honestly above a single ring,
     // because the owner key was the NODE: a caller running two of the same
@@ -4029,6 +4306,204 @@ describe('GraphExecutorService — a node’s context reading', () => {
 
     completeTurn(callOne!, 'one done');
     completeTurn(callTwo!, 'two done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it("ACCUMULATES a node's worked time and tool calls across its turns", async () => {
+    // The distinction from the context pair written beside it: a reading is a
+    // LEVEL, so the newest one is the whole truth and `rememberContext`
+    // replaces. These are TOTALS — a callee called twice has worked the sum of
+    // both turns, and a writer that replaced would report only the second.
+    const { service, claude, callBroker, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'work',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await first;
+    await second;
+    await drain();
+
+    const [callOne, callTwo] = claude.starts.slice(1, 3);
+    // Two tools on the first turn, one on the second — and a DELEGATE's call
+    // in between, which must not be counted as the node's own.
+    callOne!.emit({ type: 'tool_call', id: 't1', name: 'Bash', input: {} });
+    callOne!.emit({ type: 'tool_call', id: 't2', name: 'Read', input: {} });
+    callOne!.emit({
+      type: 'tool_call',
+      id: 't3',
+      name: 'Bash',
+      input: {},
+      parentToolUseId: 'delegate-1',
+    });
+    callOne!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, durationMs: 5_000 },
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    callOne!.finish();
+    callTwo!.emit({ type: 'tool_call', id: 't4', name: 'Bash', input: {} });
+    callTwo!.emit({
+      type: 'turn_complete',
+      usage: { ...NO_USAGE, durationMs: 7_000 },
+      stopReason: 'end_turn',
+      finalText: 'two done',
+    });
+    callTwo!.finish();
+    await drain();
+
+    expect(nodeDao.row(run.id, 'callee')).toMatchObject({
+      workedMs: 12_000,
+      toolCalls: 3,
+    });
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('writes a DURABLE reading per CALL, so both rings survive a reload', async () => {
+    // The live twin above proves the EPHEMERAL plane is per-call. This proves
+    // the row is: without it a reloaded window has only `node_state`, keyed
+    // (runId, nodeId), where the second call has overwritten the first.
+    const { service, claude, callBroker, callContextDao } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'two',
+      mode: 'async',
+    });
+    await first;
+    await second;
+    await drain();
+
+    const [callOne, callTwo] = claude.starts.slice(1, 3);
+    callOne!.emit({ type: 'context_progress', contextTokens: 10_000 });
+    callTwo!.emit({ type: 'context_progress', contextTokens: 90_000 });
+    await drain();
+
+    expect(callContextDao.rows.get(`${run.id}:call-1`)).toMatchObject({
+      nodeId: 'callee',
+      contextTokens: 10_000,
+    });
+    expect(callContextDao.rows.get(`${run.id}:call-2`)).toMatchObject({
+      nodeId: 'callee',
+      contextTokens: 90_000,
+    });
+
+    // The SETTLE site, which is the only one that can file a WINDOW: a
+    // `context_progress` carries a count alone, so without this write a
+    // reloaded per-call ring has a numerator and no denominator to scale it
+    // against. Pinned separately because the two write sites are separately
+    // revertible.
+    callOne!.emit({
+      type: 'turn_complete',
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        contextTokens: 12_000,
+        contextWindowTokens: 200_000,
+        contextModel: null,
+        costUsd: null,
+        durationMs: null,
+        apiMs: null,
+      },
+      stopReason: 'end_turn',
+      finalText: 'one done',
+    });
+    callOne!.finish();
+    await drain();
+
+    expect(callContextDao.rows.get(`${run.id}:call-1`)).toMatchObject({
+      contextTokens: 12_000,
+      contextWindowTokens: 200_000,
+    });
+
+    completeTurn(callTwo!, 'two done');
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('writes NO per-call row for a DAG-launched node, which holds no call', async () => {
+    // `callContext` is absent on the DAG path, so there is no call identity to
+    // key a row on — and inventing one would file an ordinary node turn under
+    // a call that never happened.
+    const { service, claude, callContextDao } = setup();
+    await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'context_progress', contextTokens: 12_000 });
+    await drain();
+
+    expect(callContextDao.rows.size).toBe(0);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('exposes the per-call readings on the nodes route, grouped by node', async () => {
+    // The PRODUCER hop of this wire field, revertible independently of the
+    // renderer's reader: a reading that reaches the row and not the route is
+    // as invisible to the ring as one that was never written.
+    const { service, claude, callBroker } = setup();
+    const run = await service.startRun({
+      slug: 'ctx',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    await callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'one',
+      mode: 'async',
+    });
+    await drain();
+    claude.starts[1]!.emit({ type: 'context_progress', contextTokens: 10_000 });
+    await drain();
+
+    const nodes = await service.getNodeStates(run.id);
+    expect(nodes.find((n) => n.nodeId === 'callee')?.calls).toEqual([
+      { callId: 'call-1', contextTokens: 10_000, contextWindowTokens: null },
+    ]);
+    // The CALLER ran no call of its own, so its row carries an empty list
+    // rather than inheriting its callee's.
+    expect(nodes.find((n) => n.nodeId === 'a')?.calls).toEqual([]);
+
+    completeTurn(claude.starts[1]!, 'one done');
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();

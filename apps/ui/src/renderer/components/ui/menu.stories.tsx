@@ -102,6 +102,40 @@ export const WithSearch: Story = {
   },
 };
 
+const CONFIG_GROUPS: MenuGroup[] = [
+  {
+    label: 'Profiles',
+    items: [
+      {
+        value: '/w',
+        label: 'Work account',
+        subLabel: '/Users/me/acme/.claude',
+        accent: 'blue',
+      },
+      {
+        value: '/p',
+        label: 'Personal account',
+        subLabel: '/Users/me/home/.claude',
+        accent: 'green',
+      },
+    ],
+  },
+  {
+    label: 'Recents',
+    items: [{ value: '/e', label: '…/config-dirs/experiments/.claude' }],
+  },
+];
+
+/**
+ * A row whose label NAMES something, with the identity it stands for on a
+ * second line — the config-directory picker's shape. The recent below carries
+ * no sub-label and stays one line, which is what lets both live in one list
+ * without reading as two kinds of row.
+ */
+export const NameOverPath: Story = {
+  args: { groups: CONFIG_GROUPS, value: '/w' },
+};
+
 export const Empty: Story = {
   render: () => (
     <div className="relative inline-block">

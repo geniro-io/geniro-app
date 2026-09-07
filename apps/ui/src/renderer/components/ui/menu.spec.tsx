@@ -152,6 +152,68 @@ describe('Menu', () => {
     expect(labels(el)).toEqual(['…/Desktop/Projects/price-field']);
   });
 
+  it('stacks a sub-label under its label, and leaves a row without one alone', () => {
+    const el = open([
+      {
+        items: [
+          {
+            value: '/w/.claude',
+            label: 'Work account',
+            subLabel: '/Users/me/acme/.claude',
+          },
+          { value: '/p/.claude', label: '…/personal/.claude' },
+        ],
+      },
+    ]);
+
+    const rows = [...el.querySelectorAll('[role="option"]')];
+
+    expect(rows[0]?.textContent).toContain('Work account');
+    expect(
+      rows[0]?.querySelector('[data-slot="menu-item-sublabel"]')?.textContent,
+    ).toBe('/Users/me/acme/.claude');
+    // Most rows in most menus carry none, and they must stay exactly one line:
+    // an empty second line would add height to every menu in the app.
+    expect(
+      rows[1]?.querySelector('[data-slot="menu-item-sublabel"]'),
+    ).toBeNull();
+  });
+
+  it('finds a row by its sub-label', () => {
+    // The sub-label is on the row in plain sight, so a filter blind to it hides
+    // rows whose visible text matches what was typed. Neither LABEL here
+    // contains the needle.
+    const el = open(
+      [
+        {
+          items: [
+            {
+              value: '/w',
+              label: 'Work account',
+              subLabel: '/Users/me/acme/.claude',
+            },
+            {
+              value: '/p',
+              label: 'Personal account',
+              subLabel: '/Users/me/home/.claude',
+            },
+          ],
+        },
+      ],
+      { searchPlaceholder: 'Search config directories…' },
+    );
+
+    type(el, 'acme');
+
+    // Read the rows rather than `labels`, which joins a row's whole text and
+    // would pass on the sub-label alone even with the label arm deleted.
+    const rows = [...el.querySelectorAll('[role="option"]')];
+    expect(rows).toHaveLength(1);
+    expect(
+      rows[0]?.querySelector('[data-slot="menu-item-sublabel"]')?.textContent,
+    ).toBe('/Users/me/acme/.claude');
+  });
+
   it('keeps an action row visible through a filter that excludes it', () => {
     // "Choose folder…" is how the user escapes a search that matched nothing;
     // filtering it out by label would strand them in an empty menu.

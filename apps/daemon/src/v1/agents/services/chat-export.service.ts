@@ -89,6 +89,8 @@ function exportRun(run: Run): ChatExportRunWire {
     title: run.title,
     agentKind: run.agentKind,
     cwd: run.cwd,
+    startSha: run.startSha,
+    startDirty: run.startDirty,
     model: run.model,
     approval: run.approval,
     effort: run.effort,

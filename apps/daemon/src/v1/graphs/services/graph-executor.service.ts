@@ -20,6 +20,7 @@ import {
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
 } from '../../agents/chat.types';
+import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { NodeStateDao } from '../../agents/dao/node-state.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -330,6 +331,7 @@ export class GraphExecutorService {
     private readonly pullRequests: PullRequestCaptureService,
     private readonly itemDao: ItemDao,
     private readonly nodeStateDao: NodeStateDao,
+    private readonly callContextDao: CallContextDao,
     private readonly bus: AgentEventBus,
     private readonly registry: ProcessRegistry,
     private readonly sessions: AgentSessionRegistry,
@@ -587,12 +589,27 @@ export class GraphExecutorService {
     const em = this.em.fork();
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     const rows = await this.nodeStateDao.listByRun(runId, em);
+    // Grouped by the node that ran each call, so a reconnecting client gets one
+    // ring per call thread beside the node's own collapsed figure.
+    const callsByNode = new Map<string, NodeStateWire['calls']>();
+    for (const call of await this.callContextDao.listByRun(runId, em)) {
+      const forNode = callsByNode.get(call.nodeId) ?? [];
+      forNode.push({
+        callId: call.callId,
+        contextTokens: call.contextTokens,
+        contextWindowTokens: call.contextWindowTokens,
+      });
+      callsByNode.set(call.nodeId, forNode);
+    }
     return rows.map((row) => ({
       runId: row.runId,
       nodeId: row.nodeId,
       status: row.status,
       contextTokens: row.contextTokens,
       contextWindowTokens: row.contextWindowTokens,
+      calls: callsByNode.get(row.nodeId) ?? [],
+      workedMs: row.workedMs,
+      toolCalls: row.toolCalls,
       startedAt: row.startedAt,
       endedAt: row.endedAt,
       error: row.error,
@@ -1222,6 +1239,19 @@ export class GraphExecutorService {
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
+      /**
+       * Tool calls seen since the last `turn_complete`, counted here because no
+       * CLI reports a total and the transcript a client loads is windowed.
+       *
+       * Today this closure is built per TURN, so it starts at zero anyway and
+       * the zeroing below is unobservable — verified by mutation: removing it
+       * changes no test. It stays because the durable write ADDS, so the day a
+       * closure serves two turns (a kept session driving them, as the ACP
+       * transport already does for its own state) an un-zeroed counter would
+       * contribute the first turn's tools again on the second settle, and the
+       * figure would silently overcount rather than fail.
+       */
+      let toolCalls = 0;
       // The turn's own CLI session — the broker's thread-resume handle.
       let capturedSessionId: string | null = null;
 
@@ -1337,6 +1367,13 @@ export class GraphExecutorService {
             );
             return;
           }
+          if (event.type === 'usage_progress') {
+            // The node's own running bill for this turn — the graph twin of
+            // `ChatService`'s site, and ephemeral for the same reason: the
+            // turn's `turn_complete` usage is the durable copy.
+            this.partials.spend(runId, ownerKey, node.id, event);
+            return;
+          }
           if (event.type === 'context_progress') {
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next
@@ -1370,17 +1407,43 @@ export class GraphExecutorService {
             // the node the reader was asking about. Fire-and-forget for the
             // reason every other write on this path is: a failed bookkeeping
             // write must not fail the turn.
+            //
+            // A reading naming no window borrows the one the live plane holds
+            // for this owner, resolved HERE rather than inside the queued
+            // callback: the queue drains later, and a model change in between
+            // deletes that entry — so a deferred read would file null for a
+            // reading that had a window at the moment it was taken.
+            const windowTokens =
+              event.contextWindowTokens ??
+              this.partials.windowFor(runId, ownerKey);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
                   runId,
                   node.id,
                   event.contextTokens,
-                  event.contextWindowTokens ?? null,
+                  windowTokens,
                   em,
                 )
                 .catch(() => {}),
             );
+            // And again per CALL, where there is one: a DAG-launched node
+            // carries no `callContext` and no call identity to key a row on, so
+            // it writes the node row above and nothing here.
+            if (callContext) {
+              enqueue(() =>
+                this.callContextDao
+                  .rememberContext(
+                    runId,
+                    callContext.callId,
+                    node.id,
+                    event.contextTokens,
+                    windowTokens,
+                    em,
+                  )
+                  .catch(() => {}),
+              );
+            }
             return;
           }
           if (event.type === 'turn_model') {
@@ -1395,6 +1458,16 @@ export class GraphExecutorService {
               node.contextWindow ?? null,
             );
             return;
+          }
+          if (
+            event.type === 'tool_call' &&
+            event.parentToolUseId === undefined
+          ) {
+            // This node's OWN tools, never its delegates'. `parentToolUseId` is
+            // the daemon-side twin of the renderer's `subagentIdOf` exclusion:
+            // a delegate has its own card and its own rows, so folding its
+            // toolbelt in here would report a fan-out's total as one node's.
+            toolCalls += 1;
           }
           if (event.type === 'text') {
             textChunks.push(event.text);
@@ -1414,16 +1487,50 @@ export class GraphExecutorService {
             // The result line is the ONLY one carrying the window, so it is
             // where a node's denominator becomes durable — the count beside it
             // is written too, since a turn that reported none mid-flight still
-            // states its total here.
+            // states its total here. A result line that names no window falls
+            // back to the live plane, resolved eagerly for the reason the
+            // reading above states.
+            const settledWindowTokens =
+              event.usage?.contextWindowTokens ??
+              this.partials.windowFor(runId, ownerKey);
             enqueue(() =>
               this.nodeStateDao
                 .rememberContext(
                   runId,
                   node.id,
                   event.usage?.contextTokens ?? null,
-                  event.usage?.contextWindowTokens ?? null,
+                  settledWindowTokens,
                   em,
                 )
+                .catch(() => {}),
+            );
+            if (callContext) {
+              enqueue(() =>
+                this.callContextDao
+                  .rememberContext(
+                    runId,
+                    callContext.callId,
+                    node.id,
+                    event.usage?.contextTokens ?? null,
+                    settledWindowTokens,
+                    em,
+                  )
+                  .catch(() => {}),
+              );
+            }
+            // This turn's worked time and tool count, ADDED to the node's
+            // running totals. `rememberWork` rather than another
+            // `rememberContext` because these are totals rather than levels —
+            // the reading above may be overwritten harmlessly, this one may not.
+            // Read out and zeroed HERE, synchronously, for the reason the window
+            // above is resolved eagerly: the queue drains later, and by then the
+            // next turn's calls would already have moved the counter.
+            const turnToolCalls = toolCalls;
+            toolCalls = 0;
+            const turnWorkedMs = event.usage?.durationMs ?? null;
+            enqueue(() =>
+              this.nodeStateDao
+                .rememberWork(runId, node.id, turnWorkedMs, turnToolCalls, em)
                 .catch(() => {}),
             );
           }
@@ -1515,6 +1622,12 @@ export class GraphExecutorService {
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
+              if (callContext) {
+                // This callee is demonstrably alive — restart its silence
+                // watchdog. The broker holds a promise and nothing else, so
+                // this seam is the only place a callee's output is visible.
+                this.callBroker.noteCalleeActivity(runId, callContext.callId);
+              }
             } catch (err) {
               // The card can't be shown — deny to unblock the parked node CLI
               // so the node settles instead of hanging forever on a verdict
@@ -1527,6 +1640,12 @@ export class GraphExecutorService {
             }
           }
           if (event.type === 'approval_request') {
+            // A CALLEE parked on a card is waiting on a person, not wedged —
+            // stand its silence window down until the verdict lands, the same
+            // carve-out `spawn-cli.ts` makes for its own deadline.
+            if (callContext) {
+              this.callBroker.noteCalleeBlocked(runId, callContext.callId);
+            }
             this.approvals.track({
               runId,
               nodeId: node.id,
@@ -1537,6 +1656,15 @@ export class GraphExecutorService {
               // never re-derives it (`PendingApproval.question`).
               question: isQuestion,
               respond: (allow, answer) => {
+                // The card is gone whatever the delivery outcome, so the
+                // window restarts either way — a refused delivery leaves the
+                // callee unblocked from this side's point of view.
+                if (callContext) {
+                  this.callBroker.noteCalleeUnblocked(
+                    runId,
+                    callContext.callId,
+                  );
+                }
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
@@ -1886,6 +2014,12 @@ export class GraphExecutorService {
             finalText: string | null;
             sessionId: string | null;
           };
+          // The silence window measures the CALLEE, so it starts when the
+          // callee does — not when `call_agent` returned. Depth-1 calls queue
+          // on a four-slot pool, so a fan-out's fifth call can sit here for
+          // minutes before anything of its own could have been produced, and a
+          // window armed at the call would report a callee that had not begun.
+          this.callBroker.noteCalleeActivity(runId, callId);
           try {
             persistTurnStart(callee, callId);
             ({ handle, finish } = beginAgentTurn(callee, message, {

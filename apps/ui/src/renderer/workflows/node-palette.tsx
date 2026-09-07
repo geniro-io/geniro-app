@@ -119,8 +119,8 @@ const TRIGGER_META: Record<TriggerKind, TileMeta> = {
     label: 'Manual',
     blurb: 'Fire the workflow by hand with a prompt — the run starts here.',
     details: [
-      'Every run enters through a trigger: connect it to your first agent(s).',
-      'Firing it seeds the connected agents with the prompt you submit.',
+      'Every run enters through a trigger: connect it to your first agent.',
+      'One agent per trigger — it seeds that agent with the prompt you submit, and the rest of the team follows its edges.',
       'Runs no CLI — it completes the moment the run starts.',
     ],
     icon: <Zap aria-hidden="true" className="size-4" />,

@@ -15,6 +15,7 @@ import { ChatController } from './controllers/chat.controller';
 import { McpController } from './controllers/mcp.controller';
 import { RunGroupsController } from './controllers/run-groups.controller';
 import { SkillsController } from './controllers/skills.controller';
+import { CallContextDao } from './dao/call-context.dao';
 import { ItemDao } from './dao/item.dao';
 import { NodeStateDao } from './dao/node-state.dao';
 import { RunDao } from './dao/run.dao';
@@ -31,6 +32,7 @@ import { ChartBroker } from './services/chart.broker';
 import { ChatService } from './services/chat.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
+import { ChatSearchService } from './services/chat-search.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
 import { ComparisonBroker } from './services/comparison.broker';
@@ -56,6 +58,7 @@ import { PullRequestCaptureService } from './services/pull-request-capture.servi
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
+import { SearchTextBackfillService } from './services/search-text-backfill.service';
 import { ShellOutputService } from './services/shell-output.service';
 import { SkillHarvestStore } from './services/skill-harvest.store';
 import { SkillsService } from './services/skills.service';
@@ -88,7 +91,9 @@ import { defaultSpawn } from './utils/spawn-cli';
   ],
   providers: [
     ChatService,
+    ChatSearchService,
     PullRequestCaptureService,
+    SearchTextBackfillService,
     TaskListCaptureService,
     CursorUsageService,
     UserQuestionBroker,
@@ -235,6 +240,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     ItemSeqAllocator,
     ItemDao,
     NodeStateDao,
+    CallContextDao,
     RunDao,
     RunGroupDao,
     {
@@ -355,6 +361,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     McpHarvestStore,
     ItemDao,
     NodeStateDao,
+    CallContextDao,
     RunDao,
     ClaudeAdapter,
     CursorAcpAdapter,

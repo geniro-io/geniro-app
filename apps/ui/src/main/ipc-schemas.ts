@@ -243,8 +243,43 @@ export const settingsPatchSchema = z.strictObject({
   daemonInspect: z.boolean().nullable().optional(),
 });
 
+/**
+ * Any C0 or DEL control character — the bar for a FILE NAME.
+ *
+ * Stricter than {@link hasControlCharacters}, which this schema module uses for
+ * prose (a settings box, where a tab or a newline is ordinary text and must be
+ * allowed through). A file name carries neither, and one of them reaching
+ * `showSaveDialog`'s `defaultPath` puts a value this process cannot see rendered
+ * into a native panel it does not paint.
+ *
+ * A code-point scan rather than a regex, for the two reasons the sibling states:
+ * raw bytes in the source make git classify the file as binary and the
+ * `pre-commit` hook refuses it, and the escapes trip eslint's `no-control-regex`.
+ */
+function hasFilenameControlCharacters(value: string): boolean {
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** A directory a git command may run in. */
 export const gitDirSchema = absolutePath;
+
+/**
+ * A commit id on its way to `git` as an ARGUMENT.
+ *
+ * Held to the exact shape `rev-parse` prints rather than merely to "a string":
+ * a revision expression is a small language (`@{upstream}`, `HEAD~3`, `:/text`),
+ * and the only thing this channel has any business resolving is a commit the app
+ * itself stamped. It is the same bound the daemon puts on the column
+ * (`createChatSchema`), stated again here because this is a different process
+ * validating input it may not assume anyone else checked.
+ */
+export const commitShaSchema = z.string().regex(/^[0-9a-f]{40}$/);
 
 /**
  * How many pull requests one resolve may be asked about.
@@ -308,20 +343,24 @@ export const revealPathSchema = absolutePath;
 export const openTerminalAtSchema = absolutePath;
 
 /**
- * A chat export on its way to disk: the file name to suggest, and the document.
+ * A chat export on its way to disk: the file name to suggest, and BOTH
+ * renderings of the document.
  *
  * The NAME is held to a bare filename, and that is the whole of the validation
  * here — it is the field that reaches a PATH (`showSaveDialog`'s `defaultPath`),
  * so a separator or a `..` in it would open the dialog somewhere the user did
  * not ask to be. Control characters go with them: the value is drawn in a native
- * dialog this process does not paint.
+ * dialog this process does not paint. It carries no extension: main appends the
+ * one matching the filter it opens on (`save-chat-export.ts`).
  *
- * `content` is bounded in SHAPE and deliberately not in LENGTH, which is the one
- * departure from this module's own rule. It is this app's own export document,
- * already materialized in renderer memory to be sent, and its destination is a
- * path the USER picked in a native dialog — so a cap would buy no safety and
- * would refuse exactly the long conversations the feature exists for (a real
- * transcript runs to tens of megabytes).
+ * Two documents rather than one because the FORMAT is chosen in the save panel,
+ * which only main can read — see that file for why the alternatives are worse.
+ * Both are bounded in SHAPE and deliberately not in LENGTH, which is the one
+ * departure from this module's own rule: they are this app's own export
+ * document, already materialized in renderer memory to be sent, and their
+ * destination is a path the USER picked in a native dialog — so a cap would buy
+ * no safety and would refuse exactly the long conversations the feature exists
+ * for (a real transcript runs to tens of megabytes).
  */
 export const chatExportSaveSchema = z.strictObject({
   suggestedName: z
@@ -334,10 +373,17 @@ export const chatExportSaveSchema = z.strictObject({
     .refine((name) => name !== '.' && name !== '..', {
       message: 'must name a file',
     })
-    .refine((name) => !hasControlCharacters(name), {
+    // Its OWN screen rather than `hasControlCharacters`, which was written for
+    // PROSE and therefore whitelists tab, newline and carriage return — legal in
+    // a settings box, not in a file name that reaches `showSaveDialog`'s
+    // `defaultPath`. The predicate is a code-point scan for the same two reasons
+    // that one gives: a raw byte in the source makes git treat the file as
+    // binary, and the escape trips eslint's `no-control-regex`.
+    .refine((name) => !hasFilenameControlCharacters(name), {
       message: 'must not contain control characters',
     }),
-  content: z.string(),
+  json: z.string(),
+  markdown: z.string(),
 });
 
 /**

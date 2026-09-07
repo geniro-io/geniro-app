@@ -5,6 +5,7 @@ import type { AgentSessionRecord } from '../adapter.types';
 import {
   matchSessions,
   searchTerms,
+  snippetAround,
   unmatchedTerms,
 } from './session-search.utils';
 
@@ -124,5 +125,53 @@ describe('matchSessions', () => {
     ];
 
     expect(matchSessions(rows, 'asar').map((row) => row.id)).toEqual(['shout']);
+  });
+});
+
+/**
+ * The character budget is the CALLER's, because it is a property of the surface
+ * the snippet lands on rather than of the text: a session-picker row and a
+ * transcript hit list have different room for it.
+ */
+describe('snippetAround', () => {
+  it('returns a short line whole, with its whitespace collapsed', () => {
+    expect(snippetAround('one\n\n  two\tthree', 'two', 80)).toBe(
+      'one two three',
+    );
+  });
+
+  it('SHOWS the matched term, which is the whole point of windowing', () => {
+    // The pin the function exists for. Taking the line's first `maxChars`
+    // instead — which is what it used to do — quotes a sentence with no visible
+    // connection to what was typed, and this assertion is what goes red.
+    const line = `${'lorem ipsum '.repeat(40)}needle ${'dolor sit '.repeat(40)}`;
+
+    expect(snippetAround(line, 'needle', 60)).toContain('needle');
+  });
+
+  it('keeps roughly a third of the budget ahead of the term', () => {
+    // So the quote reads as a sentence rather than starting abruptly on the
+    // match.
+    const line = `${'a '.repeat(100)}needle tail`;
+    const snippet = snippetAround(line, 'needle', 60);
+
+    expect(snippet.indexOf('needle')).toBeGreaterThan(10);
+  });
+
+  it('marks both cut ends with an ellipsis', () => {
+    const line = `${'x'.repeat(200)} needle ${'y'.repeat(200)}`;
+    const snippet = snippetAround(line, 'needle', 60);
+
+    expect(snippet.startsWith('…')).toBe(true);
+    expect(snippet.endsWith('…')).toBe(true);
+  });
+
+  it('falls back to the start of the line when the term is not in it', () => {
+    // Reachable: the caller matches case-insensitively against a lowercased
+    // haystack, so a term can answer for the line without appearing in the
+    // exact form passed here.
+    const line = 'z'.repeat(200);
+
+    expect(snippetAround(line, 'absent', 60).startsWith('…')).toBe(false);
   });
 });

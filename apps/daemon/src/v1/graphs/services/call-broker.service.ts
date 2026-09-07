@@ -34,6 +34,29 @@ const MAX_CALL_TURNS_PER_RUN = 50;
 const QUESTION_TTL_MS = 5 * 60_000;
 
 /**
+ * How long a call may go with the callee producing NOTHING before the caller's
+ * transcript says so.
+ *
+ * Bounded by SILENCE rather than by total duration, mirroring
+ * `agents/utils/spawn-cli.ts`'s `TURN_SILENCE_DEADLINE_MS`: an agent turn
+ * legitimately runs for many minutes, so a duration cap would abort real work,
+ * while a callee that has emitted nothing at all for this long has either
+ * wedged or is waiting on something nobody can see.
+ *
+ * It SURFACES and never settles the call — the wait continues untouched.
+ * `callAgent` takes no cancellation signal, and adding one would change what
+ * `sync` MEANS. What was missing was never the ability to stop a call; it was
+ * any way to tell that one had stopped producing.
+ *
+ * It is SUSPENDED while the callee is blocked on an approval card
+ * ({@link ActiveCall.blockedOnVerdicts}), the same carve-out `spawn-cli.ts`
+ * makes: a callee waiting on a person emits nothing by construction, so
+ * without it the window would time the human and report a callee that is
+ * doing exactly what it should.
+ */
+const CALL_SILENCE_DEADLINE_MS = 10 * 60_000;
+
+/**
  * A collection whose REQUEST went away before the callee settled.
  *
  * A sentinel rather than an error envelope, because the difference has to
@@ -101,6 +124,34 @@ interface ActiveCall {
    * envelope carries the typed error instead of a generic CALLEE_CANCELLED.
    */
   failReason: string | null;
+  /**
+   * The silence watchdog — re-armed by every row the callee produces, cleared
+   * when the call settles. See {@link CALL_SILENCE_DEADLINE_MS}.
+   */
+  silence: NodeJS.Timeout | null;
+  /**
+   * Whether the transcript has ALREADY been told this call went quiet.
+   *
+   * One row per call, not one per silent stretch: the watchdog re-arms on the
+   * callee's next row, and a call that goes quiet repeatedly would otherwise
+   * write an advisory every ten minutes into the conversation it is warning
+   * about.
+   */
+  saidStalled: boolean;
+  /**
+   * How many verdicts this callee is blocked on — approval cards raised for it
+   * and not yet answered.
+   *
+   * The silence watchdog is SUSPENDED while this is non-zero, mirroring
+   * `spawn-cli.ts`'s own deadline, which stands down while a turn has
+   * outstanding requests. A callee parked on a card emits nothing by
+   * construction, so timing it would be timing the person looking at the card
+   * — and "has produced nothing" is then true and useless.
+   *
+   * A COUNT rather than a flag: a turn can have several cards open at once,
+   * and the wait is over only when the last of them is answered.
+   */
+  blockedOnVerdicts: number;
 }
 
 /**
@@ -189,14 +240,22 @@ export class CallBroker implements OnModuleInit {
   unregisterRun(runId: string): void {
     const state = this.runs.get(runId);
     if (state) {
-      // A parked timer must not fire into a dead run (the executor already
-      // cancelled every callee handle on the way here).
+      // No timer of a call open at teardown may fire into a dead run (the
+      // executor already cancelled every callee handle on the way here). BOTH
+      // kinds: the parked question's TTL, and the silence watchdog — a wedged
+      // callee is exactly what arms the second one AND what makes the delete's
+      // own settle wait time out, so it is the likeliest to still be here.
       for (const call of state.activeCalls.values()) {
         if (call.parked) {
           clearTimeout(call.parked.timer);
           call.parked = null;
         }
+        if (call.silence !== null) {
+          clearTimeout(call.silence);
+          call.silence = null;
+        }
       }
+      state.activeCalls.clear();
     }
     this.runs.delete(runId);
   }
@@ -297,8 +356,12 @@ export class CallBroker implements OnModuleInit {
       parked: null,
       questionWaiters: [],
       failReason: null,
+      silence: null,
+      saidStalled: false,
+      blockedOnVerdicts: 0,
     };
     state.activeCalls.set(callId, call);
+    this.armSilenceWatch(runId, callId, call);
     state.capability.persistItem(callerNodeId, 'call_started', null, {
       callId,
       callerNodeId,
@@ -339,6 +402,12 @@ export class CallBroker implements OnModuleInit {
           // crash) — the timer must not fire into a settled call.
           clearTimeout(call.parked.timer);
           call.parked = null;
+        }
+        // Same rule for the silence watchdog, and the same reason: a settled
+        // call must not later announce that it went quiet.
+        if (call.silence !== null) {
+          clearTimeout(call.silence);
+          call.silence = null;
         }
         state.activeCalls.delete(callId);
         state.capability.persistItem(callerNodeId, 'call_result', null, {
@@ -681,6 +750,141 @@ export class CallBroker implements OnModuleInit {
       };
       call.questionWaiters.push(once);
       void call.settled.then(once);
+    });
+  }
+
+  /**
+   * The callee produced a row — it is demonstrably alive, so restart its
+   * silence watchdog.
+   *
+   * Called from the executor's own callee persist seam, which is the only
+   * place that sees a callee's output: the broker launches the turn and then
+   * holds a promise, so without this hook its only measurable quantity is
+   * total duration — the bound {@link CALL_SILENCE_DEADLINE_MS} exists not to
+   * use.
+   *
+   * A no-op for a call that is settled or unknown, so a row arriving after the
+   * result cannot re-arm a clock on a call that is over.
+   */
+  noteCalleeActivity(runId: string, callId: string): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (call) {
+      this.armSilenceWatch(runId, callId, call);
+    }
+  }
+
+  /**
+   * An approval card went up for this callee — SUSPEND its silence watchdog
+   * until the card is answered.
+   *
+   * A callee blocked on a verdict emits nothing by construction, so a window
+   * that kept running would be timing the person reading the card, and would
+   * report "has produced nothing" about a callee doing exactly what it should.
+   * `spawn-cli.ts` stands its own silence deadline down for the same reason and
+   * on the same reasoning.
+   *
+   * Called by the executor, which is where a callee's card is raised and where
+   * its verdict lands — so no cross-module read is needed to know either.
+   */
+  noteCalleeBlocked(runId: string, callId: string): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.blockedOnVerdicts += 1;
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
+  }
+
+  /**
+   * A card this callee was blocked on has been answered (or has gone away) —
+   * restart the window once the LAST of them is settled.
+   *
+   * Floors at zero rather than trusting the pairing: the card is gone on every
+   * `respond`, delivered or not, and a settle can sweep one that was never
+   * answered at all, so an unmatched call here must not drive the count
+   * negative and suspend the watchdog for the rest of the call.
+   */
+  noteCalleeUnblocked(runId: string, callId: string): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.blockedOnVerdicts = Math.max(0, call.blockedOnVerdicts - 1);
+    if (call.blockedOnVerdicts === 0) {
+      this.armSilenceWatch(runId, callId, call);
+    }
+  }
+
+  /**
+   * (Re)arm one call's silence watchdog. Clearing first is what makes this
+   * idempotent under the callee's every row.
+   */
+  private armSilenceWatch(
+    runId: string,
+    callId: string,
+    call: ActiveCall,
+  ): void {
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
+    // A blocked callee stays suspended however many rows arrive: an approval
+    // card is itself persisted as a row, so without this the very event that
+    // suspends the window would immediately re-arm it.
+    if (call.blockedOnVerdicts > 0) {
+      return;
+    }
+    call.silence = setTimeout(() => {
+      call.silence = null;
+      this.announceStall(runId, callId, call);
+    }, CALL_SILENCE_DEADLINE_MS);
+    // Node keeps the process alive for a pending timer, and a ten-minute one
+    // on every open call would hold a daemon that is otherwise done.
+    call.silence.unref?.();
+  }
+
+  /**
+   * Say ONCE, in the caller's own transcript, that its callee has stopped
+   * producing — and do nothing else.
+   *
+   * Not a cancellation: the wait is untouched and the call may still settle
+   * normally, which is what keeps `sync` meaning what it meant. A stalled call
+   * that recovers simply produces a row, which re-arms the watchdog.
+   *
+   * The run is re-read from `this.runs` rather than closed over, exactly as
+   * {@link expireQuestion} does and for the same reason: a captured state
+   * object survives `unregisterRun`, and its `activeCalls` map still holds this
+   * id — so the guard would pass and the write would insert an item for a run
+   * whose rows the teardown has already purged. `Item.runId` has no foreign
+   * key, so such an insert SUCCEEDS and leaves transcript text no route can
+   * reach or delete.
+   *
+   * TWIN PARSER: this payload is read by
+   * `apps/ui/src/renderer/chats/transcript-groups.ts` — `CallBlockEntry.stalled`
+   * folds it by `stalledCall` + `callId`, and a later callee row for the same
+   * call supersedes it. The SENTENCE is rendered by that file's `system` arm in
+   * `transcript-item.tsx`, which reads the `message` key and draws nothing when
+   * it is absent — so this row's wording lives under `message`, never `text`,
+   * and carries `severity: 'info'` because an absent severity resolves to the
+   * red failure chrome, which this row is not.
+   */
+  private announceStall(runId: string, callId: string, call: ActiveCall): void {
+    const state = this.runs.get(runId);
+    if (call.saidStalled || !state?.activeCalls.has(callId)) {
+      return;
+    }
+    call.saidStalled = true;
+    const minutes = Math.round(CALL_SILENCE_DEADLINE_MS / 60_000);
+    state.capability.persistItem(call.owner, 'system', null, {
+      callId,
+      callerNodeId: call.owner,
+      calleeNodeId: call.calleeId,
+      stalledCall: true,
+      severity: 'info',
+      message: `'${call.calleeId}' has produced nothing for ${minutes} minutes. The call is still open — nothing has been cancelled.`,
     });
   }
 

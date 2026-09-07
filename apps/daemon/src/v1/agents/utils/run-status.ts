@@ -99,12 +99,41 @@ export async function writeRunStatus(
     restored = false,
   } = announce;
   const settled = isTerminalRunStatus(status);
+  // The run's worked-time and tool-count TOTALS, on a settle alone.
+  //
+  // They ride this channel for the reason `taskList` does and `status` does
+  // not: a client cannot derive a total from the event that moved it, and
+  // nothing else refreshes the row between full listings — so a window that
+  // fetched the run at open went on rendering the figures as they stood then,
+  // for the life of the session. On a chat past the renderer's history page the
+  // durable total outranks its own windowed fold, so the frozen copy is what
+  // was drawn: the card's clock climbed through a turn and dropped back by the
+  // whole of it at the settle, and the tool count never moved at all.
+  //
+  // Only on a settle, because that is the only moment they change, and one
+  // extra read per turn is what an activity announce firing on every tool call
+  // must not pay. A workflow run keeps its figures per NODE, so both come back
+  // null there and the renderer's chat-only guard ignores them.
+  //
+  // Sent only when there is a figure to send, on the rule every optional field
+  // here follows: absent asserts nothing, and these columns only ever GROW —
+  // nothing nulls them once written — so a pair of nulls could never correct a
+  // client's copy of anything. That is every workflow run (its figures live per
+  // NODE) and every chat whose CLI has reported no timing and called no tool.
+  const read = settled ? await deps.runDao.readWork(runId, em) : null;
+  const work =
+    read !== null && (read.workedMs !== null || read.toolCalls !== null)
+      ? read
+      : null;
   deps.bus.publishRunStatus({
     runId,
     status,
     activity,
     awaiting: null,
     at,
+    ...(work === null
+      ? {}
+      : { workedMs: work.workedMs, toolCalls: work.toolCalls }),
     ...(settled && !restored ? { summary } : {}),
     // Only ever said out loud, never as a `false` nobody reads.
     ...(settled && housekeeping ? { housekeeping } : {}),

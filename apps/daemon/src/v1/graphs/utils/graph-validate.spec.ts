@@ -123,12 +123,27 @@ describe('connection rules under the REAL registry (via validateWorkflowGraph)',
     ).toBe('GRAPH_EDGE_RULE');
   });
 
-  it('lets one trigger fan out to several agents', () => {
-    expect(() =>
-      validateWorkflowGraph(
-        [trigger('t'), node('a'), node('b')],
-        [data('t', 'a'), data('t', 'b')],
+  it('refuses one trigger fanning out to several agents (single-arity output rule)', () => {
+    // The mirror of the case above, from the other end of the same wire: a
+    // trigger starts exactly one agent, so a run has one entry point rather
+    // than a set the order has to pick between. Breaking by design and
+    // shipped without a migration — a workflow saved under this rule carries
+    // one trigger edge, which the OLD rule accepts, so a revert costs nothing.
+    expect(
+      errorCode(() =>
+        validateWorkflowGraph(
+          [trigger('t'), node('a'), node('b')],
+          [data('t', 'a'), data('t', 'b')],
+        ),
       ),
+    ).toBe('GRAPH_EDGE_RULE');
+  });
+
+  it('still allows the one trigger edge a workflow actually has', () => {
+    // The control. Without it the pin above passes just as well against a
+    // validator that refuses every trigger edge there is.
+    expect(() =>
+      validateWorkflowGraph([trigger('t'), node('a')], [data('t', 'a')]),
     ).not.toThrow();
   });
 

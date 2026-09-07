@@ -301,6 +301,44 @@ export function readClaudeAssistantContext(
   return promptSideTokens(asRecord(message.usage));
 }
 
+/** What ONE request spent, off the same `message.usage` the context reads. */
+export interface ClaudeRequestSpend {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+}
+
+/**
+ * The SPEND half of an `assistant` line's usage — the four counts, unsummed.
+ *
+ * Kept apart from {@link readClaudeAssistantContext} above, which folds three
+ * of them into one prompt-side total: that sum answers "how full is the
+ * window", and it is the wrong number for "what did this cost" precisely
+ * because cache reads dominate it on a resumed conversation while being the
+ * cheapest tokens on the bill. Both readings come off the same object and
+ * neither can stand in for the other.
+ *
+ * Null for a whole line with no usage, so a build that stops sending it
+ * degrades to "the figures appear when the turn ends" rather than to a zero
+ * nobody measured. Each FIELD is independently null on the same rule.
+ */
+export function readClaudeRequestSpend(
+  message: Record<string, unknown>,
+): ClaudeRequestSpend | null {
+  const usage = asRecord(message.usage);
+  if (!usage) {
+    return null;
+  }
+  const spend: ClaudeRequestSpend = {
+    inputTokens: asNumber(usage.input_tokens),
+    outputTokens: asNumber(usage.output_tokens),
+    cacheReadTokens: asNumber(usage.cache_read_input_tokens),
+    cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
+  };
+  return Object.values(spend).some((part) => part !== null) ? spend : null;
+}
+
 /**
  * Everything one request put on the prompt side of the window: fresh input,
  * newly cached input, and cache reads. `input_tokens` alone excludes all cache

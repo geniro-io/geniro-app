@@ -160,10 +160,17 @@ function submenuGroups(el: HTMLElement): HTMLElement[] {
     : [];
 }
 
-/** The second-level row whose label matches, or undefined. */
+/**
+ * The second-level row whose label matches, or undefined.
+ *
+ * Reads the label SLOT rather than the row's first span: a row that carries a
+ * sub-label wraps both lines in a column, so the first span holds the two
+ * joined and no exact match on a label alone would ever find it.
+ */
 function submenuRow(el: HTMLElement, label: string): HTMLElement | undefined {
   return submenuRows(el).find(
-    (r) => r.querySelector('span')?.textContent === label,
+    (r) =>
+      r.querySelector('[data-slot="menu-item-label"]')?.textContent === label,
   );
 }
 
@@ -214,19 +221,30 @@ describe('ModelSettingsSelect', () => {
     expect(axisRow(el, 'Profile')?.textContent).toContain('personal');
 
     openAxis(el, 'Profile');
-    // The current one leads even before it is among the persisted recents.
+    // The current one leads even before it is among the persisted recents —
+    // and each row is NAME (or leaf) over PATH, the same shape the new-thread
+    // picker draws. The two used to disagree: this one said `/profiles/team`
+    // where `DirectorySelect` said the configuration's name.
     expect(
-      submenuRows(el).map((r) => r.querySelector('span')?.textContent),
+      submenuRows(el).map((r) => ({
+        label: r.querySelector('[data-slot="menu-item-label"]')?.textContent,
+        subLabel:
+          r.querySelector('[data-slot="menu-item-sublabel"]')?.textContent ??
+          null,
+      })),
     ).toEqual([
-      '/profiles/personal',
-      '/profiles/team',
-      'Default profile',
-      'Choose config directory…',
+      { label: 'personal', subLabel: '/profiles/personal' },
+      { label: 'team', subLabel: '/profiles/team' },
+      { label: 'Default profile', subLabel: null },
+      { label: 'Choose config directory…', subLabel: null },
     ]);
 
     act(() => {
-      submenuRow(el, '/profiles/team')!.click();
+      submenuRow(el, 'team')!.click();
     });
+    // The row leads with the leaf, but what it REPORTS is the full path — the
+    // directory is what a run is pointed at, and the leaf is only how the row
+    // reads.
     expect(chosen).toEqual(['/profiles/team']);
   });
 

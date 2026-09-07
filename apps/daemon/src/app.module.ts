@@ -16,8 +16,10 @@ import { GraphsModule } from './v1/graphs/graphs.module';
 import { HandoffModule } from './v1/handoff/handoff.module';
 import { NotificationsModule } from './v1/notifications/notifications.module';
 import { WsPresenceService } from './v1/notifications/services/ws-presence.service';
+import { ProjectsModule } from './v1/projects/projects.module';
 import { RunsModule } from './v1/runs/runs.module';
 import { StatsModule } from './v1/stats/stats.module';
+import { TasksModule } from './v1/tasks/tasks.module';
 
 export interface AppModuleOptions {
   runtime: RuntimeInfo;
@@ -49,6 +51,8 @@ export class AppModule {
         HandoffModule,
         AuthModule,
         StatsModule,
+        ProjectsModule,
+        TasksModule,
       ],
       providers: [
         { provide: APP_GUARD, useClass: LoopbackTokenGuard },

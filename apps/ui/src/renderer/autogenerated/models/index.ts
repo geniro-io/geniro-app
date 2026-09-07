@@ -710,6 +710,31 @@ export type AttachmentMediaType = typeof AttachmentMediaType[keyof typeof Attach
 /**
  * 
  * @export
+ * @interface CallContextReading
+ */
+export interface CallContextReading {
+    /**
+     * 
+     * @type {string}
+     * @memberof CallContextReading
+     */
+    callId: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    contextTokens: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof CallContextReading
+     */
+    contextWindowTokens: number | null;
+}
+/**
+ * 
+ * @export
  * @interface CancelledDto
  */
 export interface CancelledDto {
@@ -1017,6 +1042,18 @@ export interface ChatExportRun {
      * @type {string}
      * @memberof ChatExportRun
      */
+    startSha: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ChatExportRun
+     */
+    startDirty: boolean | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
     model: string | null;
     /**
      * 
@@ -1147,6 +1184,64 @@ export interface ChatMetricsDto {
      * @memberof ChatMetricsDto
      */
     totals: ChatTotals;
+}
+/**
+ * 
+ * @export
+ * @interface ChatSearchHit
+ */
+export interface ChatSearchHit {
+    /**
+     * Where in the run this is — the jump target
+     * @type {number}
+     * @memberof ChatSearchHit
+     */
+    seq: number;
+    /**
+     * 
+     * @type {ItemKind}
+     * @memberof ChatSearchHit
+     */
+    kind: ItemKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    role: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    snippet: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchHit
+     */
+    createdAt: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ChatSearchResultDto
+ */
+export interface ChatSearchResultDto {
+    /**
+     * 
+     * @type {Array<ChatSearchHit>}
+     * @memberof ChatSearchResultDto
+     */
+    hits: Array<ChatSearchHit>;
+    /**
+     * 
+     * @type {string}
+     * @memberof ChatSearchResultDto
+     */
+    partialReason: string | null;
 }
 /**
  * 
@@ -1439,6 +1534,18 @@ export interface CreateChatDto {
      * @type {string}
      * @memberof CreateChatDto
      */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof CreateChatDto
+     */
+    startDirty?: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateChatDto
+     */
     model?: string;
     /**
      * 
@@ -1500,6 +1607,75 @@ export interface CreateChatDto {
 /**
  * 
  * @export
+ * @interface CreateProjectDto
+ */
+export interface CreateProjectDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    name: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    folder: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    groupId?: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof CreateProjectDto
+     */
+    agentKind?: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof CreateProjectDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateProjectDto
+     */
+    workflowSlug?: string;
+    /**
+     * 
+     * @type {TaskSource}
+     * @memberof CreateProjectDto
+     */
+    provider?: TaskSource;
+}
+
+
+/**
+ * 
+ * @export
  * @interface CreateRunGroupDto
  */
 export interface CreateRunGroupDto {
@@ -1527,6 +1703,57 @@ export interface CreateRunGroupDto {
      * @memberof CreateRunGroupDto
      */
     autoWorkflowId?: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface CreateTaskDto
+ */
+export interface CreateTaskDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    description?: string;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof CreateTaskDto
+     */
+    status?: TaskStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof CreateTaskDto
+     */
+    labels?: Array<string>;
+    /**
+     * 
+     * @type {TaskSource}
+     * @memberof CreateTaskDto
+     */
+    source?: TaskSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    sourceRef?: string;
 }
 
 
@@ -2196,6 +2423,27 @@ export interface LogoutResultDto {
 /**
  * 
  * @export
+ * @interface MoveTaskStatusDto
+ */
+export interface MoveTaskStatusDto {
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof MoveTaskStatusDto
+     */
+    from: TaskStatus;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof MoveTaskStatusDto
+     */
+    to: TaskStatus;
+}
+
+
+/**
+ * 
+ * @export
  * @interface NodePosition
  */
 export interface NodePosition {
@@ -2248,6 +2496,24 @@ export interface NodeStateDto {
      * @memberof NodeStateDto
      */
     contextWindowTokens: number | null;
+    /**
+     * 
+     * @type {Array<CallContextReading>}
+     * @memberof NodeStateDto
+     */
+    calls: Array<CallContextReading>;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof NodeStateDto
+     */
+    toolCalls: number | null;
     /**
      * 
      * @type {number}
@@ -2349,6 +2615,136 @@ export type ProbeStatus = typeof ProbeStatus[keyof typeof ProbeStatus];
 /**
  * 
  * @export
+ * @interface ProjectDeletedDto
+ */
+export interface ProjectDeletedDto {
+    /**
+     * True when the project row was removed
+     * @type {boolean}
+     * @memberof ProjectDeletedDto
+     */
+    deleted: boolean;
+    /**
+     * How many of its tasks were removed with it
+     * @type {number}
+     * @memberof ProjectDeletedDto
+     */
+    tasksRemoved: number;
+}
+/**
+ * 
+ * @export
+ * @interface ProjectDto
+ */
+export interface ProjectDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    name: string;
+    /**
+     * The absolute project folder every task in it is worked in
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    folder: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    groupId: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ProjectDto
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    effort: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof ProjectDto
+     */
+    approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    workflowSlug: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ProjectDto
+     */
+    autopilotEnabled: boolean;
+    /**
+     * The column the autopilot picks work up from
+     * @type {TaskStatus}
+     * @memberof ProjectDto
+     */
+    autopilotIntakeStatus: TaskStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProjectDto
+     */
+    autopilotMaxConcurrent: number;
+    /**
+     * Consecutive failed autopilot runs — the breaker reads it, and a success resets it to 0
+     * @type {number}
+     * @memberof ProjectDto
+     */
+    autopilotFailureStreak: number;
+    /**
+     * Where this project's tasks come from — the value its tasks carry as their own source
+     * @type {TaskSource}
+     * @memberof ProjectDto
+     */
+    provider: TaskSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    updatedAt: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface RecheckMcpServerDto
  */
 export interface RecheckMcpServerDto {
@@ -2423,6 +2819,19 @@ export interface ReorderRunGroupsDto {
      * @memberof ReorderRunGroupsDto
      */
     ids: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface RetriedDto
+ */
+export interface RetriedDto {
+    /**
+     * True when the conversation was reopened without re-prompting
+     * @type {boolean}
+     * @memberof RetriedDto
+     */
+    retried: boolean;
 }
 
 /**
@@ -2501,6 +2910,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     cwd: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    startSha: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunDto
+     */
+    startDirty: boolean | null;
     /**
      * 
      * @type {string}
@@ -2603,6 +3024,18 @@ export interface RunDto {
      * @memberof RunDto
      */
     taskList: Array<RunTaskGroup>;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    workedMs: number | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    toolCalls: number | null;
 }
 
 
@@ -3006,6 +3439,143 @@ export interface SweptArchivedDto {
      */
     deleted: number;
 }
+/**
+ * 
+ * @export
+ * @interface TaskDeletedDto
+ */
+export interface TaskDeletedDto {
+    /**
+     * True when the task row was removed
+     * @type {boolean}
+     * @memberof TaskDeletedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface TaskDto
+ */
+export interface TaskDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    projectId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    title: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    description: string | null;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof TaskDto
+     */
+    status: TaskStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof TaskDto
+     */
+    labels: Array<string>;
+    /**
+     * 
+     * @type {TaskSource}
+     * @memberof TaskDto
+     */
+    source: TaskSource;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    sourceRef: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    branch: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    worktreePath: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    runId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    reportItemId: string | null;
+    /**
+     * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
+     * @type {number}
+     * @memberof TaskDto
+     */
+    position: number;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    updatedAt: string;
+}
+
+
+
+/**
+ * 
+ * @export
+ */
+export const TaskSource = {
+    Geniro: 'geniro'
+} as const;
+export type TaskSource = typeof TaskSource[keyof typeof TaskSource];
+
+
+/**
+ * 
+ * @export
+ */
+export const TaskStatus = {
+    Backlog: 'backlog',
+    Todo: 'todo',
+    InProgress: 'in_progress',
+    InReview: 'in_review',
+    Done: 'done',
+    Failed: 'failed'
+} as const;
+export type TaskStatus = typeof TaskStatus[keyof typeof TaskStatus];
+
 
 /**
  * 
@@ -3091,6 +3661,69 @@ export interface UpdateChatSettingsDto {
 /**
  * 
  * @export
+ * @interface UpdateProjectDto
+ */
+export interface UpdateProjectDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    name?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    folder?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    groupId?: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof UpdateProjectDto
+     */
+    agentKind?: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    model?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    effort?: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof UpdateProjectDto
+     */
+    approval?: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    configDir?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateProjectDto
+     */
+    workflowSlug?: string | null;
+}
+
+
+/**
+ * 
+ * @export
  * @interface UpdateRunGroupDto
  */
 export interface UpdateRunGroupDto {
@@ -3127,6 +3760,55 @@ export interface UpdateRunGroupDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UpdateTaskDto
+ */
+export interface UpdateTaskDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    title?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    description?: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof UpdateTaskDto
+     */
+    labels?: Array<string>;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    branch?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    worktreePath?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    runId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    reportItemId?: string | null;
+}
 /**
  * 
  * @export

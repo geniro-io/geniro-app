@@ -9,7 +9,12 @@ import { type ComparisonSpec, readComparison } from './comparison-payload';
 import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
-import { CHAT_LIVE_KEY, type LiveState, ownerOfKey } from './live-text';
+import {
+  CHAT_LIVE_KEY,
+  formatLiveSpend,
+  type LiveState,
+  ownerOfKey,
+} from './live-text';
 import { type MetricsSpec, readMetrics } from './metrics-payload';
 import {
   type BackgroundOutcome,
@@ -32,7 +37,7 @@ import {
   toolResultBody,
   toolResultText,
 } from './tool-render';
-import { payloadString } from './transcript-payload';
+import { payloadBoolean, payloadString } from './transcript-payload';
 import {
   mergeWorkflowDeclarations,
   readWorkflowDeclaration,
@@ -243,6 +248,24 @@ export interface CallBlockEntry {
    * framing). Null while running or when the sub-turn did not complete.
    */
   result: string | null;
+  /**
+   * The daemon has said this call's callee stopped producing.
+   *
+   * TWIN PARSER: written by `CallBroker`'s silence watchdog as a `system` row
+   * carrying `stalledCall: true` and this call's id — see
+   * `apps/daemon/src/v1/graphs/services/call-broker.service.ts`
+   * (`announceStall`). It is a claim about the CALL, not about the run: the
+   * call is still open and nothing has been cancelled, so the block goes on
+   * running and only says that it has gone quiet.
+   *
+   * A later row from the same call CLEARS it — the daemon announces a silence
+   * once and never retracts it, so the supersession is this side's job.
+   *
+   * The row itself deliberately stays in the caller's MAIN flow rather than
+   * claiming into this block — a warning folded inside a collapsed card is a
+   * warning nobody reads.
+   */
+  stalled: boolean;
   entries: TranscriptEntry[];
 }
 
@@ -879,6 +902,44 @@ function entryNodeId(entry: TranscriptEntry): string | null {
   return entry.nodeId;
 }
 
+/**
+ * The LOWEST `seq` any row inside one entry carries — where that entry BEGINS
+ * in the transcript — or null when it encloses no row at all.
+ *
+ * What makes a rendered entry addressable by seq, which is what a search hit
+ * names. The lowest rather than the highest because the lookup that uses it is
+ * nearest-at-or-below: an entry is the right landing place for every row it
+ * holds, and a block spanning 480–520 has to answer for a hit at 500.
+ *
+ * A range rather than a point is the whole difficulty — the fold collapses runs
+ * of rows into one turn block, one tool group, one card — so an exact match is
+ * not available and must not be assumed by callers.
+ */
+export function entryStartSeq(entry: TranscriptEntry): number | null {
+  if (entry.type === 'item') {
+    return entry.item.seq;
+  }
+  if (entry.type === 'tools') {
+    // The CALL's seq: a pair begins where it was invoked, and its result may be
+    // thousands of rows later on a long-running command.
+    return entry.pairs.reduce<number | null>(
+      (min, pair) =>
+        min === null ? pair.call.seq : Math.min(min, pair.call.seq),
+      null,
+    );
+  }
+  if (isCardEntry(entry)) {
+    return entry.seq;
+  }
+  return entry.entries.reduce<number | null>((min, inner) => {
+    const seq = entryStartSeq(inner);
+    if (seq === null) {
+      return min;
+    }
+    return min === null ? seq : Math.min(min, seq);
+  }, null);
+}
+
 /** The highest `seq` any row inside these entries carries (0 when empty). */
 function maxSeqOf(list: readonly TranscriptEntry[]): number {
   let max = 0;
@@ -1192,6 +1253,54 @@ function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
   return null;
 }
 
+/**
+ * What the callee is DOING — the newest tool call's own name, or null when it
+ * has made none.
+ *
+ * A SECOND fold beside {@link callBlockSummary} rather than a fallback inside
+ * it, because the two answer different questions: that one is what the callee
+ * SAID, and a tool name rendered in the summary slot would read as the callee's
+ * own words.
+ *
+ * It exists because a tool-using callee is wordless for nearly all of a call —
+ * its first message routinely lands with the result — so a message-only band
+ * says nothing for the whole of the work it is meant to describe.
+ *
+ * Tool invocations are read from `tools` groups alone, the same reading
+ * {@link countTools} documents: a card entry hides the calls that produced it,
+ * so counting those would name work with no row to open.
+ */
+export function callBlockActivity(block: CallBlockEntry): string | null {
+  return newestToolNameIn(block.entries);
+}
+
+function newestToolNameIn(entries: readonly TranscriptEntry[]): string | null {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i]!;
+    if (entry.type === 'tools') {
+      // Backwards through the group's OWN pairs, not just its last one: a run
+      // of tool calls from one node folds into a single group, so reading only
+      // the newest pair lets a call that disclosed no name hide the named one
+      // before it — and an ACP agent routinely discloses none.
+      for (let p = entry.pairs.length - 1; p >= 0; p -= 1) {
+        const name = payloadString(entry.pairs[p]!.call.payload, 'name');
+        if (name !== null && name.trim().length > 0) {
+          return name;
+        }
+      }
+      continue;
+    }
+    if (entry.type === 'item' || isCardEntry(entry)) {
+      continue;
+    }
+    const nested = newestToolNameIn(entry.entries);
+    if (nested !== null) {
+      return nested;
+    }
+  }
+  return null;
+}
+
 /** What one call block's own turns have spent — the footer's two figures. */
 export interface CallBlockUsage {
   /** Input + output, on the agent card's own rule — never the cache reads. */
@@ -1249,6 +1358,79 @@ function addCallUsage(
     }
     addCallUsage(entry.entries, into);
   }
+}
+
+/** How full the CALLEE's window was when it last reported, for its own ring. */
+export interface CallBlockContext {
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
+}
+
+/**
+ * The callee's own context reading, folded out of this block.
+ *
+ * The LAST turn's figures rather than a sum, which is what separates this from
+ * `callBlockUsage` beside it: spend ACCUMULATES across a callee's turns, while
+ * a context reading is a LEVEL — adding two of them produces a number the
+ * callee never held, and one over a window would read as a ring past full.
+ *
+ * Folded rather than passed in as a prop, because neither other source reaches
+ * here: the live per-call plane is keyed `<nodeId>::<callId>` and reaches no
+ * ancestor of a call block, and the durable row the sidebar's rings read is
+ * fetched per NODE. The block's own `turn_complete` rows are already in hand.
+ *
+ * Each figure is carried independently, on the daemon's own rule: a reading
+ * that omits one half says nothing about it, so a later turn reporting only a
+ * count must not erase the window an earlier one reported.
+ */
+export function callBlockContext(block: CallBlockEntry): CallBlockContext {
+  const found: CallBlockContext = {
+    contextTokens: null,
+    contextWindowTokens: null,
+  };
+  readCallContext(block.entries, found);
+  return found;
+}
+
+function readCallContext(
+  entries: readonly TranscriptEntry[],
+  into: CallBlockContext,
+): void {
+  for (const entry of entries) {
+    if (entry.type === 'item') {
+      if (entry.item.kind !== 'turn_complete') {
+        continue;
+      }
+      const usage = recordOf(recordOf(entry.item.payload)?.usage);
+      if (usage === undefined) {
+        continue;
+      }
+      const tokens = measured(usage.contextTokens);
+      const window = measured(usage.contextWindowTokens);
+      if (tokens !== null) {
+        into.contextTokens = tokens;
+      }
+      if (window !== null) {
+        into.contextWindowTokens = window;
+      }
+      continue;
+    }
+    if (entry.type === 'tools' || isCardEntry(entry)) {
+      continue;
+    }
+    readCallContext(entry.entries, into);
+  }
+}
+
+/**
+ * A figure worth drawing — the renderer's half of the rule the daemon's own
+ * `positive` states: a turn that reported `0` measured nothing, and both halves
+ * of a ring read it as a numerator or a denominator that cannot be right.
+ */
+function measured(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? value
+    : null;
 }
 
 function recordOf(value: unknown): Record<string, unknown> | undefined {
@@ -1926,6 +2108,32 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       });
     }
   }
+  // The daemon's silence advisories, read as a SET of call ids rather than
+  // claimed into their blocks: the row stays in the caller's main flow, where
+  // it is visible without opening anything, and the block reads the fact off
+  // this set. See `CallBlockEntry.stalled` for the twin it parses.
+  //
+  // A LATER row from the same call SUPERSEDES the advisory. The daemon says a
+  // call went quiet once and never retracts it — its own recovery story is
+  // "the callee simply produces a row" — so without this the marker would
+  // outlive what it describes, and a callee streaming tool calls again, or a
+  // call that settled minutes ago, would still be reported as silent. Items
+  // arrive in seq order, so one pass decides it.
+  const stalledCalls = new Set<string>();
+  for (const item of items) {
+    const callId = payloadString(item.payload, 'callId');
+    if (callId === null) {
+      continue;
+    }
+    if (
+      item.kind === 'system' &&
+      payloadBoolean(item.payload, 'stalledCall') === true
+    ) {
+      stalledCalls.add(callId);
+      continue;
+    }
+    stalledCalls.delete(callId);
+  }
   const claimed = new Set<string>();
   if (shells.size > 0) {
     for (const item of items) {
@@ -1997,7 +2205,7 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         shell.started.id === item.id &&
         shell.bucket.length > 0
       ) {
-        entries.push(buildCallBlock(callId, shell));
+        entries.push(buildCallBlock(callId, shell, stalledCalls.has(callId)));
       } else {
         // No tagged sub-turn yet (a legacy transcript, a call rejected
         // before any turn started, or the spawn racing this render) — keep
@@ -2351,7 +2559,11 @@ function closeGroupsBeforeTurnEnds(
  * groups work inside a block; the bucket holds no call rows, so no blocks
  * nest from here).
  */
-function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
+function buildCallBlock(
+  callId: string,
+  shell: CallShell,
+  stalled: boolean,
+): CallBlockEntry {
   let status: CallBlockEntry['status'] = 'pending';
   const inner: ChatItem[] = [];
   for (const item of shell.bucket) {
@@ -2399,6 +2611,7 @@ function buildCallBlock(callId: string, shell: CallShell): CallBlockEntry {
     message: payloadString(shell.started.payload, 'message'),
     status,
     result,
+    stalled,
     // A callee runs its own delegates, so its sub-turn gets the same fold the
     // main flow gets. Without this a workflow callee's `Task` work spilled
     // loose into the call block, invisible to the panel and to the run badge —
@@ -2890,6 +3103,18 @@ function nodeIdOf(key: string): string | null {
  * completely silent between a tool batch and the next words, leaving the chat
  * header as the only place saying anything was happening.
  */
+/**
+ * The `spend` key for a synthetic live row, or nothing at all.
+ *
+ * Spread rather than assigned so an unmeasured turn leaves the key ABSENT: the
+ * row's renderer reads it with `payloadString`, and a present-but-empty value
+ * would draw the separator with no figure after it.
+ */
+function spendPayload(state: LiveState | null): { spend?: string } {
+  const spend = state === null ? null : formatLiveSpend(state);
+  return spend === null ? {} : { spend };
+}
+
 export function withLiveText(
   blocks: readonly TranscriptEntry[],
   liveText: ReadonlyMap<string, LiveState>,
@@ -2984,6 +3209,12 @@ export function withLiveText(
         payload: {
           live: 'working',
           ...(since === null ? {} : { workingSince: since }),
+          // This turn's running token bill, formatted at the FOLD because that
+          // is where the live state is in hand — the row's own renderer holds a
+          // payload and no live plane. Omitted entirely when nothing reported,
+          // so the row's `payloadString` reads null and draws nothing rather
+          // than an empty figure.
+          ...spendPayload(liveText.get(key) ?? null),
           ...(waitingOn === null
             ? {}
             : {

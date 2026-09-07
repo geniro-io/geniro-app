@@ -227,6 +227,9 @@ describe('PartialStreamService — live context', () => {
     service.rememberWindow(RUN, OWNER, 1_000_000);
     service.context(RUN, OWNER, null, 28_283);
     expect(last().contextWindowTokens).toBe(1_000_000);
+    // The same figure a DURABLE writer reads — one expression behind both, so a
+    // reopened chat cannot disagree with the ring it was just showing.
+    expect(service.windowFor(RUN, OWNER)).toBe(1_000_000);
   });
 
   it('keeps the window across the turn boundary that clears everything else', () => {
@@ -249,6 +252,13 @@ describe('PartialStreamService — live context', () => {
     service.forgetRun(RUN);
     service.context(RUN, OWNER, null, 10);
     expect(last().contextWindowTokens).toBeNull();
+  });
+
+  it('windowFor is scoped to the OWNER, not to the run', () => {
+    // The map is keyed by the pair, so a workflow node must not read the window
+    // a sibling node on the same run reported.
+    service.rememberWindow(RUN, OWNER, 1_000_000);
+    expect(service.windowFor(RUN, 'another-node')).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@ import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
 import type { ChatListScope } from '../chat.types';
+import { positive } from '../utils/positive-figure';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -198,6 +199,78 @@ export class RunDao extends BaseDao<Run> {
       return;
     }
     await this.getRepo(txEm).nativeUpdate({ id: runId }, data);
+  }
+
+  /**
+   * Add one turn's worked milliseconds and tool count to this chat's running
+   * totals — the run-level twin of `NodeStateDao.rememberWork`, and the
+   * accumulating counterpart of {@link rememberContext} above.
+   *
+   * That one records a LEVEL and overwrites; these are TOTALS, so every write
+   * is a fraction of the answer and overwriting would report the last turn's
+   * work as the chat's whole history.
+   *
+   * Read-modify-write rather than a SQL increment, on the same reasoning its
+   * node-level twin states: a chat's turns are serialized — one turn per run at
+   * a time, enforced by the session registry's own busy check — so the two
+   * writes that can touch this row never overlap. A second concurrent writer
+   * would need a real increment.
+   *
+   * Neither figure is cleared by a turn that omits it: a CLI reporting no
+   * timing must not erase the time already counted, which is the ordinary case
+   * on every ACP agent.
+   */
+  async rememberWork(
+    runId: string,
+    workedMs: number | null,
+    toolCalls: number | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    if (!positive(workedMs) && !positive(toolCalls)) {
+      return;
+    }
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return;
+    }
+    const data: Partial<Run> = {};
+    if (positive(workedMs)) {
+      data.workedMs = (row.workedMs ?? 0) + workedMs;
+    }
+    if (positive(toolCalls)) {
+      data.toolCalls = (row.toolCalls ?? 0) + toolCalls;
+    }
+    await this.getRepo(txEm).nativeUpdate({ id: runId }, data);
+  }
+
+  /**
+   * The run's CURRENT worked-time and tool-count totals.
+   *
+   * Read for the settle announce alone (`writeRunStatus`), which is what keeps
+   * a client's copy of these columns from freezing at the moment it fetched the
+   * run. They are TOTALS the daemon accumulates per turn, so unlike `status` or
+   * `title` a client cannot derive the new value from the event that changed
+   * it — and nothing else refreshes the row between full listings.
+   *
+   * `disableIdentityMap` for the reason {@link rememberWork} needs it: that
+   * write is a `nativeUpdate`, which the identity map never sees, so a cached
+   * entity would answer with the totals as they stood before this very turn.
+   */
+  async readWork(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<{ workedMs: number | null; toolCalls: number | null } | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { id: runId },
+      { disableIdentityMap: true },
+    );
+    if (row === null) {
+      return null;
+    }
+    return { workedMs: row.workedMs, toolCalls: row.toolCalls };
   }
 
   /**
@@ -473,15 +546,4 @@ export class RunDao extends BaseDao<Run> {
       { disableIdentityMap: true },
     );
   }
-}
-
-/**
- * A figure worth storing: a real number above zero.
- *
- * Zero is rejected as hard as null, and for the reason the renderer's own fold
- * states — a turn that reported `0` measured nothing, and both halves of the
- * ring read it as a denominator or a numerator that cannot be right.
- */
-function positive(value: number | null | undefined): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }

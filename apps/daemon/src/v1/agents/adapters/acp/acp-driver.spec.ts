@@ -763,6 +763,179 @@ describe('AcpSession session resume', () => {
   });
 });
 
+describe('AcpSession — the files a tool call names', () => {
+  it('carries the paths through, and a line only where the agent set one', () => {
+    // Measured on cursor-agent 2026.08.31-4057e58: six kinds carry `locations`
+    // on the OPENING frame, and `read` is the only one that ever sets a line —
+    // from `args.offset`, and only when that offset is above zero.
+    const h = harness();
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'tool_call',
+          toolCallId: 't-1',
+          title: 'Read File',
+          locations: [
+            { path: '/repo/src/a.ts', line: 42 },
+            { path: '/repo/src/b.ts' },
+          ],
+        }),
+      ),
+    ).toMatchObject([
+      {
+        type: 'tool_call',
+        locations: [
+          { path: '/repo/src/a.ts', line: 42 },
+          { path: '/repo/src/b.ts', line: null },
+        ],
+      },
+    ]);
+  });
+
+  it('omits the key entirely when the agent named no files', () => {
+    // ABSENT is not the same as empty here, and the difference is the agent's:
+    // it drops the field rather than sending `[]`, so an empty array would put
+    // "this call touched nothing" in its mouth. Every claude row is this case.
+    const h = harness();
+    const [event] = h.feed(
+      update({ sessionUpdate: 'tool_call', toolCallId: 't-2', title: 'Bash' }),
+    );
+
+    expect(event).toMatchObject({ type: 'tool_call' });
+    expect(event).not.toHaveProperty('locations');
+  });
+
+  it('drops a location that names no file rather than emitting a blank path', () => {
+    const h = harness();
+    const [event] = h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-3',
+        title: 'Glob',
+        locations: [{ line: 3 }, { path: '/repo/src/c.ts' }],
+      }),
+    );
+
+    expect(event).toMatchObject({
+      locations: [{ path: '/repo/src/c.ts', line: null }],
+    });
+  });
+});
+
+describe('AcpSession — the agent naming its own conversation', () => {
+  it('draws no row for it, and records nothing', () => {
+    // The name reaches geniro already: this CLI writes it into its own session
+    // store BEFORE emitting the frame, and `readSessionTitle` reads that store.
+    // So the frame buys only TIMING — and collecting that needs a consumer able
+    // to reach `ChatTitleService`, which owns the guard keeping a manual rename
+    // permanent and which no driver can call. Handling it without that consumer
+    // is state nobody reads.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+
+    expect(
+      h.feed(
+        update({
+          sessionUpdate: 'session_info_update',
+          title: 'Bloom Filters',
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe('AcpSession — a resume-only turn', () => {
+  const reopening = {
+    input: { ...BASE_INPUT, resumeSessionId: 'prior-7', resumeOnly: true },
+  };
+
+  it('settles from the load reply, having sent no prompt', () => {
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+    expect(h.sentMethod('session/load')).toBeDefined();
+
+    const events = h.feed({ id: 2, result: {} });
+
+    // The load reply IS the settle here, and nothing else could be: no prompt
+    // is in flight to earn a stop reason, so an unbranched turn would wait out
+    // the transport's silence deadline and settle as a failure having done
+    // exactly what it was asked to.
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+    expect(
+      events.find((event) => event.type === 'turn_complete'),
+    ).toMatchObject({ stopReason: null, finalText: null });
+  });
+
+  it('still sends the prompt on an ordinary resume', () => {
+    // The control. Without it the pin above passes just as well against a
+    // driver that never sends a prompt on any resumed session at all.
+    const h = harness({ input: { ...BASE_INPUT, resumeSessionId: 'prior-7' } });
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({ id: 2, result: {} });
+
+    expect(h.sentMethod('session/prompt')).toBeDefined();
+    expect(events.map((event) => event.type)).not.toContain('turn_complete');
+  });
+
+  it('reports a refused load as a failure instead of opening a fresh session', () => {
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    const events = h.feed({
+      id: 2,
+      error: { code: -32602, message: 'Session "prior-7" not found' },
+    });
+
+    // The ordinary turn's degrade — a notice, then `session/new` on the same
+    // process — is right when there is a prompt to run without the history.
+    // This turn's only product IS the reopened conversation, so taking that
+    // path would report success while discarding it.
+    expect(h.sentMethod('session/new')).toBeUndefined();
+    expect(events).toEqual([
+      {
+        type: 'error',
+        message:
+          'agent could not reopen this conversation: Session "prior-7" not found',
+      },
+    ]);
+  });
+
+  it('sends no prompt when opened on a session the process already holds', () => {
+    // The SECOND opener. `onSessionReady`'s branch covers a turn that shook
+    // hands; a turn opened on a KEPT session goes `openOnLiveSession` →
+    // `beginTurn` → `sendPrompt` and never passes through it. `ChatService.retry`
+    // closes a kept session first, which is what makes this unreachable in
+    // production — but that is a cross-module invariant this file cannot
+    // enforce, and the guard in `sendPrompt` is what holds if it ever breaks.
+    const h = harness();
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: { sessionId: 'sess-1' } });
+    h.feed({ id: 3, result: { stopReason: 'end_turn' } });
+    const before = h.sentAll('session/prompt').length;
+
+    h.openTurn({ ...BASE_INPUT, resumeSessionId: 'sess-1', resumeOnly: true });
+
+    expect(h.sentAll('session/prompt')).toHaveLength(before);
+  });
+
+  it('has no session to write a follow-up into before its load reply', () => {
+    // Not a guard of its own: a follow-up is a second `session/prompt`, and the
+    // existing null-session check already refuses one for the whole life of
+    // this turn — the id arrives with the load reply, which is also what
+    // settles it. Pinned so a later change that sets the id earlier has to come
+    // back here and decide deliberately.
+    const h = harness(reopening);
+    h.feed(initializeReply(1, { loadSession: true }));
+
+    expect(h.driver.sendFollowUp({ text: 'while you are back, do X' })).toBe(
+      false,
+    );
+    expect(h.sentMethod('session/prompt')).toBeUndefined();
+  });
+});
+
 describe('AcpSession model selection', () => {
   const WANTED = 'claude-opus-5[thinking=true]';
   const wanting = { input: { ...BASE_INPUT, model: WANTED } };
@@ -886,12 +1059,115 @@ describe('AcpSession model selection', () => {
     ]);
   });
 
+  it('does not re-send a model the session has already confirmed', () => {
+    // Every later turn on a kept process is handed the STORED `session/new`
+    // reply, which names the model the session was CREATED with. Compared
+    // against that, a model confirmed on turn 1 looks unset on turn 2 — so the
+    // frame goes out again each turn, and the seed above rewinds the field the
+    // anti-poisoning guard reads back to the session's original model.
+    const h = harness(wanting);
+    h.feed(initializeReply(1));
+    h.feed({ id: 2, result: sessionWithModels('agents-own-model', [WANTED]) });
+    const setModelId = h.sent.find(
+      (frame) => frame.method === 'session/set_model',
+    )?.id;
+    h.feed({ id: setModelId, result: {} });
+    const afterTurnOne = h.sentAll('session/set_model').length;
+    expect(afterTurnOne).toBe(1);
+
+    h.openTurn({ ...BASE_INPUT, model: WANTED });
+
+    expect(h.sentAll('session/set_model')).toHaveLength(afterTurnOne);
+  });
+
   it('leaves a turn that named no model alone', () => {
     const h = harness();
     h.feed(initializeReply(1));
     h.feed({ id: 2, result: sessionWithModels('composer-2.5', [WANTED]) });
 
     expect(h.sentMethod('session/set_model')).toBeUndefined();
+  });
+
+  describe('what a window measured on this turn is filed under', () => {
+    // The reading this transport takes off disk names no model of its own, so
+    // the label falls back to what the SESSION is running as — and that field
+    // holds the model the agent CONFIRMED, never the one a turn requested,
+    // which `turn_model` announces instead. `PartialStreamService`'s
+    // anti-poisoning guard compares exactly those two, so collapsing them onto
+    // one value leaves it comparing that value against itself, unable to fire,
+    // filing a refused model's window under the model the user asked for.
+    const NAMELESS_READING = {
+      usedTokens: 101_100,
+      windowTokens: 200_000,
+      model: null,
+    };
+
+    /** Drive a turn that asks for WANTED on an agent sitting on its own model. */
+    function switching(): {
+      h: Harness;
+      opened: AgentEvent[];
+      setModelId: unknown;
+    } {
+      const h = harness({
+        ...wanting,
+        readContext: () => NAMELESS_READING,
+      });
+      h.feed(initializeReply(1));
+      const opened = h.feed({
+        id: 2,
+        result: sessionWithModels('agents-own-model', [WANTED]),
+      });
+      const setModelId = h.sent.find(
+        (frame) => frame.method === 'session/set_model',
+      )?.id;
+      return { h, opened, setModelId };
+    }
+
+    /**
+     * Settle the turn and hand back its `turn_complete`.
+     *
+     * The return type is the NARROWED member rather than `AgentEvent`: the
+     * union's other variants carry no `usage`, so annotating it as the union
+     * discards exactly the narrowing every assertion below needs.
+     */
+    function settle(
+      h: Harness,
+    ): Extract<AgentEvent, { type: 'turn_complete' }> | undefined {
+      const promptId = h.sent.find(
+        (frame) => frame.method === 'session/prompt',
+      )?.id;
+      return h
+        .feed({ id: promptId, result: { stopReason: 'end_turn' } })
+        .find((event) => event.type === 'turn_complete');
+    }
+
+    it('labels it with the AGENT’s model when the switch was refused', () => {
+      const { h, opened, setModelId } = switching();
+
+      // The turn announces what it ASKED to run as — the offers check passed,
+      // so nothing local knows yet that this will be refused.
+      expect(opened).toContainEqual({ type: 'turn_model', model: WANTED });
+
+      h.feed({
+        id: setModelId,
+        error: { code: -32602, message: 'Invalid model value' },
+      });
+
+      const complete = settle(h);
+      expect(complete?.usage?.contextWindowTokens).toBe(200_000);
+      expect(complete?.usage?.contextModel).toBe('agents-own-model');
+    });
+
+    it('labels it with the REQUESTED model once the agent accepts it', () => {
+      // The other direction, and the reason the fix is a moved write rather than
+      // a dropped one: a guard that blocked every ACP window would be a fresh
+      // defect wearing the old one's clothes.
+      const { h, setModelId } = switching();
+      h.feed({ id: setModelId, result: {} });
+
+      const complete = settle(h);
+      expect(complete?.usage?.contextModel).toBe(WANTED);
+    });
   });
 
   describe('when the reply enumerates nothing', () => {
@@ -1730,9 +2006,37 @@ describe('AcpSession session updates', () => {
     const h = harness();
     expect(h.feed(chunk('user_message_chunk', 'our own prompt'))).toEqual([]);
     expect(h.feed(update({ sessionUpdate: 'plan', entries: [] }))).toEqual([]);
-    expect(h.feed(update({ sessionUpdate: 'current_mode_update' }))).toEqual(
-      [],
+  });
+
+  it('records a mode the AGENT switched to, and draws no row for it', () => {
+    // `session/set_mode`'s reply covers a change this client ASKED for and
+    // nothing else, so this notification is the only channel reporting the
+    // agent moving itself. It is recorded because the mode outlives the turn —
+    // `pickMode` reads it to decide whether the next turn needs a frame at all
+    // — and it draws nothing, being session state rather than something said.
+    //
+    // The FIELD is what this pins, deliberately: the adopt emits no event, so
+    // an assertion about events holds either way and could not fail on a revert.
+    const h = harness();
+    expect(h.driver.currentModeId).toBeNull();
+
+    const events = h.feed(
+      update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' }),
     );
+
+    expect(h.driver.currentModeId).toBe('plan');
+    expect(events).toEqual([]);
+  });
+
+  it('leaves the mode alone when the update names none', () => {
+    const h = harness();
+    h.feed(
+      update({ sessionUpdate: 'current_mode_update', currentModeId: 'plan' }),
+    );
+
+    h.feed(update({ sessionUpdate: 'current_mode_update' }));
+
+    expect(h.driver.currentModeId).toBe('plan');
   });
 
   it('degrades a malformed notification to no events', () => {
@@ -2031,15 +2335,18 @@ describe('AcpSession off-protocol context reading', () => {
       .find((event) => event.type === 'turn_complete');
 
     expect(complete?.usage?.contextTokens).toBe(42_000);
-    // The WINDOW still comes from the reading: `usage_update` carries none, so
-    // dropping it here would leave the ring a count with no denominator.
+    // The WINDOW still comes from the reading: this frame carries no `size`,
+    // and the arm does not read one even when a frame does, so dropping the
+    // reading here would leave the ring a count with no denominator.
     expect(complete?.usage?.contextWindowTokens).toBe(200_000);
   });
 
   it('claims no window at all for an agent with no reading', () => {
-    // Every other ACP agent. ACP states no window anywhere, so the consumer
-    // must show the count bare rather than have this client invent a
-    // denominator — the rule the meter's own "no assumed 200k" note keeps.
+    // Every other ACP agent. No shipped one here has been observed stating a
+    // window — the protocol defines `size` on `usage_update` and none sends the
+    // frame — so the consumer must show the count bare rather than have this
+    // client invent a denominator, the rule the meter's own "no assumed 200k"
+    // note keeps.
     const { h } = opened({});
     const complete = h
       .feed({ id: 3, result: { stopReason: 'end_turn' } })
@@ -2235,6 +2542,158 @@ describe('AcpSession — a parameter the turn must not start without', () => {
     );
   });
 
+  it('releases the prompt when the agent never answers the frame at all', () => {
+    // The refusal above is the agent SAYING no; this is it saying nothing, and
+    // the two must end the same way. A held turn emits nothing while it waits,
+    // so a frame that was never going to be answered stranded the prompt in
+    // total silence — until the turn-level silence deadline gave up on the
+    // whole turn half an hour later.
+    //
+    // Its own fake timers: the only `vi.useFakeTimers()` in this file is scoped
+    // to a nested describe elsewhere, so nothing here inherits them.
+    vi.useFakeTimers();
+    try {
+      const h = harness(turnAsking(true));
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: sessionOfferingContext() });
+      expect(methods(h.sent)).not.toContain('session/prompt');
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(methods(h.sent)).toContain('session/prompt');
+      expect(h.emitted).toContainEqual(
+        expect.objectContaining({ type: 'notice', severity: 'warning' }),
+      );
+      // Nothing was torn down: an `error` is how this turn would have ENDED,
+      // and the whole point is that it runs on the agent's own settings instead.
+      expect(h.emitted).not.toContainEqual(
+        expect.objectContaining({ type: 'error' }),
+      );
+      // Still able to serve the turn it released — which is the liveness claim
+      // that matters here, the session having no flag to read one off.
+      const promptId = h.sent.find(
+        (frame) => frame.method === 'session/prompt',
+      )?.id;
+      expect(
+        h.feed({ id: promptId, result: { stopReason: 'end_turn' } }),
+      ).toContainEqual(expect.objectContaining({ type: 'turn_complete' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays silent for a frame that never held the prompt', () => {
+    // Every parameter goes out under the one `set_model_parameter` kind while
+    // only an `applyBeforePrompt` one blocks, so most armed frames have nothing
+    // to rescue. Speaking anyway is worse than silence: an event emitted after
+    // the turn settles reaches the off-turn handler, which reads a `notice` as
+    // the run working again with no terminal left to take the badge back down.
+    vi.useFakeTimers();
+    try {
+      const h = harness(turnAsking(false));
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: sessionOfferingContext() });
+      // The frame went out and the prompt did NOT wait for it.
+      expect(methods(h.sent)).toContain('session/set_config_option');
+      expect(methods(h.sent)).toContain('session/prompt');
+      const settled = h.emitted.length;
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(h.emitted).toHaveLength(settled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says nothing when the turn it would narrate is already gone', () => {
+    // The session outlives its turns and gets no settle signal, so a deadline
+    // can fire into a turn that was stopped or whose process died. The evidence
+    // is the release itself: a prompt that cannot be written has no turn behind
+    // it, and BOTH events would be untrue there — a notice promising a turn
+    // that runs on, over an error reporting a send nobody awaits.
+    vi.useFakeTimers();
+    let writable = true;
+    try {
+      const h = harness(turnAsking(true), () => writable);
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: sessionOfferingContext() });
+      expect(methods(h.sent)).not.toContain('session/prompt');
+      const held = h.emitted.length;
+
+      // The turn is stopped and its group killed — every later write refuses.
+      writable = false;
+      vi.advanceTimersByTime(30_000);
+
+      expect(h.emitted).toHaveLength(held);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('narrates only the frame that actually held the prompt', () => {
+    // Both halves of the guard, and only the second can fail here: a turn
+    // carrying an effort AND a context window arms two frames under the one
+    // `set_model_parameter` kind while only the context one blocks. Keyed on
+    // `promptHeld` alone, the effort's expiry would narrate a loss on a frame
+    // that was never holding anything — two notices for one stranded prompt.
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        input: { ...BASE_INPUT, model: 'claude-opus-5' },
+        modelSelection: {
+          model: 'claude-opus-5',
+          parameters: [
+            { id: 'effort', value: 'xhigh', applyBeforePrompt: false },
+            { id: 'context', value: '1m', applyBeforePrompt: true },
+          ],
+        },
+      });
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: sessionOfferingEffortAndContext() });
+      expect(methods(h.sent)).not.toContain('session/prompt');
+
+      // Neither frame is ever answered; both deadlines expire together.
+      vi.advanceTimersByTime(30_000);
+
+      expect(h.emitted.filter((event) => event.type === 'notice')).toHaveLength(
+        1,
+      );
+      expect(methods(h.sent)).toContain('session/prompt');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does NOT bound the prompt itself', () => {
+    // The one kind deliberately absent from the deadline map. A prompt IS the
+    // turn, so a deadline on it would give up on an agent that is working — a
+    // plain harness, since a turn asking for a parameter arms that frame's own.
+    vi.useFakeTimers();
+    try {
+      const h = harness();
+      h.feed(initializeReply(1));
+      h.feed({ id: 2, result: { sessionId: 's-1' } });
+      expect(methods(h.sent)).toContain('session/prompt');
+      const settled = h.emitted.length;
+
+      vi.advanceTimersByTime(60 * 60_000);
+
+      expect(h.emitted).toHaveLength(settled);
+      // The assertion that actually costs something: arming `prompt` would take
+      // its entry out of `pending`, after which the agent's reply routes to the
+      // "nothing owed" arm and the turn never settles at all.
+      const promptId = h.sent.find(
+        (frame) => frame.method === 'session/prompt',
+      )?.id;
+      expect(
+        h.feed({ id: promptId, result: { stopReason: 'end_turn' } }),
+      ).toContainEqual(expect.objectContaining({ type: 'turn_complete' }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   /** A session offering BOTH axes, so two parameter frames can go out. */
   function sessionOfferingEffortAndContext(): Record<string, unknown> {
     return {
@@ -2353,7 +2812,49 @@ describe('AcpSession permissions', () => {
       status: null,
       rawInput: { path: 'a.ts' },
       rawOutput: null,
+      // Null rather than absent: `readToolCall` always produces the key, and a
+      // permission request's toolCall stub names no files. The policy decides
+      // on `kind`, so this is shape rather than signal — asserted exactly so
+      // the day it becomes signal is a day this test has to be revisited.
+      locations: null,
     });
+  });
+
+  it('restores the cached NAME and KIND onto a stub request, and never its locations', () => {
+    // The merge exists so a stubbed request is decided and drawn on what the
+    // opening frame announced. `locations` is deliberately left out of it:
+    // nothing on this path consults one — the policy decides on `kind`, the
+    // card shows the name and arguments — so merging it would cache a value
+    // with no reader. This is the assertion that goes red if it is added.
+    const autoDecide = vi.fn(() => null);
+    const h = harness({ autoDecide });
+    h.feed(
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: 't-1',
+        name: 'write_file',
+        kind: 'edit',
+        locations: [{ path: '/repo/src/a.ts', line: 42 }],
+      }),
+    );
+
+    h.feed({
+      id: 5,
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's',
+        toolCall: { toolCallId: 't-1' },
+        options: [{ optionId: 'o-allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    });
+
+    expect(autoDecide).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'write_file',
+        kind: 'edit',
+        locations: null,
+      }),
+    );
   });
 
   it('parks the request as an approval card when the policy defers', () => {

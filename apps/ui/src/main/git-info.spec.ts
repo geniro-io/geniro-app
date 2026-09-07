@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -15,6 +16,7 @@ import {
   pullBranch,
   pullStashIsOurs,
   readGitInfo,
+  readGitStamp,
   readOriginOwner,
   switchBranch,
 } from './git-info';
@@ -180,6 +182,116 @@ describe('readGitInfo', () => {
     expect(info.worktrees).toEqual([
       { branch: 'feat/elsewhere', path: realpathSync(other) },
     ]);
+  });
+});
+
+describe('a folder’s own git config cannot run a program', () => {
+  /**
+   * `core.fsmonitor` names a PROGRAM git executes on any command that refreshes
+   * the index — which is every read in this file. The folder is chosen by the
+   * user and its `.git/config` is therefore untrusted input, so pointing the
+   * composer's branch chip at a cloned repository would otherwise be enough to
+   * run whatever that clone asked for.
+   *
+   * Driven with a real hook against a real repository, for this file's own
+   * stated reason: whether git runs it, and whether `-c` beats the repository's
+   * value, are git's behaviour rather than this spec's assumptions about it.
+   */
+  const armFsmonitor = (): string => {
+    const marker = join(dir, '.git', 'fsmonitor-ran');
+    const hook = join(dir, '.git', 'fsmonitor-hook.sh');
+    // Inside `.git` so arming the trap does not itself dirty the working tree.
+    writeFileSync(hook, `#!/bin/sh\n: > ${JSON.stringify(marker)}\n`, {
+      mode: 0o755,
+    });
+    run(['config', 'core.fsmonitor', hook]);
+    return marker;
+  };
+
+  it('really does run what core.fsmonitor names, absent the refusal', () => {
+    // The control. Without it the case below is a false pin: a marker that is
+    // never written either way would pass with the refusal deleted.
+    initRepo();
+    const marker = armFsmonitor();
+    run(['status', '--porcelain']);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  it('reads a repository without running its fsmonitor program', async () => {
+    initRepo();
+    const marker = armFsmonitor();
+
+    const info = await readGitInfo(dir);
+
+    expect(info.isRepo).toBe(true);
+    expect(info.branch).toBe('main');
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('switches a branch without running it either', async () => {
+    initRepo();
+    run(['branch', 'feature']);
+    const marker = armFsmonitor();
+
+    expect(await switchBranch(dir, 'feature')).toMatchObject({ ok: true });
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe('readGitStamp', () => {
+  it('answers both fields null for a plain folder', async () => {
+    // NOT `dirty: false`, which is what `readGitInfo` answers here and would be
+    // the wrong reading for a record: this stamp is what a diff view later
+    // measures against, so "nobody looked" must stay distinguishable from "the
+    // tree was clean".
+    expect(await readGitStamp(dir)).toEqual({ sha: null, dirty: null });
+  });
+
+  it('stamps the commit the folder is on, and reports a clean tree', async () => {
+    initRepo();
+
+    // Against git's OWN answer rather than a sha this spec wrote: the point is
+    // that the stamp names the commit actually checked out.
+    expect(await readGitStamp(dir)).toEqual({
+      sha: run(['rev-parse', 'HEAD']),
+      dirty: false,
+    });
+  });
+
+  it('reports an uncommitted change as dirty', async () => {
+    initRepo();
+    writeFileSync(join(dir, 'README.md'), 'edited\n');
+
+    expect((await readGitStamp(dir)).dirty).toBe(true);
+  });
+
+  it('reports a file that was created and never added as dirty', async () => {
+    // The case the diff view exists to include: an untracked file is invisible
+    // to `git diff <sha>`, so if the stamp did not see it either, work the user
+    // had in flight before the chat would be reported as the agent's.
+    initRepo();
+    writeFileSync(join(dir, 'scratch.txt'), 'notes\n');
+
+    expect((await readGitStamp(dir)).dirty).toBe(true);
+  });
+
+  it('stamps a detached HEAD, which has a commit even with no branch', async () => {
+    // `readHeadBranch` answers null here and is right to — there is no branch
+    // to name. A commit there certainly is, and it is the whole of what this
+    // reads.
+    initRepo();
+    run(['checkout', '-q', '--detach']);
+
+    expect((await readGitStamp(dir)).sha).toBe(run(['rev-parse', 'HEAD']));
+  });
+
+  it('answers null rather than a sha for a repository with no commits', async () => {
+    // `rev-parse HEAD` fails outright on an unborn branch. A chat opened in a
+    // fresh `git init` is a real case, and it must cost the stamp rather than
+    // the chat — the daemon's schema refuses anything that is not a commit id.
+    run(['init', '-b', 'main', '-q', dir], tmpdir());
+
+    expect(await readGitStamp(dir)).toEqual({ sha: null, dirty: false });
   });
 });
 
@@ -482,9 +594,24 @@ describe('pullBranch', () => {
     expect(result.ok).toBe(false);
     expect(result.stashLeft).toBeNull();
     // The stash push's OWN reason, not `git pull`'s — which would read
-    // "Pulling is not possible…" instead, and only appears if the code went
-    // on to run `pull` after a stash push it never checked the result of.
-    expect(result.error).toContain('could not write index');
+    // "Pulling is not possible…" and only appears if the code went on to run
+    // `pull` after a stash push it never checked the result of.
+    //
+    // Matched across every form the refusal is known to take, rather than
+    // pinned to one: git 2.43 refuses on STDOUT ("README.md: needs merge")
+    // with an EMPTY stderr, so `runGit` falls back to its own "git stash
+    // failed", while newer git writes "could not write index" to stderr and
+    // that is what surfaces. Pinning either literal passes on one machine and
+    // fails on the other while this behaviour is perfectly correct.
+    //
+    // An alternation and not a negative assertion, which is the version this
+    // replaced: `not.toContain('Pulling is not possible')` holds on reverted
+    // code the moment git rewords that sentence, so it would stop pinning
+    // anything without ever going red. The two structural assertions below
+    // cannot cover for it either — they hold on both sides of the guard.
+    expect(result.error).toMatch(
+      /git stash failed|needs merge|could not write index/i,
+    );
     // The tree is exactly as it was left by the conflict — nothing was moved
     // aside, and no fast-forward was attempted against it.
     expect(run(['status', '--porcelain'])).toContain('UU README.md');

@@ -643,6 +643,14 @@ export class ChatService implements OnModuleInit {
   async createChat(input: {
     agentKind: AgentKind;
     cwd: string;
+    /**
+     * What `cwd` had checked out at this moment, read by the client — the fixed
+     * point the diff view measures against. Absent for a folder that is not a
+     * repository or has no commits yet, which is a real answer and stored as
+     * null; see {@link Run.startSha}.
+     */
+    startSha?: string;
+    startDirty?: boolean;
     model?: string;
     title?: string;
     approval?: ChatApprovalMode;
@@ -709,6 +717,12 @@ export class ChatService implements OnModuleInit {
         status: 'pending',
         agentKind: input.agentKind,
         cwd,
+        // The client's reading of the folder, taken a moment ago. Stored as
+        // given: the daemon runs no git, so there is nothing here it could
+        // check the pair against, and re-reading it later would answer about a
+        // different moment than the one the chat began at.
+        startSha: input.startSha ?? null,
+        startDirty: input.startDirty ?? null,
         model: input.model ?? null,
         effort: input.effort ?? null,
         contextWindow: input.contextWindow ?? null,
@@ -1914,6 +1928,14 @@ export class ChatService implements OnModuleInit {
       }
       return;
     }
+    if (event.type === 'usage_progress') {
+      // The live half of what the turn is COSTING. No durable twin beside it,
+      // unlike `context_progress` below: the turn's own `turn_complete` usage
+      // already carries these four counts for the whole turn, so filing them
+      // per request would be the same money written down twice.
+      this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
+      return;
+    }
     if (event.type === 'context_progress') {
       this.partials.context(
         runId,
@@ -1921,7 +1943,7 @@ export class ChatService implements OnModuleInit {
         null,
         event.contextTokens,
       );
-      await this.rememberContext(runId, {
+      await this.rememberContext(runId, SINGLE_AGENT_NODE, {
         contextTokens: event.contextTokens,
         contextWindowTokens: event.contextWindowTokens ?? null,
       });
@@ -2143,21 +2165,33 @@ export class ChatService implements OnModuleInit {
 
   private async rememberContext(
     runId: string,
+    ownerKey: string,
     reading: {
       contextTokens?: number | null;
       contextWindowTokens?: number | null;
     },
   ): Promise<void> {
+    // A reading that names no window borrows the one the live plane already
+    // resolved for this owner — most readings carry a count alone, so without
+    // this the durable row keeps a numerator nothing can divide. Above BOTH
+    // writes rather than between them, for the reason the next comment gives:
+    // resolving after the twin would fix the stored row and leave every
+    // client's ring undrawn.
+    const window =
+      reading.contextWindowTokens ?? this.partials.windowFor(runId, ownerKey);
     // The in-memory twin FIRST, and unconditionally: it is what every status
     // broadcast is stamped from, so a database write that fails must not also
     // cost every client its reading. Same rule the DAO applies — a half of the
     // pair that was not reported does not clear the half that was.
     this.contexts.remember(runId, {
       tokens: reading.contextTokens ?? null,
-      window: reading.contextWindowTokens ?? null,
+      window,
     });
     try {
-      await this.runDao.rememberContext(runId, reading);
+      await this.runDao.rememberContext(runId, {
+        ...reading,
+        contextWindowTokens: window,
+      });
     } catch (err) {
       this.logger.warn(
         `failed to record the context reading for run ${runId}: ${
@@ -2746,15 +2780,94 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Persist the user message, then start a turn whose streamed events are each
-   * persisted-then-emitted. Returns the persisted user item immediately; the
-   * agent's reply streams over the bus → WS while this method has already
-   * resolved.
+   * Reopen a failed turn's conversation without replaying its prompt.
+   *
+   * What the user pressed is Retry on an error row: the conversation is intact
+   * and the work is not, so this re-establishes the agent's session and stops.
+   * The agent is asked nothing, so it answers nothing — the transcript row the
+   * turn writes is the only evidence the recovery happened.
+   *
+   * The kept session is CLOSED first, and that is what keeps a turn that merely
+   * reloads an already-live session out of reach: a failure the agent reports
+   * about ITSELF settles the turn while its process lives on
+   * (`AcpAgentFailureProtocol`), and reloading a session that never went away
+   * would report a recovery that recovered nothing.
+   */
+  async retry(runId: string): Promise<{ retried: boolean }> {
+    const em = this.em.fork();
+    const run = assertChatRun(await this.runDao.getById(runId, em), runId);
+    if (run.archivedAt !== null) {
+      throw new ConflictException(
+        'RUN_ARCHIVED',
+        'this chat is archived — unarchive it before retrying',
+      );
+    }
+    const node = await this.nodeStateDao.getByRunNode(
+      runId,
+      SINGLE_AGENT_NODE,
+      em,
+    );
+    // BEFORE the close below, which is destructive and unconditional: it
+    // terminates the process group, taking the live turn's CLI, its MCP
+    // servers and every delegate still out with it. `sendMessage`'s own busy
+    // check is downstream of that, so refusing there would refuse having
+    // already destroyed the work — and an error row is durable, so Retry stays
+    // pressable on an old row while a later turn runs.
+    if (this.registry.has(runId)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'this chat is still working — retry is for a turn that has already failed',
+      );
+    }
+    // A per-CLI fact, not a branch on the agent's name: the resume-only turn is
+    // an ACP frame, and an adapter that cannot honour it would run this turn
+    // as an ordinary one — spending a real, billed turn on the EMPTY prompt a
+    // retry composes, under a transcript row saying nothing was sent again.
+    // A run with no agent named cannot be reopened either, and `sendMessage`
+    // would refuse it a moment later as RUN_NOT_CONFIGURED — but only after
+    // the close below had already fired.
+    if (!run.agentKind) {
+      throw new BadRequestException(
+        'RUN_NOT_CONFIGURED',
+        'run is missing an agent',
+      );
+    }
+    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
+      .resumeOnlyUnavailableReason;
+    if (cannotReopen !== null) {
+      throw new ConflictException('RUN_NOT_RESUMABLE', cannotReopen);
+    }
+    if (!node?.agentSessionId) {
+      // There is no conversation to reopen. Left to run, the turn would open a
+      // FRESH session and settle at once — a success reported for a recovery
+      // that did not happen, on a thread that is still exactly as stuck.
+      throw new ConflictException(
+        'RUN_NOT_RESUMABLE',
+        'this chat has no agent session to reopen — send a message to start one',
+      );
+    }
+    this.sessions.close(runId);
+    await this.sendMessage(runId, '', [], { resumeOnly: true });
+    return { retried: true };
+  }
+
+  /**
+   * Persist the opening row, then start a turn whose streamed events are each
+   * persisted-then-emitted. Returns that row immediately; the agent's reply
+   * streams over the bus → WS while this method has already resolved.
+   *
+   * `resumeOnly` makes it the RETRY turn instead: no prompt is composed or
+   * sent, and the opening row is a `system` note rather than the user's
+   * message. One method rather than two, because everything after that row —
+   * the claim, the seq allocation, the spawn, the event chain, the delegate
+   * leases, every settle path — is identical, and a second copy of it is how
+   * the two would come to disagree about what ending a turn means.
    */
   async sendMessage(
     runId: string,
     text: string,
     images: SendMessageImage[] = [],
+    options: { resumeOnly?: boolean } = {},
   ): Promise<ItemWire> {
     const em = this.em.fork();
     const run = assertChatRun(await this.runDao.getById(runId, em), runId);
@@ -2810,6 +2923,19 @@ export class ChatService implements OnModuleInit {
       // running turn is picked up at the next tool boundary. So try that first,
       // and fall back to the queue only when this CLI has no such channel (ACP)
       // or the turn is already on its way out.
+      if (options.resumeOnly === true) {
+        // A retry has nothing to recover on a run that is WORKING: the
+        // conversation is live rather than lost. Falling through would deliver
+        // this turn's empty text as a follow-up — writing a blank user message
+        // into the transcript, and on ACP sending a second `session/prompt`,
+        // which CANCELS the turn in flight. The press would then destroy the
+        // work it was meant to rescue, while sending the very frame this route
+        // exists not to send.
+        throw new ConflictException(
+          'RUN_BUSY',
+          'this chat is still working — retry is for a turn that has already failed',
+        );
+      }
       return await this.deliverIntoRunningTurn(runId, text, images);
     }
     /**
@@ -2965,14 +3091,35 @@ export class ChatService implements OnModuleInit {
       // (`deliverIntoRunningTurn`) writes a user item on its own request
       // chain — and a local counter cannot see that row, so it reissued the
       // seq the follow-up had just taken. See {@link ItemSeqAllocator}.
-      const userWire = await this.persist(
-        em,
-        runId,
-        await this.seqs.reserve(runId),
-        'message',
-        'user',
-        { text, ...(attachments.length > 0 ? { images: attachments } : {}) },
-      );
+      const openingWire =
+        options.resumeOnly === true
+          ? // A retry writes a SYSTEM row where the message would go. It sends
+            // no prompt and the agent answers nothing, so this row is the only
+            // evidence the recovery happened — without it the press is
+            // indistinguishable from a dead button.
+            await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'system',
+              null,
+              {
+                message:
+                  'Reopened this conversation. Your next message carries on ' +
+                  'from here — nothing was sent again.',
+              },
+            )
+          : await this.persist(
+              em,
+              runId,
+              await this.seqs.reserve(runId),
+              'message',
+              'user',
+              {
+                text,
+                ...(attachments.length > 0 ? { images: attachments } : {}),
+              },
+            );
 
       const adapter: AgentAdapter = this.adapterFor(agentKind);
 
@@ -3019,10 +3166,18 @@ export class ChatService implements OnModuleInit {
        * The take is read-and-clear, so the column cannot ride a second prompt —
        * including this one's own retry.
        */
-      const turnPrompt = withCarriedContext(
-        await this.runDao.takePendingContext(runId, em),
-        geniroCommand ? geniroCommand.prompt : text,
-      );
+      const turnPrompt =
+        options.resumeOnly === true
+          ? // Nothing is composed for a turn that sends no prompt — and the
+            // take is read-and-CLEAR, so reaching it here would consume a
+            // carried summary this turn cannot deliver and leave the next real
+            // message opening on an agent that has forgotten the conversation
+            // it just summarised.
+            ''
+          : withCarriedContext(
+              await this.runDao.takePendingContext(runId, em),
+              geniroCommand ? geniroCommand.prompt : text,
+            );
 
       const node = await this.nodeStateDao.getByRunNode(
         runId,
@@ -3117,6 +3272,19 @@ export class ChatService implements OnModuleInit {
         preTokens: number | null;
         postTokens: number | null;
       } | null = null;
+      /**
+       * Tool calls this turn has made on the MAIN thread — counted here because
+       * no CLI reports a total, and the durable row is what keeps the figure
+       * from describing only the transcript a client happens to hold.
+       *
+       * Per TURN, in this closure, like `compactedTokens` above — so it already
+       * starts at zero and the zeroing below is unobservable, verified by
+       * mutation: removing it changes no test. It stays because the durable
+       * write ADDS, so the day a closure serves two turns an un-zeroed counter
+       * would contribute the first turn's tools again on the second settle, and
+       * the figure would silently overcount rather than fail.
+       */
+      let turnToolCalls = 0;
       /**
        * How many units of background work this turn is being HELD for — 0
        * whenever the agent is itself still working.
@@ -3995,6 +4163,13 @@ export class ChatService implements OnModuleInit {
         disposeComparer?.();
         disposeGallerist?.();
       };
+      // ZERO the last turn's running bill before this one's first request can
+      // report. It belongs HERE rather than at the settle for the reason the
+      // comment below gives about the process: a chat's CLI is kept across
+      // turns, so the live plane's state is too — and clearing at the settle
+      // would leave the figure blank for the whole gap between turns, which is
+      // exactly when a reader is looking at what the last one cost.
+      this.partials.startTurn(runId, SINGLE_AGENT_NODE);
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -4014,6 +4189,10 @@ export class ChatService implements OnModuleInit {
           customInstructions,
           cursorMaxMode,
           resumeSessionId,
+          // Only ever set alongside a resume id — `retry` refuses the pairing
+          // without one, since a resume-only turn on a fresh session opens a
+          // conversation nobody asked for and settles at once.
+          ...(options.resumeOnly === true ? { resumeOnly: true } : {}),
           approvalMode,
           // A human is watching a chat: let the agent ask, and stream its
           // words as they are written. Each adapter decides what that costs —
@@ -4088,6 +4267,14 @@ export class ChatService implements OnModuleInit {
               );
               return;
             }
+            if (event.type === 'usage_progress') {
+              // The IN-TURN site, and the one that matters: its off-turn twin
+              // above only ever sees a CLI carrying on by itself after a turn
+              // settled. Wiring only that one was measured to draw nothing at
+              // all through a whole live turn.
+              this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
+              return;
+            }
             if (event.type === 'context_progress') {
               // BEFORE the figure it scales, so the delta this publishes
               // already carries both halves: `context` publishes, and a window
@@ -4115,7 +4302,7 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.contextTokens,
               );
-              void this.rememberContext(runId, {
+              void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.contextTokens,
                 contextWindowTokens: event.contextWindowTokens ?? null,
               });
@@ -4156,10 +4343,42 @@ export class ChatService implements OnModuleInit {
               // the ring is withheld rather than drawn against an assumed size.
               // From the second turn on the row already holds one — the write
               // never clears it — so this is what gets a new chat its ring.
-              void this.rememberContext(runId, {
+              void this.rememberContext(runId, SINGLE_AGENT_NODE, {
                 contextTokens: event.usage?.contextTokens ?? null,
                 contextWindowTokens: event.usage?.contextWindowTokens ?? null,
               });
+              // This turn's worked time and tool count, ADDED to the chat's
+              // running totals. Read out and zeroed synchronously, for the
+              // reason the window above is resolved eagerly: the write is
+              // fire-and-forget, and by the time it runs the next turn's calls
+              // could already have moved the counter.
+              const workedMs = event.usage?.durationMs ?? null;
+              const toolCalls = turnToolCalls;
+              turnToolCalls = 0;
+              void this.runDao
+                .rememberWork(runId, workedMs, toolCalls)
+                // A failed bookkeeping write must not fail the turn — the same
+                // rule every durable write on this path follows.
+                .catch(() => {});
+            }
+            if (event.type === 'turn_cancelled' || event.type === 'error') {
+              // A turn the user STOPPED, or one that failed, still called the
+              // tools it called: that work happened, and the column answers how
+              // much this agent has done rather than how much of it finished.
+              // Counting it only on `turn_complete` left a delegate-heavy chat
+              // — the long kind these columns exist for — permanently short by
+              // every turn that ended any other way, since the per-turn counter
+              // dies with this closure.
+              //
+              // The TOOLS alone: neither terminal carries a `usage`, so there is
+              // no duration to add, and `rememberWork` takes the two
+              // independently precisely so a figure nobody measured stays null
+              // rather than being written as a zero.
+              const stoppedToolCalls = turnToolCalls;
+              turnToolCalls = 0;
+              void this.runDao
+                .rememberWork(runId, null, stoppedToolCalls)
+                .catch(() => {});
             }
             if (event.type === 'slash_commands') {
               // The CLI's own invokable set for this cwd — feeds the
@@ -4327,6 +4546,11 @@ export class ChatService implements OnModuleInit {
               event.type === 'tool_call' &&
               event.parentToolUseId === undefined
             ) {
+              // This chat's OWN tools. The `parentToolUseId` guard this branch
+              // already applies is the delegate exclusion the durable count
+              // needs too — a sub-agent has its own card, so folding its
+              // toolbelt in here would report a fan-out's total as the chat's.
+              turnToolCalls += 1;
               // What "running" actually means right now, for a badge the user
               // is not looking at.
               //
@@ -4825,7 +5049,7 @@ export class ChatService implements OnModuleInit {
       // rejects, per `AgentTurnHandle.done`.
       void finalized.finally(disposeHostTools);
 
-      return userWire;
+      return openingWire;
     } catch (err) {
       // Failed before the handle took over the slot's lifecycle — drop the claim
       // so the run is not wedged as permanently busy, and take the host tools

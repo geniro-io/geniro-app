@@ -25,6 +25,29 @@ const TASK_STATUSES = new Set(['pending', 'in_progress', 'completed']);
  * required: a patch legitimately carries no title, which is exactly why the
  * daemon's fold exists.
  */
+/**
+ * One of the run's durable WORK totals off a status announce, as a spreadable
+ * patch — `{}` when the announce said nothing about it.
+ *
+ * TWIN PARSER of the daemon's `RunStatusEvent.workedMs` / `.toolCalls`. A
+ * number is floored at zero and truncated, `null` is admitted as its own real
+ * value (never measured), and anything else is treated as the field being
+ * absent — which is the rule every optional field on this event follows, since
+ * an activity announce fires on every tool call without reading the run.
+ */
+function readWorkTotal(
+  field: 'workedMs' | 'toolCalls',
+  value: unknown,
+): Partial<Pick<RunStatusEvent, 'workedMs' | 'toolCalls'>> {
+  if (value === null) {
+    return { [field]: null };
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return {};
+  }
+  return { [field]: Math.max(0, Math.trunc(value)) };
+}
+
 function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
   const out: RunTaskGroup[] = [];
   for (const group of groups) {
@@ -272,6 +295,22 @@ export interface RunStatusEvent {
    */
   taskList?: RunTaskGroup[];
   /**
+   * How long this run's agent has WORKED, and how many tools it has called —
+   * the durable totals as they stand after the settle that carried them.
+   *
+   * TWIN PARSER of the daemon's `RunStatusEvent`. They ride this channel for
+   * `taskList`'s reason and not `status`'s: a total cannot be derived from the
+   * event that moved it, and nothing else refreshes the row between full
+   * listings — so a window's copy froze at the moment it fetched the run, and
+   * past `HISTORY_PAGE` items that frozen figure outranks the renderer's own
+   * windowed fold. Sent on a SETTLE alone; absent asserts nothing, and either
+   * may be null beside the other — though the daemon sends nothing at all when
+   * BOTH are null, these columns only ever growing. So a workflow run, whose
+   * figures live per node, never carries them.
+   */
+  workedMs?: number | null;
+  toolCalls?: number | null;
+  /**
    * How full this run's context window was when its CLI last reported, and the
    * window it is measured against.
    *
@@ -388,6 +427,8 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     spendUpdatedAt,
     pullRequests,
     taskList,
+    workedMs,
+    toolCalls,
     contextTokens,
     contextWindowTokens,
     summary,
@@ -481,6 +522,13 @@ export function parseRunStatus(data: unknown): RunStatusEvent | null {
     // act on; a pull-request announce carrying nothing usable is only ever a
     // malformed payload, since a run that opened none is never announced.
     ...(Array.isArray(taskList) ? { taskList: readTaskGroups(taskList) } : {}),
+    // Admitted INDEPENDENTLY of each other, unlike the context pair below: a
+    // count is only a reading beside the window it was measured against, while
+    // these two are separate totals and a CLI that reports no timing while
+    // calling tools is the ordinary case on every ACP agent. `null` is a real
+    // value for either — never measured — so the guard takes a number OR null.
+    ...readWorkTotal('workedMs', workedMs),
+    ...readWorkTotal('toolCalls', toolCalls),
     // The PAIR travels together or not at all: a count is only a reading with
     // the window it was measured against, and admitting half would let a fresh
     // count be scaled against a window from before a model change. `null` is a

@@ -68,14 +68,51 @@ export function ProjectPicker({
     },
   ];
 
+  const selected = projects.find((row) => row.id === selectedProjectId) ?? null;
+
   return (
-    <div className="w-56 shrink-0">
+    <div className="w-64 shrink-0">
       <Select
         aria-label="Project"
         groups={groups}
         value={selectedProjectId}
         placeholder="No projects yet"
+        // The folder rides INSIDE the trigger, in a quieter treatment. It was
+        // a muted span beside the control, which said the project's name and
+        // its folder as two separate facts on one row — the same value twice
+        // over, since the name is what the folder is named after.
+        triggerLabel={
+          selected === null ? undefined : (
+            <span className="flex min-w-0 flex-col items-start leading-tight">
+              {/* TWO lines, name over folder. Side by side they competed for
+                  one row's width and a long pair truncated BOTH halves —
+                  `Harn… geniro-claude-har…`, where the half that identifies
+                  the project is the half that was destroyed. Stacked, each
+                  gets the control's full width and the name is read first. */}
+              <span className="max-w-full truncate">{selected.name}</span>
+              <span className="max-w-full truncate text-xs text-muted-foreground">
+                {folderName(selected.folder)}
+              </span>
+            </span>
+          )
+        }
+        title={selected?.folder}
+        // Opens DOWNWARD, which every other picker in the app does not: the
+        // default `top` grows a panel upward from the trigger, right for the
+        // composer chips at the foot of the window and wrong for the first
+        // control this app has put at the TOP of one. `Menu` clamps rather
+        // than flips — only `Popover` flips — and the clamp is floored, so
+        // the rows simply ran off the top edge. Measured in the running app:
+        // three rows open in the DOM with a sliver of the panel on screen.
+        side="bottom"
+        // Grows to the two-line label rather than clipping it: `h-9` is the
+        // single-row form field, and tailwind-merge lets `h-auto` beat it.
+        className="h-auto py-1.5"
         leadingIcon={
+          // NO optical lift here, unlike the button's glyph. That correction
+          // exists to align a square icon with ONE descender-free baseline;
+          // beside a two-line block the icon centres on the block, which is
+          // already what the eye reads as centred.
           <FolderGit2 className="size-4 shrink-0 text-muted-foreground" />
         }
         searchPlaceholder={

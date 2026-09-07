@@ -440,4 +440,98 @@ describe('the column surface', () => {
     );
     expect(add?.disabled).toBe(true);
   });
+
+  // Every other picker in the app sits near the FOOT of the window, so `Menu`
+  // defaults to opening upward — and it clamps rather than flips, with the
+  // clamp floored, so a trigger at the top of the window simply runs its rows
+  // off the edge. Measured in the running app before the fix: three rows open
+  // in the DOM with a sliver of the panel on screen. jsdom computes no layout,
+  // so the emitted class is the observable — and it IS the mechanism here,
+  // not a proxy for it.
+  it('opens the project menu downward, away from the top of the window', async () => {
+    const el = await board();
+
+    await act(async () => {
+      headerTrigger(el).click();
+    });
+
+    const panel = el.querySelector('[data-slot="menu-panel"]');
+    expect(panel).not.toBeNull();
+    expect(panel!.className).toContain('top-full');
+    expect(panel!.className).not.toContain('bottom-full');
+  });
+
+  // The folder used to sit beside the control as its own muted span, which
+  // said the same fact twice — the project is named after the folder. It now
+  // rides inside the trigger, in a quieter treatment, and appears ONCE.
+  it('names the folder inside the trigger, and only there', async () => {
+    // A distinctive leaf: the default fixture's is `/w`, one letter, and
+    // "New task" contains it — a substring check against that passes on the
+    // button beside the picker and proves nothing.
+    mocks.listProjects.mockResolvedValue([
+      aProject({ folder: '/tmp/board-fixture' }),
+    ]);
+    const el = await board();
+
+    const trigger = headerTrigger(el);
+    expect(trigger.textContent).toContain('One');
+    expect(trigger.textContent).toContain('board-fixture');
+
+    const header = el.querySelector('header')!;
+    const outside = [...header.children].filter(
+      (node) => !node.contains(trigger),
+    );
+    expect(
+      outside.some((node) =>
+        (node.textContent ?? '').includes('board-fixture'),
+      ),
+    ).toBe(false);
+  });
+
+  // `items-center` centres BOXES, and a descender-free label sits high in its
+  // own line box, so a square glyph beside it lands visibly low — measured on
+  // the running app at 5.5 device px for the picker and 5.0 for the button.
+  // jsdom computes no layout, so the class IS the correction, not a proxy.
+  it('lifts the header glyphs off the box centre', async () => {
+    const el = await board();
+
+    const icons = [...el.querySelectorAll('header svg')];
+    expect(icons.length).toBeGreaterThan(0);
+    // The chevron is the menu's own affordance and centres on the box, not on
+    // the label — only the two LEADING glyphs are corrected.
+    const lifted = icons.filter((node) =>
+      (node.getAttribute('class') ?? '').includes('-translate-y-'),
+    );
+    // ONE, not two: the picker's glyph sits beside a two-line block and
+    // centres on it, so only the button's plus — beside a single
+    // descender-free baseline — needs the correction.
+    expect(lifted.length).toBe(1);
+  });
+
+  // Side by side, a long pair truncated BOTH halves —
+  // `Harn… geniro-claude-har…` — losing the half that identifies the project.
+  // Stacked, each line gets the control's full width. jsdom lays nothing out,
+  // so the flex direction is the observable and it IS the rule.
+  it('stacks the folder under the project name', async () => {
+    mocks.listProjects.mockResolvedValue([
+      aProject({ name: 'Harness', folder: '/home/user/geniro-claude-harness' }),
+    ]);
+    const el = await board();
+
+    const trigger = headerTrigger(el);
+    const name = [...trigger.querySelectorAll('span')].find(
+      (node) => node.textContent === 'Harness',
+    );
+    const folder = [...trigger.querySelectorAll('span')].find(
+      (node) => node.textContent === 'geniro-claude-harness',
+    );
+    expect(name).toBeDefined();
+    expect(folder).toBeDefined();
+    expect(name!.parentElement).toBe(folder!.parentElement);
+    expect(name!.parentElement!.className).toContain('flex-col');
+    // The name leads: a reader takes the identity before the qualifier.
+    expect(
+      name!.compareDocumentPosition(folder!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });

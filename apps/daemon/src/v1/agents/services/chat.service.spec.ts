@@ -126,6 +126,8 @@ class FakeRunDao {
       // `runToWire` an `undefined` the real entity can never produce.
       modelParameters: null,
       archivedAt: null,
+      groupId: null,
+      pinnedPosition: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -147,6 +149,33 @@ class FakeRunDao {
     }
     Object.assign(run, data);
     return 1;
+  }
+  /**
+   * Mirrors the real query: one SCOPE's pinned runs, in band order. Scoped
+   * rather than filtered over every pinned run, because `pinnedPosition` is
+   * contiguous within a scope and two groups legitimately both hold a 0.
+   */
+  async pinnedInScope(groupId: string | null): Promise<Run[]> {
+    return [...this.runs.values()]
+      .filter((run) => run.groupId === groupId && run.pinnedPosition !== null)
+      .sort((a, b) => (a.pinnedPosition ?? 0) - (b.pinnedPosition ?? 0));
+  }
+  /** Mirrors the real one, flush included — mutating the object IS the write. */
+  async repin(run: Run, pinned: boolean): Promise<void> {
+    if (!pinned) {
+      run.pinnedPosition = null;
+    } else if (run.pinnedPosition === null) {
+      run.pinnedPosition = (await this.pinnedInScope(run.groupId)).length;
+    }
+    await this.renumberPinned(run.groupId);
+  }
+  async renumberPinned(groupId: string | null): Promise<void> {
+    await this.applyPinnedOrder(await this.pinnedInScope(groupId));
+  }
+  async applyPinnedOrder(ordered: readonly Run[]): Promise<void> {
+    ordered.forEach((row, position) => {
+      row.pinnedPosition = position;
+    });
   }
   /** The real one writes the column explicitly; so does this. */
   async touch(id: string, at: Date = new Date()): Promise<void> {
@@ -1112,6 +1141,230 @@ describe('ChatService', () => {
     expect((await service.setGroup(run.id, null)).groupId).toBeNull();
     // Null names no group, so there is nothing to check — one assertion still.
     expect(assertedGroups).toEqual(['g-work']);
+  });
+
+  describe('setPinned', () => {
+    /** Pin every id in order, so a band's arrangement is one line to set up. */
+    const pinAll = async (
+      service: { setPinned: (id: string, pinned: boolean) => Promise<unknown> },
+      ids: readonly string[],
+    ): Promise<void> => {
+      for (const id of ids) {
+        await service.setPinned(id, true);
+      }
+    };
+
+    it('appends to the band rather than leading it', async () => {
+      const { service } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await pinAll(service, [a.id, b.id]);
+      // The order inside a band is the user's own arrangement, so the newest
+      // pin goes LAST — leading would move every row they had placed.
+      const band = await service.setPinned(b.id, true);
+      expect(band.map((run) => [run.id, run.pinnedPosition])).toEqual([
+        [a.id, 0],
+        [b.id, 1],
+      ]);
+    });
+
+    it('leaves an already-pinned run exactly where it is', async () => {
+      const { service } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await pinAll(service, [a.id, b.id]);
+      // A replayed request must not walk a thread to the end of its own band.
+      await service.setPinned(a.id, true);
+      const band = await service.setPinned(a.id, true);
+      expect(band.map((run) => run.id)).toEqual([a.id, b.id]);
+    });
+
+    it('closes the gap behind an unpinned run, and answers with the scope', async () => {
+      const { service } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const c = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await pinAll(service, [a.id, b.id, c.id]);
+      const affected = await service.setPinned(a.id, false);
+      // The pressed run rides along with its pin CLEARED — it is what the
+      // caller pressed for — and the rest come back renumbered, which is the
+      // whole reason this route answers with a list where `setGroup` answers
+      // with one run.
+      expect(affected.map((run) => [run.id, run.pinnedPosition])).toEqual([
+        [b.id, 0],
+        [c.id, 1],
+        [a.id, null],
+      ]);
+    });
+
+    it('keeps each group its OWN band, both starting at 0', async () => {
+      const { service } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.setGroup(a.id, 'g-work');
+      await service.setGroup(b.id, 'g-play');
+      await pinAll(service, [a.id, b.id]);
+      // Scoped, not global: two runs in different groups both holding 0 is the
+      // normal case, and it is why nothing may sort the whole list on this.
+      expect(
+        (await service.setPinned(a.id, true)).map((run) => [
+          run.id,
+          run.pinnedPosition,
+        ]),
+      ).toEqual([[a.id, 0]]);
+      expect(
+        (await service.setPinned(b.id, true)).map((run) => [
+          run.id,
+          run.pinnedPosition,
+        ]),
+      ).toEqual([[b.id, 0]]);
+    });
+
+    it('carries a pin into the band of the group a run is re-filed into', async () => {
+      const { service, runDao } = setup();
+      const held = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const moved = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.setGroup(held.id, 'g-play');
+      await pinAll(service, [held.id, moved.id]);
+      // `moved` is pinned at 0 of the LOOSE band; `held` at 0 of g-play. The
+      // move must not carry the 0 across, or two rows claim one slot.
+      await service.setGroup(moved.id, 'g-play');
+      expect(
+        (await runDao.pinnedInScope('g-play')).map((run) => [
+          run.id,
+          run.pinnedPosition,
+        ]),
+      ).toEqual([
+        [held.id, 0],
+        [moved.id, 1],
+      ]);
+      // And the band it left closed behind it.
+      expect(await runDao.pinnedInScope(null)).toEqual([]);
+    });
+
+    it('clears the pin when a thread is archived, and unarchive leaves it off', async () => {
+      const { service } = setup();
+      const a = await service.createChat({ agentKind: 'claude', cwd: dir });
+      const b = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await pinAll(service, [a.id, b.id]);
+      expect((await service.archive(a.id)).pinnedPosition).toBeNull();
+      // The band closes behind it, so the shelved thread holds no slot in a
+      // list it is no longer drawn in.
+      expect(
+        (await service.setPinned(b.id, true)).map((run) => [
+          run.id,
+          run.pinnedPosition,
+        ]),
+      ).toEqual([[b.id, 0]]);
+      expect((await service.unarchive(a.id)).pinnedPosition).toBeNull();
+    });
+
+    it('refuses to pin an archived thread', async () => {
+      const { service } = setup();
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.archive(run.id);
+      // The band is drawn at the top of the DESK, so a pinned shelved thread
+      // is a state with no rendering.
+      await expect(service.setPinned(run.id, true)).rejects.toThrow();
+    });
+
+    it('404s for a run that does not exist', async () => {
+      const { service } = setup();
+      await expect(service.setPinned('nope', true)).rejects.toThrow();
+    });
+
+    describe('reorderPinned', () => {
+      /** Three pinned runs in one scope, in band order. */
+      const band = async (
+        service: {
+          createChat: (input: {
+            agentKind: 'claude';
+            cwd: string;
+          }) => Promise<{ id: string }>;
+          setPinned: (id: string, pinned: boolean) => Promise<unknown>;
+        },
+        cwd: string,
+      ): Promise<string[]> => {
+        const ids: string[] = [];
+        for (let n = 0; n < 3; n++) {
+          const run = await service.createChat({ agentKind: 'claude', cwd });
+          await service.setPinned(run.id, true);
+          ids.push(run.id);
+        }
+        return ids;
+      };
+
+      it('takes the whole arrangement and renumbers from it', async () => {
+        const { service } = setup();
+        const [a, b, c] = await band(service, dir);
+        const after = await service.reorderPinned(null, [c!, a!, b!]);
+        expect(after.map((run) => [run.id, run.pinnedPosition])).toEqual([
+          [c, 0],
+          [a, 1],
+          [b, 2],
+        ]);
+      });
+
+      it('is idempotent — replaying an arrangement lands on the same rows', async () => {
+        const { service } = setup();
+        const [a, b, c] = await band(service, dir);
+        const order = [c!, a!, b!];
+        await service.reorderPinned(null, order);
+        // The whole ORDER rather than a displacement is what buys this: a
+        // relative move replayed moves twice.
+        expect(
+          (await service.reorderPinned(null, order)).map((run) => run.id),
+        ).toEqual(order);
+      });
+
+      it('appends a pinned run the client never named', async () => {
+        const { service } = setup();
+        const [a, b, c] = await band(service, dir);
+        // `c` was pinned in another window while this drag was in flight — it
+        // must not lose its place because a stale client failed to mention it.
+        expect(
+          (await service.reorderPinned(null, [b!, a!])).map((run) => run.id),
+        ).toEqual([b, a, c]);
+      });
+
+      it('ignores an id that names nothing pinned in THIS scope', async () => {
+        const { service, runDao } = setup();
+        const [a, b, c] = await band(service, dir);
+        const elsewhere = await service.createChat({
+          agentKind: 'claude',
+          cwd: dir,
+        });
+        await service.setGroup(elsewhere.id, 'g-work');
+        await service.setPinned(elsewhere.id, true);
+        // Naming another band's run must not drag it into this one, or one
+        // sequence would renumber two bands at once.
+        expect(
+          (await service.reorderPinned(null, [elsewhere.id, c!, b!, a!])).map(
+            (run) => run.id,
+          ),
+        ).toEqual([c, b, a]);
+        expect(
+          (await runDao.pinnedInScope('g-work')).map((run) => [
+            run.id,
+            run.pinnedPosition,
+          ]),
+        ).toEqual([[elsewhere.id, 0]]);
+      });
+
+      it('leaves an UNPINNED run out of the band, however it is named', async () => {
+        const { service } = setup();
+        const [a, b] = await band(service, dir);
+        const loose = await service.createChat({
+          agentKind: 'claude',
+          cwd: dir,
+        });
+        expect(
+          (await service.reorderPinned(null, [loose.id, b!, a!])).map(
+            (run) => run.id,
+          ),
+        ).not.toContain(loose.id);
+      });
+    });
   });
 
   describe('the run-start git stamp', () => {

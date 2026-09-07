@@ -8,6 +8,7 @@ import {
   runGroupSections,
   runGroupSummary,
   SECTION_PREVIEW_LIMIT,
+  splitPinnedRuns,
 } from './run-group';
 
 const group = (id: string, position: number): RunGroupDto => ({
@@ -165,6 +166,42 @@ describe('runGroupSummary', () => {
       busy: false,
       needsInput: true,
     });
+  });
+});
+
+describe('splitPinnedRuns', () => {
+  const run = (id: string, pinnedPosition: number | null) => ({
+    id,
+    pinnedPosition,
+  });
+
+  it('orders the band by its position and leaves the rest alone', () => {
+    const { pinned, rest } = splitPinnedRuns([
+      run('c', null),
+      run('b', 1),
+      run('d', null),
+      run('a', 0),
+    ]);
+    expect(pinned.map((r) => r.id)).toEqual(['a', 'b']);
+    // The caller's order below the band, NOT re-sorted: that order is the
+    // sidebar's newest-activity-first rule, and re-deriving it here would put
+    // this function in charge of a ranking it knows nothing about.
+    expect(rest.map((r) => r.id)).toEqual(['c', 'd']);
+  });
+
+  it('keeps position 0 in the band', () => {
+    // The whole reason the column is nullable rather than a number with 0
+    // meaning "unpinned": a truthiness test here drops the top pin, and it
+    // drops it from the one slot the user cares most about.
+    expect(splitPinnedRuns([run('a', 0)]).pinned.map((r) => r.id)).toEqual([
+      'a',
+    ]);
+  });
+
+  it('draws nothing as pinned when nothing is', () => {
+    const { pinned, rest } = splitPinnedRuns([run('a', null), run('b', null)]);
+    expect(pinned).toEqual([]);
+    expect(rest.map((r) => r.id)).toEqual(['a', 'b']);
   });
 });
 

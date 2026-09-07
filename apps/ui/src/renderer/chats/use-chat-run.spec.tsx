@@ -44,6 +44,7 @@ const run1: ChatRun = {
   configDir: null,
   configDirPin: null,
   groupId: null,
+  pinnedPosition: null,
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,
@@ -590,6 +591,9 @@ describe('useChatRun', () => {
         thinkingStretch: null,
         contextTokens: 740_515,
         contextWindowTokens: 1_000_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
     });
 
@@ -675,6 +679,9 @@ describe('useChatRun', () => {
         ...reading,
         contextTokens: 740_515,
         contextWindowTokens: 1_000_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
       // …and then the settle, which clears the live figure entirely.
       emitLiveText({
@@ -682,6 +689,9 @@ describe('useChatRun', () => {
         text: '',
         contextTokens: null,
         contextWindowTokens: null,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
     });
 
@@ -711,6 +721,9 @@ describe('useChatRun', () => {
       thinkingStretch: null,
       contextTokens: 740_515,
       contextWindowTokens: 1_000_000,
+      spentInputTokens: null,
+      spentOutputTokens: null,
+      spentCacheReadTokens: null,
     };
     const contextNow = (): number | null | undefined =>
       [...harness.state().liveText.values()][0]?.contextTokens;
@@ -794,6 +807,9 @@ describe('useChatRun', () => {
         thinkingStretch: null,
         contextTokens: 653_400,
         contextWindowTokens: 1_000_000,
+        spentInputTokens: null,
+        spentOutputTokens: null,
+        spentCacheReadTokens: null,
       });
     };
 

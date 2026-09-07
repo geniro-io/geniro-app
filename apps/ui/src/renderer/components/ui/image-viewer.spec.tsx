@@ -135,6 +135,29 @@ describe('an image the user can open', () => {
     expect(viewer()?.className).not.toContain('object-cover');
   });
 
+  it('caps its height against the VIEWPORT, never a percentage', () => {
+    // REPORTED on a long screenshot: "I see only its middle part and can't
+    // move it." The cap was `min(78vh,100%)`, and that percentage is measured
+    // against the zoom library's own content div, which is `height:
+    // fit-content` — an indefinite basis, so it never resolves and the browser
+    // drops the WHOLE declaration. MEASURED in a real browser on a 600×4000
+    // picture in a 577px window: computed `min(450.06px, 100%)`, rendered at
+    // the full 4000px, wrapper `clientHeight` 4000. Its `overflow: hidden`
+    // then showed a slice of the middle, and the drag was dead too, since at
+    // rest the library bounds the content against a wrapper `fit-content` had
+    // made exactly as tall as it.
+    //
+    // The class IS the whole of the correction, and jsdom computes no layout,
+    // so this pins the class — the same trade `object-contain` above makes.
+    render(<ZoomableImage src={SRC} alt="a shot" />);
+
+    press(thumbnail()!);
+
+    const cap = /max-h-\[([^\]]+)\]/.exec(viewer()?.className ?? '');
+    expect(cap?.[1]).toBeDefined();
+    expect(cap![1]).not.toContain('%');
+  });
+
   it('is a BUTTON, so a keyboard can reach the picture at all', () => {
     render(<ZoomableImage src={SRC} alt="a shot" />);
 

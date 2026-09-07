@@ -84,13 +84,14 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { ChatActionProviders } from './chat-action-providers';
+import { type CalleeContext, resolveCalleeContext } from './call-context';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { chatToMarkdown } from './chat-markdown';
 import { ChatMetricsLoaderContext } from './chat-metrics';
+import { ChatProviders } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
 import {
@@ -146,6 +147,7 @@ import {
   previewSectionRuns,
   runGroupSections,
   runGroupSummary,
+  splitPinnedRuns,
 } from './run-group';
 import { sortRunsForSidebar } from './run-order';
 import { effectiveConfigDir } from './run-profile';
@@ -1295,6 +1297,78 @@ export function Chats({
     }
   }, []);
 
+  /**
+   * The scope whose band a live reorder has actually MOVED, and `undefined`
+   * while none has.
+   *
+   * `null` is a real value here — the loose list is a scope — which is why the
+   * idle state is `undefined` rather than null. A ref rather than state
+   * because nothing renders from it: it exists so `dragend` can tell a drag
+   * that rearranged something from one that merely passed over rows, and a
+   * drop that changes nothing writes nothing.
+   */
+  const pinnedReorderRef = useRef<string | null | undefined>(undefined);
+
+  /**
+   * The pointer is over a chat ROW.
+   *
+   * It rearranges the PINNED band under the cursor, and does nothing at all
+   * anywhere else — which is the whole of "only relative to other pinned
+   * threads". Three separate refusals, and each names a different way the
+   * gesture could leave the band: the carried row is not pinned, the row under
+   * it is not, or the two are in different groups. A pinned run dragged over
+   * another group's rows therefore reorders nothing, and the section's own
+   * drop handler still re-files it, which is the move that was already there.
+   *
+   * Live, like the group headers' reorder and for its reason: the daemon is
+   * told once at `dragend`, because the arrangements the cursor passes through
+   * are not decisions.
+   */
+  const handleRunDragOver = useCallback((overRunId: string): void => {
+    const dragging = dragRef.current;
+    if (dragging?.kind !== 'run' || dragging.id === overRunId) {
+      return;
+    }
+    const rows = runsRef.current;
+    const moved = rows.find((row) => row.id === dragging.id);
+    const over = rows.find((row) => row.id === overRunId);
+    if (
+      moved === undefined ||
+      over === undefined ||
+      moved.pinnedPosition === null ||
+      over.pinnedPosition === null ||
+      moved.groupId !== over.groupId
+    ) {
+      return;
+    }
+    const band = rows
+      .filter(
+        (row) => row.groupId === moved.groupId && row.pinnedPosition !== null,
+      )
+      .sort((a, b) => (a.pinnedPosition ?? 0) - (b.pinnedPosition ?? 0));
+    const from = band.findIndex((row) => row.id === moved.id);
+    const to = band.findIndex((row) => row.id === over.id);
+    if (from === -1 || to === -1 || from === to) {
+      return;
+    }
+    const next = [...band];
+    next.splice(to, 0, next.splice(from, 1)[0]!);
+    const seated = new Map(next.map((row, position) => [row.id, position]));
+    pinnedReorderRef.current = moved.groupId;
+    // Positions are RESTATED rather than left stale, for the reason the group
+    // reorder restates its own: `splitPinnedRuns` sorts the band by this
+    // column, so an unwritten position would re-sort the list back into the
+    // order it had a moment ago and undo the drag on every render.
+    setRuns((prev) =>
+      prev.map((row) => {
+        const position = seated.get(row.id);
+        return position === undefined
+          ? row
+          : { ...row, pinnedPosition: position };
+      }),
+    );
+  }, []);
+
   /** A chat was dropped into a section. A drop in its own section is a no-op. */
   const handleDropInSection = useCallback((groupId: string | null): void => {
     const dragging = dragRef.current;
@@ -1314,6 +1388,40 @@ export function Chats({
     const dragging = dragRef.current;
     setDrag(null);
     setDropSectionId(undefined);
+    const reordered = pinnedReorderRef.current;
+    pinnedReorderRef.current = undefined;
+    if (reordered !== undefined) {
+      // Only when the band actually MOVED — a pinned row picked up and put
+      // back writes nothing. The whole arrangement goes out, not a
+      // displacement, so replaying it lands on the same rows.
+      void chatApi
+        .reorderPinnedRuns({
+          reorderPinnedDto: {
+            groupId: reordered,
+            ids: runsRef.current
+              .filter(
+                (row) =>
+                  row.groupId === reordered && row.pinnedPosition !== null,
+              )
+              .sort((a, b) => (a.pinnedPosition ?? 0) - (b.pinnedPosition ?? 0))
+              .map((row) => row.id),
+          },
+        })
+        .then((band) => {
+          const seated = new Map(
+            band.map((row) => [row.id, row.pinnedPosition]),
+          );
+          setRuns((prev) =>
+            prev.map((row) =>
+              seated.has(row.id)
+                ? { ...row, pinnedPosition: seated.get(row.id) ?? null }
+                : row,
+            ),
+          );
+        })
+        .catch((err: unknown) => setError(String(err)));
+      return;
+    }
     if (dragging?.kind !== 'group') {
       return;
     }
@@ -1325,7 +1433,7 @@ export function Chats({
       })
       .then(setGroups)
       .catch((err: unknown) => setError(String(err)));
-  }, [groupApi]);
+  }, [groupApi, chatApi]);
 
   const handleToggleGroup = useCallback(
     (groupId: string, collapsed: boolean): void => {
@@ -1480,6 +1588,32 @@ export function Chats({
             ),
           ),
         )
+        .catch((err: unknown) => setError(String(err)));
+    },
+    [chatApi],
+  );
+
+  const handleSetRunPinned = useCallback(
+    (runId: string, pinned: boolean): void => {
+      void chatApi
+        .setRunPinned({ runId, setRunPinnedDto: { pinned } })
+        .then((affected) => {
+          // The reply is the whole SCOPE the write re-seated, not the pressed
+          // row, so every position this client holds for that band is
+          // replaced at once. Deriving the others here instead would be the
+          // daemon's own renumbering written a second time, in a place that
+          // cannot see the rows a stale list is missing.
+          const seated = new Map(
+            affected.map((run) => [run.id, run.pinnedPosition]),
+          );
+          setRuns((prev) =>
+            prev.map((run) =>
+              seated.has(run.id)
+                ? { ...run, pinnedPosition: seated.get(run.id) ?? null }
+                : run,
+            ),
+          );
+        })
         .catch((err: unknown) => setError(String(err)));
     },
     [chatApi],
@@ -3761,6 +3895,19 @@ export function Chats({
     reconnectNonce,
   );
   /**
+   * The same two ranks, handed to every call block in the transcript.
+   *
+   * A block can fold only its callee's SETTLED turns, so without this its ring
+   * is empty for the whole of a call and fills at the settle — REPORTED against
+   * a running cursor call. See `CalleeContextResolverContext` for why it travels
+   * as a context, and `ChatProviders` for why it is provided there.
+   */
+  const resolveCallReading = useCallback(
+    (calleeNodeId: string, callId: string): CalleeContext =>
+      resolveCalleeContext(liveText, nodeReadings, calleeNodeId, callId),
+    [liveText, nodeReadings],
+  );
+  /**
    * The open thread is shelved, so its composer is inert.
    *
    * Read off the ROW rather than off `chatScope`: the scope says what the list
@@ -5050,23 +5197,22 @@ export function Chats({
      * dropped the moment a run settles and never exists at all for a window
      * that reloaded, so a per-call ring drawn from it alone shows nothing
      * outside a running turn.
+     *
+     * The pair itself lives in `resolveCalleeContext`, shared with the call
+     * block's own ring on the very rule `cardContextOf` states below — an order
+     * written down twice is an order two surfaces eventually disagree on.
      */
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
     ): AgentThread[] => {
-      const durableCalls = nodeReadings.get(nodeId)?.calls;
       return threadsOf(nodeActivity).map((thread) => {
         if (thread.kind !== 'call') {
           return thread;
         }
-        const live = liveText.get(partialOwnerKey(nodeId, thread.id));
-        const row = durableCalls?.find((call) => call.callId === thread.id);
         return {
           ...thread,
-          contextTokens: live?.contextTokens ?? row?.contextTokens ?? null,
-          contextWindowTokens:
-            live?.contextWindowTokens ?? row?.contextWindowTokens ?? null,
+          ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
         };
       });
     };
@@ -6362,7 +6508,10 @@ export function Chats({
   // panel's own resizable width drives it).
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <ChatActionProviders signIn={signInToActiveCli} retry={retryActiveRun}>
+      <ChatProviders
+        signIn={signInToActiveCli}
+        retry={retryActiveRun}
+        callContext={resolveCallReading}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -6487,7 +6636,16 @@ export function Chats({
                           // scrolling past conversations nobody was returning
                           // to. The header's count stays the section's TOTAL,
                           // so what the fold holds back is never in doubt.
-                          const folded = previewSectionRuns(sectionRuns, {
+                          // The PINNED band leads the section and the fold is
+                          // computed over what is left. Two reasons it is
+                          // taken out first rather than kept and `keep`-ed
+                          // through: the fold preserves the caller's order, so
+                          // a pinned row would sit wherever activity had put
+                          // it — pinned and third — and `Show all` could
+                          // otherwise hide one, which is the one thing a pin
+                          // is a promise against.
+                          const { pinned, rest } = splitPinnedRuns(sectionRuns);
+                          const folded = previewSectionRuns(rest, {
                             keep: (run) => {
                               if (run.id === activeRunId) {
                                 return true;
@@ -6499,9 +6657,10 @@ export function Chats({
                             },
                           });
                           const showingAll = expandedSections.has(sectionKey);
-                          const rows = (
-                            showingAll ? sectionRuns : folded.visible
-                          ).map((run) => (
+                          const rows = [
+                            ...pinned,
+                            ...(showingAll ? rest : folded.visible),
+                          ].map((run) => (
                             <ChatListItem
                               key={run.id}
                               runId={run.id}
@@ -6543,7 +6702,15 @@ export function Chats({
                               // the desk but destroying it.
                               onArchive={handleArchiveRun}
                               onUnarchive={handleUnarchiveRun}
+                              // Read off the ROW, like `archived` above and
+                              // for its reason: under `Show all` the band and
+                              // the rest are one list, so a flag derived from
+                              // where the row was drawn would offer Unpin to
+                              // whatever happened to come first.
+                              pinned={run.pinnedPosition !== null}
+                              onSetPinned={handleSetRunPinned}
                               onDragStartRun={handleRunDragStart}
+                              onDragOverRun={handleRunDragOver}
                               onDragEndRun={handleDragEnd}
                             />
                           ));
@@ -8301,7 +8468,7 @@ export function Chats({
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
-      </ChatActionProviders>
+      </ChatProviders>
     </CardBackedRequestsContext.Provider>
   );
 }

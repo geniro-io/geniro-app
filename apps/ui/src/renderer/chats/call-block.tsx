@@ -1,5 +1,5 @@
 import { ArrowRight, ArrowRightLeft } from 'lucide-react';
-import { memo } from 'react';
+import { memo, useContext } from 'react';
 
 import { HoverPopover } from '../components/hover-popover';
 import { avatarTone, initialsOf } from '../components/ui/avatar';
@@ -16,6 +16,7 @@ import {
   BlockTitle,
   BlockToolFooter,
 } from './block-shell';
+import { CalleeContextResolverContext } from './call-context';
 import { ContextMeter } from './context-meter';
 import { liveRowKind } from './live-row';
 import { NestedThreadContext } from './subagent-context';
@@ -24,6 +25,7 @@ import type { AgentTaskRow } from './task-payload';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
+  callBlockActivity,
   callBlockContext,
   type CallBlockEntry,
   callBlockSummary,
@@ -178,7 +180,31 @@ export const CallBlock = memo(function CallBlock({
   const status = blockStatusOf(block.status);
   const toolCount = countTools(block.entries);
   const usage = callBlockUsage(block);
-  const context = callBlockContext(block);
+  /**
+   * The callee's window, live first and the block's own settled rows last.
+   *
+   * The fold alone could only ever answer AFTER the call — a `turn_complete` is
+   * the one row it reads and the callee has not written one yet — so the ring
+   * was blank for the whole of every call and appeared at the moment it stopped
+   * being worth watching. REPORTED against a running cursor call, and measured
+   * on that same run: no ring for 46 seconds, then `80.4k / 200k` at the settle.
+   *
+   * Each figure falls back on its own, the rule `resolveCalleeContext` states in
+   * full: a source that reports one half says nothing about the other, so a
+   * live delta carrying only a count must not erase a window the settled turn
+   * already had.
+   */
+  const folded = callBlockContext(block);
+  const resolveCallReading = useContext(CalleeContextResolverContext);
+  const live =
+    resolveCallReading !== null && block.calleeNodeId !== null
+      ? resolveCallReading(block.calleeNodeId, block.callId)
+      : null;
+  const context = {
+    contextTokens: live?.contextTokens ?? folded.contextTokens,
+    contextWindowTokens:
+      live?.contextWindowTokens ?? folded.contextWindowTokens,
+  };
   const tasks = callBlockTasks(block);
   const failed = block.status === 'failed';
   // The callee's live row draws its own spinner and its own clock, so the
@@ -195,6 +221,28 @@ export const CallBlock = memo(function CallBlock({
    */
   const pending = status === 'running' && summaryText === null;
   /**
+   * What to say while the callee has produced no words yet — composed ONCE,
+   * because the shut band and the open card both show it.
+   *
+   * Not gated on {@link pending}: the open card draws this line under a
+   * different condition (running, with no live row of its own), so a lookup
+   * tied to the shut card's state would leave that one saying `is thinking...`
+   * about a callee three tools deep.
+   */
+  const activity = callBlockActivity(block);
+  /**
+   * A STALLED call outranks both — naming the tool it was last on would report
+   * work that is no longer happening, and `is thinking...` would be the same
+   * claim in softer words. The call is still open; only its silence is
+   * reported. A later callee row clears `stalled` upstream, so this cannot
+   * outlive the silence it describes.
+   */
+  const pendingLine = block.stalled
+    ? `${callee} has gone quiet — the call is still open`
+    : activity === null
+      ? `${callee} is thinking...`
+      : `${callee} is running ${activity}`;
+  /**
    * Whether there is anything to put in the band at all — `BlockShell` renders
    * it on `summary ?`, and an element is always truthy, so the caller has to
    * pass `undefined` to say it has nothing to show.
@@ -202,6 +250,10 @@ export const CallBlock = memo(function CallBlock({
   const hasSummary =
     summaryText !== null ||
     pending ||
+    // A call that has gone quiet with nothing else to show still owes the
+    // reader that one fact, so it earns the band on its own — on the same
+    // terms the marker itself is drawn, or the band could open empty.
+    (block.stalled && status === 'running') ||
     tasks.length > 0 ||
     usage.tokens !== null ||
     usage.costUsd !== null ||
@@ -222,7 +274,7 @@ export const CallBlock = memo(function CallBlock({
               {pending ? (
                 // The same sentence the OPEN card shows in this state, so the
                 // fold changes what is on screen and not what is true.
-                <BlockPendingLine>{callee} is thinking...</BlockPendingLine>
+                <BlockPendingLine>{pendingLine}</BlockPendingLine>
               ) : (
                 /* The words give way — the figures and the chip beside them are a
                  fixed handful of characters, while a callee's last message is a
@@ -231,6 +283,21 @@ export const CallBlock = memo(function CallBlock({
                   {summaryText ?? ''}
                 </span>
               )}
+              {/* GONE QUIET — its own marker rather than a variation on the
+                pending line, because that line is drawn only while there are
+                no words yet: a callee that spoke and THEN stopped is exactly
+                the case worth reporting, and it would have had none. Muted
+                rather than destructive: nothing has failed and nothing has
+                been cancelled, so the loudest tone on the page would be a
+                claim this row is careful not to make. */}
+              {block.stalled && status === 'running' ? (
+                <span
+                  data-slot="call-summary-stalled"
+                  title={`${callee} has produced nothing for a while. The call is still open — nothing has been cancelled.`}
+                  className="shrink-0 text-xs text-muted-foreground">
+                  quiet
+                </span>
+              ) : null}
               {/* WHAT IT IS ON, without opening the card — asked for beside the
                 figures ("also current tasks icon with popover"). The list is
                 the callee's own, folded out of this block, so a card that is
@@ -326,7 +393,7 @@ export const CallBlock = memo(function CallBlock({
           <BlockResult label={`Result from ${callee}`} text={block.result} />
         ) : null}
         {status === 'running' && !liveTail ? (
-          <BlockPendingLine>{callee} is thinking...</BlockPendingLine>
+          <BlockPendingLine>{pendingLine}</BlockPendingLine>
         ) : null}
         <BlockToolFooter
           count={toolCount}

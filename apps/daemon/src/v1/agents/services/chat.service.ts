@@ -1420,10 +1420,111 @@ export class ChatService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
+    // A pinned run RE-FILED carries its pin into the new band, and cannot
+    // carry its number: `pinnedPosition` is contiguous within a scope, so the
+    // old number collides with whatever already holds that slot next door.
+    // The two halves straddle the move deliberately — `repin` acts on the
+    // scope the run NAMES, so the band it is leaving has to be closed while it
+    // still names that one, and it can only join the new band once it does.
+    const moving = run.pinnedPosition !== null && run.groupId !== groupId;
+    if (moving) {
+      await this.runDao.repin(run, false, em);
+    }
     await this.runDao.updateById(runId, { groupId }, em);
     run.groupId = groupId;
+    if (moving) {
+      await this.runDao.repin(run, true, em);
+    }
     const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
     return this.toRunWire(run, previews.get(runId) ?? null);
+  }
+
+  /**
+   * Pin a run to the top of its own scope, or unpin it.
+   *
+   * Kind-blind like {@link setGroup} and {@link rename}, and for their reason:
+   * the sidebar lists chats and workflow runs together, so this is a run-row
+   * property rather than a command that has to reach the right engine.
+   *
+   * An ARCHIVED run is refused rather than pinned. The archive is the shelf a
+   * thread goes to when it is done being on the desk, and the pinned band is
+   * drawn at the top of the desk — pinning something that is not there would
+   * be a state with no rendering, and {@link archive} clears the pin for the
+   * same reason from the other direction.
+   *
+   * It answers with the whole SCOPE rather than the pressed run, which is the
+   * one way this differs from {@link setGroup}: a pin renumbers the band it
+   * joins and an unpin closes the gap behind it, so a client handed only the
+   * row it pressed keeps a stale position for every other row in that band —
+   * after which two of them can claim one slot, and the order the sidebar
+   * draws is one neither side chose. The pressed run rides along even when it
+   * has just left the band, since its cleared pin is what the caller pressed
+   * for.
+   */
+  async setPinned(runId: string, pinned: boolean): Promise<RunWire[]> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run) {
+      throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    if (pinned && run.archivedAt !== null) {
+      throw new BadRequestException(
+        'RUN_ARCHIVED',
+        `run ${runId} is archived — unarchive it before pinning`,
+      );
+    }
+    await this.runDao.repin(run, pinned, em);
+    const band = await this.runDao.pinnedInScope(run.groupId, em);
+    const affected = band.some((row) => row.id === run.id)
+      ? band
+      : [...band, run];
+    const previews = await this.itemDao.latestMessageTextPerRun(
+      affected.map((row) => row.id),
+      em,
+    );
+    return affected.map((row) =>
+      this.toRunWire(row, previews.get(row.id) ?? null),
+    );
+  }
+
+  /**
+   * Rearrange ONE scope's pinned band, and answer with it.
+   *
+   * Takes the whole arrangement rather than "move this one up", exactly as
+   * `RunGroupsService.reorder` does and for its reason: the band is reordered
+   * by DRAGGING, where the gesture produces an arrangement rather than a
+   * displacement — which also makes the write idempotent, where a relative
+   * move replayed moves twice.
+   *
+   * A pinned run the client did not name is APPENDED in its current order
+   * rather than dropped: the list is a snapshot of what one window could see,
+   * and a thread pinned in another window (or by a request still in flight
+   * when the drag started) must not lose its place because a stale client
+   * failed to mention it. An id naming nothing pinned in THIS scope is
+   * ignored for the same reason — a thread unpinned or re-filed mid-drag is
+   * not a reason to refuse the arrangement, and it is also what keeps the
+   * write inside one band when a client names a run from another.
+   */
+  async reorderPinned(
+    groupId: string | null,
+    ids: readonly string[],
+  ): Promise<RunWire[]> {
+    const em = this.em.fork();
+    const band = await this.runDao.pinnedInScope(groupId, em);
+    const byId = new Map(band.map((run) => [run.id, run]));
+    const named = ids
+      .map((id) => byId.get(id))
+      .filter((run): run is Run => run !== undefined);
+    const namedIds = new Set(named.map((run) => run.id));
+    const ordered = [...named, ...band.filter((run) => !namedIds.has(run.id))];
+    await this.runDao.applyPinnedOrder(ordered, em);
+    const previews = await this.itemDao.latestMessageTextPerRun(
+      ordered.map((run) => run.id),
+      em,
+    );
+    return ordered.map((run) =>
+      this.toRunWire(run, previews.get(run.id) ?? null),
+    );
   }
 
   /**
@@ -1494,6 +1595,14 @@ export class ChatService implements OnModuleInit {
       // with a status the run no longer has is a lie the caller cannot detect.
       const fresh = (await this.runDao.getById(runId, em)) ?? run;
       fresh.archivedAt = archivedAt;
+      // Shelving CLEARS the pin, and the band closes behind it. A pin is a
+      // property of an OPEN thread — the band is drawn at the top of the desk
+      // — so one kept across the archive would either hold a slot in a list it
+      // is no longer drawn in, or come back months later in the middle of an
+      // arrangement the user has since rebuilt. Unarchiving therefore returns
+      // the thread unpinned, which is the state it is in while shelved rather
+      // than a second rule.
+      await this.runDao.repin(fresh, false, em);
       const previews = await this.itemDao.latestMessageTextPerRun([runId], em);
       return this.toRunWire(fresh, previews.get(runId) ?? null);
     } finally {
@@ -1817,6 +1926,14 @@ export class ChatService implements OnModuleInit {
         this.partials.reasoning(runId, SINGLE_AGENT_NODE, null, event.text);
         await this.restatusAfterOffTurnSignal(runId, event);
       }
+      return;
+    }
+    if (event.type === 'usage_progress') {
+      // The live half of what the turn is COSTING. No durable twin beside it,
+      // unlike `context_progress` below: the turn's own `turn_complete` usage
+      // already carries these four counts for the whole turn, so filing them
+      // per request would be the same money written down twice.
+      this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
       return;
     }
     if (event.type === 'context_progress') {
@@ -4046,6 +4163,13 @@ export class ChatService implements OnModuleInit {
         disposeComparer?.();
         disposeGallerist?.();
       };
+      // ZERO the last turn's running bill before this one's first request can
+      // report. It belongs HERE rather than at the settle for the reason the
+      // comment below gives about the process: a chat's CLI is kept across
+      // turns, so the live plane's state is too — and clearing at the settle
+      // would leave the figure blank for the whole gap between turns, which is
+      // exactly when a reader is looking at what the last one cost.
+      this.partials.startTurn(runId, SINGLE_AGENT_NODE);
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -4141,6 +4265,14 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.text,
               );
+              return;
+            }
+            if (event.type === 'usage_progress') {
+              // The IN-TURN site, and the one that matters: its off-turn twin
+              // above only ever sees a CLI carrying on by itself after a turn
+              // settled. Wiring only that one was measured to draw nothing at
+              // all through a whole live turn.
+              this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
             if (event.type === 'context_progress') {

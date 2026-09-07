@@ -45,10 +45,12 @@ function openRows(el: HTMLDivElement): [string, string][] {
     el.querySelector<HTMLElement>('[data-menu-trigger]')?.click();
   });
   return [...el.querySelectorAll('[role="option"]')].map((option) => {
-    const spans = [...option.querySelectorAll('span')];
+    // By SLOT, not by span position: a row wraps its label in a column so a
+    // sub-label can sit under it, and counting spans then reads the wrapper as
+    // the label and the label as the hint.
     return [
-      spans[0]?.textContent ?? '',
-      spans[1]?.textContent ?? '',
+      option.querySelector('[data-slot="menu-item-label"]')?.textContent ?? '',
+      option.querySelector('[data-slot="menu-item-hint"]')?.textContent ?? '',
     ] satisfies [string, string];
   });
 }

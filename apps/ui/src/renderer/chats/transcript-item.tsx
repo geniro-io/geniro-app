@@ -198,6 +198,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
+            spend={payloadString(item.payload, 'spend')}
             waitingOn={
               waitingCall === null
                 ? null

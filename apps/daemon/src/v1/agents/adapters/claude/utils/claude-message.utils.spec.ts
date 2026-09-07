@@ -747,10 +747,49 @@ describe('mapClaudeMessage — the control dialogue (ask mode)', () => {
     );
     // Prompt side only — output tokens are not context — and cache traffic
     // counts, because on a resumed session it IS the context.
+    //
+    // The SPEND rides the same line, unsummed, and the two readings are the
+    // reason both events exist: `context_progress` folds three of these four
+    // into a level, which is the wrong number for a bill because cache reads
+    // dominate it and are the cheapest tokens on it. Real figures off a
+    // captured 2.1.220 line, so the split is pinned against the CLI's own
+    // field names rather than against this spec's arithmetic.
     expect(events).toEqual([
       { type: 'context_progress', contextTokens: 2 + 36569 + 18366 },
+      {
+        type: 'usage_progress',
+        inputTokens: 2,
+        outputTokens: 1,
+        cacheReadTokens: 18366,
+        cacheCreationTokens: 36569,
+      },
       { type: 'text', text: 'A teapot.' },
     ]);
+  });
+
+  it('emits NO spend event for a delegate’s own assistant line', () => {
+    // Same rule as the context above it, for a different reason worth stating:
+    // a delegate's context is another conversation's LEVEL and would be wrong
+    // to show, while its spend is real money on this turn — but the turn's own
+    // `turn_complete` roll-up already counts every request the turn made,
+    // delegates included. Publishing both would show a running total that then
+    // SHRANK at the settle.
+    const events = mapClaudeMessage(
+      {
+        type: 'assistant',
+        parent_tool_use_id: 'toolu_delegate',
+        message: {
+          content: [{ type: 'text', text: 'from a delegate' }],
+          usage: { input_tokens: 11, output_tokens: 22 },
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+
+    expect(events.some((event) => event.type === 'usage_progress')).toBe(false);
+    expect(events.some((event) => event.type === 'context_progress')).toBe(
+      false,
+    );
   });
 
   it('emits no context event for an assistant line that carries no usage', () => {

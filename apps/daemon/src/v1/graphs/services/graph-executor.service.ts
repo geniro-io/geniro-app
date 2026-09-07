@@ -1367,6 +1367,13 @@ export class GraphExecutorService {
             );
             return;
           }
+          if (event.type === 'usage_progress') {
+            // The node's own running bill for this turn — the graph twin of
+            // `ChatService`'s site, and ephemeral for the same reason: the
+            // turn's `turn_complete` usage is the durable copy.
+            this.partials.spend(runId, ownerKey, node.id, event);
+            return;
+          }
           if (event.type === 'context_progress') {
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next
@@ -1615,6 +1622,12 @@ export class GraphExecutorService {
                 nodeId: node.id,
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
+              if (callContext) {
+                // This callee is demonstrably alive — restart its silence
+                // watchdog. The broker holds a promise and nothing else, so
+                // this seam is the only place a callee's output is visible.
+                this.callBroker.noteCalleeActivity(runId, callContext.callId);
+              }
             } catch (err) {
               // The card can't be shown — deny to unblock the parked node CLI
               // so the node settles instead of hanging forever on a verdict
@@ -1627,6 +1640,12 @@ export class GraphExecutorService {
             }
           }
           if (event.type === 'approval_request') {
+            // A CALLEE parked on a card is waiting on a person, not wedged —
+            // stand its silence window down until the verdict lands, the same
+            // carve-out `spawn-cli.ts` makes for its own deadline.
+            if (callContext) {
+              this.callBroker.noteCalleeBlocked(runId, callContext.callId);
+            }
             this.approvals.track({
               runId,
               nodeId: node.id,
@@ -1637,6 +1656,15 @@ export class GraphExecutorService {
               // never re-derives it (`PendingApproval.question`).
               question: isQuestion,
               respond: (allow, answer) => {
+                // The card is gone whatever the delivery outcome, so the
+                // window restarts either way — a refused delivery leaves the
+                // callee unblocked from this side's point of view.
+                if (callContext) {
+                  this.callBroker.noteCalleeUnblocked(
+                    runId,
+                    callContext.callId,
+                  );
+                }
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
@@ -1986,6 +2014,12 @@ export class GraphExecutorService {
             finalText: string | null;
             sessionId: string | null;
           };
+          // The silence window measures the CALLEE, so it starts when the
+          // callee does — not when `call_agent` returned. Depth-1 calls queue
+          // on a four-slot pool, so a fan-out's fifth call can sit here for
+          // minutes before anything of its own could have been produced, and a
+          // window armed at the call would report a callee that had not begun.
+          this.callBroker.noteCalleeActivity(runId, callId);
           try {
             persistTurnStart(callee, callId);
             ({ handle, finish } = beginAgentTurn(callee, message, {

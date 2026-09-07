@@ -2357,6 +2357,28 @@ export interface RunDeltaEvent {
    * model this session — has reported one.
    */
   contextWindowTokens: number | null;
+  /**
+   * What THIS TURN has spent so far — its requests' tokens, summed as they
+   * land, rather than the one figure the `turn_complete` roll-up reports when
+   * it is over.
+   *
+   * A RUNNING TOTAL, unlike `contextTokens` above, which is a level: the two
+   * move independently and a compaction sends them in opposite directions.
+   * Cache reads are their own field because they are priced apart and dominate
+   * the input side of any resumed conversation — folded in, the figure would
+   * say a cheap turn was an expensive one.
+   *
+   * CLAUDE ONLY today, and null everywhere else. Cursor exposes no token
+   * accounting a client can reach: measured 2026-09-06 on 2026.08.31-4057e58 —
+   * its ACP wire declares `usage_update` in the schema union and emits it
+   * nowhere, its session store holds the context breakdown and nothing else,
+   * its `afterAgentResponse` and `stop` hooks do not fire, and the `sessionEnd`
+   * hook that does fire carries duration and ids. Null is therefore the honest
+   * reading for that CLI rather than a gap to be filled in with an estimate.
+   */
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
 }
 
 /**
@@ -2672,6 +2694,21 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and workflow runs together',
+    ),
+  /**
+   * Where this run sits in the pinned band at the top of its own group (or of
+   * the loose list, when it belongs to none); null while it is not pinned.
+   *
+   * Scoped by `groupId` rather than global, so two runs in different groups
+   * sharing a position is normal and a client must never sort on this alone —
+   * it orders a scope's pinned band and nothing else.
+   */
+  pinnedPosition: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      "Position in the pinned band at the top of this run's own group (or of the loose list); null while unpinned",
     ),
   createdAt: z.string(),
   /**

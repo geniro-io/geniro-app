@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,14 +34,23 @@ describe('TasksService (in-memory sqlite)', () => {
   // must flush on THIS one: `orm.em` is a different UnitOfWork and does not
   // manage entities loaded here, so a write flushed there never lands.
   let em: EntityManager;
-  // A real directory: `update` canonicalizes `worktreePath` through
-  // `resolveValidDirectory`, which refuses one that is not on disk.
+  /**
+   * A real directory, in its CANONICAL form — the shape the service stores.
+   *
+   * `update` puts `worktreePath` through `resolveValidDirectory`, which both
+   * refuses a path that is not on disk AND resolves its symlinks. On macOS
+   * `os.tmpdir()` is `/var/folders/…`, itself a symlink to `/private/var/…`,
+   * so a raw `mkdtempSync` result and what the service stores differ by that
+   * prefix and the round-trip below fails on every Mac while passing on Linux,
+   * where `/var` is a real directory. Canonicalizing the fixture at creation
+   * is what `resolve-cwd.spec.ts` and `cli-auth.service.spec.ts` already do.
+   */
   let worktree: string;
   let events: TaskEventBus;
   let changes: TaskChangedEvent[];
 
   beforeAll(async () => {
-    worktree = mkdtempSync(join(tmpdir(), 'geniro-worktree-'));
+    worktree = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-worktree-')));
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',

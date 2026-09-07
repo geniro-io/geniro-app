@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { ItemKind } from '../../runs/runs.types';
@@ -1142,5 +1142,232 @@ describe('CallBroker — untilAbandoned / untilDeadline reject propagation', () 
     await expect(untilDeadline(60_000, Promise.resolve(outcome))).resolves.toBe(
       outcome,
     );
+  });
+});
+
+describe('CallBroker — a call whose callee goes quiet', () => {
+  // The gap this milestone's own verification named: every abandonment and
+  // deadline case in this file enters through `awaitAgent`, and none drives
+  // the SYNC arm — which is the arm a live cursor call was measured taking
+  // (`call_started` carrying `mode: 'sync'`), and the one whose wait has
+  // neither a deadline nor an abandon race around it.
+
+  it('says so in the caller transcript, and does NOT settle the call', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      let settled = false;
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'take your time',
+      });
+      void call.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+
+      const stalls = items.filter((i) => i.payload.stalledCall === true);
+      expect(stalls).toHaveLength(1);
+      expect(stalls[0]!.kind).toBe('system');
+      // On the CALLER's node — it is the caller's transcript that had no way
+      // to say anything about a callee that had stopped.
+      expect(stalls[0]!.nodeId).toBe('orch');
+      expect(stalls[0]!.payload).toMatchObject({
+        callId: 'call-1',
+        calleeNodeId: 'helper',
+      });
+      // The KEY, not just the presence of a sentence: `transcript-item.tsx`
+      // reads a `system` row's `message` and draws nothing without it, so a
+      // row whose wording sits under any other key is persisted, folded, and
+      // invisible. `severity` matters for the same reason — an absent one
+      // resolves to the red failure chrome, and nothing here has failed.
+      expect(stalls[0]!.payload.message).toContain('has produced nothing');
+      expect(stalls[0]!.payload.severity).toBe('info');
+
+      // The whole of the carve-out: SURFACED, never cancelled. `callAgent`
+      // takes no cancellation signal, and giving it one would change what
+      // sync MEANS, which this milestone forbids.
+      expect(settled).toBe(false);
+      expect(items.some((i) => i.kind === 'call_result')).toBe(false);
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'late, but fine',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+      // And it settles normally afterwards — the advisory changed nothing
+      // about the call's own outcome.
+      expect(items.some((i) => i.kind === 'call_result')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stands down while the callee is blocked on a verdict, and resumes after', async () => {
+    // A callee parked on an approval card emits nothing by construction, so a
+    // window left running would be timing the PERSON reading the card and
+    // would report a callee doing exactly what it should. `spawn-cli.ts`
+    // suspends its own silence deadline on the same reasoning.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'ask me something',
+      });
+
+      broker.noteCalleeBlocked('run-1', 'call-1');
+      // An hour on a card is a long think, not a stall.
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      // Answered — and now the silence counts again, from here.
+      broker.noteCalleeUnblocked('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stays suspended even though the card itself is a row', async () => {
+    // The trap in the pairing: an `approval_request` is PERSISTED, so the
+    // executor's own activity hook fires for the very event that suspended the
+    // window. Without the guard in `armSilenceWatch` that row would re-arm it
+    // and the carve-out above would do nothing.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'ask me something',
+      });
+
+      broker.noteCalleeBlocked('run-1', 'call-1');
+      broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes NOTHING once the run is unregistered', async () => {
+    // The teardown case, and the one the sibling `parked` timer's own comment
+    // already warned about: a wedged callee is both what arms this watchdog
+    // AND what makes `RunTeardownService`'s settle wait give up and purge the
+    // run anyway. A timer left armed then inserts an `items` row for a run
+    // whose rows are gone — and `Item.runId` has no foreign key, so the insert
+    // SUCCEEDS and leaves transcript text no route can reach or delete.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      void broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'wedge',
+      });
+
+      broker.unregisterRun('run-1');
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'never collected',
+        error: null,
+        sessionId: 'sess-1',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-arms on every callee row, so a WORKING callee is never called stalled', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'work steadily',
+      });
+
+      // Twenty-seven minutes of work, never nine of them silent. A total-
+      // duration cap would have fired twice over by here — which is the
+      // behaviour the silence bound exists instead of.
+      for (let i = 0; i < 3; i += 1) {
+        await vi.advanceTimersByTimeAsync(9 * 60_000);
+        broker.noteCalleeActivity('run-1', 'call-1');
+      }
+
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says it ONCE, even after the callee wakes and goes quiet again', async () => {
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'hang',
+      });
+
+      // Go quiet, be reported, produce ONE row, then go quiet again. The
+      // second silence re-arms the watchdog and fires it a second time — so
+      // this drives the `saidStalled` guard rather than the one-shot timer,
+      // which would have passed with the guard deleted.
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+
+      // An advisory per silent stretch would bury the conversation it is
+      // warning about.
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'eventually',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -26,9 +26,11 @@ import type {
   ItemDto,
   LocalImageDto,
   RenameRunDto,
+  ReorderPinnedDto,
   RunDto,
   SendMessageDto,
   SetRunGroupDto,
+  SetRunPinnedDto,
   ShellOutputDto,
   SweepArchivedDto,
   SweptArchivedDto,
@@ -94,6 +96,10 @@ export interface ChatsApiRenameRunRequest {
     renameRunDto: RenameRunDto;
 }
 
+export interface ChatsApiReorderPinnedRunsRequest {
+    reorderPinnedDto: ReorderPinnedDto;
+}
+
 export interface ChatsApiSendChatMessageRequest {
     runId: string;
     sendMessageDto: SendMessageDto;
@@ -102,6 +108,11 @@ export interface ChatsApiSendChatMessageRequest {
 export interface ChatsApiSetRunGroupRequest {
     runId: string;
     setRunGroupDto: SetRunGroupDto;
+}
+
+export interface ChatsApiSetRunPinnedRequest {
+    runId: string;
+    setRunPinnedDto: SetRunPinnedDto;
 }
 
 export interface ChatsApiSweepArchivedChatsRequest {
@@ -797,6 +808,53 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async reorderPinnedRunsRaw(requestParameters: ChatsApiReorderPinnedRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
+        if (requestParameters['reorderPinnedDto'] == null) {
+            throw new runtime.RequiredError(
+                'reorderPinnedDto',
+                'Required parameter "reorderPinnedDto" was null or undefined when calling reorderPinnedRuns().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/reorder-pinned`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['reorderPinnedDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reorderPinnedRuns(requestParameters: ChatsApiReorderPinnedRunsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
+        const response = await this.reorderPinnedRunsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async sendChatMessageRaw(requestParameters: ChatsApiSendChatMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ItemDto>> {
         if (requestParameters['runId'] == null) {
             throw new runtime.RequiredError(
@@ -901,6 +959,61 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async setRunGroup(requestParameters: ChatsApiSetRunGroupRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<RunDto> {
         const response = await this.setRunGroupRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async setRunPinnedRaw(requestParameters: ChatsApiSetRunPinnedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling setRunPinned().'
+            );
+        }
+
+        if (requestParameters['setRunPinnedDto'] == null) {
+            throw new runtime.RequiredError(
+                'setRunPinnedDto',
+                'Required parameter "setRunPinnedDto" was null or undefined when calling setRunPinned().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/pin`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'PUT',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['setRunPinnedDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async setRunPinned(requestParameters: ChatsApiSetRunPinnedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<RunDto>> {
+        const response = await this.setRunPinnedRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

@@ -42,6 +42,7 @@ const run1: ChatRun = {
   configDir: null,
   configDirPin: null,
   groupId: null,
+  pinnedPosition: null,
   createdAt: 'now',
   updatedAt: 'now',
   archivedAt: null,

@@ -35,6 +35,7 @@ export function NavListItem({
   suspendActivation = false,
   draggable = false,
   onDragStart,
+  onDragOver,
   onDragEnd,
 }: {
   active: boolean;
@@ -59,18 +60,24 @@ export function NavListItem({
    *
    * On the `li` rather than on the content stack: the activation overlay spans
    * the row and would otherwise be what the pointer grabs, so a drag begun
-   * anywhere but the text would do nothing. Only the two ENDS of the gesture
-   * are here — where it lands is the drop zone's business, and `dragover`
-   * bubbles up to it.
+   * anywhere but the text would do nothing.
+   *
+   * `onDragOver` is here for the one question a drop zone cannot answer:
+   * WHICH row the pointer is over. Where a gesture lands is still the zone's
+   * business — `dragover` bubbles up to it either way, and the row's own
+   * handler runs first without stopping it — but a list that rearranges
+   * itself under the cursor has to be told the row, not the section.
    */
   draggable?: boolean;
   onDragStart?: (event: React.DragEvent) => void;
+  onDragOver?: (event: React.DragEvent) => void;
   onDragEnd?: (event: React.DragEvent) => void;
 }): React.JSX.Element {
   return (
     <li
       draggable={draggable}
       onDragStart={onDragStart}
+      onDragOver={onDragOver}
       onDragEnd={onDragEnd}
       className={cn(
         'relative flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 hover:bg-accent/50',

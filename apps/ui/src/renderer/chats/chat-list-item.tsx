@@ -2,6 +2,8 @@ import {
   Archive,
   ArchiveRestore,
   Pencil,
+  Pin,
+  PinOff,
   Trash2,
   Workflow as WorkflowIcon,
 } from 'lucide-react';
@@ -110,8 +112,11 @@ export const ChatListItem = memo(function ChatListItem({
   onArchive,
   onUnarchive,
   archived = false,
+  pinned = false,
+  onSetPinned,
   dragging = false,
   onDragStartRun,
+  onDragOverRun,
   onDragEndRun,
 }: {
   runId: string;
@@ -199,6 +204,22 @@ export const ChatListItem = memo(function ChatListItem({
    * actions it offers: Archive on the desk, Unarchive + Delete on the shelf.
    */
   archived?: boolean;
+  /**
+   * This thread is pinned to the top of its own group (or of the loose list).
+   *
+   * Read off the ROW rather than from where the section drew it, on the same
+   * rule {@link archived} follows: the band and the rest are one list of rows,
+   * so a position-derived flag would offer Unpin to whatever happened to be
+   * drawn first.
+   */
+  pinned?: boolean;
+  /**
+   * Pin this thread, or unpin it. Absent on a row that cannot be pinned — an
+   * archived one — which is what withholds the control rather than disabling
+   * it: the daemon refuses the write, so a live button would be a press with
+   * nothing behind it.
+   */
+  onSetPinned?: (runId: string, pinned: boolean) => void;
   /** This is the row being dragged — dimmed while it travels. */
   dragging?: boolean;
   /**
@@ -207,6 +228,16 @@ export const ChatListItem = memo(function ChatListItem({
    * between its rows, and `dragover` bubbles there from here anyway.
    */
   onDragStartRun?: (runId: string) => void;
+  /**
+   * The pointer is over THIS row while something is being dragged.
+   *
+   * What that means is the section's business, not the row's: within one
+   * pinned band it rearranges the band under the cursor, and anywhere else it
+   * does nothing at all. The row reports the position and knows neither what
+   * is being carried nor what happens to it — the same split
+   * {@link onDragStartRun} already documents for where a chat LANDS.
+   */
+  onDragOverRun?: (runId: string) => void;
   onDragEndRun?: () => void;
 }): React.JSX.Element {
   const meta = RUN_STATUS_META[status];
@@ -292,6 +323,16 @@ export const ChatListItem = memo(function ChatListItem({
         event.dataTransfer.effectAllowed = 'move';
         onDragStartRun?.(runId);
       }}
+      onDragOver={(event) => {
+        // Prevent FIRST, decide second. A dragover the row does not act on
+        // must still accept the drop, or the browser calls the gesture
+        // unsuccessful and flies the carried row home — the snap-back the
+        // queued strip already records. This list rearranges live under the
+        // pointer, so the row beneath the cursor when the button comes up is
+        // routinely the dragged one itself.
+        event.preventDefault();
+        onDragOverRun?.(runId);
+      }}
       onDragEnd={() => onDragEndRun?.()}
       onActivate={() => onActivate(runId)}>
       <span className="flex items-center gap-1.5">
@@ -331,6 +372,21 @@ export const ChatListItem = memo(function ChatListItem({
           // be decorative markup carrying a label nothing announces.
           <span role="img" aria-label="archived" title="Archived">
             <Archive
+              aria-hidden="true"
+              className="size-3.5 shrink-0 text-muted-foreground"
+            />
+          </span>
+        ) : null}
+        {/* At REST, not on hover: the band's rows sit against the ordinary
+            ones in the same list under the same rail, so with the mark behind
+            a hover the only thing saying which rows are pinned would be their
+            position — and position is exactly what a reader cannot check,
+            since the newest thread legitimately sits at the top of the rest.
+            The accessible name is on a wrapper for the archived glyph's own
+            reason. */}
+        {pinned ? (
+          <span role="img" aria-label="pinned" title="Pinned">
+            <Pin
               aria-hidden="true"
               className="size-3.5 shrink-0 text-muted-foreground"
             />
@@ -403,6 +459,33 @@ export const ChatListItem = memo(function ChatListItem({
                 <Pencil className="size-3 shrink-0" />
               </Button>
             )}
+            {/* FIRST among the row's actions, and offered on both kinds of
+                row: pinning is about where a thread is DRAWN, which is a
+                question about the sidebar rather than about what the run is —
+                so a workflow run earns it exactly as a chat does, unlike
+                Rename beside it, whose name belongs to the library entry. */}
+            {!archived && onSetPinned ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`${pinned ? 'Unpin' : 'Pin'} ${label}`}
+                title={pinned ? 'Unpin' : 'Pin to the top of its group'}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  // The state it should END in, never a toggle: the row is
+                  // told what it is, so two windows pressing at once cannot
+                  // each flip the other's answer back.
+                  onSetPinned(runId, !pinned);
+                }}>
+                {pinned ? (
+                  <PinOff className="size-3 shrink-0" />
+                ) : (
+                  <Pin className="size-3 shrink-0" />
+                )}
+              </Button>
+            ) : null}
             {/* The desk's destructive-looking action is ARCHIVE, and it is
                 reversible: nothing is destroyed, the thread moves to the
                 shelf. Both kinds of row. */}

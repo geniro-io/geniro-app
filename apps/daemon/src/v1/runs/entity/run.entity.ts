@@ -220,6 +220,27 @@ export class Run extends TimestampsEntity {
   groupId: string | null = null;
 
   /**
+   * Where this run sits in the PINNED band at the top of its own scope, or
+   * null for one that is not pinned at all.
+   *
+   * The scope is {@link groupId}: a pinned run leads the group it is filed
+   * under, and a pinned loose run leads the sidebar. So the column is a
+   * position WITHIN a scope rather than a global one, and two runs in
+   * different groups holding position 0 is the normal case.
+   *
+   * Kept CONTIGUOUS from 0 within each scope by every write that pins,
+   * unpins, archives or re-files, exactly as `RunGroup.position` is — so "the
+   * one above this" is always `position - 1` and no gap can accumulate into
+   * an ordering two clients disagree about.
+   *
+   * Nullable INTEGER so the `safe: true` schema sync adds it additively, no
+   * migration — and so that "not pinned" is a value rather than a sentinel
+   * number a sort would have to know about.
+   */
+  @Property({ type: 'integer', nullable: true })
+  pinnedPosition: number | null = null;
+
+  /**
    * A summary of everything this conversation held BEFORE geniro compacted it,
    * waiting to be handed to the next turn — null whenever nothing is owed.
    *

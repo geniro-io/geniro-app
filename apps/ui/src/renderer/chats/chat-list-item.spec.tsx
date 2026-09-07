@@ -78,6 +78,89 @@ async function press(input: HTMLInputElement, key: string): Promise<void> {
 }
 
 describe('ChatListItem', () => {
+  describe('pinning', () => {
+    it('asks for the state the row should END in, never a toggle', async () => {
+      const onSetPinned = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ pinned: false, onSetPinned })} />,
+      );
+      buttonLabelled(container, 'Pin Review team').click();
+      expect(onSetPinned).toHaveBeenCalledWith('run-1', true);
+
+      const pinnedRow = await mount(
+        <ChatListItem {...props({ pinned: true, onSetPinned })} />,
+      );
+      buttonLabelled(pinnedRow, 'Unpin Review team').click();
+      // The absolute state, so two windows pressing at once cannot each flip
+      // the other's answer back.
+      expect(onSetPinned).toHaveBeenLastCalledWith('run-1', false);
+    });
+
+    it('marks a pinned row at REST, not only on hover', async () => {
+      // The band sits against the ordinary rows in one list under one rail, so
+      // with the mark behind a hover the only thing saying which rows are
+      // pinned would be position — which a reader cannot check, the newest
+      // thread legitimately leading the rest.
+      const container = await mount(
+        <ChatListItem {...props({ pinned: true, onSetPinned: vi.fn() })} />,
+      );
+      expect(container.querySelector('[aria-label="pinned"]')).not.toBeNull();
+    });
+
+    it('draws no mark on an unpinned row', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ pinned: false, onSetPinned: vi.fn() })} />,
+      );
+      expect(container.querySelector('[aria-label="pinned"]')).toBeNull();
+    });
+
+    it('withholds the control on an ARCHIVED row rather than disabling it', async () => {
+      // The daemon refuses to pin a shelved thread, so a live button here
+      // would be a press with nothing behind it.
+      const container = await mount(
+        <ChatListItem
+          {...props({ archived: true, pinned: false, onSetPinned: vi.fn() })}
+        />,
+      );
+      expect(container.querySelector('button[aria-label^="Pin "]')).toBeNull();
+    });
+
+    it('reports the row a drag is over, and ACCEPTS the drop either way', async () => {
+      // jsdom implements neither DragEvent nor DataTransfer, so this is a
+      // plain bubbling cancelable Event — the same stand-in `queued-strip`'s
+      // own drag spec uses, and enough for the two observables here.
+      const onDragOverRun = vi.fn();
+      const container = await mount(
+        <ChatListItem
+          {...props({ pinned: true, onSetPinned: vi.fn(), onDragOverRun })}
+        />,
+      );
+      const row = container.querySelector('li')!;
+      const event = new Event('dragover', { bubbles: true, cancelable: true });
+      await act(async () => {
+        row.dispatchEvent(event);
+      });
+      expect(onDragOverRun).toHaveBeenCalledWith('run-1');
+      // `defaultPrevented` is the real observable and the only one — jsdom runs
+      // no drag machinery. A dragover the row does not prevent is an
+      // unsuccessful drop, and the browser flies the carried row home even
+      // though the reorder itself landed.
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('offers it on a WORKFLOW row too — where the row is drawn is not about the run kind', async () => {
+      // Unlike Rename beside it, whose name belongs to the library entry.
+      const container = await mount(
+        <ChatListItem
+          {...props({ isWorkflow: true, pinned: false, onSetPinned: vi.fn() })}
+        />,
+      );
+      expect(
+        container.querySelector('button[aria-label^="Pin "]'),
+      ).not.toBeNull();
+    });
+  });
+
   it('renders the label, the last message, and the relative activity time', async () => {
     const container = await mount(<ChatListItem {...props()} />);
     expect(container.textContent).toContain('Review team');

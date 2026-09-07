@@ -146,6 +146,7 @@ export function runToWire(
     configDir: run.configDir,
     configDirPin,
     groupId: run.groupId,
+    pinnedPosition: run.pinnedPosition,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
     archivedAt: run.archivedAt?.toISOString() ?? null,

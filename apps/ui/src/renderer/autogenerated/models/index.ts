@@ -2395,6 +2395,25 @@ export interface RenameRunDto {
 /**
  * 
  * @export
+ * @interface ReorderPinnedDto
+ */
+export interface ReorderPinnedDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ReorderPinnedDto
+     */
+    groupId: string | null;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ReorderPinnedDto
+     */
+    ids: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface ReorderRunGroupsDto
  */
 export interface ReorderRunGroupsDto {
@@ -2542,6 +2561,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     groupId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    pinnedPosition: number | null;
     /**
      * 
      * @type {string}
@@ -2916,6 +2941,19 @@ export interface SetRunGroupDto {
      * @memberof SetRunGroupDto
      */
     groupId: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface SetRunPinnedDto
+ */
+export interface SetRunPinnedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof SetRunPinnedDto
+     */
+    pinned: boolean;
 }
 /**
  * 

@@ -78,7 +78,7 @@ import { isHostMetricsCall } from '../utils/host-metrics';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
-import { asRecord } from '../utils/json-util';
+import { asArray, asRecord, asString } from '../utils/json-util';
 import { messageTextOf } from '../utils/message-preview';
 import {
   readModelParameters,
@@ -2804,12 +2804,29 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Reopen a failed turn's conversation without replaying its prompt.
+   * Carry on from a failed turn — in ONE of two ways, decided by the CLI.
    *
    * What the user pressed is Retry on an error row: the conversation is intact
-   * and the work is not, so this re-establishes the agent's session and stops.
-   * The agent is asked nothing, so it answers nothing — the transcript row the
-   * turn writes is the only evidence the recovery happened.
+   * and the work is not.
+   *
+   * On a CLI that can reopen a conversation WITHOUT a prompt (an ACP
+   * `session/load` with the prompt branched away), this re-establishes the
+   * session and stops. The agent is asked nothing, so it answers nothing — the
+   * transcript row the turn writes is the only evidence the recovery happened.
+   *
+   * On a CLI that CANNOT — claude, whose prompt IS how a turn opens — the retry
+   * RE-SENDS the message the interrupted turn was answering. That is a real
+   * second send and is written as one: the message is persisted again as the
+   * user's row, so the transcript shows what was asked twice rather than
+   * implying the agent replied to nothing. Until this branch existed the button
+   * was drawn on every claude error row and could only ever refuse, which is
+   * what got reported.
+   *
+   * A session id is required either way. Without one there is nothing to carry
+   * on FROM: the resume-only turn would open a fresh session and settle at once
+   * (a success reported for a recovery that did not happen), and the re-send
+   * would start a brand-new conversation with the old message in it, losing
+   * every earlier turn the reader can still see above the button.
    *
    * The kept session is CLOSED first, and that is what keeps a turn that merely
    * reloads an already-live session out of reach: a failure the agent reports
@@ -2843,36 +2860,82 @@ export class ChatService implements OnModuleInit {
         'this chat is still working — retry is for a turn that has already failed',
       );
     }
-    // A per-CLI fact, not a branch on the agent's name: the resume-only turn is
-    // an ACP frame, and an adapter that cannot honour it would run this turn
-    // as an ordinary one — spending a real, billed turn on the EMPTY prompt a
-    // retry composes, under a transcript row saying nothing was sent again.
-    // A run with no agent named cannot be reopened either, and `sendMessage`
-    // would refuse it a moment later as RUN_NOT_CONFIGURED — but only after
-    // the close below had already fired.
+    // A run with no agent named cannot be carried on either way, and
+    // `sendMessage` would refuse it a moment later as RUN_NOT_CONFIGURED — but
+    // only after the close below had already fired.
     if (!run.agentKind) {
       throw new BadRequestException(
         'RUN_NOT_CONFIGURED',
         'run is missing an agent',
       );
     }
-    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
-      .resumeOnlyUnavailableReason;
-    if (cannotReopen !== null) {
-      throw new ConflictException('RUN_NOT_RESUMABLE', cannotReopen);
-    }
     if (!node?.agentSessionId) {
-      // There is no conversation to reopen. Left to run, the turn would open a
-      // FRESH session and settle at once — a success reported for a recovery
-      // that did not happen, on a thread that is still exactly as stuck.
       throw new ConflictException(
         'RUN_NOT_RESUMABLE',
-        'this chat has no agent session to reopen — send a message to start one',
+        'this chat has no agent session to carry on from — send a message to start one',
       );
     }
+    // A per-CLI fact, not a branch on the agent's name. An adapter that cannot
+    // honour a resume-only turn would otherwise run this one as an ordinary
+    // turn and spend a real, billed request on the EMPTY prompt a retry
+    // composes, under a transcript row saying nothing was sent again.
+    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
+      .resumeOnlyUnavailableReason;
+    if (cannotReopen === null) {
+      this.sessions.close(runId);
+      await this.sendMessage(runId, '', [], { resumeOnly: true });
+      return { retried: true };
+    }
+    // The re-send path. Read BEFORE the close, so a transcript this cannot
+    // answer for costs the user nothing: closing first would take the session
+    // down and then refuse, leaving the chat worse off than the failed turn did.
+    const resend = await this.messageToResend(runId, em);
     this.sessions.close(runId);
-    await this.sendMessage(runId, '', [], { resumeOnly: true });
+    await this.sendMessage(runId, resend.text, resend.images);
     return { retried: true };
+  }
+
+  /**
+   * The user message a retry re-sends, with its attachments read back as bytes.
+   *
+   * The images are re-read from the attachment store rather than referenced,
+   * because `sendMessage` takes them the way the HTTP edge delivers them — as
+   * base64 to be SAVED — and saves its own copies. So a retried message keeps
+   * the screenshot the first one carried instead of silently becoming a
+   * text-only version of itself, which the agent would answer differently.
+   *
+   * An attachment whose file has since gone is DROPPED rather than failing the
+   * retry: the words are most of the message, and refusing to carry on because
+   * one image is missing helps nobody looking at a stuck thread.
+   */
+  private async messageToResend(
+    runId: string,
+    em: EntityManager,
+  ): Promise<{ text: string; images: SendMessageImage[] }> {
+    const row = await this.itemDao.latestUserMessage(runId, em);
+    const payload = row === null ? null : asRecord(parsePayload(row.payload));
+    const text = asString(payload?.['text']) ?? '';
+    const stored = asArray(payload?.['images']);
+    if (text.trim() === '' && stored.length === 0) {
+      throw new ConflictException(
+        'RUN_NOT_RESUMABLE',
+        'there is no message to send again — write your next one and the agent continues from where it left off',
+      );
+    }
+    const images: SendMessageImage[] = [];
+    for (const entry of stored) {
+      const id = asString(asRecord(entry)?.id);
+      if (id === null) {
+        continue;
+      }
+      try {
+        const { mediaType, bytes } = this.attachments.read(runId, id);
+        images.push({ mediaType, data: bytes.toString('base64') });
+      } catch {
+        // See the doc block: a missing file costs its image, never the retry.
+      }
+    }
+    return { text, images };
   }
 
   /**

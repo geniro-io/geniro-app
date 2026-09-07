@@ -119,11 +119,14 @@ export function errorRecovery(
     return {
       label: 'Retry',
       icon: <RotateCw aria-hidden="true" className="size-3.5 shrink-0" />,
-      // What it does and, as importantly, what it does NOT: the prompt is not
-      // sent again, which is the whole point and is not guessable from the word
-      // "retry".
-      title:
-        'Reopen this conversation and carry on — your message is not sent again',
+      // Says what is true of BOTH CLIs. It used to promise "your message is not
+      // sent again", which is the resume-only turn's behaviour and holds on
+      // cursor alone: claude has no way to reopen a conversation without a
+      // prompt, so its retry re-sends the interrupted message and the reader
+      // watches a second copy of it appear. Naming the per-CLI difference here
+      // would mean branching on the agent, which is the daemon's fact to state
+      // through a capability rather than the renderer's to guess.
+      title: 'Carry on from this failure — the conversation is kept',
       onClick: retry,
     };
   }

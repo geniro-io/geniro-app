@@ -916,10 +916,16 @@ describe('errorRecovery — which cure an error row offers', () => {
     });
   });
 
-  it('says the prompt is not sent again, which "retry" alone does not', () => {
-    // The one thing about this action a user cannot guess from its label — and
-    // the whole reason the feature exists rather than re-sending the message.
-    expect(errorRecovery(null, null, retry)?.title).toContain('not sent again');
+  it('makes no promise about the prompt, because that answer is per-CLI', () => {
+    // It used to say "your message is not sent again". That is the resume-only
+    // turn's behaviour and holds on cursor alone — claude cannot reopen a
+    // conversation without a prompt, so its retry re-sends the interrupted
+    // message and the reader watches a second copy appear under a tooltip that
+    // had just said it would not. The wording says what is true of both; the
+    // per-CLI difference is the daemon's to state through a capability.
+    const title = errorRecovery(null, null, retry)?.title ?? '';
+    expect(title).toContain('Carry on');
+    expect(title).not.toContain('not sent again');
   });
 
   it('offers nothing when the chat can do neither', () => {

@@ -209,6 +209,19 @@ export const ConversationTimeline = memo(function ConversationTimeline({
  * opens a stretch of work — the last one's is whatever the agent is doing now.
  * What the last node drops is the extra spacing, so the list ends at its
  * figures rather than trailing off into empty panel.
+ *
+ * THE WHOLE NODE ANSWERS THE POINTER, and it does so in `--accent` — the two
+ * halves of a hover that could not be seen. The fill was `bg-sidebar-accent`,
+ * a token tuned for the sidebar's own ground: over this floating panel it is
+ * `#282624` on `#262422`, two units per channel, so on the dark theme the
+ * effect existed and was invisible — the same trap the connector line below
+ * fell into. `--accent` is what the app's own menu rows highlight with on this
+ * exact surface, so a timeline node and a menu row now react alike. And it
+ * moved off the message BUTTON onto the node's body, because a reader aiming
+ * at a node aims at all of it: with the fill on the label alone, crossing the
+ * figures — which are half the node's height — put the highlight out again.
+ * The click target stays the message line, since the figures carry a tooltip
+ * of their own that an overlaid button would swallow.
  */
 function TimelineNode({
   marker,
@@ -222,12 +235,15 @@ function TimelineNode({
   onJump: (seq: number) => void;
 }): React.JSX.Element {
   return (
-    <li className="flex gap-3">
+    <li className="group flex gap-3">
       <div className="flex w-2 flex-none flex-col items-center">
+        {/* The dot answers the same hover, in a ring rather than a size: it
+            sits in a fixed-width column beside a line, so anything that grows
+            it moves both. */}
         <span
           aria-hidden
           data-slot="timeline-dot"
-          className="mt-1.5 size-2 flex-none rounded-full bg-primary"
+          className="mt-2 size-2 flex-none rounded-full bg-primary ring-2 ring-transparent transition-[box-shadow] group-hover:ring-primary/30"
         />
         {/* `--border` is tuned for an edge BETWEEN two surfaces and is far too
             faint to read as a line drawn ON one: measured at rgb(59,56,53) over
@@ -237,20 +253,28 @@ function TimelineNode({
             token family the figures beside it use. */}
         <span aria-hidden className="w-px flex-1 bg-muted-foreground/40" />
       </div>
-      <div className={cn('min-w-0 flex-1', last ? 'pb-1' : 'pb-4')}>
+      {/* The gap to the next node is a MARGIN, not padding: it is what gives
+          the connector its length, and inside the box it would tint a
+          centimetre of empty panel under every node's figures. */}
+      <div
+        data-slot="timeline-node"
+        className={cn(
+          'min-w-0 flex-1 rounded-md px-1.5 py-1 transition-colors group-hover:bg-accent group-focus-within:bg-accent',
+          last ? null : 'mb-3',
+        )}>
         <button
           type="button"
           onClick={() => onJump(marker.seq)}
           title={`${label}\n${new Date(marker.createdAt).toLocaleString()}`}
           aria-label={`Jump to: ${label}`}
           data-slot="timeline-marker"
-          className="block w-full rounded-md px-1.5 py-0.5 text-left text-xs text-foreground transition-colors hover:bg-sidebar-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+          className="block w-full cursor-pointer rounded-sm text-left text-xs text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
           {label}
         </button>
         <p
           data-slot="timeline-segment"
           title={segmentDetail(marker.segment)}
-          className="mt-0.5 px-1.5 text-[11px] tabular-nums text-muted-foreground/80">
+          className="mt-0.5 text-[11px] tabular-nums text-muted-foreground/80">
           {segmentFigures(marker.segment).join(' · ')}
         </p>
       </div>

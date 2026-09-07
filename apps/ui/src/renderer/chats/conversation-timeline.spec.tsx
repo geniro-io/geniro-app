@@ -277,4 +277,34 @@ describe('ConversationTimeline', () => {
       null,
     );
   });
+
+  it('highlights the WHOLE node on hover, in the panel-row token', () => {
+    // Two halves of one defect. The fill was on the message BUTTON alone,
+    // where crossing the figures — half the node's height — put it out again;
+    // and it was `--sidebar-accent`, tuned for the sidebar's own ground, which
+    // over this floating panel is #282624 on #262422, two units per channel,
+    // so on the dark theme the hover existed and could not be seen. jsdom
+    // computes no CSS, so the emitted classes ARE the mechanism here: the
+    // `group` marks the hover target and `group-hover:` is what reads it.
+    render([marker(1, 'ask', { aiMessages: 2 })]);
+    open();
+
+    const node = document.body.querySelector<HTMLElement>(
+      '[data-slot="timeline-node"]',
+    )!;
+    const segment = document.body.querySelector(
+      '[data-slot="timeline-segment"]',
+    );
+    const message = markerButtons()[0]!;
+
+    expect(node.parentElement?.className).toContain('group');
+    expect(node.className).toContain('group-hover:bg-accent');
+    expect(node.contains(segment)).toBe(true);
+    expect(node.contains(message)).toBe(true);
+    // The button no longer fills itself, or the two would stack.
+    expect(message.className).not.toContain('hover:bg-');
+    expect(`${node.className} ${message.className}`).not.toContain(
+      'sidebar-accent',
+    );
+  });
 });

@@ -6,7 +6,9 @@ apis/CliAuthApi.ts
 apis/DiagnosticsApi.ts
 apis/GroupsApi.ts
 apis/HandoffApi.ts
+apis/ProjectsApi.ts
 apis/StatsApi.ts
+apis/TasksApi.ts
 apis/WorkflowsApi.ts
 apis/index.ts
 index.ts

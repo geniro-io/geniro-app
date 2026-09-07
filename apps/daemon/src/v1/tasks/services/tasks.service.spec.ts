@@ -113,6 +113,36 @@ describe('TasksService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 
+  // The test above refuses a move whose `from` was already stale when it was
+  // SENT, which a JavaScript comparison catches on its own. This one is the
+  // case that comparison cannot catch: both moves are in flight at once, so
+  // both read the card in `todo` before either writes. Only a conditional
+  // UPDATE separates them — and the autopilot's sweep is exactly this caller,
+  // fanning several starts out inside one tick.
+  it('lets exactly one of two simultaneous identical moves win', async () => {
+    const task = await service.create({ projectId, title: 'contended' });
+    await service.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+    changes.length = 0;
+
+    const settled = await Promise.allSettled([
+      service.moveStatus(task.id, { from: 'todo', to: 'in_progress' }),
+      service.moveStatus(task.id, { from: 'todo', to: 'in_progress' }),
+    ]);
+
+    expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const loser = settled.find((r) => r.status === 'rejected');
+    // Either refusal is correct and which one fires depends on how the two
+    // interleave: the loser may still be reading when the winner's UPDATE
+    // lands (the stale-`from` branch) or may reach its own UPDATE and match no
+    // row. Both say the card moved; asserting one of them would pin the
+    // interleaving rather than the behaviour.
+    expect((loser?.reason as Error | undefined)?.message).toMatch(/moved/);
+    expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+    // One winner means one redraw. A board told twice that the same card
+    // arrived would be the same double-start seen from the client side.
+    expect(changes).toHaveLength(1);
+  });
+
   it('emits on the task bus after a create, with the fixed board payload', async () => {
     const task = await service.create({ projectId, title: 'ship it' });
 

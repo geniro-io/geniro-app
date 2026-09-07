@@ -181,6 +181,12 @@ export class TasksService {
    * whole mechanism keeping two open boards from double-starting one task:
    * both send `from: 'todo'`, and only the first one finds it there.
    *
+   * The line is held by the database, in `TaskDao.compareAndSetStatus`, not by
+   * the read below. The read exists to tell a caller that lost WHICH status it
+   * lost to, and to answer a 404; it cannot be the guard, because computing the
+   * destination position is an `await` and two callers can both pass a
+   * JavaScript comparison made before it.
+   *
    * A move to the status the task is already in is a no-op that succeeds:
    * re-sending it is not a conflict, and failing it would make a retried
    * request look like a lost race.
@@ -203,13 +209,33 @@ export class TasksService {
       return toWire(task);
     }
 
-    task.status = move.to;
-    task.position = await this.taskDao.nextPositionIn(
+    const position = await this.taskDao.nextPositionIn(
       task.projectId,
       move.to,
       em,
     );
-    await em.flush();
+    const at = new Date();
+    const moved = await this.taskDao.compareAndSetStatus(
+      taskId,
+      move.from,
+      move.to,
+      position,
+      at,
+      em,
+    );
+    if (!moved) {
+      throw new BadRequestException(
+        'TASK_STATUS_CONFLICT',
+        `task ${taskId} moved out of ${move.from} while this move was being applied`,
+      );
+    }
+
+    // Carried onto the entity by hand: the conditional UPDATE went around the
+    // UnitOfWork, so the row the caller is about to be handed back is only
+    // correct if these three follow it. Nothing flushes this fork afterwards.
+    task.status = move.to;
+    task.position = position;
+    task.updatedAt = at;
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,

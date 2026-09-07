@@ -128,12 +128,18 @@ describe('the richer card', () => {
     expect(el.textContent).not.toContain('##');
   });
 
-  it('shows when the task last moved', () => {
+  // The REVERSE of what an earlier pass pinned, and deliberately so. A card
+  // carried its update time on a row of its own — the one fact on it with no
+  // glyph, that nothing here sorts or filters by, costing a full line under
+  // two lines of title and up to two of metadata. It is on the detail panel,
+  // which is where a timestamp is worth its room.
+  it('spends no row on a timestamp', () => {
     const el = card({
       updatedAt: new Date(Date.now() - 7_200_000).toISOString(),
     });
 
-    expect(el.querySelector('time')?.textContent).toBe('2h');
+    expect(el.querySelector('time')).toBeNull();
+    expect(el.textContent).not.toContain('2h');
   });
 
   it('gives each label its own colour dot', () => {

@@ -178,6 +178,28 @@ export class ProjectsService {
   }
 
   /**
+   * Clear the failure streak, which is the only way a tripped breaker closes.
+   *
+   * A deliberate press rather than a field on the patch above, and that is the
+   * whole point of it: the breaker opened because runs kept failing, so
+   * whatever it is guarding against is presumed still there until a person
+   * says otherwise. A client that could zero the count as part of an ordinary
+   * settings write could clear it without ever having looked.
+   *
+   * Idempotent — re-arming a project whose streak is already zero is a no-op
+   * that succeeds, so a second press costs nothing.
+   */
+  async rearmAutopilot(projectId: string): Promise<ProjectWire> {
+    const em = this.em.fork();
+    const project = await this.require(projectId, em);
+    if (project.autopilotFailureStreak !== 0) {
+      project.autopilotFailureStreak = 0;
+      await em.flush();
+    }
+    return toWire(project);
+  }
+
+  /**
    * Delete a project AND every task on its board.
    *
    * The tasks go explicitly, one call, because nothing in this daemon

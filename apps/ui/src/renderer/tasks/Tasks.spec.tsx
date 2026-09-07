@@ -17,12 +17,20 @@ const mocks = vi.hoisted(() => ({
   startTaskRun: vi.fn(),
   reconcileTasks: vi.fn(),
   listRunItems: vi.fn(),
+  readProjectQueue: vi.fn(async () => ({
+    running: 0,
+    waiting: 0,
+    eligible: [],
+  })),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: () => ({
-    projects: { listProjects: mocks.listProjects },
+    projects: {
+      listProjects: mocks.listProjects,
+      readProjectQueue: mocks.readProjectQueue,
+    },
     tasks: {
       listTasks: mocks.listTasks,
       moveTaskStatus: mocks.moveTaskStatus,
@@ -535,11 +543,17 @@ describe('the column surface', () => {
     expect(lifted).toEqual([]);
   });
 
-  // Side by side, a long pair truncated BOTH halves —
-  // `Harn… geniro-claude-har…` — losing the half that identifies the project.
-  // Stacked, each line gets the control's full width. jsdom lays nothing out,
-  // so the flex direction is the observable and it IS the rule.
-  it('stacks the folder under the project name', async () => {
+  // The REVERSE of what an earlier pass pinned, and the defect it was written
+  // against is still closed — by a different mechanism.
+  //
+  // Side by side in a fixed 256px, a long pair truncated BOTH halves
+  // (`Harn… geniro-claude-har…`), losing the half that identifies the project.
+  // Stacking fixed that and made the picker the tallest thing in a header of
+  // 32px controls. The real cause was the fixed width and the EVEN fight, so
+  // the control now sizes to its content and the name is `shrink-0` while the
+  // folder truncates — one line, and the identifying half cannot be the one
+  // that is lost. jsdom lays nothing out, so those two classes ARE the rule.
+  it('keeps the project name and its folder on one line, name unshrinkable', async () => {
     mocks.listProjects.mockResolvedValue([
       aProject({ name: 'Harness', folder: '/home/user/geniro-claude-harness' }),
     ]);
@@ -555,12 +569,16 @@ describe('the column surface', () => {
     expect(name).toBeDefined();
     expect(folder).toBeDefined();
     expect(name!.parentElement).toBe(folder!.parentElement);
-    expect(name!.parentElement!.className).toContain('flex-col');
-    // The name leads: a reader takes the identity before the qualifier.
+    expect(name!.parentElement!.className).not.toContain('flex-col');
+    // The name cannot give way; the folder is what truncates.
+    expect(name!.className).toContain('shrink-0');
+    expect(folder!.className).toContain('truncate');
+    // The name still leads: a reader takes the identity before the qualifier.
     expect(
       name!.compareDocumentPosition(folder!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
+
   const openDetail = async (el: HTMLElement): Promise<void> => {
     await act(async () => {
       cardNode(el).click();

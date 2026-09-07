@@ -4,6 +4,8 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { ProjectDao } from '../../projects/dao/project.dao';
+import { isBreakerOpen } from '../../projects/utils/breaker';
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import type { TaskStatus, TaskWire } from '../tasks.types';
@@ -49,6 +51,7 @@ export class TaskSettleService implements OnModuleInit {
     private readonly runDao: RunDao,
     private readonly itemDao: ItemDao,
     private readonly taskDao: TaskDao,
+    private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
   ) {}
 
@@ -153,6 +156,7 @@ export class TaskSettleService implements OnModuleInit {
     if (reportItemId !== null) {
       await this.tasks.update(task.id, { reportItemId });
     }
+    await this.recordOutcome(task.projectId, status, em);
     // The reason rides the broadcast because the CLIENT cannot derive it: a
     // card's column is written optimistically the moment it is dragged, so
     // "settled" is a claim only this service is in a position to make.
@@ -161,6 +165,55 @@ export class TaskSettleService implements OnModuleInit {
       { from: task.status, to },
       'run-settled',
     );
+  }
+
+  /**
+   * Move the project's failure streak, which is what opens and closes the
+   * breaker.
+   *
+   * Counted per PROJECT and kept on the row rather than in memory, because the
+   * daemon may exit between two tasks — the idle window is measured in
+   * minutes — and a breaker that forgot its count on every restart could never
+   * reach a threshold at all.
+   *
+   * A CANCEL moves nothing in either direction: the user stopped their own
+   * agent, which is neither a fault to count nor a success to clear one.
+   *
+   * A failure counts only while the project is armed. The streak is a claim
+   * about unattended work, and a person deliberately re-running something they
+   * know is broken, on a project they have already disarmed, is not building
+   * evidence for a breaker that is not guarding anything. A SUCCESS clears it
+   * either way — whatever the run was started by, the thing works.
+   */
+  private async recordOutcome(
+    projectId: string,
+    status: RunStatus,
+    em: EntityManager,
+  ): Promise<void> {
+    if (status === 'cancelled') {
+      return;
+    }
+    const project = await this.projectDao.getById(projectId, em);
+    if (!project) {
+      return;
+    }
+    if (status === 'completed') {
+      if (project.autopilotFailureStreak !== 0) {
+        project.autopilotFailureStreak = 0;
+        await em.flush();
+      }
+      return;
+    }
+    if (!project.autopilotEnabled) {
+      return;
+    }
+    project.autopilotFailureStreak += 1;
+    await em.flush();
+    if (isBreakerOpen(project)) {
+      this.logger.warn(
+        `project ${project.id} has ${project.autopilotFailureStreak} failed runs in a row — the autopilot has stopped picking work up`,
+      );
+    }
   }
 
   /**

@@ -18,6 +18,17 @@ export const PROJECT_MAX_CONCURRENT_CEILING = 5;
 export const PROJECT_DEFAULT_MAX_CONCURRENT = 1;
 
 /**
+ * How many autopilot runs may fail in a row before the project stops picking
+ * work up.
+ *
+ * The number answers "how many failures is enough to be a pattern rather than
+ * bad luck", and three is the smallest count that can tell the two apart. It
+ * is not a setting: a user who wants a longer leash wants the runs to succeed,
+ * and a knob here only delays the moment they look at why they do not.
+ */
+export const PROJECT_FAILURE_BREAKER_THRESHOLD = 3;
+
+/**
  * One project on the wire.
  *
  * No `.meta({ id })` on this ROOT: it backs an array response DTO, and an id
@@ -71,3 +82,57 @@ export const ProjectWireSchema = z.object({
   updatedAt: z.iso.datetime(),
 });
 export type ProjectWire = z.infer<typeof ProjectWireSchema>;
+
+/**
+ * One card the autopilot may pick up, and only what starting it needs.
+ *
+ * Deliberately not the board's own `TaskWireSchema`: this is a work handout
+ * rather than a listing, and the caller is a conductor that starts runs, not a
+ * screen that draws cards. `status` rides along because the start route is a
+ * compare-and-set — it is the `from` the conductor must send back.
+ */
+export const QueuedTaskSchema = z
+  .object({
+    id: z.string(),
+    title: z.string(),
+    status: TaskStatusSchema,
+    position: z.number().int(),
+  })
+  .meta({ id: 'QueuedTask' });
+export type QueuedTask = z.infer<typeof QueuedTaskSchema>;
+
+/**
+ * What one project's autopilot may do right now.
+ *
+ * `eligible` is the answer to "what should I start", already narrowed to the
+ * free slots and empty whenever nothing may start at all — autopilot off, the
+ * breaker open, or every slot taken. The route refuses to hand out work past
+ * the cap rather than reporting a queue and trusting the conductor to count,
+ * because the daemon is the only place that can see every window's runs.
+ *
+ * `waiting` is the whole intake column, so a screen can say how much is queued
+ * behind what may start. No `.meta({ id })` on this ROOT — it backs a response
+ * DTO; see `ProjectWireSchema` above.
+ */
+export const ProjectQueueSchema = z.object({
+  projectId: z.string(),
+  enabled: z.boolean().describe('Whether this project is armed'),
+  intakeStatus: TaskStatusSchema.describe('The column work is picked up from'),
+  cap: z.number().int().describe('How many tasks may run at once'),
+  running: z
+    .number()
+    .int()
+    .describe('How many of this project’s tasks hold a run that is still live'),
+  waiting: z
+    .number()
+    .int()
+    .describe('How many tasks sit in the intake column in total'),
+  breakerOpen: z
+    .boolean()
+    .describe('True once consecutive failures reached the threshold'),
+  failureStreak: z.number().int(),
+  eligible: z
+    .array(QueuedTaskSchema)
+    .describe('The tasks that may be started now, oldest first'),
+});
+export type ProjectQueue = z.infer<typeof ProjectQueueSchema>;

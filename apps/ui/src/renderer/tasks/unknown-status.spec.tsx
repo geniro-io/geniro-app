@@ -20,7 +20,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: () => ({
-    projects: { listProjects: mocks.listProjects },
+    projects: {
+      listProjects: mocks.listProjects,
+      readProjectQueue: vi
+        .fn()
+        .mockResolvedValue({ running: 0, waiting: 0, eligible: [] }),
+    },
     tasks: {
       listTasks: mocks.listTasks,
       reconcileTasks: mocks.reconcileTasks,

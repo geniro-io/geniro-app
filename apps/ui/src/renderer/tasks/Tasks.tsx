@@ -8,6 +8,7 @@ import { ErrorBanner } from '../components/error-banner';
 import { Button } from '../components/ui/button';
 import { createDaemonApis, type DaemonApis } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import { AutopilotControl, isBreakerOpen } from './autopilot-control';
 import { BoardColumn } from './board-column';
 import { NewProjectDialog } from './new-project-dialog';
 import { NewTaskDialog } from './new-task-dialog';
@@ -131,6 +132,9 @@ export function Tasks({
     };
   }, [reportRunId, reportItemId, loadReport]);
 
+  const openProject =
+    board.projects.find((row) => row.id === board.selectedProjectId) ?? null;
+
   if (!handle) {
     return <EmptyState>Connecting to the daemon…</EmptyState>;
   }
@@ -152,6 +156,17 @@ export function Tasks({
               setNewProjectOpen(true);
             }}
           />
+          {openProject !== null ? (
+            <AutopilotControl
+              project={openProject}
+              onUpdate={(patch) => {
+                void board.updateAutopilot(patch);
+              }}
+              onRearm={() => {
+                void board.rearmAutopilot();
+              }}
+            />
+          ) : null}
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
               size="sm"
@@ -202,6 +217,23 @@ export function Tasks({
                 <BoardColumn
                   key={status}
                   status={status}
+                  // Only on the column the open project actually picks work up
+                  // from, and only while it is armed: everywhere else "work
+                  // leaves here on its own" is not a fact about what the user
+                  // is looking at.
+                  autopilot={
+                    openProject?.autopilotEnabled === true &&
+                    openProject.autopilotIntakeStatus === status
+                      ? {
+                          breakerOpen: isBreakerOpen(openProject),
+                          running: board.queue?.running ?? null,
+                          waiting: board.queue?.waiting ?? null,
+                          onStop: () => {
+                            void board.stopAutopilot();
+                          },
+                        }
+                      : undefined
+                  }
                   tasks={board.tasks.filter((row) => row.status === status)}
                   selectedTaskId={openTaskId}
                   draggingTaskId={draggingTaskId}

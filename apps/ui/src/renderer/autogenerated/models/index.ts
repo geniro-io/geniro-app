@@ -1670,6 +1670,24 @@ export interface CreateProjectDto {
      * @memberof CreateProjectDto
      */
     provider?: TaskSource;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof CreateProjectDto
+     */
+    autopilotEnabled?: boolean;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof CreateProjectDto
+     */
+    autopilotIntakeStatus?: TaskStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof CreateProjectDto
+     */
+    autopilotMaxConcurrent?: number;
 }
 
 
@@ -2751,6 +2769,102 @@ export interface ProjectDto {
      * @memberof ProjectDto
      */
     updatedAt: string;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface ProjectQueueDto
+ */
+export interface ProjectQueueDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectQueueDto
+     */
+    projectId: string;
+    /**
+     * Whether this project is armed
+     * @type {boolean}
+     * @memberof ProjectQueueDto
+     */
+    enabled: boolean;
+    /**
+     * The column work is picked up from
+     * @type {TaskStatus}
+     * @memberof ProjectQueueDto
+     */
+    intakeStatus: TaskStatus;
+    /**
+     * How many tasks may run at once
+     * @type {number}
+     * @memberof ProjectQueueDto
+     */
+    cap: number;
+    /**
+     * How many of this project’s tasks hold a run that is still live
+     * @type {number}
+     * @memberof ProjectQueueDto
+     */
+    running: number;
+    /**
+     * How many tasks sit in the intake column in total
+     * @type {number}
+     * @memberof ProjectQueueDto
+     */
+    waiting: number;
+    /**
+     * True once consecutive failures reached the threshold
+     * @type {boolean}
+     * @memberof ProjectQueueDto
+     */
+    breakerOpen: boolean;
+    /**
+     * 
+     * @type {number}
+     * @memberof ProjectQueueDto
+     */
+    failureStreak: number;
+    /**
+     * The tasks that may be started now, oldest first
+     * @type {Array<QueuedTask>}
+     * @memberof ProjectQueueDto
+     */
+    eligible: Array<QueuedTask>;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface QueuedTask
+ */
+export interface QueuedTask {
+    /**
+     * 
+     * @type {string}
+     * @memberof QueuedTask
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof QueuedTask
+     */
+    title: string;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof QueuedTask
+     */
+    status: TaskStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof QueuedTask
+     */
+    position: number;
 }
 
 
@@ -3850,6 +3964,24 @@ export interface UpdateProjectDto {
      * @memberof UpdateProjectDto
      */
     workflowSlug?: string | null;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof UpdateProjectDto
+     */
+    autopilotEnabled?: boolean;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof UpdateProjectDto
+     */
+    autopilotIntakeStatus?: TaskStatus;
+    /**
+     * 
+     * @type {number}
+     * @memberof UpdateProjectDto
+     */
+    autopilotMaxConcurrent?: number;
 }
 
 

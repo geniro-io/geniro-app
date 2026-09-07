@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import {
   defineConfig,
+  type EntityManager,
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
@@ -26,6 +27,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: ProjectsService;
   let projectDao: ProjectDao;
+  let em: EntityManager;
   let taskDao: TaskDao;
   let folder: string;
   let otherFolder: string;
@@ -56,7 +58,7 @@ describe('ProjectsService (in-memory sqlite)', () => {
 
   beforeEach(async () => {
     await orm.schema.clear();
-    const em = orm.em.fork();
+    em = orm.em.fork() as EntityManager;
     projectDao = new ProjectDao(em);
     taskDao = new TaskDao(em);
     service = new ProjectsService(em, projectDao, taskDao);
@@ -201,5 +203,21 @@ describe('ProjectsService (in-memory sqlite)', () => {
     // The omitted key is the half that is easy to break: a patch that rebuilds
     // the row from its own fields would blank this too.
     expect(updated.workflowSlug).toBe('ship-it');
+  });
+
+  // Re-arming is its own press rather than a field on the patch: the breaker
+  // opened because runs kept failing, so resuming is presumed deliberate.
+  it('clears the failure streak on a re-arm, and a second press is a no-op', async () => {
+    const project = await service.create({ name: 'board', folder });
+    const row = await projectDao.getById(project.id, em);
+    (row as Project).autopilotFailureStreak = 4;
+    await em.flush();
+
+    expect(
+      (await service.rearmAutopilot(project.id)).autopilotFailureStreak,
+    ).toBe(0);
+    expect(
+      (await service.rearmAutopilot(project.id)).autopilotFailureStreak,
+    ).toBe(0);
   });
 });

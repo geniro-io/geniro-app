@@ -129,8 +129,6 @@ export class TaskRunsService {
         worktreePath: input.cwd,
       });
 
-      // Last, because it is the only step whose failure leaves something worth
-      // keeping: the conversation exists and the user can send to it by hand.
       await this.chats.sendMessage(run.id, composeTaskPrompt(task));
       return wire;
     } catch (error) {
@@ -152,13 +150,10 @@ export class TaskRunsService {
     runId: string | null,
   ): Promise<void> {
     try {
-      // The run goes with the card. `Run.taskId` and `Task.runId` are two ends
-      // of one edge, and leaving a chat behind that names a card the card does
-      // not name back is exactly the disagreement `run.entity.ts` says nothing
-      // writes.
-      if (runId !== null) {
-        await this.chats.delete(runId);
-      }
+      // The CARD first. Everything here is best-effort, and of the two the card
+      // is what a user can be stuck on: left in `in_progress` it is refused by
+      // the very guard that protects a live run, so a failure while cleaning up
+      // would cost them the ability to start it again.
       await this.tasks.update(taskId, {
         runId: null,
         branch: null,
@@ -171,6 +166,22 @@ export class TaskRunsService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+    }
+    // Its OWN catch, so a failing teardown cannot swallow the card revert
+    // above — which is the half a user can be stuck on. `Run.taskId` and
+    // `Task.runId` are two ends of one edge, and a chat left naming a card
+    // that no longer names it back is the disagreement `run.entity.ts` says
+    // nothing writes.
+    if (runId !== null) {
+      try {
+        await this.chats.delete(runId);
+      } catch (error) {
+        this.logger.warn(
+          `could not delete run ${runId} after a failed start: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
 

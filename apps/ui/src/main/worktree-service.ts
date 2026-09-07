@@ -7,7 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 import { app } from 'electron';
@@ -135,10 +135,16 @@ function forget(path: string): void {
  * Nest graph into the main bundle.
  */
 function isInsideWorktreesRoot(path: string): boolean {
-  const root = resolve(worktreesRoot());
   const target = resolve(path);
-  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
-  return target.startsWith(prefix);
+  // Exactly ONE segment under the root, which is what a legitimate row is:
+  // `join(worktreesRoot(), taskId)` where the id is a single path-safe segment
+  // (`taskIdSchema`). A prefix test admits `<root>/link/inner`, and `resolve`
+  // is purely lexical — so with `<root>/link` a symlink, the recursive delete
+  // followed it out of the root and removed the real target. One segment
+  // leaves no intermediate component there is anything to symlink.
+  return (
+    dirname(target) === resolve(worktreesRoot()) && basename(target) !== ''
+  );
 }
 
 async function git(cwd: string, args: string[]): Promise<void> {
@@ -356,6 +362,12 @@ export async function reapOrphanedWorktrees(): Promise<{
       removed.push(record.path);
       continue;
     }
+    if (!isInsideWorktreesRoot(record.path)) {
+      // Refused before `inspect`, which would otherwise run git inside it.
+      forget(record.path);
+      kept.push(record.path);
+      continue;
+    }
     const state = await inspect(record);
     // Unconfirmable (no git, the project folder moved), holding unsaved work,
     // or a path git no longer calls a worktree of that repository — all three
@@ -381,6 +393,13 @@ export async function reapOrphanedWorktrees(): Promise<{
 export async function pruneWorktreeForTask(taskId: string): Promise<boolean> {
   const record = readRegistry().find((row) => row.taskId === taskId);
   if (record === undefined) {
+    return false;
+  }
+  // The ROW is refused here rather than at the delete, because everything
+  // below RUNS GIT IN the path it names — and a directory this app does not
+  // own is not one to run anything in, let alone remove.
+  if (!isInsideWorktreesRoot(record.path)) {
+    forget(record.path);
     return false;
   }
   // Keeps a worktree holding unsaved work, on `reapOrphanedWorktrees`'s rule

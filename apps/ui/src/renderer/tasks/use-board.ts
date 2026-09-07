@@ -401,28 +401,6 @@ export function useBoard(
     [apis],
   );
 
-  /**
-   * Take down the worktree of any card whose run has settled.
-   *
-   * Spec step 4 asks for this and nothing else was doing it: the only prune
-   * was the failed-start catch, so a finished task's whole checkout stayed on
-   * disk, and the boot reaper deliberately skips a dirty one — which is the
-   * routine end state of an agent run.
-   *
-   * Idempotent by construction, which is what lets it run off the task list
-   * rather than off a transition: pruning drops the registry row, so a second
-   * pass finds nothing and answers false. Main keeps a worktree holding
-   * unsaved work, so a card dragged out of `in_progress` while its agent is
-   * still writing does not lose it.
-   */
-  useEffect(() => {
-    for (const task of tasks) {
-      if (task.worktreePath !== null && task.status !== 'in_progress') {
-        void window.geniro.pruneTaskWorktree(task.id);
-      }
-    }
-  }, [tasks]);
-
   const dismissError = useCallback(() => {
     setError(null);
   }, []);

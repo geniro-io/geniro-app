@@ -4,7 +4,15 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
@@ -232,7 +240,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       status: 'completed',
       at: new Date().toISOString(),
     });
-    // The subscriber detaches its work, so let the microtask queue drain.
+    // The subscriber detaches its work, so yield a full turn of the event
+    // loop — every await under it resolves synchronously (better-sqlite3), so
+    // one macrotask is enough for the whole chain.
     await new Promise((resolve) => setImmediate(resolve));
 
     const stored = await taskDao.getById(task.id);
@@ -276,12 +286,21 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       await em.flush();
     }
     // `settle` ends in a compare-and-set that throws when the row moved since
-    // it was read; `reconcileTasks` is the board's ONLY listing call.
-    await tasks.update(task.id, { runId: 'run-1' });
-    await taskDao.getById(task.id);
+    // it was read — this is that throw, driven directly, because reproducing
+    // the race needs a second writer landing between one card's read and its
+    // write. `reconcileTasks` is the board's ONLY listing call, so without the
+    // per-card catch this one card takes every other one with it.
+    const moved = vi
+      .spyOn(tasks, 'moveStatus')
+      .mockRejectedValueOnce(new Error('TASK_STATUS_CONFLICT'));
 
     const board = await service.reconcileProject(projectId);
 
-    expect(board.map((r) => r.id)).toContain(other.id);
+    expect(moved).toHaveBeenCalledTimes(1);
+    expect(board.map((r) => r.id)).toEqual(
+      expect.arrayContaining([task.id, other.id]),
+    );
+    // The contested card is left exactly where the failed move found it.
+    expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 });

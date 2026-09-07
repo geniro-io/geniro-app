@@ -5,6 +5,7 @@ import {
   type CreateTaskDto,
   type ItemDto,
   type ProjectDto,
+  type ProjectQueueDto,
   type TaskDto,
   TaskStatus,
   type UpdateTaskDto,
@@ -81,6 +82,17 @@ export interface BoardApi {
    * Intake only: a task already running is left working. Stopping one is a
    * different act with a different cost and has its own control on the run.
    */
+  /**
+   * What the open project's autopilot may start right now, as the DAEMON
+   * counts it — or null while nothing has been read.
+   *
+   * Read rather than derived from `tasks`, and that is the whole point: a
+   * card's column is written optimistically the moment it is dragged, and
+   * "running" means a run that is still live, which a column cannot say. It
+   * is fetched with the board and again on `task_changed`, so it moves with
+   * the work rather than on a timer.
+   */
+  queue: ProjectQueueDto | null;
   stopAutopilot: () => Promise<void>;
   /** Write the open project's autopilot policy — switch, intake column, cap. */
   updateAutopilot: (patch: {
@@ -104,6 +116,7 @@ export function useBoard(
   apis: DaemonApis | null,
   client: DaemonClient | null,
 ): BoardApi {
+  const [queue, setQueue] = useState<ProjectQueueDto | null>(null);
   const [projects, setProjects] = useState<ProjectDto[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
@@ -166,10 +179,27 @@ export function useBoard(
   useEffect(() => {
     if (!apis || selectedProjectId === null) {
       setTasks([]);
+      setQueue(null);
       return;
     }
     let cancelled = false;
     setLoading(true);
+    // Beside the board rather than inside it, and its failure is SWALLOWED:
+    // this only decides whether a banner can count, and a board that refused
+    // to draw because a count could not be read would trade the whole screen
+    // for a line of it.
+    void apis.projects
+      .readProjectQueue({ projectId: selectedProjectId })
+      .then((read) => {
+        if (!cancelled) {
+          setQueue(read);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQueue(null);
+        }
+      });
     // RECONCILE rather than list, and it answers with the board so this is
     // still one call. A run that settled while no window was open announced to
     // nobody, so without this the card it belongs to is still drawn as working
@@ -507,6 +537,7 @@ export function useBoard(
     loadReport,
     dismissError,
     refreshProjects,
+    queue,
     stopAutopilot,
     updateAutopilot: patchProject,
     rearmAutopilot,

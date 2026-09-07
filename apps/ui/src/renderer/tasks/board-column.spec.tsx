@@ -52,7 +52,12 @@ function column(
 const byLabel = (el: HTMLElement, label: string): HTMLElement | null =>
   el.querySelector(`[aria-label="${label}"]`);
 
-const armed = { breakerOpen: false, onStop: vi.fn() };
+const armed = {
+  breakerOpen: false,
+  running: null,
+  waiting: null,
+  onStop: vi.fn(),
+};
 
 describe('BoardColumn — the autopilot banner', () => {
   it('draws no banner on a column the autopilot does not read', () => {
@@ -67,6 +72,36 @@ describe('BoardColumn — the autopilot banner', () => {
 
     expect(el.textContent).toContain('Autopilot starts tasks here');
     expect(byLabel(el, 'Stop the autopilot')).not.toBeNull();
+  });
+
+  // The counts come from the DAEMON's queue, not from the columns: a card's
+  // column is written optimistically on a drag, and a card dragged out of
+  // `in_progress` by hand still holds a live agent — so a column cannot say
+  // what is running.
+  it('counts what is running and waiting once the queue has been read', () => {
+    expect(column({ ...armed, running: 1, waiting: 3 }).textContent).toContain(
+      '1 running · 3 waiting',
+    );
+    expect(column({ ...armed, running: 0, waiting: 2 }).textContent).toContain(
+      '2 waiting',
+    );
+    expect(column({ ...armed, running: 2, waiting: 0 }).textContent).toContain(
+      '2 running',
+    );
+  });
+
+  // A zero it cannot stand behind is worse than no number: an unread queue
+  // falls back to the plain sentence rather than claiming nothing is queued.
+  it('states no counts at all while the queue is unread', () => {
+    const el = column({ ...armed, running: null, waiting: null });
+
+    expect(el.textContent).toContain('Autopilot starts tasks here');
+    expect(el.textContent).not.toMatch(/\d+ (running|waiting)/);
+  });
+
+  it('says nothing in an empty column at rest, and hints only on a drag', () => {
+    expect(column().textContent).not.toContain('No tasks');
+    expect(column().textContent).not.toContain('Drop here');
   });
 
   // Always visible and never behind a confirm: it is what a user reaches for

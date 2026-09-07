@@ -226,6 +226,8 @@ export function Tasks({
                     openProject.autopilotIntakeStatus === status
                       ? {
                           breakerOpen: isBreakerOpen(openProject),
+                          running: board.queue?.running ?? null,
+                          waiting: board.queue?.waiting ?? null,
                           onStop: () => {
                             void board.stopAutopilot();
                           },

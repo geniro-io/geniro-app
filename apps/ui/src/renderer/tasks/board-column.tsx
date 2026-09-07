@@ -47,6 +47,9 @@ export function BoardColumn({
    */
   autopilot?: {
     breakerOpen: boolean;
+    /** From the daemon's queue, not the columns — null while unread. */
+    running: number | null;
+    waiting: number | null;
     onStop: () => void;
   };
 }): React.JSX.Element {
@@ -67,7 +70,11 @@ export function BoardColumn({
         // between themes — it is darker than the page in light and LIGHTER than
         // `card` in dark, which would sink every card into its own column. The
         // blend keeps one order in both: page, then column, then card on top.
-        'flex w-72 shrink-0 flex-col gap-2 rounded-xl bg-muted/40 p-2',
+        // Grows to share the width when the columns FIT, and falls back to
+        // scrolling when they do not. A fixed `w-72` put the fifth column off
+        // the right edge behind a horizontal scroll on a window wide enough
+        // to hold all of them with room to spare.
+        'flex min-w-64 flex-1 basis-72 flex-col gap-2 rounded-xl bg-muted/40 p-2',
         // The EDGE carries the definition, not the fill. `muted` cannot simply
         // be deepened: in dark it converges on `card` around 50%, and past that
         // the cards stop reading as raised out of their own column. A ring is
@@ -115,10 +122,12 @@ export function BoardColumn({
             onKeyDown={onTaskKeyDown}
           />
         ))}
-        {tasks.length === 0 ? (
-          <p className="px-1 py-3 text-xs text-muted-foreground">
-            {isDropTarget ? 'Drop here' : 'No tasks'}
-          </p>
+        {/* Nothing at rest. An empty column already LOOKS empty, and on a
+            fresh board "No tasks" was written four times across a screen whose
+            own emptiness said it once. The drop hint stays: that one is a
+            state the column is in, not a restatement of what it holds. */}
+        {tasks.length === 0 && isDropTarget ? (
+          <p className="px-1 py-3 text-xs text-muted-foreground">Drop here</p>
         ) : null}
       </div>
     </section>
@@ -146,9 +155,13 @@ export function BoardColumn({
  */
 function AutopilotBanner({
   breakerOpen,
+  running,
+  waiting,
   onStop,
 }: {
   breakerOpen: boolean;
+  running: number | null;
+  waiting: number | null;
   onStop: () => void;
 }): React.JSX.Element {
   return (
@@ -172,7 +185,9 @@ function AutopilotBanner({
       <span className="min-w-0 flex-1 text-xs">
         {/* The column is NOT named again: this sits directly under a header
             that already says it. */}
-        {breakerOpen ? 'Autopilot is stopped.' : 'Autopilot starts tasks here.'}
+        {breakerOpen
+          ? 'Autopilot is stopped.'
+          : (queueLine(running, waiting) ?? 'Autopilot starts tasks here.')}
       </span>
       {breakerOpen ? null : (
         <Chip asChild interactive>
@@ -191,6 +206,37 @@ function AutopilotBanner({
       )}
     </div>
   );
+}
+
+/**
+ * What the autopilot is doing, in the fewest words that are still true.
+ *
+ * The counts come from the daemon's own queue rather than from the columns on
+ * screen: a card's column is written optimistically the moment it is dragged,
+ * and "running" means a run that is still live — which a column cannot say,
+ * since a card dragged out of `in_progress` by hand still holds its agent.
+ *
+ * Null while nothing has been read, and the caller falls back to the plain
+ * sentence rather than drawing a zero it cannot stand behind.
+ */
+function queueLine(
+  running: number | null,
+  waiting: number | null,
+): string | null {
+  if (running === null || waiting === null) {
+    return null;
+  }
+  if (running === 0 && waiting === 0) {
+    return 'Autopilot starts tasks here.';
+  }
+  const parts: string[] = [];
+  if (running > 0) {
+    parts.push(`${running} running`);
+  }
+  if (waiting > 0) {
+    parts.push(`${waiting} waiting`);
+  }
+  return parts.join(' · ');
 }
 
 function TaskCardRow({

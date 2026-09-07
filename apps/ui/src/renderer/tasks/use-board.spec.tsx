@@ -53,7 +53,15 @@ function stubApis(
         Promise.resolve(task({ status: moveTaskStatusDto.to })),
       );
   const apis = {
-    projects: { listProjects: vi.fn().mockResolvedValue([project()]) },
+    projects: {
+      listProjects: vi.fn().mockResolvedValue([project()]),
+      // Read beside the board so the intake banner can count. Its failure is
+      // swallowed by the hook, so a fake that omitted it would still pass —
+      // which is why it answers real numbers here rather than nothing.
+      readProjectQueue: vi
+        .fn()
+        .mockResolvedValue({ running: 0, waiting: 0, eligible: [] }),
+    },
     tasks: { listTasks, moveTaskStatus, reconcileTasks },
   } as unknown as DaemonApis;
   return { apis, listTasks, reconcileTasks, moveTaskStatus };

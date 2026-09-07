@@ -375,6 +375,14 @@ import { defaultSpawn } from './utils/spawn-cli';
     // can claim a workflow by slug, and the executor is the only place a
     // workflow run row is created.
     RunGroupsService,
+    // Exported for the tasks module: pressing Run on a card starts an ORDINARY
+    // chat, so it needs the same service the chat routes use rather than a
+    // second execution path of its own. Nest encapsulation makes this entry
+    // required for that injection, not merely tidy.
+    //
+    // The service alone, and the import runs one way — `TasksModule` imports
+    // this module, never the reverse, as `GraphsModule` already does.
+    ChatService,
   ],
 })
 export class AgentsModule {}

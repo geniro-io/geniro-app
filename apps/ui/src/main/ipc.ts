@@ -32,6 +32,8 @@ import {
   pullRequestRefsSchema,
   revealPathSchema,
   settingsPatchSchema,
+  taskIdSchema,
+  taskWorktreeSchema,
 } from './ipc-schemas';
 import { applyTheme } from './native-appearance';
 import { openNotificationSettings } from './notifications/notification-settings';
@@ -41,6 +43,7 @@ import { revealPath } from './reveal-path';
 import { saveChatExport } from './save-chat-export';
 import { readSettings, updateSettings } from './settings';
 import type { UpdateService } from './update-service';
+import { prepareWorktree, pruneWorktreeForTask } from './worktree-service';
 
 /**
  * Register every privileged channel the renderer can invoke. The renderer has
@@ -199,6 +202,33 @@ export function registerIpc(
   // the user then picks. See `chatExportSaveSchema`.
   ipcMain.handle(IPC.saveChatExport, (_event, input: unknown) =>
     saveChatExport(chatExportSaveSchema.parse(input)),
+  );
+
+  ipcMain.handle(IPC.prepareTaskWorktree, async (_event, input: unknown) => {
+    const parsed = taskWorktreeSchema.parse(input);
+    try {
+      const made = await prepareWorktree(parsed);
+      return { ok: true, path: made.path, branch: made.branch, error: null };
+    } catch (error) {
+      // Shaped rather than rethrown: an exception crossing IPC arrives as a
+      // string with its structure gone, and the caller must be able to tell a
+      // failed worktree from a made one before it starts a run against it.
+      const stderr =
+        error instanceof Error && 'stderr' in error
+          ? String((error as { stderr: unknown }).stderr).trim()
+          : '';
+      const message =
+        stderr === ''
+          ? error instanceof Error
+            ? error.message
+            : String(error)
+          : stderr.split('\n')[0]!;
+      return { ok: false, path: null, branch: null, error: message };
+    }
+  });
+
+  ipcMain.handle(IPC.pruneTaskWorktree, (_event, taskId: unknown) =>
+    pruneWorktreeForTask(taskIdSchema.parse(taskId)),
   );
 
   ipcMain.handle(IPC.switchBranch, (_event, dir: unknown, branch: unknown) =>

@@ -270,6 +270,26 @@ function hasFilenameControlCharacters(value: string): boolean {
 export const gitDirSchema = absolutePath;
 
 /**
+ * A task id on its way into a BRANCH NAME and a directory name.
+ *
+ * Held to the id alphabet rather than to "a non-blank string", because this
+ * value becomes both a git ref (`geniro/task-<id>`) and a path segment under
+ * the userData dir. The daemon mints these as UUIDs; anything carrying a
+ * slash, a dot-dot or whitespace is not one and has no business reaching
+ * either use. This is a different process validating input it may not assume
+ * anyone else checked.
+ */
+export const taskIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/);
+
+/** Which task to make a worktree for, and the repository to cut it from. */
+export const taskWorktreeSchema = z.object({
+  taskId: taskIdSchema,
+  folder: absolutePath,
+});
+
+/**
  * A commit id on its way to `git` as an ARGUMENT.
  *
  * Held to the exact shape `rev-parse` prints rather than merely to "a string":

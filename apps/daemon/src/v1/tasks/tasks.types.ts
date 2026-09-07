@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import type { ChatApprovalMode } from '../agents/chat.types';
+import type { AgentKind } from '../runs/runs.types';
+
 /**
  * The board's columns, and the whole vocabulary a task's status may take.
  *
@@ -153,6 +156,33 @@ export type TaskWire = z.infer<typeof TaskWireSchema>;
 export interface TaskStatusMove {
   from: TaskStatus;
   to: TaskStatus;
+}
+
+/**
+ * What starting a run for one task needs to know.
+ *
+ * `cwd` and `branch` are the caller's because the daemon runs no git: the
+ * Electron main process makes the worktree and names the branch, and this
+ * module records what it is told. `from` is the status the caller believed the
+ * card was in, on {@link TaskStatusMove}'s own terms — starting a run moves
+ * the card, so a start computed against a stale one must lose.
+ *
+ * The run-configuration half is entirely optional and falls back to the
+ * project's standing answers, so a board that sends nothing still runs the
+ * setup the user chose for that project.
+ */
+export interface StartTaskRun {
+  cwd: string;
+  branch: string;
+  from: TaskStatus;
+  startSha?: string;
+  startDirty?: boolean;
+  agentKind?: AgentKind;
+  model?: string;
+  effort?: string;
+  approval?: ChatApprovalMode;
+  configDir?: string;
+  customInstructions?: string;
 }
 
 /**

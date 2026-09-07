@@ -12,6 +12,7 @@ import {
   type PullRequestRefResult,
   type PullRequestsResult,
   type Settings,
+  type TaskWorktreeResult,
   type UpdateState,
 } from '../../shared/contracts';
 
@@ -203,6 +204,22 @@ export function createPreloadStub(
         truncated: false,
         unavailableReason: 'Not a git repository.',
       });
+    },
+    prepareTaskWorktree: (input: {
+      taskId: string;
+      folder: string;
+    }): Promise<TaskWorktreeResult> => {
+      note('prepareTaskWorktree');
+      return Promise.resolve({
+        ok: true,
+        path: `/tmp/geniro-worktrees/${input.taskId}`,
+        branch: `geniro/task-${input.taskId}`,
+        error: null,
+      });
+    },
+    pruneTaskWorktree: (): Promise<boolean> => {
+      note('pruneTaskWorktree');
+      return Promise.resolve(true);
     },
     switchBranch: (
       _dir: string,

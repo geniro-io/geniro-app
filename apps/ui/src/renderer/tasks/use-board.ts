@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   type CreateProjectDto,
   type CreateTaskDto,
+  type ItemDto,
   type ProjectDto,
   type TaskDto,
   TaskStatus,
@@ -54,6 +55,23 @@ export interface BoardApi {
   createTask: (dto: CreateTaskDto) => Promise<TaskDto | null>;
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
   moveTask: (taskId: string, to: string) => Promise<void>;
+  /**
+   * Start an agent on a card: main makes the worktree, the daemon starts the
+   * chat inside it.
+   */
+  runTask: (taskId: string) => Promise<void>;
+  /** The card whose run is being started right now, or null. */
+  startingTaskId: string | null;
+  /**
+   * Read back the transcript row holding one task's closing report.
+   *
+   * Null when the card names none, or when the row could not be read — a run
+   * the user has since deleted takes its items with it.
+   */
+  loadReport: (
+    runId: string | null,
+    reportItemId: string | null,
+  ) => Promise<ItemDto | null>;
   dismissError: () => void;
   /** Re-read the project list — the board calls this when it becomes visible. */
   refreshProjects: () => void;
@@ -81,6 +99,7 @@ export function useBoard(
   // TWO counters, not one. A task write echoes its own broadcast back, and a
   // single counter both effects keyed on turned every card move into a
   // `listProjects` as well as a `listTasks` of the whole board.
+  const [startingTaskId, setStartingTaskId] = useState<string | null>(null);
   const [projectsNonce, setProjectsNonce] = useState(0);
   const [tasksNonce, setTasksNonce] = useState(0);
 
@@ -136,8 +155,12 @@ export function useBoard(
     }
     let cancelled = false;
     setLoading(true);
+    // RECONCILE rather than list, and it answers with the board so this is
+    // still one call. A run that settled while no window was open announced to
+    // nobody, so without this the card it belongs to is still drawn as working
+    // — which is exactly the force-quit case the milestone is asked to handle.
     void apis.tasks
-      .listTasks({ projectId: selectedProjectId })
+      .reconcileTasks({ reconcileTasksDto: { projectId: selectedProjectId } })
       .then((rows) => {
         if (!cancelled) {
           setTasks(rows);
@@ -285,6 +308,95 @@ export function useBoard(
     setSelectedProjectId(projectId);
   }, []);
 
+  /**
+   * Press Run: make the workspace, then start the agent in it.
+   *
+   * The ORDER is the whole safety of it. Main creates the worktree first,
+   * because the daemon needs a real directory to run in and runs no git
+   * itself; the daemon then starts the chat. If that second half fails, the
+   * worktree is removed in the failure path of the same operation — otherwise
+   * every failed press leaves a checkout on disk that nothing will ever
+   * collect, since the boot reaper only sees what a previous SESSION left.
+   */
+  const runTask = useCallback(
+    async (taskId: string): Promise<void> => {
+      const task = tasks.find((row) => row.id === taskId);
+      const project = projects.find((row) => row.id === selectedProjectId);
+      if (!apis || task === undefined || project === undefined) {
+        return;
+      }
+      setStartingTaskId(taskId);
+      try {
+        const made = await window.geniro.prepareTaskWorktree({
+          taskId,
+          folder: project.folder,
+        });
+        if (!made.ok || made.path === null || made.branch === null) {
+          setError(made.error ?? 'the worktree could not be created');
+          return;
+        }
+        try {
+          // The client's own reading of the folder, taken now — the fixed
+          // point the chat's diff view measures against, exactly as the
+          // composer takes it when a chat is opened by hand.
+          const stamp = await window.geniro.getGitStamp(made.path);
+          const settings = await window.geniro.getSettings();
+          const started = await apis.tasks.startTaskRun({
+            taskId,
+            startTaskRunDto: {
+              cwd: made.path,
+              branch: made.branch,
+              // What THIS board believes the card is in, so a start computed
+              // against a card someone else already moved is refused.
+              from: task.status,
+              startSha: stamp.sha ?? undefined,
+              startDirty: stamp.dirty ?? undefined,
+              customInstructions:
+                settings.customInstructions.trim() === ''
+                  ? undefined
+                  : settings.customInstructions,
+            },
+          });
+          setTasks((current) =>
+            current.map((row) => (row.id === taskId ? started : row)),
+          );
+        } catch (err: unknown) {
+          await window.geniro.pruneTaskWorktree(taskId);
+          setError(describe(err));
+        }
+      } finally {
+        setStartingTaskId(null);
+      }
+    },
+    [apis, projects, selectedProjectId, tasks],
+  );
+
+  /**
+   * One task's report row, fetched from the run that wrote it.
+   *
+   * The whole item list rather than a by-id route, because none exists and the
+   * transcript is already the app's one way to read a run — the alternative is
+   * a second read path for one row. Failures answer null: a missing report is
+   * a panel without a card, never an error banner over the board.
+   */
+  const loadReport = useCallback(
+    async (
+      runId: string | null,
+      reportItemId: string | null,
+    ): Promise<ItemDto | null> => {
+      if (!apis || runId === null || reportItemId === null) {
+        return null;
+      }
+      try {
+        const items = await apis.chats.listRunItems({ runId });
+        return items.find((row) => row.id === reportItemId) ?? null;
+      } catch {
+        return null;
+      }
+    },
+    [apis],
+  );
+
   const dismissError = useCallback(() => {
     setError(null);
   }, []);
@@ -300,6 +412,9 @@ export function useBoard(
     createTask,
     updateTask,
     moveTask,
+    runTask,
+    startingTaskId,
+    loadReport,
     dismissError,
     refreshProjects,
   };

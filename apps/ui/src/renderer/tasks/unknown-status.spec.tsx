@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     Promise.resolve([{ id: 'p1', name: 'One', folder: '/w' }]),
   ),
   listTasks: vi.fn(),
+  reconcileTasks: vi.fn(),
   moveTaskStatus: vi.fn(() => Promise.resolve({})),
 }));
 
@@ -19,7 +20,11 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: () => ({
     projects: { listProjects: mocks.listProjects },
-    tasks: { listTasks: mocks.listTasks, moveTaskStatus: mocks.moveTaskStatus },
+    tasks: {
+      listTasks: mocks.listTasks,
+      reconcileTasks: mocks.reconcileTasks,
+      moveTaskStatus: mocks.moveTaskStatus,
+    },
   }),
 }));
 
@@ -98,7 +103,7 @@ describe('a keyboard move from a status this build does not know', () => {
       branch: null,
       position: 0,
     } as unknown as TaskDto;
-    mocks.listTasks.mockResolvedValue([unknown]);
+    mocks.reconcileTasks.mockResolvedValue([unknown]);
 
     const handle: DaemonHandle = {
       host: '127.0.0.1',

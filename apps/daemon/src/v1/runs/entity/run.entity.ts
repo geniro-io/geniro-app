@@ -287,6 +287,23 @@ export class Run extends TimestampsEntity {
   groupId: string | null = null;
 
   /**
+   * The board task this run was started for, or null for a run nobody started
+   * from a card — every chat and every workflow run.
+   *
+   * A plain nullable id on `groupId`'s shape and for its reasons, with one
+   * more: `v1/runs` is the substrate feature modules OBSERVE, so it may not
+   * name the tasks module. Deleting a task leaves this pointing at a row that
+   * is gone, which the reader treats as no task rather than repairing —
+   * a conversation must outlive the card that opened it.
+   *
+   * The other end, `Task.runId`, is written by the same operation. Two
+   * independently writable ends of one edge can only disagree if something
+   * writes them apart; nothing does.
+   */
+  @Property({ type: 'string', nullable: true })
+  taskId: string | null = null;
+
+  /**
    * Where this run sits in the PINNED band at the top of its own scope, or
    * null for one that is not pinned at all.
    *

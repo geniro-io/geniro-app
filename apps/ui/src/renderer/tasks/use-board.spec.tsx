@@ -32,6 +32,7 @@ const task = (over: Partial<TaskDto> = {}): TaskDto => aTask(over);
 interface Stub {
   apis: DaemonApis;
   listTasks: ReturnType<typeof vi.fn>;
+  reconcileTasks: ReturnType<typeof vi.fn>;
   moveTaskStatus: ReturnType<typeof vi.fn>;
 }
 
@@ -39,6 +40,9 @@ function stubApis(
   over: { moveTaskStatus?: ReturnType<typeof vi.fn> } = {},
 ): Stub {
   const listTasks = vi.fn().mockResolvedValue([task()]);
+  // The board LOADS through reconcile: one call that also settles any run
+  // which finished while no window was open.
+  const reconcileTasks = vi.fn().mockResolvedValue([task()]);
   const moveTaskStatus =
     over.moveTaskStatus ??
     vi
@@ -48,9 +52,9 @@ function stubApis(
       );
   const apis = {
     projects: { listProjects: vi.fn().mockResolvedValue([project()]) },
-    tasks: { listTasks, moveTaskStatus },
+    tasks: { listTasks, moveTaskStatus, reconcileTasks },
   } as unknown as DaemonApis;
-  return { apis, listTasks, moveTaskStatus };
+  return { apis, listTasks, reconcileTasks, moveTaskStatus };
 }
 
 /** Mount the hook and hand back a live handle to its latest return value. */
@@ -137,7 +141,7 @@ describe('useBoard', () => {
         return () => undefined;
       },
     } as unknown as DaemonClient;
-    const { apis, listTasks } = stubApis();
+    const { apis, reconcileTasks: listTasks } = stubApis();
     await mount(apis, client);
     const before = listTasks.mock.calls.length;
 
@@ -159,7 +163,7 @@ describe('useBoard', () => {
         return () => undefined;
       },
     } as unknown as DaemonClient;
-    const { apis, listTasks } = stubApis();
+    const { apis, reconcileTasks: listTasks } = stubApis();
     await mount(apis, client);
     const before = listTasks.mock.calls.length;
 
@@ -226,7 +230,7 @@ describe('useBoard error text and refresh scope', () => {
         return () => undefined;
       },
     } as unknown as DaemonClient;
-    const { apis, listTasks } = stubApis();
+    const { apis, reconcileTasks: listTasks } = stubApis();
     const listProjects = apis.projects.listProjects as ReturnType<typeof vi.fn>;
     await mount(apis, client);
     const projectReads = listProjects.mock.calls.length;

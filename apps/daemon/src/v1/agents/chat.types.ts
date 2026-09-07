@@ -2695,6 +2695,12 @@ export const RunWireSchema = z.object({
     .describe(
       'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and workflow runs together',
     ),
+  taskId: z
+    .string()
+    .nullable()
+    .describe(
+      'Board task this run was started for; null for a run nobody started from a card. The board reads it to tell its own runs apart from every other conversation on the machine',
+    ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of
    * the loose list, when it belongs to none); null while it is not pinned.

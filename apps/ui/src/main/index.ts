@@ -25,6 +25,7 @@ import {
   isRealLoadFailure,
   reportMainLog,
 } from './window-diagnostics';
+import { reapOrphanedWorktrees } from './worktree-service';
 
 /**
  * Product display name. Set before anything reads it: it drives
@@ -385,6 +386,15 @@ function main(): void {
     // running. Not gated on the auto-check setting: a user who switched checks
     // off still has whatever the last update left on their disk.
     void updates.sweepDebris();
+    // Worktrees a force-quit or a crash left behind, cleared before any task
+    // can start one. Detached rather than awaited: it shells out to git once
+    // per leftover, and the window must not wait behind that. It confirms
+    // every entry before touching it and leaves anything holding unsaved work
+    // exactly where it is — see `worktree-service.ts`.
+    void reapOrphanedWorktrees().catch(() => {
+      // A reaper that cannot run costs disk and nothing else; a launch that
+      // fails because of one would cost the user their app.
+    });
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint

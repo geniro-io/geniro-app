@@ -86,6 +86,13 @@ const columnNamed = (el: HTMLElement, name: string): HTMLElement =>
     (node.getAttribute('aria-label') ?? '').startsWith(name),
   ) as HTMLElement;
 
+const headerTrigger = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector<HTMLButtonElement>('[data-menu-trigger]')!;
+
+const options = (el: HTMLElement): HTMLElement[] => [
+  ...el.querySelectorAll<HTMLElement>('[role="option"]'),
+];
+
 describe('Tasks board', () => {
   it('renders a column per status the daemon defines', async () => {
     const el = await board();
@@ -374,5 +381,63 @@ describe('the column surface', () => {
     });
 
     expect(target.textContent).toContain('Drop here');
+  });
+
+  it('switches the board from the header picker', async () => {
+    const other = aProject({ id: 'p2', name: 'Other', folder: '/tmp/other' });
+    mocks.listProjects.mockResolvedValue([project, other]);
+    const el = await board();
+
+    await act(async () => {
+      headerTrigger(el).click();
+    });
+    const row = options(el).find((node) => node.textContent?.includes('Other'));
+    expect(row).toBeDefined();
+    await act(async () => {
+      row!.click();
+    });
+
+    expect(mocks.listTasks).toHaveBeenCalledWith({ projectId: 'p2' });
+  });
+
+  // The rail carried `New project` along its bottom edge. Deleting the rail
+  // without rehoming it would leave a user with no projects unable to make one
+  // from this screen at all, and nothing about the board would look broken.
+  it('opens the new-project dialog from the picker', async () => {
+    const el = await board();
+
+    await act(async () => {
+      headerTrigger(el).click();
+    });
+    const row = options(el).find((node) =>
+      node.textContent?.includes('New project'),
+    );
+    expect(row).toBeDefined();
+    await act(async () => {
+      row!.click();
+    });
+
+    expect(
+      [...document.querySelectorAll('label')].some((node) =>
+        node.textContent?.includes('Folder'),
+      ),
+    ).toBe(true);
+  });
+
+  it('still offers a new project, and refuses a new task, with none at all', async () => {
+    mocks.listProjects.mockResolvedValue([]);
+    const el = await board();
+
+    await act(async () => {
+      headerTrigger(el).click();
+    });
+    expect(options(el).map((node) => node.textContent?.trim())).toStrictEqual([
+      'New project…',
+    ]);
+
+    const add = [...el.querySelectorAll('button')].find((node) =>
+      node.textContent?.includes('New task'),
+    );
+    expect(add?.disabled).toBe(true);
   });
 });

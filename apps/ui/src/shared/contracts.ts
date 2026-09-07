@@ -915,6 +915,38 @@ export interface GitChanges {
   unavailableReason: string | null;
 }
 
+/**
+ * The outcome of preparing a task's worktree.
+ *
+ * A RESULT rather than a throw, on `BranchSwitchResult`'s own terms: this
+ * crosses IPC, where an exception arrives as a string with its shape gone, and
+ * the caller has a real decision to make on a failure — it must not go on to
+ * start a run against a worktree that was never made.
+ */
+export interface TaskWorktreeResult {
+  ok: boolean;
+  /** Where the agent will work; null when the worktree could not be made. */
+  path: string | null;
+  /** The branch it has checked out; null on failure. */
+  branch: string | null;
+  /** Why it failed, as git's own first line; null on success. */
+  error: string | null;
+}
+
+/**
+ * What became of a settled run's worktree.
+ *
+ * Two facts rather than one, because "kept" has two causes a caller may want
+ * to tell apart: nothing could be committed (hooks refused it, or the machine
+ * has no git identity), or git could not say what was in there at all.
+ */
+export interface TaskWorktreeSettleResult {
+  /** Whether the directory is gone. False means it is still on disk. */
+  removed: boolean;
+  /** Whether a rescue commit was made first. False on an already-clean tree. */
+  committed: boolean;
+}
+
 /** Outcome of a guarded branch switch. `branch` is the branch now checked out. */
 export interface BranchSwitchResult {
   ok: boolean;
@@ -1263,6 +1295,39 @@ export interface GeniroApi {
     /** The readable rendering, for a person. */
     markdown: string;
   }): Promise<ChatExportSaveResult>;
+  /**
+   * Make the worktree and branch a task's agent will work in.
+   *
+   * Here rather than in the daemon because every git call this app makes
+   * belongs to the main process. The daemon is told the path afterwards and
+   * records it; it never creates one.
+   */
+  prepareTaskWorktree(input: {
+    taskId: string;
+    folder: string;
+  }): Promise<TaskWorktreeResult>;
+  /**
+   * Take down the worktree a task was given, keeping its BRANCH.
+   *
+   * Answers false when this app never made one for that task — the caller
+   * cannot name a path, only a task, so nothing outside the registry is
+   * reachable from here.
+   */
+  pruneTaskWorktree(taskId: string): Promise<boolean>;
+  /**
+   * Collect the worktree of a run that has SETTLED, keeping what is in it.
+   *
+   * Commits whatever the agent left uncommitted onto the task's own branch and
+   * then removes the directory, so the routine end state of a run stops being
+   * a checkout nothing ever collects. A commit that could not be made keeps
+   * the worktree instead — the branch is the only place the work would
+   * survive, so nothing is removed until it is on there.
+   *
+   * Separate from `pruneTaskWorktree`, which is the FAILED-START path and must
+   * never commit: there is nothing of the agent's to rescue, and the only
+   * changes in that directory would be the user's own.
+   */
+  settleTaskWorktree(taskId: string): Promise<TaskWorktreeSettleResult>;
   /** Switch the folder to a branch — refused when the tree is dirty. */
   switchBranch(dir: string, branch: string): Promise<BranchSwitchResult>;
   /**
@@ -1406,6 +1471,9 @@ export const IPC = {
   getGitInfo: 'geniro:getGitInfo',
   getGitStamp: 'geniro:getGitStamp',
   getChangesSince: 'geniro:getChangesSince',
+  prepareTaskWorktree: 'geniro:prepareTaskWorktree',
+  pruneTaskWorktree: 'geniro:pruneTaskWorktree',
+  settleTaskWorktree: 'geniro:settleTaskWorktree',
   openInTerminal: 'geniro:openInTerminal',
   openTerminalAt: 'geniro:openTerminalAt',
   saveChatExport: 'geniro:saveChatExport',

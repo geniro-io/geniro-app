@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Item } from '../../runs/entity/item.entity';
+import type { ItemKind } from '../../runs/runs.types';
 import { messageText } from '../utils/message-preview';
 
 /**
@@ -533,6 +534,39 @@ export class ItemDao extends BaseDao<Item> {
         disableIdentityMap: true,
       },
     );
+  }
+
+  /**
+   * The last row of one kind a run wrote, or null for a run that wrote none.
+   *
+   * A board task's closing report is read through this, and reading it from
+   * the TRANSCRIPT is what makes the live settle and the app-was-closed
+   * reconcile one code path: `writeRunStatus` persists the status column
+   * alone, so the closing words the `run_status` event carries exist nowhere
+   * once that event has passed. The rows do, and they are written before the
+   * terminal status is announced (persist-then-emit).
+   *
+   * `role` narrows it where a kind is not enough — a `message` row is written
+   * for the user's own turn too, and the agent's is the one a report means.
+   */
+  async latestOfKind(
+    runId: string,
+    kind: ItemKind,
+    role?: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'id'> | null> {
+    const [row] = await this.getRepo(txEm).find(
+      { runId, kind, ...(role === undefined ? {} : { role }) },
+      {
+        orderBy: { seq: 'desc' },
+        limit: 1,
+        // The id alone: `payload` is the TEXT column, and a `report_findings`
+        // row can be many KB read for a value no caller looks at.
+        fields: ['id'],
+        disableIdentityMap: true,
+      },
+    );
+    return row ?? null;
   }
 
   /**

@@ -683,6 +683,13 @@ export interface TaskChangedEvent {
   taskId: string;
   projectId: string;
   status: TaskStatus;
+  /**
+   * Present only when the DAEMON moved this card because the run working it
+   * reached a terminal status. Nothing a client can derive: a card's column is
+   * written optimistically the moment it is dragged, so "the agent has
+   * stopped" is a claim only the daemon is in a position to make.
+   */
+  reason?: 'run-settled';
 }
 
 /**
@@ -705,7 +712,7 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   if (typeof data !== 'object' || data === null) {
     return null;
   }
-  const { taskId, projectId, status } = data as Record<string, unknown>;
+  const { taskId, projectId, status, reason } = data as Record<string, unknown>;
   if (
     typeof taskId !== 'string' ||
     typeof projectId !== 'string' ||
@@ -713,7 +720,15 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
   ) {
     return null;
   }
-  return { taskId, projectId, status: status as TaskStatus };
+  return {
+    taskId,
+    projectId,
+    status: status as TaskStatus,
+    // Narrowed to the one value this renderer acts on, unlike `status` above:
+    // the reason gates a DESTRUCTIVE act, so an unknown one from a newer
+    // daemon must read as "no reason given" rather than be passed through.
+    ...(reason === 'run-settled' ? { reason } : {}),
+  };
 }
 
 const JOIN_TIMEOUT_MS = 5_000;

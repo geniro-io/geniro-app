@@ -675,6 +675,23 @@ export class ChatService implements OnModuleInit {
      * the new thread resumes it, and opens on the transcript it already had.
      */
     resumeSessionId?: string;
+    /**
+     * The board task this chat is the work for, or absent for every ordinary
+     * chat. Set at creation because the settle path finds a task through it:
+     * a run that learned its task later would have a window in which its own
+     * terminal status could arrive with nothing to move.
+     */
+    taskId?: string;
+    /**
+     * Which group to file this chat under, when the caller knows better than
+     * the folder rule below.
+     *
+     * A board's run works in a WORKTREE, so the folder it runs in is one
+     * nothing has ever been filed under — the auto rule would answer null for
+     * every task run, while the project it belongs to names a group outright.
+     * Explicit `null` files it loose; absent falls through to the rule.
+     */
+    groupId?: string | null;
   }): Promise<RunWire> {
     const cwd = resolveValidCwd(input.cwd);
     this.assertApprovalSupported(input.agentKind, input.approval);
@@ -696,7 +713,13 @@ export class ChatService implements OnModuleInit {
     // creates, and against the CANONICAL cwd above rather than the one the
     // request spelled — a group's folder is canonical too, so a symlinked path
     // matches the rule the user actually set.
-    const groupId = await this.groups.resolveAutoGroupId({ cwd });
+    //
+    // Checked against `undefined` rather than nullish: an explicit null is a
+    // caller filing this chat loose, which the rule must not then overturn.
+    const groupId =
+      input.groupId !== undefined
+        ? input.groupId
+        : await this.groups.resolveAutoGroupId({ cwd });
     // BEFORE the run row exists. A CLI that has to bring the conversation
     // across can refuse (it was deleted, it is under another profile), and a
     // refusal must leave no half-made thread behind — the user gets the CLI's
@@ -734,6 +757,7 @@ export class ChatService implements OnModuleInit {
         customInstructions: input.customInstructions?.trim() || null,
         cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
+        taskId: input.taskId ?? null,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.

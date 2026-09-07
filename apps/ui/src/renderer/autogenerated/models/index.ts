@@ -2790,6 +2790,19 @@ export interface RecheckMcpServerDto {
 /**
  * 
  * @export
+ * @interface ReconcileTasksDto
+ */
+export interface ReconcileTasksDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof ReconcileTasksDto
+     */
+    projectId: string;
+}
+/**
+ * 
+ * @export
  * @interface RenameRunDto
  */
 export interface RenameRunDto {
@@ -2994,6 +3007,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    taskId: string | null;
     /**
      * 
      * @type {number}
@@ -3428,6 +3447,81 @@ export interface ShellOutputDto {
 /**
  * 
  * @export
+ * @interface StartTaskRunDto
+ */
+export interface StartTaskRunDto {
+    /**
+     * The worktree the agent works in — already created by the caller, and validated here only as a real directory
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    cwd: string;
+    /**
+     * The branch that worktree has checked out
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    branch: string;
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof StartTaskRunDto
+     */
+    from: TaskStatus;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    startSha?: string;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof StartTaskRunDto
+     */
+    startDirty?: boolean;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof StartTaskRunDto
+     */
+    agentKind?: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof StartTaskRunDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    customInstructions?: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface SweepArchivedDto
  */
 export interface SweepArchivedDto {
@@ -3834,30 +3928,6 @@ export interface UpdateTaskDto {
      * @memberof UpdateTaskDto
      */
     dueDate?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    branch?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    worktreePath?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    runId?: string | null;
-    /**
-     * 
-     * @type {string}
-     * @memberof UpdateTaskDto
-     */
-    reportItemId?: string | null;
 }
 
 

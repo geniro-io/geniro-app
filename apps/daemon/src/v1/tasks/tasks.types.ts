@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+import type { ChatApprovalMode } from '../agents/chat.types';
+import type { AgentKind } from '../runs/runs.types';
+
 /**
  * The board's columns, and the whole vocabulary a task's status may take.
  *
@@ -156,6 +159,33 @@ export interface TaskStatusMove {
 }
 
 /**
+ * What starting a run for one task needs to know.
+ *
+ * `cwd` and `branch` are the caller's because the daemon runs no git: the
+ * Electron main process makes the worktree and names the branch, and this
+ * module records what it is told. `from` is the status the caller believed the
+ * card was in, on {@link TaskStatusMove}'s own terms — starting a run moves
+ * the card, so a start computed against a stale one must lose.
+ *
+ * The run-configuration half is entirely optional and falls back to the
+ * project's standing answers, so a board that sends nothing still runs the
+ * setup the user chose for that project.
+ */
+export interface StartTaskRun {
+  cwd: string;
+  branch: string;
+  from: TaskStatus;
+  startSha?: string;
+  startDirty?: boolean;
+  agentKind?: AgentKind;
+  model?: string;
+  effort?: string;
+  approval?: ChatApprovalMode;
+  configDir?: string;
+  customInstructions?: string;
+}
+
+/**
  * A task write the board needs to hear about, over the WS `task_changed`
  * broadcast — see {@link TaskEventBus}.
  *
@@ -171,4 +201,19 @@ export interface TaskChangedEvent {
   taskId: string;
   projectId: string;
   status: TaskStatus;
+  /**
+   * Present only when the DAEMON moved this card because the run working it
+   * reached a terminal status — `TaskSettleService`, and nothing else, sets it.
+   *
+   * It exists because the card's COLUMN cannot answer "has the agent stopped".
+   * The board writes a status optimistically the moment a card is dragged, so
+   * a client keying a destructive act on the column alone acts on a card whose
+   * agent may still be working — which is what an earlier cut of the worktree
+   * collection did. This says the daemon OBSERVED the run settle, which is the
+   * claim a client cannot make for itself.
+   */
+  reason?: TaskChangeReason;
 }
+
+/** Why a card moved, where the reason is one a client has to act on. */
+export type TaskChangeReason = 'run-settled';

@@ -19,6 +19,9 @@ import {
   TaskDto,
   UpdateTaskDto,
 } from '../dto/task.dto';
+import { ReconcileTasksDto, StartTaskRunDto } from '../dto/task-run.dto';
+import { TaskRunsService } from '../services/task-runs.service';
+import { TaskSettleService } from '../services/task-settle.service';
 import { TasksService } from '../services/tasks.service';
 import type { TaskWire } from '../tasks.types';
 
@@ -30,7 +33,11 @@ import type { TaskWire } from '../tasks.types';
 @ApiTags('tasks')
 @ApiBearerAuth()
 export class TasksController {
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly taskRuns: TaskRunsService,
+    private readonly settle: TaskSettleService,
+  ) {}
 
   /**
    * One project's board. Scoped by query rather than served unfiltered: every
@@ -49,6 +56,20 @@ export class TasksController {
   @ZodResponse({ status: 201, type: TaskDto })
   create(@Body() dto: CreateTaskDto): Promise<TaskWire> {
     return this.tasks.create(dto);
+  }
+
+  /**
+   * Catch a board up on runs that settled while it was closed.
+   *
+   * Declared BEFORE the `:taskId` routes so the path is never read as a task
+   * id — the same ordering `forget-custom-instructions` takes on the chat
+   * controller. It answers with the board so one call serves the load.
+   */
+  @Post('reconcile')
+  @ApiOperation({ operationId: 'reconcileTasks' })
+  @ZodResponse({ status: 200, type: [TaskDto] })
+  reconcile(@Body() dto: ReconcileTasksDto): Promise<TaskWire[]> {
+    return this.settle.reconcileProject(dto.projectId);
   }
 
   @Get(':taskId')
@@ -87,5 +108,22 @@ export class TasksController {
   @ZodResponse({ status: 200, type: TaskDeletedDto })
   remove(@Param('taskId') taskId: string): Promise<{ deleted: boolean }> {
     return this.tasks.remove(taskId);
+  }
+
+  /**
+   * Start an agent on this task, in a worktree the caller has already made.
+   *
+   * Answers with the TASK rather than the run: the board is what the presser
+   * is looking at, and the card now carries the run's id, its branch and its
+   * worktree — everything needed to open the conversation from here.
+   */
+  @Post(':taskId/runs')
+  @ApiOperation({ operationId: 'startTaskRun' })
+  @ZodResponse({ status: 201, type: TaskDto })
+  startRun(
+    @Param('taskId') taskId: string,
+    @Body() dto: StartTaskRunDto,
+  ): Promise<TaskWire> {
+    return this.taskRuns.start(taskId, dto);
   }
 }

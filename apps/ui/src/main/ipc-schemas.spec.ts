@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { branchNameSchema, commitShaSchema, gitDirSchema } from './ipc-schemas';
+import {
+  branchNameSchema,
+  commitShaSchema,
+  gitDirSchema,
+  taskIdSchema,
+  taskWorktreeSchema,
+} from './ipc-schemas';
 
 describe('commitShaSchema', () => {
   const accepted = (value: string): boolean =>
@@ -93,5 +99,54 @@ describe('gitDirSchema', () => {
     expect(gitDirSchema.safeParse('/Users/me/proj').success).toBe(true);
     expect(gitDirSchema.safeParse('relative/proj').success).toBe(false);
     expect(gitDirSchema.safeParse('').success).toBe(false);
+  });
+});
+
+describe('taskIdSchema', () => {
+  const accepts = (value: string): boolean =>
+    taskIdSchema.safeParse(value).success;
+
+  it('accepts the ids the daemon actually mints', () => {
+    expect(accepts('0b3f5a2e-7c11-4d9a-8e2f-1a2b3c4d5e6f')).toBe(true);
+    expect(accepts('t1')).toBe(true);
+  });
+
+  it('refuses anything that would escape the worktrees directory', () => {
+    // The value becomes a path segment under the userData dir AND a git ref.
+    // A separator or a dot-dot in it is a write outside the directory this
+    // app owns, reached through a channel that only ever meant to name a card.
+    for (const bad of ['..', '../etc', 'a/b', 'a\\b', '.hidden', '']) {
+      expect(accepts(bad), bad).toBe(false);
+    }
+  });
+
+  it('refuses characters git would refuse in a ref, and control bytes', () => {
+    for (const bad of ['a b', 'a~1', 'a^', 'a:b', 'a?', 'a*', 'a[1]']) {
+      expect(accepts(bad), bad).toBe(false);
+    }
+    // Written as escapes: a literal NUL in the source is invisible to review.
+    expect(accepts('t\u0000rm')).toBe(false);
+    expect(accepts('t\u007f')).toBe(false);
+  });
+
+  it('refuses an absurdly long id', () => {
+    expect(accepts('a'.repeat(65))).toBe(false);
+  });
+});
+
+describe('taskWorktreeSchema', () => {
+  it('requires a real task id and an absolute folder', () => {
+    expect(
+      taskWorktreeSchema.safeParse({ taskId: 't1', folder: '/Users/me/proj' })
+        .success,
+    ).toBe(true);
+    expect(
+      taskWorktreeSchema.safeParse({ taskId: '../x', folder: '/Users/me/proj' })
+        .success,
+    ).toBe(false);
+    expect(
+      taskWorktreeSchema.safeParse({ taskId: 't1', folder: 'relative' })
+        .success,
+    ).toBe(false);
   });
 });

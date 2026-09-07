@@ -119,6 +119,18 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.saveChatExport, input) as ReturnType<
       GeniroApi['saveChatExport']
     >,
+  prepareTaskWorktree: (input) =>
+    ipcRenderer.invoke(IPC.prepareTaskWorktree, input) as ReturnType<
+      GeniroApi['prepareTaskWorktree']
+    >,
+  pruneTaskWorktree: (taskId) =>
+    ipcRenderer.invoke(IPC.pruneTaskWorktree, taskId) as ReturnType<
+      GeniroApi['pruneTaskWorktree']
+    >,
+  settleTaskWorktree: (taskId) =>
+    ipcRenderer.invoke(IPC.settleTaskWorktree, taskId) as ReturnType<
+      GeniroApi['settleTaskWorktree']
+    >,
   switchBranch: (dir, branch) =>
     ipcRenderer.invoke(IPC.switchBranch, dir, branch) as ReturnType<
       GeniroApi['switchBranch']

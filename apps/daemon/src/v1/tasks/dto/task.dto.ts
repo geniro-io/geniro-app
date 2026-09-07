@@ -64,6 +64,21 @@ export const createTaskSchema = z.object({
 });
 export class CreateTaskDto extends createZodDto(createTaskSchema) {}
 
+/**
+ * What a client may change about a card — its OWN fields, and nothing of the
+ * run working it.
+ *
+ * `runId`, `worktreePath`, `branch` and `reportItemId` are deliberately NOT
+ * here, though `UpdateTaskInput` still carries them for the services. They are
+ * the two ends of the run<->task edge and the run's own record, and
+ * `TaskRunsService` guards every write to them: a synchronous claim, a
+ * compare-and-set on the column, and a question put to the RUN rather than to
+ * the id. A patch accepting them re-opened all three at once — clearing
+ * `runId` on a card whose agent was live let the start path run a second agent
+ * against the same worktree. Nothing in the renderer ever sent them; the route
+ * simply accepted more than any caller needed, which is the shape a bypass
+ * takes.
+ */
 export const updateTaskSchema = z
   .object({
     title: taskTitleSchema.optional(),
@@ -72,10 +87,6 @@ export const updateTaskSchema = z
     labels: labelsSchema.optional(),
     priority: TaskPrioritySchema.optional(),
     dueDate: z.iso.date().nullable().optional(),
-    branch: z.string().min(1).nullable().optional(),
-    worktreePath: z.string().min(1).nullable().optional(),
-    runId: z.string().min(1).nullable().optional(),
-    reportItemId: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) => Object.values(dto).some((value) => value !== undefined),

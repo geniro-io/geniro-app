@@ -43,6 +43,18 @@ export class TaskDao extends BaseDao<Task> {
   }
 
   /**
+   * The card holding one run, if any still does.
+   *
+   * The run<->task edge has an end on each row, and this reads it from the RUN
+   * side — which is what a `run_deleted` announcement gives you, the run row
+   * itself being gone by the time it fires. Null is an ordinary answer: most
+   * runs are chats that never belonged to a card.
+   */
+  async findByRunId(runId: string, txEm?: EntityManager): Promise<Task | null> {
+    return this.getOne({ runId }, {}, txEm);
+  }
+
+  /**
    * How many tasks a project holds. Read before a project delete, so the
    * acknowledgement can say how many cards went with the board.
    */

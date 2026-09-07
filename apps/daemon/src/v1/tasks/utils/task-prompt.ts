@@ -1,0 +1,39 @@
+import type { Task } from '../entity/task.entity';
+
+/**
+ * What geniro asks a task's agent to do, on top of whatever the user's own
+ * standing instructions already say.
+ *
+ * It rides the run's `customInstructions` snapshot rather than the prompt,
+ * because the prompt is what a CLI NAMES the conversation from: leading with
+ * house-keeping had cursor-agent titling chats after geniro's own preamble
+ * (see `AgentAdapter.composeSystemPrompt`), and the same would happen here.
+ *
+ * `report_findings` is named rather than described because it is registered
+ * for every chat this daemon runs, on either CLI — so the agent can be asked
+ * for a structured report with no per-CLI branch. Prose is the fallback and is
+ * stated as one, since an agent that cannot call the tool must still finish by
+ * saying what it did rather than treating the instruction as unmeetable.
+ */
+export const TASK_REPORT_INSTRUCTIONS = [
+  'You are working a single task from a board. When you are finished, close with a report of what you did.',
+  'Prefer the `report_findings` tool — it draws a structured report the user can read at a glance.',
+  'If you cannot call it, write the report as your final message instead: what changed, what you verified, and anything you deliberately left undone.',
+].join('\n');
+
+/**
+ * The task's own brief, as the agent's opening message.
+ *
+ * The title alone when there is no description — an empty section under a
+ * heading reads as a section the author forgot to fill in, which is a worse
+ * brief than the one line that is actually known.
+ */
+export function composeTaskPrompt(
+  task: Pick<Task, 'title' | 'description'>,
+): string {
+  const description = task.description?.trim() ?? '';
+  if (description === '') {
+    return task.title;
+  }
+  return `${task.title}\n\n${description}`;
+}

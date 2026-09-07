@@ -17,6 +17,8 @@ import * as runtime from '../runtime';
 import type {
   CreateTaskDto,
   MoveTaskStatusDto,
+  ReconcileTasksDto,
+  StartTaskRunDto,
   TaskDeletedDto,
   TaskDto,
   UpdateTaskDto,
@@ -41,6 +43,15 @@ export interface TasksApiMoveTaskStatusRequest {
 
 export interface TasksApiReadTaskRequest {
     taskId: string;
+}
+
+export interface TasksApiReconcileTasksRequest {
+    reconcileTasksDto: ReconcileTasksDto;
+}
+
+export interface TasksApiStartTaskRunRequest {
+    taskId: string;
+    startTaskRunDto: StartTaskRunDto;
 }
 
 export interface TasksApiUpdateTaskRequest {
@@ -290,6 +301,108 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async readTask(requestParameters: TasksApiReadTaskRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
         const response = await this.readTaskRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reconcileTasksRaw(requestParameters: TasksApiReconcileTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<TaskDto>>> {
+        if (requestParameters['reconcileTasksDto'] == null) {
+            throw new runtime.RequiredError(
+                'reconcileTasksDto',
+                'Required parameter "reconcileTasksDto" was null or undefined when calling reconcileTasks().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/reconcile`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['reconcileTasksDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reconcileTasks(requestParameters: TasksApiReconcileTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
+        const response = await this.reconcileTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async startTaskRunRaw(requestParameters: TasksApiStartTaskRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling startTaskRun().'
+            );
+        }
+
+        if (requestParameters['startTaskRunDto'] == null) {
+            throw new runtime.RequiredError(
+                'startTaskRunDto',
+                'Required parameter "startTaskRunDto" was null or undefined when calling startTaskRun().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/runs`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['startTaskRunDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async startTaskRun(requestParameters: TasksApiStartTaskRunRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.startTaskRunRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

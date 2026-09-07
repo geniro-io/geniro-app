@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
   searchChat: vi.fn(),
+  readChatTimeline: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
 const groupApi = vi.hoisted(() => ({
@@ -670,6 +671,9 @@ beforeEach(() => {
     },
   });
   api.sweepArchivedChats.mockReset().mockResolvedValue({ deleted: 0 });
+  // The timeline rail's own read. An empty rail is the resting answer for every
+  // test here; the rail itself is pinned in `conversation-timeline.spec.tsx`.
+  api.readChatTimeline.mockReset().mockResolvedValue({ markers: [] });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {
       turns: 0,
@@ -885,6 +889,31 @@ describe('Chats — searching one conversation', () => {
     createdAt: '2026-09-05T10:00:00.000Z',
   });
 
+  /** One node of the conversation timeline, as the daemon sends it. */
+  const timelineMarker = (
+    seq: number,
+    preview: string,
+  ): Record<string, unknown> => ({
+    seq,
+    preview,
+    createdAt: '2026-09-05T10:00:00.000Z',
+    segment: {
+      aiMessages: 1,
+      elapsedMs: 1_000,
+      totals: {
+        turns: 1,
+        costedTurns: 0,
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        thinkingTokens: null,
+        workedMs: null,
+      },
+    },
+  });
+
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
@@ -1007,6 +1036,52 @@ describe('Chats — searching one conversation', () => {
     });
     expect(
       classesOf(container.querySelector('[data-transcript-seq="901"]')!),
+    ).not.toContain('bg-accent/60');
+  });
+
+  it('draws the conversation timeline and jumps the transcript from it', async () => {
+    // The rail's own drawing is pinned in `conversation-timeline.spec.tsx`,
+    // which supplies its props directly. What only THIS spec can reach is the
+    // wiring: that `Chats` hands the daemon's markers to the rail and the rail's
+    // click to `jumpToSeq`. Swapping `onJump` for a no-op leaves both specs
+    // green without it.
+    api.listRunItems.mockResolvedValue([
+      msg(900, 'user', 'the first ask'),
+      msg(901, 'assistant', 'a reply'),
+      msg(902, 'user', 'the second ask'),
+    ]);
+    api.readChatTimeline.mockResolvedValue({
+      markers: [
+        timelineMarker(900, 'the first ask'),
+        timelineMarker(902, 'the second ask'),
+      ],
+      partialReason: null,
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    const markers = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="timeline-marker"]',
+      ),
+    );
+    expect(markers.map((b) => b.textContent)).toEqual([
+      'the first ask',
+      'the second ask',
+    ]);
+
+    await act(async () => {
+      markers[0]!.click();
+    });
+
+    // The same wash a search hit lands on — the jump is one mechanism, so this
+    // is the observable it already produces.
+    expect(
+      classesOf(container.querySelector('[data-transcript-seq="900"]')!),
+    ).toContain('bg-accent/60');
+    expect(
+      classesOf(container.querySelector('[data-transcript-seq="902"]')!),
     ).not.toContain('bg-accent/60');
   });
 

@@ -1353,6 +1353,68 @@ export const ChatSearchResultSchema = z.object({
 export type ChatSearchResult = z.infer<typeof ChatSearchResultSchema>;
 
 /**
+ * What happened between one user message and the next.
+ *
+ * `elapsedMs` and `totals.workedMs` are different figures and both are kept:
+ * elapsed is wall clock across the stretch, worked is the CLI's own accounting
+ * of time it spent, which is null on a CLI that reports none. Substituting one
+ * for the other is the mixing `utils/usage-figures.ts` refuses at the fold, and
+ * it would be no more honest here.
+ */
+export const ChatTimelineSegmentSchema = z
+  .object({
+    aiMessages: z
+      .number()
+      .int()
+      .describe(
+        "every non-user message row before the next user message — a delegate's output included, since it rides the same kind and role and only the payload tells them apart",
+      ),
+    elapsedMs: z
+      .number()
+      .nullable()
+      .describe(
+        'wall clock from this user message to the last row before the next one — null when nothing followed it',
+      ),
+    totals: ChatTotalsWireSchema,
+  })
+  .meta({ id: 'ChatTimelineSegment' });
+export type ChatTimelineSegment = z.infer<typeof ChatTimelineSegmentSchema>;
+
+/** One user message on the timeline, and the stretch of work it opened. */
+export const ChatTimelineMarkerSchema = z
+  .object({
+    seq: z
+      .number()
+      .int()
+      .describe('Where in the run this is — the jump target'),
+    createdAt: z.string(),
+    preview: z
+      .string()
+      .describe("the message's own opening words, cut to a label's length"),
+    segment: ChatTimelineSegmentSchema,
+  })
+  .meta({ id: 'ChatTimelineMarker' });
+export type ChatTimelineMarker = z.infer<typeof ChatTimelineMarkerSchema>;
+
+/**
+ * The whole conversation as a rail of user messages.
+ *
+ * No `.meta({ id })` on this root: nestjs-zod would register the component
+ * under that id while the response still points at the DTO class name, and
+ * `setupSwagger` fails the boot on the dangling `$ref`.
+ */
+export const ChatTimelineWireSchema = z.object({
+  markers: z.array(ChatTimelineMarkerSchema),
+  partialReason: z
+    .string()
+    .nullable()
+    .describe(
+      'why the rail is real but incomplete — a capped list has to be able to SAY so, since a shorter rail is otherwise indistinguishable from a shorter conversation',
+    ),
+});
+export type ChatTimelineWire = z.infer<typeof ChatTimelineWireSchema>;
+
+/**
  * The version of the export DOCUMENT's own shape, stamped on every file.
  *
  * An export is read back by whatever the user pastes it into — a bug report, a

@@ -21,6 +21,7 @@ import type {
   ChatExportDto,
   ChatMetricsDto,
   ChatSearchResultDto,
+  ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
   ForgottenInstructionsDto,
@@ -76,6 +77,10 @@ export interface ChatsApiReadChatAttachmentRequest {
 }
 
 export interface ChatsApiReadChatMetricsRequest {
+    runId: string;
+}
+
+export interface ChatsApiReadChatTimelineRequest {
     runId: string;
 }
 
@@ -602,6 +607,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readChatMetrics(requestParameters: ChatsApiReadChatMetricsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatMetricsDto> {
         const response = await this.readChatMetricsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readChatTimelineRaw(requestParameters: ChatsApiReadChatTimelineRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatTimelineDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readChatTimeline().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/timeline`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readChatTimeline(requestParameters: ChatsApiReadChatTimelineRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatTimelineDto> {
+        const response = await this.readChatTimelineRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

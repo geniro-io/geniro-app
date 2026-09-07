@@ -118,6 +118,7 @@ import {
 import { ConfigDirSelect } from './config-dir-select';
 import { ContextMeter } from './context-meter';
 import { useContextReadings } from './context-reading';
+import { ConversationTimeline } from './conversation-timeline';
 import { FastActionBar } from './fast-action-bar';
 import { FolderSelect } from './folder-select';
 import { type GroupCommand, GroupHeader } from './group-header';
@@ -239,6 +240,7 @@ import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
 import { useChatSearch } from './use-chat-search';
+import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
@@ -5023,6 +5025,37 @@ export function Chats({
     client,
   );
   /**
+   * The newest user message the loaded window holds — the timeline rail's
+   * second refresh trigger.
+   *
+   * It moves when a message is SENT and at no other time: the items arrive in
+   * seq order, so paging older history in prepends rows whose seqs are all
+   * lower and this figure is unchanged. That is what lets the rail follow the
+   * conversation without a fetch every time the reader scrolls up.
+   */
+  const latestUserSeq = useMemo(
+    () =>
+      items.reduce(
+        (seq, item) =>
+          item.kind === 'message' && item.role === 'user' ? item.seq : seq,
+        0,
+      ),
+    [items],
+  );
+  /**
+   * Every user message in the thread, whatever the loaded window holds.
+   *
+   * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
+   * rail built from `items` would draw the tail of the conversation and present
+   * it as the whole of it — see `use-chat-timeline.ts`.
+   */
+  const timeline = useChatTimeline(
+    chatApi,
+    activeRunId,
+    threadWorked.turns,
+    latestUserSeq,
+  );
+  /**
    * What the header states about the thread as a WHOLE — the daemon's answer
    * where it has one, this component's fold where it does not.
    *
@@ -7220,6 +7253,23 @@ export function Chats({
                         onSearch={openChatSearch}
                       />
                     ) : null}
+
+                    {/* The conversation as a rail of its user messages, between
+                    the header and the transcript it navigates. A SIBLING of the
+                    scroller rather than its first row: a row would scroll away
+                    with the conversation, which is the one thing a navigation
+                    strip may not do.
+
+                    It is `shrink-0` and the scroller is `flex-1`, so the rail
+                    takes its own height off the transcript — which is exactly
+                    the viewport-SHRINKING case the tail follow used to miss, and
+                    is why the ResizeObserver watches the scroller itself
+                    alongside its children. */}
+                    <ConversationTimeline
+                      markers={timeline.markers}
+                      partialReason={timeline.partialReason}
+                      onJump={jumpToSeq}
+                    />
 
                     {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
                   CSS resolves a `visible` axis to `auto` whenever the other

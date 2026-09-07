@@ -12,13 +12,18 @@ const mocks = vi.hoisted(() => ({
   listProjects: vi.fn(),
   listTasks: vi.fn(),
   moveTaskStatus: vi.fn(),
+  createTask: vi.fn(),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
   createDaemonApis: () => ({
     projects: { listProjects: mocks.listProjects },
-    tasks: { listTasks: mocks.listTasks, moveTaskStatus: mocks.moveTaskStatus },
+    tasks: {
+      listTasks: mocks.listTasks,
+      moveTaskStatus: mocks.moveTaskStatus,
+      createTask: mocks.createTask,
+    },
   }),
 }));
 
@@ -47,6 +52,9 @@ beforeEach(() => {
   mocks.listTasks.mockResolvedValue([card()]);
   mocks.moveTaskStatus.mockImplementation(({ moveTaskStatusDto }) =>
     Promise.resolve(card({ status: moveTaskStatusDto.to })),
+  );
+  mocks.createTask.mockImplementation(({ createTaskDto }) =>
+    Promise.resolve(card({ id: 'new', title: createTaskDto.title })),
   );
 });
 
@@ -264,5 +272,107 @@ describe('the drop target', () => {
     });
 
     expect(over.defaultPrevented).toBe(false);
+  });
+});
+
+describe('the column surface', () => {
+  it('files a task into the column whose + was pressed', async () => {
+    // The whole point of a per-column add: pressing In review means a task
+    // that STARTS there, not one that starts in Backlog and has to be dragged.
+    const el = await board();
+
+    const add = [...el.querySelectorAll('button')].find(
+      (node) => node.getAttribute('aria-label') === 'Add a task to In review',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      add.click();
+    });
+    const title = document.body.querySelector(
+      '#new-task-title',
+    ) as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setter?.call(title, 'Needs review');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const submit = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Add task',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      submit.click();
+    });
+
+    expect(mocks.createTask).toHaveBeenCalledWith({
+      createTaskDto: expect.objectContaining({
+        title: 'Needs review',
+        status: 'in_review',
+      }),
+    });
+  });
+
+  it('leaves the status unstated when the board-level New task is used', async () => {
+    // Absent, not null: the daemon defaults an unstated status to `backlog`,
+    // and sending one explicitly would make the board own a default the
+    // daemon already owns.
+    const el = await board();
+
+    const add = [...el.querySelectorAll('button')].find((node) =>
+      (node.textContent ?? '').includes('New task'),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      add.click();
+    });
+    const title = document.body.querySelector(
+      '#new-task-title',
+    ) as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setter?.call(title, 'Anywhere');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const submit = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Add task',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      submit.click();
+    });
+
+    const sent = mocks.createTask.mock.calls[0]?.[0] as {
+      createTaskDto: Record<string, unknown>;
+    };
+    expect('status' in sent.createTaskDto).toBe(false);
+  });
+
+  it('says where to drop while a card is over the column', async () => {
+    // An empty column reads "No tasks" until a drag arrives, and then has to
+    // say it is a target — with the dashed placeholder border gone, the words
+    // and the surface tint are what remain.
+    const el = await board();
+    const dt = { setData: vi.fn(), dropEffect: '', effectAllowed: '' };
+    await act(async () => {
+      cardNode(el).dispatchEvent(
+        Object.assign(new Event('dragstart', { bubbles: true }), {
+          dataTransfer: dt,
+        }),
+      );
+    });
+
+    const target = columnNamed(el, 'In progress');
+    await act(async () => {
+      target.dispatchEvent(
+        Object.assign(
+          new Event('dragover', { bubbles: true, cancelable: true }),
+          { dataTransfer: dt },
+        ),
+      );
+    });
+
+    expect(target.textContent).toContain('Drop here');
   });
 });

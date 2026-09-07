@@ -171,8 +171,11 @@ const NOTICE_TTL_MS = 6_000;
  */
 export function Workflows({
   handle,
+  active = true,
 }: {
   handle: DaemonHandle | null;
+  /** Whether this screen is the one on view — see the library refresh below. */
+  active?: boolean;
 }): React.JSX.Element {
   const apis = useMemo(
     () => (handle ? createDaemonApis(handle) : null),
@@ -235,9 +238,27 @@ export function Workflows({
     }
   }, [api]);
 
+  /**
+   * Re-read the library whenever this screen comes back into view.
+   *
+   * Workflows stays MOUNTED across nav switches — that is what keeps an unsaved
+   * builder edit alive while the user glances at Chats — so a one-shot mount
+   * read never runs again. The library is `*.geniro.yaml` on disk and those
+   * files are the source of truth, so anything that writes one without going
+   * through this screen stayed invisible until the app was restarted: an editor,
+   * another window, a second checkout. Measured — a file dropped into the
+   * workflows directory was served by `GET /v1/workflows` immediately and still
+   * missing from this list after navigating away and back.
+   *
+   * The LIBRARY only. The builder's canvas is the user's unsaved work, and
+   * refetching that on every nav switch is what staying mounted exists to avoid.
+   */
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     void refreshList();
-  }, [refreshList]);
+  }, [active, refreshList]);
 
   // Status-bar messages expire on their own (see NOTICE_TTL_MS).
   useEffect(() => {

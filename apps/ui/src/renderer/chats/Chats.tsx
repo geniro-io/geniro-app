@@ -7250,26 +7250,20 @@ export function Chats({
                         // end this row are chips on the composer shelf now.
                         // `sidePanelLive` still feeds all three from one place
                         // — see the `ComposerShelf` below.
+                        // The conversation as a vertical timeline, behind an
+                        // icon beside the search one. Both are about the whole
+                        // conversation rather than the next message, which is
+                        // what puts them on this row.
+                        timeline={
+                          <ConversationTimeline
+                            markers={timeline.markers}
+                            partialReason={timeline.partialReason}
+                            onJump={jumpToSeq}
+                          />
+                        }
                         onSearch={openChatSearch}
                       />
                     ) : null}
-
-                    {/* The conversation as a rail of its user messages, between
-                    the header and the transcript it navigates. A SIBLING of the
-                    scroller rather than its first row: a row would scroll away
-                    with the conversation, which is the one thing a navigation
-                    strip may not do.
-
-                    It is `shrink-0` and the scroller is `flex-1`, so the rail
-                    takes its own height off the transcript — which is exactly
-                    the viewport-SHRINKING case the tail follow used to miss, and
-                    is why the ResizeObserver watches the scroller itself
-                    alongside its children. */}
-                    <ConversationTimeline
-                      markers={timeline.markers}
-                      partialReason={timeline.partialReason}
-                      onJump={jumpToSeq}
-                    />
 
                     {/* Stating the x axis is NOT redundant beside `overflow-y-auto`.
                   CSS resolves a `visible` axis to `auto` whenever the other

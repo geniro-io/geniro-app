@@ -398,6 +398,7 @@ export function ChatHeader({
   costUsd = null,
   costedTurns = null,
   openTurns = EMPTY_OPEN_TURNS,
+  timeline,
   onSearch,
 }: {
   label: string;
@@ -501,6 +502,8 @@ export function ChatHeader({
    * one would state that this thread can be searched and that something is
    * wrong, where the truth is that nothing here has anything to search.
    */
+  /** The conversation-timeline control, composed by the caller. */
+  timeline?: React.ReactNode;
   onSearch?: () => void;
   // The "what changed since this chat started" control was HERE, beside search
   // and export, and is now the shelf's leftmost chip (`FolderChangesChip` in
@@ -624,6 +627,11 @@ export function ChatHeader({
             disabled, where there is nothing for it to act on — a greyed control
             states that a feature exists and is broken, where the truth is that
             this thread has nothing to search or nothing to compare against. */}
+        {/* A NODE rather than data: this header knows how to place an action,
+            not what a timeline is. The caller composes the trigger and its
+            panel, which is also what keeps the popover's open state out of a
+            component that re-renders on every figure the row carries. */}
+        {timeline}
         {onSearch ? (
           <Button
             variant="ghost"

@@ -1061,8 +1061,19 @@ describe('Chats — searching one conversation', () => {
     const container = await mount(client);
     await clickRun(container, 'My chat');
 
+    // Behind the header icon, so the panel has to be opened first — and the
+    // panel is portalled, which is why the reads below are against the document
+    // rather than the mounted container.
+    const openTimeline = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Conversation timeline"]',
+    );
+    expect(openTimeline).not.toBe(null);
+    await act(async () => {
+      openTimeline!.click();
+    });
+
     const markers = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
+      document.body.querySelectorAll<HTMLButtonElement>(
         '[data-slot="timeline-marker"]',
       ),
     );

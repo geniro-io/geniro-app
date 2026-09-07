@@ -7,11 +7,13 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type {
+  TaskPriority,
   TaskSource,
   TaskStatus,
   TaskStatusMove,
   TaskWire,
 } from '../tasks.types';
+import { TaskEventBus } from './task-events.bus';
 
 /** How many tasks one project's board may hold — a guard, not a design limit. */
 const MAX_TASKS_PER_PROJECT = 1000;
@@ -29,6 +31,7 @@ export class TasksService {
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
+    private readonly events: TaskEventBus,
   ) {}
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
@@ -48,6 +51,8 @@ export class TasksService {
     description?: string;
     status?: TaskStatus;
     labels?: string[];
+    priority?: TaskPriority;
+    dueDate?: string;
     source?: TaskSource;
     sourceRef?: string;
   }): Promise<TaskWire> {
@@ -68,6 +73,8 @@ export class TasksService {
         description: input.description ?? null,
         status,
         labels: JSON.stringify(input.labels ?? []),
+        priority: input.priority ?? 'none',
+        dueDate: input.dueDate ?? null,
         source: input.source ?? 'geniro',
         sourceRef: input.sourceRef ?? null,
         // Appended to the end of its column, never inserted: a new card is the
@@ -80,6 +87,11 @@ export class TasksService {
       },
       em,
     );
+    this.events.publishTaskChanged({
+      taskId: created.id,
+      projectId: created.projectId,
+      status: created.status,
+    });
     return toWire(created);
   }
 
@@ -93,6 +105,8 @@ export class TasksService {
       title?: string;
       description?: string | null;
       labels?: string[];
+      priority?: TaskPriority;
+      dueDate?: string | null;
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
@@ -107,6 +121,15 @@ export class TasksService {
     }
     if (patch.description !== undefined) {
       task.description = patch.description;
+    }
+    if (patch.priority !== undefined) {
+      task.priority = patch.priority;
+    }
+    if (patch.dueDate !== undefined) {
+      // `null` CLEARS the date, which is why this reads `!== undefined` rather
+      // than a truthiness check: a task whose due date is dropped has to lose
+      // it, while the field being absent from the patch means leave it alone.
+      task.dueDate = patch.dueDate;
     }
     if (patch.labels !== undefined) {
       task.labels = JSON.stringify(patch.labels);
@@ -139,6 +162,11 @@ export class TasksService {
     }
 
     await em.flush();
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return toWire(task);
   }
 
@@ -177,13 +205,26 @@ export class TasksService {
       em,
     );
     await em.flush();
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return toWire(task);
   }
 
   async remove(taskId: string): Promise<{ deleted: boolean }> {
     const em = this.em.fork();
-    await this.require(taskId, em);
+    const task = await this.require(taskId, em);
     await this.taskDao.deleteById(taskId, em);
+    // Captured off the row BEFORE the delete rather than re-read after: a
+    // soft-deleted task is invisible to `getById` (the `softDelete` filter),
+    // so there is nothing left here to read `status`/`projectId` off of.
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+    });
     return { deleted: true };
   }
 
@@ -231,6 +272,8 @@ function toWire(task: Task): TaskWire {
     runId: task.runId,
     reportItemId: task.reportItemId,
     position: task.position,
+    priority: task.priority,
+    dueDate: task.dueDate,
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString(),
   };

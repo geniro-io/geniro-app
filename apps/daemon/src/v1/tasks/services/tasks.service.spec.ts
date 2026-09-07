@@ -14,6 +14,8 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
+import type { TaskChangedEvent } from '../tasks.types';
+import { TaskEventBus } from './task-events.bus';
 import { TasksService } from './tasks.service';
 
 /**
@@ -44,6 +46,8 @@ describe('TasksService (in-memory sqlite)', () => {
    * is what `resolve-cwd.spec.ts` and `cli-auth.service.spec.ts` already do.
    */
   let worktree: string;
+  let events: TaskEventBus;
+  let changes: TaskChangedEvent[];
 
   beforeAll(async () => {
     worktree = realpathSync(mkdtempSync(join(tmpdir(), 'geniro-worktree-')));
@@ -70,7 +74,10 @@ describe('TasksService (in-memory sqlite)', () => {
     em = orm.em.fork();
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
-    service = new TasksService(em, taskDao, projectDao);
+    events = new TaskEventBus();
+    changes = [];
+    events.allChanges().subscribe((e) => changes.push(e));
+    service = new TasksService(em, taskDao, projectDao, events);
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-tasks-spec',
@@ -104,6 +111,68 @@ describe('TasksService (in-memory sqlite)', () => {
 
     // And the losing move changed nothing — the point of refusing it.
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
+  });
+
+  it('emits on the task bus after a create, with the fixed board payload', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'backlog' },
+    ]);
+  });
+
+  it('emits on the task bus after a status move, naming the NEW status', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+    changes.length = 0; // the create above emits too; isolate the move
+
+    await service.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+  });
+
+  it('does not emit on a no-op move — nothing changed for a board to redraw', async () => {
+    const task = await service.create({ projectId, title: 'idempotent' });
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'backlog', to: 'backlog' });
+
+    expect(changes).toEqual([]);
+  });
+
+  it('does not emit on a refused (stale) move', async () => {
+    const task = await service.create({ projectId, title: 'run me' });
+    await service.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
+    changes.length = 0;
+
+    await expect(
+      service.moveStatus(task.id, { from: 'backlog', to: 'in_progress' }),
+    ).rejects.toThrow();
+
+    expect(changes).toEqual([]);
+  });
+
+  it('emits on the task bus after a field update, naming its unchanged status', async () => {
+    const task = await service.create({ projectId, title: 'ship it' });
+    changes.length = 0;
+
+    await service.update(task.id, { title: 'renamed' });
+
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'backlog' },
+    ]);
+  });
+
+  it('emits on the task bus after a delete, naming the status it held', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'to delete',
+      status: 'todo',
+    });
+    changes.length = 0;
+
+    await service.remove(task.id);
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
   });
 
   it('accepts a move to the status the task is already in, as a no-op', async () => {
@@ -291,5 +360,65 @@ describe('TasksService (in-memory sqlite)', () => {
     await em.flush();
 
     expect((await service.get(task.id)).labels).toEqual(['ok']);
+  });
+  it('leaves a new task untriaged rather than guessing a priority', async () => {
+    // `none` has to be distinguishable from a deliberate `low`, so the default
+    // is its own value and not the bottom of the scale.
+    const task = await service.create({ projectId, title: 'fresh' });
+
+    expect(task.priority).toBe('none');
+    expect(task.dueDate).toBeNull();
+  });
+
+  it('round-trips a priority and a due date through create', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'ship the board',
+      priority: 'urgent',
+      dueDate: '2026-09-30',
+    });
+
+    expect(task.priority).toBe('urgent');
+    expect(task.dueDate).toBe('2026-09-30');
+  });
+
+  it('stores the due date as the calendar day it was given, with no zone shift', async () => {
+    // The whole reason it is a string column. Round-tripping through a `Date`
+    // would pin the day to whichever zone wrote it and move it for everyone
+    // else — a task due the 30th must not read as the 29th somewhere.
+    const task = await service.create({
+      projectId,
+      title: 'day, not instant',
+      dueDate: '2026-01-01',
+    });
+
+    expect(task.dueDate).toBe('2026-01-01');
+    expect(String(task.dueDate)).not.toContain('T');
+  });
+
+  it('clears a due date on an explicit null', async () => {
+    // The other arm of `!== undefined`: dropping a date has to be possible,
+    // and is different from leaving the field out of the patch.
+    const task = await service.create({
+      projectId,
+      title: 'was due',
+      dueDate: '2026-09-30',
+    });
+
+    const cleared = await service.update(task.id, { dueDate: null });
+
+    expect(cleared.dueDate).toBeNull();
+  });
+
+  it('leaves the due date alone when the patch does not mention it', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'still due',
+      dueDate: '2026-09-30',
+    });
+
+    const renamed = await service.update(task.id, { title: 'renamed' });
+
+    expect(renamed.dueDate).toBe('2026-09-30');
   });
 });

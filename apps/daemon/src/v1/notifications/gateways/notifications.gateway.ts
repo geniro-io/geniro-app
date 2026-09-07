@@ -23,6 +23,7 @@ import {
 } from '../../agents/utils/ws-payload';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
+import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 
 /**
@@ -121,6 +122,7 @@ export class NotificationsGateway
   private deletedSubscription?: Subscription;
   private debugSubscription?: Subscription;
   private usageSubscription?: Subscription;
+  private taskSubscription?: Subscription;
   /**
    * Debug fan-out failures, counted rather than logged.
    *
@@ -138,6 +140,7 @@ export class NotificationsGateway
     private readonly presence: WsPresenceService,
     private readonly debugLog: DebugLogService,
     private readonly usage: UsageEventBus,
+    private readonly tasks: TaskEventBus,
   ) {}
 
   afterInit(server: Server): void {
@@ -190,6 +193,22 @@ export class NotificationsGateway
       },
       error: (err: unknown) =>
         this.logger.error(`run status bus errored: ${String(err)}`),
+    });
+    // A task write goes to EVERY client, not to a run's room — a board is not
+    // scoped to one run, and a card can move from a window that has none of
+    // this project's runs open at all. Isolated like its neighbours.
+    this.taskSubscription = this.tasks.allChanges().subscribe({
+      next: (change) => {
+        try {
+          server.emit('task_changed', change);
+        } catch (err) {
+          this.logger.error(
+            `failed to broadcast task_changed for ${change.taskId}: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      },
+      error: (err: unknown) =>
+        this.logger.error(`task event bus errored: ${String(err)}`),
     });
     // A DESTROYED run goes to every client, and it is the one announcement
     // whose absence a client cannot recover from on its own.
@@ -269,6 +288,7 @@ export class NotificationsGateway
     this.busSubscription?.unsubscribe();
     this.deltaSubscription?.unsubscribe();
     this.statusSubscription?.unsubscribe();
+    this.taskSubscription?.unsubscribe();
     this.deletedSubscription?.unsubscribe();
     this.debugSubscription?.unsubscribe();
     this.usageSubscription?.unsubscribe();

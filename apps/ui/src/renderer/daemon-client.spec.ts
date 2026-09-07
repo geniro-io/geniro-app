@@ -6,6 +6,7 @@ import {
   DaemonClient,
   parseDeletedRunId,
   parseRunStatus,
+  parseTaskChanged,
 } from './daemon-client';
 
 // A fake Socket.IO socket whose 'connect' handler and onAny dispatcher the test
@@ -406,5 +407,46 @@ describe('parseDeletedRunId — the run_deleted twin', () => {
     // A blank string is not a run identity; degrading to null here means "no
     // ghost row gets cleared" rather than "clear every run in the sidebar".
     expect(parseDeletedRunId({ runId: '' })).toBeNull();
+  });
+});
+
+describe('parseTaskChanged — the task_changed reader', () => {
+  it('reads a whole event', () => {
+    expect(
+      parseTaskChanged({ taskId: 't1', projectId: 'p1', status: 'todo' }),
+    ).toEqual({ taskId: 't1', projectId: 'p1', status: 'todo' });
+  });
+
+  it('refuses a payload that is not an object', () => {
+    expect(parseTaskChanged(null)).toBeNull();
+    expect(parseTaskChanged('task_changed')).toBeNull();
+    expect(parseTaskChanged(7)).toBeNull();
+  });
+
+  it('refuses an event missing any of the three fields', () => {
+    expect(parseTaskChanged({ projectId: 'p1', status: 'todo' })).toBeNull();
+    expect(parseTaskChanged({ taskId: 't1', status: 'todo' })).toBeNull();
+    expect(parseTaskChanged({ taskId: 't1', projectId: 'p1' })).toBeNull();
+  });
+
+  it('refuses a field of the wrong type rather than passing it through', () => {
+    // The board keys a lookup on `status` and filters columns by it, so a
+    // non-string here would reach that lookup as an object.
+    expect(
+      parseTaskChanged({ taskId: 't1', projectId: 'p1', status: { a: 1 } }),
+    ).toBeNull();
+    expect(
+      parseTaskChanged({ taskId: 1, projectId: 'p1', status: 'todo' }),
+    ).toBeNull();
+  });
+
+  it('passes a status string this build does not know', () => {
+    // Deliberate: the daemon owns the vocabulary and a newer build of it may
+    // send a status this renderer has never heard of. Dropping the event would
+    // leave the card in a column it has left; the board renders an unknown
+    // status as its own raw label instead.
+    expect(
+      parseTaskChanged({ taskId: 't1', projectId: 'p1', status: 'blocked' }),
+    ).toEqual({ taskId: 't1', projectId: 'p1', status: 'blocked' });
   });
 });

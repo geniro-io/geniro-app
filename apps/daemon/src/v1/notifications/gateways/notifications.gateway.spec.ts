@@ -7,6 +7,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { DebugLogService } from '../../diagnostics/services/debug-log.service';
 import { UsageEventBus } from '../../stats/services/usage-events.bus';
+import { TaskEventBus } from '../../tasks/services/task-events.bus';
 import { WsPresenceService } from '../services/ws-presence.service';
 import { NotificationsGateway } from './notifications.gateway';
 
@@ -64,6 +65,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const socket = fakeSocket('wrong-token');
 
@@ -81,6 +83,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -100,6 +103,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -135,6 +139,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const socket = fakeSocket('good-token');
     let resolveJoin!: () => void;
@@ -167,6 +172,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const socket = fakeSocket('good-token');
 
@@ -186,6 +192,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     let calls = 0;
     const emit = vi.fn(() => {
@@ -220,6 +227,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       usage,
+      new TaskEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a usage event must never take it — the Stats page
@@ -243,6 +251,36 @@ describe('NotificationsGateway', () => {
     expect(emit).toHaveBeenCalledTimes(1);
   });
 
+  it('broadcasts a task write to EVERY client, and stops on destroy', () => {
+    const tasks = new TaskEventBus();
+    const gw = new NotificationsGateway(
+      runtime,
+      new AgentEventBus(),
+      new ApprovalRegistry(),
+      new WsPresenceService(),
+      debugLog(),
+      new UsageEventBus(),
+      tasks,
+    );
+    const emit = vi.fn();
+    // `to` is the ROOM path; a task write must never take it — a board is not
+    // scoped to one run's room, so a roomed emit would reach nobody watching
+    // that project's cards.
+    const to = vi.fn(() => ({ emit: vi.fn() }));
+    const server = { emit, to } as unknown as Server;
+    gw.afterInit(server);
+
+    const change = { taskId: 't1', projectId: 'p1', status: 'todo' as const };
+    tasks.publishTaskChanged(change);
+
+    expect(emit).toHaveBeenCalledWith('task_changed', change);
+    expect(to).not.toHaveBeenCalled();
+
+    gw.onModuleDestroy();
+    tasks.publishTaskChanged({ ...change, taskId: 't2' });
+    expect(emit).toHaveBeenCalledTimes(1);
+  });
+
   it('broadcasts a deleted run to EVERY client, and stops on destroy', () => {
     const bus = new AgentEventBus();
     const gw = new NotificationsGateway(
@@ -252,6 +290,7 @@ describe('NotificationsGateway', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     const emit = vi.fn();
     // `to` is the ROOM path; a deletion must never take it — every OTHER
@@ -297,6 +336,7 @@ describe('verdict round-trip', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
 
     const ack = gw.verdict({ runId: 'r1', requestId: 'req-1', allow: true });
@@ -315,6 +355,7 @@ describe('verdict round-trip', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
     expect(
       gw.verdict({ runId: 'r1', requestId: 'ghost', allow: false }).data,
@@ -346,6 +387,7 @@ describe('verdict round-trip', () => {
       new WsPresenceService(),
       debugLog(),
       new UsageEventBus(),
+      new TaskEventBus(),
     );
 
     track('req-a');

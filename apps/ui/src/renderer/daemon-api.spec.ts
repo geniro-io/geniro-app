@@ -62,6 +62,41 @@ describe('createDaemonApis', () => {
     expect(run).toEqual({ id: 'x' });
   });
 
+  it('binds the projects client to the launch', async () => {
+    const fetchMock = stubFetch({ ok: true, json: () => Promise.resolve([]) });
+
+    await createDaemonApis(handle).projects.listProjects();
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:8123/v1/projects',
+    );
+    expect(initOf(fetchMock).headers).toMatchObject({
+      Authorization: 'Bearer tok',
+    });
+  });
+
+  it('binds the tasks client, carrying the status it believes the card is in', async () => {
+    const fetchMock = stubFetch({
+      ok: true,
+      json: () => Promise.resolve({ id: 't1' }),
+    });
+
+    await createDaemonApis(handle).tasks.moveTaskStatus({
+      taskId: 't1',
+      moveTaskStatusDto: { from: 'todo', to: 'in_progress' },
+    });
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:8123/v1/tasks/t1/status',
+    );
+    const init = initOf(fetchMock);
+    expect(init.method).toBe('PATCH');
+    // `from` has to ride the body. The daemon answers TASK_STATUS_CONFLICT when
+    // the card left that column since the read, and a client that dropped the
+    // field would turn a detectable race into a silent last-writer-wins.
+    expect(init.body).toBe(JSON.stringify({ from: 'todo', to: 'in_progress' }));
+  });
+
   it('sends a bodyless POST WITHOUT a content-type header', async () => {
     // The cancel routes are bodyless POSTs; an application/json claim with an
     // empty body is rejected by Fastify (FST_ERR_CTP_EMPTY_JSON_BODY), which

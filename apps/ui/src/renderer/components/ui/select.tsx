@@ -75,8 +75,14 @@ export function Select({
    * Overrides what the TRIGGER shows, when a compact form of the value reads
    * better there than the menu row does — the folder picker lists full paths
    * (two checkouts of one repo share a leaf name) but the chip shows the leaf.
+   *
+   * A NODE rather than a string, so a trigger can set part of the value in a
+   * quieter treatment — the board's project switcher names the project and its
+   * folder, and the folder is the smaller of the two facts. It is rendered
+   * inside the trigger's own truncating span, so a node passed here brings its
+   * own `min-w-0` if it needs to give up width.
    */
-  triggerLabel?: string;
+  triggerLabel?: React.ReactNode;
   /** Provided = the menu gets a filter field. */
   searchPlaceholder?: string;
   /** Glyph on the TRIGGER itself (the folder chip's folder icon). */

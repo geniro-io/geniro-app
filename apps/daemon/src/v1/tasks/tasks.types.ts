@@ -57,6 +57,29 @@ export const TASK_LABELS_MAX = 20;
 export const TASK_LABEL_MAX = 40;
 
 /**
+ * A task's priority.
+ *
+ * A NAMED value rather than a number, so a row reads for itself in the database
+ * and a client cannot mistake the direction of the scale — the one thing an
+ * integer priority reliably gets wrong is which end is urgent.
+ *
+ * `none` leads the list because it is the DEFAULT: an untriaged task has to be
+ * distinguishable from one somebody deliberately marked low. The renderer owns
+ * display order; this array is the vocabulary, not a ranking.
+ */
+export const TASK_PRIORITIES = [
+  'none',
+  'urgent',
+  'high',
+  'medium',
+  'low',
+] as const;
+export const TaskPrioritySchema = z
+  .enum(TASK_PRIORITIES)
+  .meta({ id: 'TaskPriority' });
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
+/**
  * One task on the wire.
  *
  * No `.meta({ id })` on this ROOT: it backs an array response DTO, and an id
@@ -104,6 +127,15 @@ export const TaskWireSchema = z.object({
     .describe(
       'Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers',
     ),
+  priority: TaskPrioritySchema.describe(
+    "How urgent this task is; 'none' until someone triages it",
+  ),
+  dueDate: z.iso
+    .date()
+    .nullable()
+    .describe(
+      'The day this task is due, as a calendar date with no time or zone — a due date is a day in the reader\u0027s own life, and giving it an instant would move it across the date line for nobody\u0027s benefit',
+    ),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),
 });
@@ -121,4 +153,22 @@ export type TaskWire = z.infer<typeof TaskWireSchema>;
 export interface TaskStatusMove {
   from: TaskStatus;
   to: TaskStatus;
+}
+
+/**
+ * A task write the board needs to hear about, over the WS `task_changed`
+ * broadcast — see {@link TaskEventBus}.
+ *
+ * Deliberately thin: `status` (rather than the whole {@link TaskWire}) is what
+ * a board draws a card by, and the renderer already holds the rest from its
+ * own fetch — a wider payload would be a second, driftable copy of the row.
+ */
+/**
+ * TWIN PARSER: mirrored by the renderer's `parseTaskChanged`
+ * (`apps/ui/src/renderer/daemon-client.ts`). Change one and change the other.
+ */
+export interface TaskChangedEvent {
+  taskId: string;
+  projectId: string;
+  status: TaskStatus;
 }

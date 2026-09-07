@@ -8,7 +8,7 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
-import type { TaskSource, TaskStatus } from '../tasks.types';
+import type { TaskPriority, TaskSource, TaskStatus } from '../tasks.types';
 
 /**
  * One card on a project's board.
@@ -102,4 +102,18 @@ export class Task extends TimestampsEntity {
    */
   @Property({ type: 'integer' })
   position: number = 0;
+
+  @Property({ type: 'string' })
+  priority: TaskPriority = 'none';
+
+  /**
+   * The day this task is due, `YYYY-MM-DD`, or null.
+   *
+   * A DATE string and not a `Date` column: a due date is a day in the reader's
+   * own life, so an instant would pin it to whichever zone wrote it and move it
+   * a day for everyone else. Nothing compares it to a clock — the board
+   * compares it to today, which is also a local idea.
+   */
+  @Property({ type: 'string', nullable: true })
+  dueDate: string | null = null;
 }

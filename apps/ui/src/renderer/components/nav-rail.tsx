@@ -1,5 +1,6 @@
 import {
   ChartColumn,
+  KanbanSquare,
   type LucideIcon,
   MessageSquare,
   PanelLeftClose,
@@ -16,7 +17,7 @@ import { Logo } from './logo';
 import { cn } from './ui/utils';
 
 /** The top-level views the nav rail switches between. */
-export type AppView = 'chats' | 'workflows' | 'stats' | 'settings';
+export type AppView = 'chats' | 'workflows' | 'tasks' | 'stats' | 'settings';
 
 interface NavItem {
   view: AppView;
@@ -28,6 +29,7 @@ interface NavItem {
 const PRIMARY_ITEMS: readonly NavItem[] = [
   { view: 'chats', label: 'Chats', icon: MessageSquare },
   { view: 'workflows', label: 'Workflows', icon: Workflow },
+  { view: 'tasks', label: 'Tasks', icon: KanbanSquare },
   { view: 'stats', label: 'Stats', icon: ChartColumn },
 ];
 

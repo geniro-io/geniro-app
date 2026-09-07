@@ -78,8 +78,14 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       // what the transcript shows, and a pair of "background work started /
       // settled" rows beside them would say the same thing twice.
       return null;
+    // `usage_progress` is in this group for its own reason, worth stating
+    // because it is the one carrying figures anybody would want kept: the same
+    // four counts land durably in the turn's `turn_complete` usage, so a row
+    // per request would write the turn's bill down twice and leave every
+    // reader choosing between two totals.
     case 'thinking_progress':
     case 'context_progress':
+    case 'usage_progress':
     case 'text_delta':
     case 'reasoning_delta':
       // The EPHEMERAL live plane. This switch has no `default` on purpose:

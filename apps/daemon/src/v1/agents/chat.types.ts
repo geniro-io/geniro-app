@@ -2357,6 +2357,28 @@ export interface RunDeltaEvent {
    * model this session — has reported one.
    */
   contextWindowTokens: number | null;
+  /**
+   * What THIS TURN has spent so far — its requests' tokens, summed as they
+   * land, rather than the one figure the `turn_complete` roll-up reports when
+   * it is over.
+   *
+   * A RUNNING TOTAL, unlike `contextTokens` above, which is a level: the two
+   * move independently and a compaction sends them in opposite directions.
+   * Cache reads are their own field because they are priced apart and dominate
+   * the input side of any resumed conversation — folded in, the figure would
+   * say a cheap turn was an expensive one.
+   *
+   * CLAUDE ONLY today, and null everywhere else. Cursor exposes no token
+   * accounting a client can reach: measured 2026-09-06 on 2026.08.31-4057e58 —
+   * its ACP wire declares `usage_update` in the schema union and emits it
+   * nowhere, its session store holds the context breakdown and nothing else,
+   * its `afterAgentResponse` and `stop` hooks do not fire, and the `sessionEnd`
+   * hook that does fire carries duration and ids. Null is therefore the honest
+   * reading for that CLI rather than a gap to be filled in with an estimate.
+   */
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
 }
 
 /**

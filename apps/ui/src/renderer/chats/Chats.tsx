@@ -84,13 +84,14 @@ import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
 import { AttachmentStrip } from './attachment-strip';
 import { BranchSelect } from './branch-select';
-import { ChatActionProviders } from './chat-action-providers';
+import { type CalleeContext, resolveCalleeContext } from './call-context';
 import { ChatChangesDialog } from './chat-changes-dialog';
 import { chatExportBaseName } from './chat-export-name';
 import { ChatHeader } from './chat-header';
 import { ChatListItem } from './chat-list-item';
 import { chatToMarkdown } from './chat-markdown';
 import { ChatMetricsLoaderContext } from './chat-metrics';
+import { ChatProviders } from './chat-providers';
 import { ChatScopeFilter } from './chat-scope-filter';
 import { ChatSearchDialog } from './chat-search-dialog';
 import {
@@ -3761,6 +3762,19 @@ export function Chats({
     reconnectNonce,
   );
   /**
+   * The same two ranks, handed to every call block in the transcript.
+   *
+   * A block can fold only its callee's SETTLED turns, so without this its ring
+   * is empty for the whole of a call and fills at the settle — REPORTED against
+   * a running cursor call. See `CalleeContextResolverContext` for why it travels
+   * as a context, and `ChatProviders` for why it is provided there.
+   */
+  const resolveCallReading = useCallback(
+    (calleeNodeId: string, callId: string): CalleeContext =>
+      resolveCalleeContext(liveText, nodeReadings, calleeNodeId, callId),
+    [liveText, nodeReadings],
+  );
+  /**
    * The open thread is shelved, so its composer is inert.
    *
    * Read off the ROW rather than off `chatScope`: the scope says what the list
@@ -5050,23 +5064,22 @@ export function Chats({
      * dropped the moment a run settles and never exists at all for a window
      * that reloaded, so a per-call ring drawn from it alone shows nothing
      * outside a running turn.
+     *
+     * The pair itself lives in `resolveCalleeContext`, shared with the call
+     * block's own ring on the very rule `cardContextOf` states below — an order
+     * written down twice is an order two surfaces eventually disagree on.
      */
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
     ): AgentThread[] => {
-      const durableCalls = nodeReadings.get(nodeId)?.calls;
       return threadsOf(nodeActivity).map((thread) => {
         if (thread.kind !== 'call') {
           return thread;
         }
-        const live = liveText.get(partialOwnerKey(nodeId, thread.id));
-        const row = durableCalls?.find((call) => call.callId === thread.id);
         return {
           ...thread,
-          contextTokens: live?.contextTokens ?? row?.contextTokens ?? null,
-          contextWindowTokens:
-            live?.contextWindowTokens ?? row?.contextWindowTokens ?? null,
+          ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
         };
       });
     };
@@ -6362,7 +6375,10 @@ export function Chats({
   // panel's own resizable width drives it).
   return (
     <CardBackedRequestsContext.Provider value={cardBacked}>
-      <ChatActionProviders signIn={signInToActiveCli} retry={retryActiveRun}>
+      <ChatProviders
+        signIn={signInToActiveCli}
+        retry={retryActiveRun}
+        callContext={resolveCallReading}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -8301,7 +8317,7 @@ export function Chats({
             </LocalImageLoaderContext.Provider>
           </ChatMetricsLoaderContext.Provider>
         </AttachmentLoaderContext.Provider>
-      </ChatActionProviders>
+      </ChatProviders>
     </CardBackedRequestsContext.Provider>
   );
 }

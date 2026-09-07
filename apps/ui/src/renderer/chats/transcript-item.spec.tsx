@@ -63,6 +63,33 @@ function render(el: React.ReactNode): void {
 }
 
 describe('TranscriptItem — agent-call rows', () => {
+  it('RENDERS the silence advisory the call broker writes', () => {
+    // The payload key is the whole of this pin. `system` rows are read for
+    // `message` and draw NOTHING when it is absent, so a producer writing the
+    // sentence under any other key ships a row that exists in the database,
+    // survives the transcript fold, and puts nothing on screen — which is
+    // exactly what the first cut of the watchdog did. The daemon's own twin
+    // block names this reader for that reason.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          callId: 'call-1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'helper',
+          stalledCall: true,
+          severity: 'info',
+          message: "'helper' has produced nothing for 10 minutes.",
+        })}
+      />,
+    );
+
+    const text = container.textContent ?? '';
+    expect(text).toContain('has produced nothing for 10 minutes');
+    // `info`, not the red failure chrome an absent severity resolves to — the
+    // call is still open and nothing has failed.
+    expect(text).not.toContain('system');
+  });
+
   it('renders call_started with the callee and message — no wire plumbing (mode, call id)', () => {
     render(
       <TranscriptItem

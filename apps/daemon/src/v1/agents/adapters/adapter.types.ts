@@ -618,6 +618,42 @@ type AgentEventBody =
       contextWindowTokens?: number | null;
       contextModel?: string | null;
     }
+  | {
+      /**
+       * What ONE request SPENT, as soon as it lands — the live counterpart of
+       * the `turn_complete` usage's token halves.
+       *
+       * A SIBLING of `context_progress` rather than more fields on it, because
+       * the two are different facts about the same line: that one reports a
+       * LEVEL (how full the window is now, which does not accumulate), this
+       * one reports a COST (what this request added, which does). Folding them
+       * together would leave a reader unable to tell a window that grew by
+       * 12k from a turn that spent 12k, and the accumulator downstream would
+       * have to guess which of the two it was handed.
+       *
+       * Claude carries all of it on every `assistant` line and geniro was
+       * dropping everything but the prompt-side sum. Cursor carries NONE of it:
+       * measured 2026-09-06 on 2026.08.31-4057e58 — no `usage_update` emitter
+       * on its ACP wire (the name appears once, inside the schema union), no
+       * token field anywhere in its session store, `afterAgentResponse` and
+       * `stop` hooks that do not fire, and a `sessionEnd` hook plus JSONL
+       * transcript carrying neither. So this event is claude-only today, and
+       * the shape is the ACP `usage_update` one so that adopting theirs, when
+       * they ship it, is a mapping rather than a redesign.
+       *
+       * EPHEMERAL like `context_progress`: never persisted, never replayed —
+       * the durable copy is the turn's own `turn_complete` usage.
+       */
+      type: 'usage_progress';
+      /** Fresh input tokens for this request — cache traffic excluded. */
+      inputTokens?: number | null;
+      /** What the model produced on this request. */
+      outputTokens?: number | null;
+      /** Cache reads, kept apart because they are priced apart. */
+      cacheReadTokens?: number | null;
+      /** Newly written cache, likewise. */
+      cacheCreationTokens?: number | null;
+    }
   | { type: 'reasoning'; text: string }
   | {
       type: 'tool_call';

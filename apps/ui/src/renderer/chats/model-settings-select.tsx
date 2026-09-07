@@ -388,29 +388,37 @@ export function ModelSettingsSelect({
                 {
                   label: 'Recents',
                   items: paths.map((path) => {
-                    // The colour of the user's NAMED configuration for this
-                    // directory, drawn by `Menu` as the row's left border —
-                    // asked for as "просто левый бордер вот этого же цвета".
-                    // Only that: the row still says the PATH, because a colour
-                    // is a way to recognise a directory at a glance rather than
-                    // a replacement for knowing which one it is, and a list
-                    // where some rows said a name and others a path would read
-                    // as two kinds of thing.
-                    const accent = configProfiles.find(
-                      (profile) => profile.dir === path,
-                    )?.color;
+                    // The user's NAMED configuration for this directory, when
+                    // there is one. Its colour rides the row's left border —
+                    // asked for as "просто левый бордер вот этого же цвета" —
+                    // and its NAME leads the row.
+                    const profile = configProfiles.find(
+                      (candidate) => candidate.dir === path,
+                    );
                     return {
                       value: encode(PROFILE, path),
-                      // More than the leaf here: two checkouts of one repo are
-                      // both `geniro-app` and would be the same row.
-                      label: shortenPath(path),
+                      // NAME over PATH, the same row `DirectorySelect` draws.
+                      // The two pickers offer the same directories, so a row
+                      // shape that differed between them described one account
+                      // two ways depending on where it was opened from.
+                      //
+                      // Both lines are needed and neither is decoration: the
+                      // name says which ACCOUNT, the path says which DIRECTORY,
+                      // and a colour is recognition rather than either. An
+                      // unnamed directory leads with its leaf, which is only
+                      // enough BECAUSE the line under it disambiguates two
+                      // checkouts that share one.
+                      label: profile?.name ?? folderName(path),
+                      subLabel: shortenPath(path),
                       title: path,
                       icon: <IdCard />,
                       checked: path === configDir,
                       // Spread rather than a possibly-`undefined` key: an
                       // explicit undefined is still a key, and `MenuItem`
                       // distinguishes "no colour" from "a colour".
-                      ...(accent === undefined ? {} : { accent }),
+                      ...(profile?.color === undefined
+                        ? {}
+                        : { accent: profile.color }),
                     };
                   }),
                 },

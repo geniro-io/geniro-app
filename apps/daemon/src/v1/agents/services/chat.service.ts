@@ -1819,6 +1819,14 @@ export class ChatService implements OnModuleInit {
       }
       return;
     }
+    if (event.type === 'usage_progress') {
+      // The live half of what the turn is COSTING. No durable twin beside it,
+      // unlike `context_progress` below: the turn's own `turn_complete` usage
+      // already carries these four counts for the whole turn, so filing them
+      // per request would be the same money written down twice.
+      this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
+      return;
+    }
     if (event.type === 'context_progress') {
       this.partials.context(
         runId,
@@ -4046,6 +4054,13 @@ export class ChatService implements OnModuleInit {
         disposeComparer?.();
         disposeGallerist?.();
       };
+      // ZERO the last turn's running bill before this one's first request can
+      // report. It belongs HERE rather than at the settle for the reason the
+      // comment below gives about the process: a chat's CLI is kept across
+      // turns, so the live plane's state is too — and clearing at the settle
+      // would leave the figure blank for the whole gap between turns, which is
+      // exactly when a reader is looking at what the last one cost.
+      this.partials.startTurn(runId, SINGLE_AGENT_NODE);
       // Through the session registry, never `adapter.start`: a chat is the one
       // run kind that sends turn after turn to the same agent in the same
       // folder, so its CLI process is kept between them. That is what stops
@@ -4141,6 +4156,14 @@ export class ChatService implements OnModuleInit {
                 null,
                 event.text,
               );
+              return;
+            }
+            if (event.type === 'usage_progress') {
+              // The IN-TURN site, and the one that matters: its off-turn twin
+              // above only ever sees a CLI carrying on by itself after a turn
+              // settled. Wiring only that one was measured to draw nothing at
+              // all through a whole live turn.
+              this.partials.spend(runId, SINGLE_AGENT_NODE, null, event);
               return;
             }
             if (event.type === 'context_progress') {

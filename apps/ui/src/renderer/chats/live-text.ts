@@ -1,3 +1,5 @@
+import { formatTokens } from './agent-activity';
+
 /**
  * The live (not-yet-durable) assistant text one agent is writing right now.
  *
@@ -62,6 +64,22 @@ export interface LiveTextEvent {
   contextTokens: number | null;
   /** The window those tokens are measured against, or null if unreported. */
   contextWindowTokens: number | null;
+  /**
+   * What THIS TURN has spent so far, summed over its requests as they land.
+   *
+   * A RUNNING TOTAL where `contextTokens` above is a level — the two move
+   * independently, and a compaction sends them opposite ways. Cache reads stay
+   * their own figure because they are priced apart and dominate the input side
+   * of any resumed conversation.
+   *
+   * CLAUDE ONLY, and null for cursor — which exposes no token accounting a
+   * client can reach at all (see the daemon's `RunDeltaEvent` for the four
+   * channels that were measured and found empty). Null is "not measured", so
+   * the row simply does not draw the figure rather than showing a zero.
+   */
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
 }
 
 /** What one agent is doing right now, as the transcript renders it. */
@@ -73,6 +91,9 @@ export interface LiveState {
   thinkingStretch: number | null;
   contextTokens: number | null;
   contextWindowTokens: number | null;
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
 }
 
 /**
@@ -114,7 +135,55 @@ export function parseLiveText(data: unknown): LiveTextEvent | null {
     thinkingStretch: positiveNumber(record.thinkingStretch),
     contextTokens: positiveNumber(record.contextTokens),
     contextWindowTokens: positiveNumber(record.contextWindowTokens),
+    // NON-NEGATIVE, unlike the two above: a turn whose first request produced
+    // nothing yet has genuinely spent 0 output tokens, and reading that as
+    // "unmeasured" would hide the whole figure for as long as the agent was
+    // still thinking — which is precisely the stretch this exists to fill.
+    spentInputTokens: nonNegativeNumber(record.spentInputTokens),
+    spentOutputTokens: nonNegativeNumber(record.spentOutputTokens),
+    spentCacheReadTokens: nonNegativeNumber(record.spentCacheReadTokens),
   };
+}
+
+/**
+ * This turn's running token bill as one short phrase, or null when nothing has
+ * reported it.
+ *
+ * `↑` is what the turn PUT IN and `↓` what it got back — arrows rather than
+ * words because the row carrying this already has an activity phrase and a
+ * clock and one line to fit them in. Cache reads are folded into the input side
+ * here, unlike on the wire: the split decides a bill and not a glance, and a
+ * third figure is what pushes the phrase off the row.
+ *
+ * Null when NEITHER half was measured, which is every cursor turn — see
+ * {@link LiveState.spentInputTokens}. A measured ZERO still draws: "this turn
+ * has produced nothing yet" is true, useful, and exactly what the reader of a
+ * long-running turn is asking.
+ *
+ * Here rather than in the component: the fold is where the live state is in
+ * hand, and the row's own renderer holds a payload with no plane behind it.
+ */
+export function formatLiveSpend(state: {
+  spentInputTokens: number | null;
+  spentOutputTokens: number | null;
+  spentCacheReadTokens: number | null;
+}): string | null {
+  const input =
+    state.spentInputTokens === null && state.spentCacheReadTokens === null
+      ? null
+      : (state.spentInputTokens ?? 0) + (state.spentCacheReadTokens ?? 0);
+  const output = state.spentOutputTokens;
+  if (input === null && output === null) {
+    return null;
+  }
+  const parts: string[] = [];
+  if (input !== null) {
+    parts.push(`↑${formatTokens(input)}`);
+  }
+  if (output !== null) {
+    parts.push(`↓${formatTokens(output)}`);
+  }
+  return parts.join(' ');
 }
 
 /** A positive number off an untyped field, else null — the defensive default. */
@@ -213,7 +282,13 @@ export function applyLiveText(
   if (
     event.text === '' &&
     event.thinkingStretch === null &&
-    event.contextTokens === null
+    event.contextTokens === null &&
+    // A SPEND figure keeps the entry too, on the same reasoning the context
+    // figure is kept for: it is not "doing something", but the row that shows
+    // what this turn has cost needs it, and dropping the entry would blank
+    // that figure between two deltas.
+    event.spentOutputTokens === null &&
+    event.spentInputTokens === null
   ) {
     next.delete(key);
   } else {
@@ -225,6 +300,9 @@ export function applyLiveText(
       thinkingStretch: event.thinkingStretch,
       contextTokens: event.contextTokens,
       contextWindowTokens: event.contextWindowTokens,
+      spentInputTokens: event.spentInputTokens,
+      spentOutputTokens: event.spentOutputTokens,
+      spentCacheReadTokens: event.spentCacheReadTokens,
     });
   }
   return next;

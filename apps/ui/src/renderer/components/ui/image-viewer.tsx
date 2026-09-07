@@ -303,7 +303,20 @@ function ZoomableSurface({
           // its content. Its retint lives in `styles/global.css` with the other
           // two, because a Tailwind utility cannot win that argument — see the
           // rule there for the measurement.
-          className="image-viewer-picture mx-auto max-h-[min(78vh,100%)] w-auto max-w-full rounded-md object-contain"
+          //
+          // The cap is a VIEWPORT length and nothing else. It was
+          // `min(78vh,100%)`, and that `100%` is unresolvable here: the img's
+          // containing block is the library's own content div, which is
+          // `height: fit-content` — an indefinite basis, so the percentage
+          // never resolves and Chromium drops the WHOLE declaration to `none`.
+          // MEASURED on a 600×4000 picture in a 577px window: computed
+          // `min(450.06px, 100%)`, rendered 600×4000, wrapper `clientHeight`
+          // 4000. The wrapper is `overflow: hidden`, so what reached the screen
+          // was a slice of the middle — and it could not be dragged either,
+          // because at scale 1 the library bounds the content against a wrapper
+          // that fit-content had made exactly as tall as it. REPORTED as
+          // exactly that pair: "I see only its middle part and can't move it."
+          className="image-viewer-picture mx-auto max-h-[78vh] w-auto max-w-full rounded-md object-contain"
         />
       </TransformComponent>
     </div>

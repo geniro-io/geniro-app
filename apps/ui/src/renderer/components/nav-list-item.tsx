@@ -37,6 +37,7 @@ export function NavListItem({
   onDragStart,
   onDragOver,
   onDragEnd,
+  onContextMenu,
 }: {
   active: boolean;
   title?: string;
@@ -72,6 +73,15 @@ export function NavListItem({
   onDragStart?: (event: React.DragEvent) => void;
   onDragOver?: (event: React.DragEvent) => void;
   onDragEnd?: (event: React.DragEvent) => void;
+  /**
+   * Right-click anywhere on the row.
+   *
+   * On the `li` for the same reason the drag handlers are: the activation
+   * overlay spans the whole row, so a handler on the content would miss every
+   * click that did not land on the text — which on a four-line row is most of
+   * it.
+   */
+  onContextMenu?: (event: React.MouseEvent) => void;
 }): React.JSX.Element {
   return (
     <li
@@ -79,6 +89,7 @@ export function NavListItem({
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={onDragEnd}
+      onContextMenu={onContextMenu}
       className={cn(
         'relative flex cursor-pointer flex-col gap-0.5 rounded-md px-2.5 py-2 hover:bg-accent/50',
         active && 'bg-accent shadow-[inset_0_0_0_1px_var(--border)]',

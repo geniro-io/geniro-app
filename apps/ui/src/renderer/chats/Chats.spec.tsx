@@ -7221,6 +7221,47 @@ describe('Chats sidebar list', () => {
   }
 
   /**
+   * Right-click one row and press one of its menu rows.
+   *
+   * The row draws Rename and Archive and nothing else; everything past those
+   * — Pin, and the permanent Delete — is reached this way now, so a test about
+   * what one of them DOES has to open the menu first.
+   */
+  async function clickRowMenu(
+    container: HTMLElement,
+    rowLabel: string,
+    menuLabel: string,
+  ): Promise<void> {
+    const row = rowAction(container, rowLabel)!.closest('li')!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+      );
+    });
+    await act(async () => {
+      [...document.querySelectorAll('[role="option"]')]
+        .find((el) => el.textContent?.trim() === menuLabel)!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  /** The menu rows one chat row offers, by its accessible name. */
+  async function rowMenuLabels(
+    container: HTMLElement,
+    rowLabel: string,
+  ): Promise<string[]> {
+    const row = rowAction(container, rowLabel)!.closest('li')!;
+    await act(async () => {
+      row.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+      );
+    });
+    return [...document.querySelectorAll('[role="option"]')].map(
+      (el) => el.textContent?.trim() ?? '',
+    );
+  }
+
+  /**
    * Press the row's Archive and then confirm it. EVERY archive asks now, so a
    * test about what archiving DOES has to get past the dialog first; the
    * dialog itself is pinned by the two tests below.
@@ -7353,10 +7394,17 @@ describe('Chats sidebar list', () => {
     // The live row offers the reversible action and NOT the one-way one; the
     // shelved row offers the way back and the purge.
     expect(rowAction(container, 'Archive My chat')).not.toBeNull();
-    expect(rowAction(container, 'Delete My chat')).toBeNull();
     expect(rowAction(container, 'Unarchive Shelved')).not.toBeNull();
-    expect(rowAction(container, 'Delete Shelved')).not.toBeNull();
     expect(rowAction(container, 'Archive Shelved')).toBeNull();
+    // The purge is in the MENU rather than on the row, so the assertion has to
+    // open it — a `rowAction` check would now pass on both rows and pin
+    // nothing.
+    expect(await rowMenuLabels(container, 'Archive My chat')).not.toContain(
+      'Delete permanently',
+    );
+    expect(await rowMenuLabels(container, 'Unarchive Shelved')).toContain(
+      'Delete permanently',
+    );
     // And the shelved row SAYS so at rest. Row actions appear on hover, so
     // without the glyph the two rows are identical until one is pointed at —
     // which is the one thing `Show all` cannot afford.
@@ -7432,14 +7480,21 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
 
     expect(rowAction(container, 'Archive My chat')).not.toBeNull();
-    expect(rowAction(container, 'Delete My chat')).toBeNull();
     expect(rowAction(container, 'Unarchive My chat')).toBeNull();
+    expect(await rowMenuLabels(container, 'Archive My chat')).not.toContain(
+      'Delete permanently',
+    );
 
     await pickScope(container, 'Archived only');
 
     expect(rowAction(container, 'Unarchive My chat')).not.toBeNull();
-    expect(rowAction(container, 'Delete My chat')).not.toBeNull();
     expect(rowAction(container, 'Archive My chat')).toBeNull();
+    // Reached from the archive, and now from the archive's MENU — one more
+    // press from the pointer's resting place than it used to be, which is the
+    // whole of the change to the one-way door.
+    expect(await rowMenuLabels(container, 'Unarchive My chat')).toContain(
+      'Delete permanently',
+    );
   });
 
   it('offers Archive on a WORKFLOW row, and moves its Delete behind the shelf', async () => {
@@ -7455,7 +7510,9 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
 
     expect(rowAction(container, 'Archive Call Demo')).not.toBeNull();
-    expect(rowAction(container, 'Delete Call Demo')).toBeNull();
+    expect(await rowMenuLabels(container, 'Archive Call Demo')).not.toContain(
+      'Delete permanently',
+    );
   });
 
   it('asks before archiving a SETTLED chat, without calling it destructive', async () => {
@@ -7789,13 +7846,7 @@ describe('Chats sidebar list', () => {
     const { client } = makeClient();
     const container = await mountArchived(client);
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Delete My chat"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     // Irreversible: the row action asks before it destroys anything.
     const dialog = container.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain('My chat');
@@ -7861,13 +7912,7 @@ describe('Chats sidebar list', () => {
     const { client } = makeClient();
     const container = await mountArchived(client);
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Delete My chat"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     const dialog = container.querySelector('[role="dialog"]')!;
     await act(async () => {
       [...dialog.querySelectorAll('button')]
@@ -7915,13 +7960,7 @@ describe('Chats sidebar list', () => {
     const container = await mount(client);
     await pickScope(container, 'Archived only');
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Delete Call Demo"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await clickRowMenu(container, 'Unarchive Call Demo', 'Delete permanently');
     const dialog = container.querySelector('[role="dialog"]')!;
     // The workflow ITSELF is not what is being deleted — say so on the card.
     expect(dialog.textContent).toContain('stays in your library');
@@ -7952,13 +7991,7 @@ describe('Chats sidebar list', () => {
     await clickRun(container, 'My chat');
     expect(client.leaveRun).not.toHaveBeenCalledWith('r1');
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Delete My chat"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     await act(async () => {
       [
         ...container.querySelectorAll<HTMLButtonElement>(
@@ -8007,13 +8040,7 @@ describe('Chats sidebar list', () => {
     const { client } = makeClient();
     const container = await mountArchived(client);
 
-    await act(async () => {
-      container
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Delete My chat"]',
-        )!
-        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    });
+    await clickRowMenu(container, 'Unarchive My chat', 'Delete permanently');
     await act(async () => {
       [
         ...container.querySelectorAll<HTMLButtonElement>(

@@ -7,6 +7,7 @@ import {
   TASK_LABELS_MAX,
   TASK_SOURCE_REF_MAX,
   TASK_TITLE_MAX,
+  TaskPrioritySchema,
   TaskSourceSchema,
   TaskStatusSchema,
   TaskWireSchema,
@@ -56,6 +57,8 @@ export const createTaskSchema = z.object({
   /** Omitted = `backlog`, where a jotted-down task belongs until it is queued. */
   status: TaskStatusSchema.optional(),
   labels: labelsSchema.optional(),
+  priority: TaskPrioritySchema.optional(),
+  dueDate: z.iso.date().optional(),
   source: TaskSourceSchema.optional(),
   sourceRef: z.string().min(1).max(TASK_SOURCE_REF_MAX).optional(),
 });
@@ -67,6 +70,8 @@ export const updateTaskSchema = z
     /** Explicit null clears the description; an omitted key leaves it alone. */
     description: z.string().max(TASK_DESCRIPTION_MAX).nullable().optional(),
     labels: labelsSchema.optional(),
+    priority: TaskPrioritySchema.optional(),
+    dueDate: z.iso.date().nullable().optional(),
     branch: z.string().min(1).nullable().optional(),
     worktreePath: z.string().min(1).nullable().optional(),
     runId: z.string().min(1).nullable().optional(),

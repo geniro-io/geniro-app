@@ -9,8 +9,10 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { MdEditor } from '../components/ui/md-editor';
 import { MenuAnchorContext } from '../components/ui/menu';
+import { Select } from '../components/ui/select';
 import { cn } from '../components/ui/utils';
 import { LabelEditor } from './label-editor';
+import { PRIORITY_META, PRIORITY_ORDER, priorityMeta } from './task-priority';
 import { taskStatusMeta } from './task-status';
 
 /** Height of the description editor, in px — `MdEditor` takes a number. */
@@ -27,6 +29,8 @@ export function TaskDetail({
     title?: string;
     description?: string;
     labels?: string[];
+    priority?: TaskDto['priority'];
+    dueDate?: string | null;
   }) => void;
 }): React.JSX.Element {
   const [editingTitle, setEditingTitle] = useState(false);
@@ -101,6 +105,58 @@ export function TaskDetail({
             onSave({ labels });
           }}
         />
+
+        <div className="flex flex-col gap-2 border-t border-border pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-xs text-muted-foreground">Priority</span>
+            <Select
+              aria-label="Priority"
+              className="w-40"
+              value={task.priority}
+              triggerLabel={priorityMeta(task.priority).label}
+              groups={[
+                {
+                  items: PRIORITY_ORDER.map((value) => {
+                    const meta = PRIORITY_META[value];
+                    return {
+                      value,
+                      label: meta.label,
+                      icon: (
+                        <meta.icon className={cn('size-4', meta.className)} />
+                      ),
+                    };
+                  }),
+                },
+              ]}
+              onValueChange={(next) => {
+                onSave({ priority: next as TaskDto['priority'] });
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <label
+              htmlFor="task-due-date"
+              className="text-xs text-muted-foreground">
+              Due
+            </label>
+            {/* A native date input, which is the ONE place this app's
+              no-native-control rule does not reach: `select.tsx` replaces the
+              OS dropdown because its menu ignores every token and cannot be
+              asserted on, while a date field has no such menu — and
+              hand-rolling a calendar to avoid it would be a far larger surface
+              than the rule is protecting. */}
+            <Input
+              id="task-due-date"
+              type="date"
+              className="w-40"
+              value={task.dueDate ?? ''}
+              onChange={(event) => {
+                onSave({ dueDate: event.target.value || null });
+              }}
+            />
+          </div>
+        </div>
 
         <dl className="flex flex-col gap-1 border-y border-border py-2 text-xs text-muted-foreground">
           <div className="flex justify-between gap-4">

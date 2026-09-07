@@ -38,6 +38,29 @@ function detail(over: Partial<TaskDto> = {}): HTMLDivElement {
   return container;
 }
 
+/** The detail panel's own save signature, so a spy cannot drift from it. */
+type SaveHandler = React.ComponentProps<typeof TaskDetail>['onSave'];
+const saveSpy = (): ReturnType<typeof vi.fn<SaveHandler>> =>
+  vi.fn<SaveHandler>();
+
+function detailWith({
+  onSave = saveSpy(),
+  task: over = {},
+}: {
+  onSave?: ReturnType<typeof saveSpy>;
+  task?: Partial<TaskDto>;
+}): HTMLDivElement {
+  container = document.createElement('div');
+  document.body.appendChild(container);
+  root = createRoot(container);
+  act(() => {
+    root!.render(
+      <TaskDetail task={task(over)} onClose={vi.fn()} onSave={onSave} />,
+    );
+  });
+  return container;
+}
+
 const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
   [...el.querySelectorAll('button')].find((node) =>
     (node.textContent ?? '').includes(text),
@@ -75,5 +98,69 @@ describe('TaskDetail', () => {
 
     expect(el.querySelector('strong')?.textContent).toBe('bold');
     expect(el.textContent).not.toContain('**');
+  });
+});
+
+describe('priority and due date', () => {
+  it('offers the priorities most-urgent first, with no-priority last', () => {
+    // Untriaged is not the top of the scale — it is off it, so it sits at the
+    // bottom of the list even though the daemon's own array leads with it.
+    const el = detail();
+
+    const trigger = el.querySelector(
+      '[data-menu-trigger]',
+    ) as HTMLButtonElement;
+    act(() => {
+      trigger.click();
+    });
+
+    const options = [...document.body.querySelectorAll('[role="option"]')].map(
+      (node) => node.textContent,
+    );
+    expect(options).toEqual(['Urgent', 'High', 'Medium', 'Low', 'No priority']);
+  });
+
+  it('saves the priority the user picks', () => {
+    const onSave = saveSpy();
+    const el = detailWith({ onSave });
+
+    act(() => {
+      (el.querySelector('[data-menu-trigger]') as HTMLButtonElement).click();
+    });
+    const urgent = [...document.body.querySelectorAll('[role="option"]')].find(
+      (node) => node.textContent === 'Urgent',
+    ) as HTMLElement;
+    act(() => {
+      urgent.click();
+    });
+
+    expect(onSave).toHaveBeenCalledWith({ priority: 'urgent' });
+  });
+
+  it('shows the stored due date in the field', () => {
+    const el = detail({ dueDate: '2026-09-30' });
+
+    expect((el.querySelector('#task-due-date') as HTMLInputElement).value).toBe(
+      '2026-09-30',
+    );
+  });
+
+  it('clears the due date to null rather than an empty string', () => {
+    // The daemon distinguishes `null` (drop it) from the field being absent.
+    // An empty string would fail its `z.iso.date()` and land a red banner.
+    const onSave = saveSpy();
+    const el = detailWith({ onSave, task: { dueDate: '2026-09-30' } });
+
+    const field = el.querySelector('#task-due-date') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    act(() => {
+      setter?.call(field, '');
+      field.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(onSave).toHaveBeenCalledWith({ dueDate: null });
   });
 });

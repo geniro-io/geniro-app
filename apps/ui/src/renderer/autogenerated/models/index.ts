@@ -1744,6 +1744,18 @@ export interface CreateTaskDto {
     labels?: Array<string>;
     /**
      * 
+     * @type {TaskPriority}
+     * @memberof CreateTaskDto
+     */
+    priority?: TaskPriority;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    dueDate?: string;
+    /**
+     * 
      * @type {TaskSource}
      * @memberof CreateTaskDto
      */
@@ -3499,6 +3511,18 @@ export interface TaskDto {
      */
     position: number;
     /**
+     * How urgent this task is; 'none' until someone triages it
+     * @type {TaskPriority}
+     * @memberof TaskDto
+     */
+    priority: TaskPriority;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    dueDate: string | null;
+    /**
      * 
      * @type {string}
      * @memberof TaskDto
@@ -3512,6 +3536,20 @@ export interface TaskDto {
     updatedAt: string;
 }
 
+
+
+/**
+ * 
+ * @export
+ */
+export const TaskPriority = {
+    None: 'none',
+    Urgent: 'urgent',
+    High: 'high',
+    Medium: 'medium',
+    Low: 'low'
+} as const;
+export type TaskPriority = typeof TaskPriority[keyof typeof TaskPriority];
 
 
 /**
@@ -3748,6 +3786,18 @@ export interface UpdateTaskDto {
     labels?: Array<string>;
     /**
      * 
+     * @type {TaskPriority}
+     * @memberof UpdateTaskDto
+     */
+    priority?: TaskPriority;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    dueDate?: string | null;
+    /**
+     * 
      * @type {string}
      * @memberof UpdateTaskDto
      */
@@ -3771,6 +3821,8 @@ export interface UpdateTaskDto {
      */
     reportItemId?: string | null;
 }
+
+
 /**
  * 
  * @export

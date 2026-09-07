@@ -7,6 +7,7 @@ import { ProjectDao } from '../../projects/dao/project.dao';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type {
+  TaskPriority,
   TaskSource,
   TaskStatus,
   TaskStatusMove,
@@ -50,6 +51,8 @@ export class TasksService {
     description?: string;
     status?: TaskStatus;
     labels?: string[];
+    priority?: TaskPriority;
+    dueDate?: string;
     source?: TaskSource;
     sourceRef?: string;
   }): Promise<TaskWire> {
@@ -70,6 +73,8 @@ export class TasksService {
         description: input.description ?? null,
         status,
         labels: JSON.stringify(input.labels ?? []),
+        priority: input.priority ?? 'none',
+        dueDate: input.dueDate ?? null,
         source: input.source ?? 'geniro',
         sourceRef: input.sourceRef ?? null,
         // Appended to the end of its column, never inserted: a new card is the
@@ -100,6 +105,8 @@ export class TasksService {
       title?: string;
       description?: string | null;
       labels?: string[];
+      priority?: TaskPriority;
+      dueDate?: string | null;
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
@@ -114,6 +121,15 @@ export class TasksService {
     }
     if (patch.description !== undefined) {
       task.description = patch.description;
+    }
+    if (patch.priority !== undefined) {
+      task.priority = patch.priority;
+    }
+    if (patch.dueDate !== undefined) {
+      // `null` CLEARS the date, which is why this reads `!== undefined` rather
+      // than a truthiness check: a task whose due date is dropped has to lose
+      // it, while the field being absent from the patch means leave it alone.
+      task.dueDate = patch.dueDate;
     }
     if (patch.labels !== undefined) {
       task.labels = JSON.stringify(patch.labels);
@@ -256,6 +272,8 @@ function toWire(task: Task): TaskWire {
     runId: task.runId,
     reportItemId: task.reportItemId,
     position: task.position,
+    priority: task.priority,
+    dueDate: task.dueDate,
     createdAt: task.createdAt.toISOString(),
     updatedAt: task.updatedAt.toISOString(),
   };

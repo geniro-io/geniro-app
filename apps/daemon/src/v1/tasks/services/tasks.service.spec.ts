@@ -352,4 +352,64 @@ describe('TasksService (in-memory sqlite)', () => {
 
     expect((await service.get(task.id)).labels).toEqual(['ok']);
   });
+  it('leaves a new task untriaged rather than guessing a priority', async () => {
+    // `none` has to be distinguishable from a deliberate `low`, so the default
+    // is its own value and not the bottom of the scale.
+    const task = await service.create({ projectId, title: 'fresh' });
+
+    expect(task.priority).toBe('none');
+    expect(task.dueDate).toBeNull();
+  });
+
+  it('round-trips a priority and a due date through create', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'ship the board',
+      priority: 'urgent',
+      dueDate: '2026-09-30',
+    });
+
+    expect(task.priority).toBe('urgent');
+    expect(task.dueDate).toBe('2026-09-30');
+  });
+
+  it('stores the due date as the calendar day it was given, with no zone shift', async () => {
+    // The whole reason it is a string column. Round-tripping through a `Date`
+    // would pin the day to whichever zone wrote it and move it for everyone
+    // else — a task due the 30th must not read as the 29th somewhere.
+    const task = await service.create({
+      projectId,
+      title: 'day, not instant',
+      dueDate: '2026-01-01',
+    });
+
+    expect(task.dueDate).toBe('2026-01-01');
+    expect(String(task.dueDate)).not.toContain('T');
+  });
+
+  it('clears a due date on an explicit null', async () => {
+    // The other arm of `!== undefined`: dropping a date has to be possible,
+    // and is different from leaving the field out of the patch.
+    const task = await service.create({
+      projectId,
+      title: 'was due',
+      dueDate: '2026-09-30',
+    });
+
+    const cleared = await service.update(task.id, { dueDate: null });
+
+    expect(cleared.dueDate).toBeNull();
+  });
+
+  it('leaves the due date alone when the patch does not mention it', async () => {
+    const task = await service.create({
+      projectId,
+      title: 'still due',
+      dueDate: '2026-09-30',
+    });
+
+    const renamed = await service.update(task.id, { title: 'renamed' });
+
+    expect(renamed.dueDate).toBe('2026-09-30');
+  });
 });

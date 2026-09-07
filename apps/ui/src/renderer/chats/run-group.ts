@@ -86,6 +86,48 @@ export function runGroupSections<TRun extends { groupId: string | null }>(
   ];
 }
 
+/** A section's rows, split into its pinned band and everything below it. */
+export interface PinnedSplit<TRun> {
+  /** The pinned band, in the order the daemon holds for this scope. */
+  pinned: TRun[];
+  /** The rest, in the caller's own order. */
+  rest: TRun[];
+}
+
+/**
+ * Split ONE section's runs into its pinned band and the rest.
+ *
+ * Per section rather than over the whole list, which is what makes "pinned
+ * inside its own group, or at the very top when it belongs to none" fall out
+ * of the existing sectioning instead of needing a rule: the sections are
+ * already one per group with the loose runs last, so a band drawn at the head
+ * of each is exactly that.
+ *
+ * `pinnedPosition` is contiguous WITHIN a scope, so two runs in different
+ * groups holding 0 is normal — sorting the whole list on it would interleave
+ * every band into one nonsense order. Nothing outside this function may sort
+ * on the column.
+ *
+ * The band keeps the daemon's order and the rest keeps the CALLER's, which is
+ * the whole point of the split: below the band the sidebar's own
+ * newest-activity-first rule still applies, while inside it the order is the
+ * user's own arrangement and nothing about activity may move a row.
+ */
+export function splitPinnedRuns<TRun extends { pinnedPosition: number | null }>(
+  runs: readonly TRun[],
+): PinnedSplit<TRun> {
+  const pinned = runs
+    .filter(
+      (run): run is TRun & { pinnedPosition: number } =>
+        run.pinnedPosition !== null,
+    )
+    .sort((a, b) => a.pinnedPosition - b.pinnedPosition);
+  return {
+    pinned,
+    rest: runs.filter((run) => run.pinnedPosition === null),
+  };
+}
+
 /**
  * How many rows a section draws before the rest go behind "Show all".
  *

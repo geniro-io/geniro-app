@@ -2695,6 +2695,21 @@ export const RunWireSchema = z.object({
     .describe(
       'Sidebar group this run is filed under; null for one sitting loose. Both run kinds carry it — the sidebar lists chats and workflow runs together',
     ),
+  /**
+   * Where this run sits in the pinned band at the top of its own group (or of
+   * the loose list, when it belongs to none); null while it is not pinned.
+   *
+   * Scoped by `groupId` rather than global, so two runs in different groups
+   * sharing a position is normal and a client must never sort on this alone —
+   * it orders a scope's pinned band and nothing else.
+   */
+  pinnedPosition: z
+    .number()
+    .int()
+    .nullable()
+    .describe(
+      "Position in the pinned band at the top of this run's own group (or of the loose list); null while unpinned",
+    ),
   createdAt: z.string(),
   /**
    * Last write to the run row — every send flips status to `running` and every

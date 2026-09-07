@@ -59,6 +59,34 @@ const buttonLabelled = (
 ): HTMLButtonElement =>
   container.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 
+/**
+ * Right-click the row and read the menu rows the panel drew.
+ *
+ * The row draws Rename and Archive and nothing else, so every other action —
+ * Pin, and the permanent Delete — is only observable through this.
+ */
+const openMenu = async (container: HTMLElement): Promise<string[]> => {
+  await act(async () => {
+    container
+      .querySelector('li')!
+      .dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true }),
+      );
+  });
+  return [...document.querySelectorAll('[role="option"]')].map(
+    (row) => row.textContent?.trim() ?? '',
+  );
+};
+
+const clickMenuRow = async (label: string): Promise<void> => {
+  const row = [...document.querySelectorAll('[role="option"]')].find(
+    (el) => el.textContent?.trim() === label,
+  );
+  await act(async () => {
+    row!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+};
+
 /** Type into the row's rename field the way React's value tracker sees it. */
 async function typeInto(input: HTMLInputElement, value: string): Promise<void> {
   await act(async () => {
@@ -78,6 +106,180 @@ async function press(input: HTMLInputElement, key: string): Promise<void> {
 }
 
 describe('ChatListItem', () => {
+  describe('row controls and the right-click menu', () => {
+    it('draws exactly TWO controls on the row — rename and archive', async () => {
+      // The row carried four, and the title had stopped fitting beside them.
+      // Everything else moved to the right-click; these two stayed because
+      // they are the ones worth a permanent target.
+      const container = await mount(
+        <ChatListItem {...props({ onSetPinned: vi.fn() })} />,
+      );
+      expect(
+        [...container.querySelectorAll('button[aria-label]')]
+          .map((b) => b.getAttribute('aria-label'))
+          // The row-activation overlay is a button too, and is not an action.
+          .filter((l) => l !== 'Review team'),
+      ).toEqual(['Rename Review team', 'Archive Review team']);
+    });
+
+    it('the menu DUPLICATES the row’s two, and adds the rest', async () => {
+      // The menu is the complete list rather than the overflow, so a user who
+      // right-clicks never has to remember which half lives where.
+      const container = await mount(
+        <ChatListItem {...props({ onSetPinned: vi.fn() })} />,
+      );
+      expect(await openMenu(container)).toEqual([
+        'Rename',
+        'Pin to top of group',
+        'Archive',
+      ]);
+    });
+
+    it('asks for the state the row should END in, never a toggle', async () => {
+      const onSetPinned = vi.fn();
+      const container = await mount(
+        <ChatListItem {...props({ pinned: false, onSetPinned })} />,
+      );
+      await openMenu(container);
+      await clickMenuRow('Pin to top of group');
+      expect(onSetPinned).toHaveBeenCalledWith('run-1', true);
+
+      const pinnedRow = await mount(
+        <ChatListItem {...props({ pinned: true, onSetPinned })} />,
+      );
+      await openMenu(pinnedRow);
+      await clickMenuRow('Unpin');
+      // The absolute state, so two windows pressing at once cannot each flip
+      // the other's answer back.
+      expect(onSetPinned).toHaveBeenLastCalledWith('run-1', false);
+    });
+
+    it('suppresses the platform menu, so the two can never both appear', async () => {
+      // `preventDefault` is what stops Chromium raising the WebContents
+      // `context-menu` event `main/context-menu.ts` listens for — the real
+      // observable, and the only one jsdom can show.
+      const container = await mount(
+        <ChatListItem {...props({ onSetPinned: vi.fn() })} />,
+      );
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        container.querySelector('li')!.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('leaves a right-click to the PLATFORM while the name is being edited', async () => {
+      // Every row action acts on a row the field currently owns, and cut/copy/
+      // paste is what a right-click in a text field should raise.
+      const container = await mount(
+        <ChatListItem {...props({ onSetPinned: vi.fn() })} />,
+      );
+      buttonLabelled(container, 'Rename Review team').click();
+      await act(async () => {});
+      const event = new MouseEvent('contextmenu', {
+        bubbles: true,
+        cancelable: true,
+      });
+      await act(async () => {
+        container.querySelector('li')!.dispatchEvent(event);
+      });
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.querySelector('[role="option"]')).toBeNull();
+    });
+
+    it('an ARCHIVED row offers unarchive on the row and DELETE only in the menu', async () => {
+      // The one-way door was a hover button, which put the gesture that
+      // destroys a run's history one click from the pointer's resting place.
+      const container = await mount(
+        <ChatListItem
+          {...props({ archived: true, pinned: false, onSetPinned: vi.fn() })}
+        />,
+      );
+      expect(
+        container.querySelector('button[aria-label^="Delete "]'),
+      ).toBeNull();
+      expect(await openMenu(container)).toEqual([
+        'Rename',
+        'Unarchive',
+        'Delete permanently',
+      ]);
+    });
+
+    it('never offers PIN on an archived row, in the menu either', async () => {
+      // The daemon refuses to pin a shelved thread, and the band is drawn at
+      // the top of the desk — so a row here would be a press with nothing
+      // behind it.
+      const container = await mount(
+        <ChatListItem
+          {...props({ archived: true, pinned: false, onSetPinned: vi.fn() })}
+        />,
+      );
+      expect(await openMenu(container)).not.toContain('Pin to top of group');
+    });
+
+    it('marks a pinned row at REST, not only on hover', async () => {
+      // The band sits against the ordinary rows in one list under one rail, so
+      // with the mark behind a hover the only thing saying which rows are
+      // pinned would be position — which a reader cannot check, the newest
+      // thread legitimately leading the rest.
+      const container = await mount(
+        <ChatListItem {...props({ pinned: true, onSetPinned: vi.fn() })} />,
+      );
+      expect(container.querySelector('[aria-label="pinned"]')).not.toBeNull();
+    });
+
+    it('draws no mark on an unpinned row', async () => {
+      const container = await mount(
+        <ChatListItem {...props({ pinned: false, onSetPinned: vi.fn() })} />,
+      );
+      expect(container.querySelector('[aria-label="pinned"]')).toBeNull();
+    });
+
+    it('reports the row a drag is over, and ACCEPTS the drop either way', async () => {
+      // jsdom implements neither DragEvent nor DataTransfer, so this is a
+      // plain bubbling cancelable Event — the same stand-in `queued-strip`'s
+      // own drag spec uses, and enough for the two observables here.
+      const onDragOverRun = vi.fn();
+      const container = await mount(
+        <ChatListItem
+          {...props({ pinned: true, onSetPinned: vi.fn(), onDragOverRun })}
+        />,
+      );
+      const row = container.querySelector('li')!;
+      const event = new Event('dragover', { bubbles: true, cancelable: true });
+      await act(async () => {
+        row.dispatchEvent(event);
+      });
+      expect(onDragOverRun).toHaveBeenCalledWith('run-1');
+      // `defaultPrevented` is the real observable and the only one — jsdom runs
+      // no drag machinery. A dragover the row does not prevent is an
+      // unsuccessful drop, and the browser flies the carried row home even
+      // though the reorder itself landed.
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('offers PIN on a WORKFLOW row and RENAME on neither surface', async () => {
+      // Two different rules meeting on one row: where a row is DRAWN is not a
+      // fact about the run kind, while a workflow run's NAME belongs to the
+      // library entry, so renaming it here would read as editing that.
+      const container = await mount(
+        <ChatListItem
+          {...props({ isWorkflow: true, pinned: false, onSetPinned: vi.fn() })}
+        />,
+      );
+      expect(
+        container.querySelector('button[aria-label^="Rename "]'),
+      ).toBeNull();
+      expect(await openMenu(container)).toEqual([
+        'Pin to top of group',
+        'Archive',
+      ]);
+    });
+  });
+
   it('renders the label, the last message, and the relative activity time', async () => {
     const container = await mount(<ChatListItem {...props()} />);
     expect(container.textContent).toContain('Review team');
@@ -449,26 +651,23 @@ describe('ChatListItem', () => {
     const p = props({ isWorkflow: true, archived: true });
     const container = await mount(<ChatListItem {...p} />);
 
-    await act(async () => {
-      buttonLabelled(container, 'Delete Review team').dispatchEvent(
-        new MouseEvent('click', { bubbles: true }),
-      );
-    });
+    await openMenu(container);
+    await clickMenuRow('Delete permanently');
 
     expect(p.onDelete).toHaveBeenCalledWith('run-1');
   });
 
   it('delete asks the parent WITHOUT activating the row', async () => {
-    // Reached from the ARCHIVE — a chat row on the desk offers Archive
-    // instead, and the permanent delete lives one step behind it.
+    // Reached from the ARCHIVE, and now from its right-click menu — a chat row
+    // on the desk offers Archive instead, and the permanent delete lives two
+    // steps behind it.
     const p = props({ archived: true });
     const container = await mount(<ChatListItem {...p} />);
-    await act(async () => {
-      buttonLabelled(container, 'Delete Review team').dispatchEvent(
-        new MouseEvent('click', { bubbles: true }),
-      );
-    });
+    await openMenu(container);
+    await clickMenuRow('Delete permanently');
     expect(p.onDelete).toHaveBeenCalledWith('run-1');
+    // A right-click never activates the row, and neither does the menu it
+    // opens: the delete would otherwise open the very chat it destroys.
     expect(p.onActivate).not.toHaveBeenCalled();
   });
 
@@ -476,16 +675,18 @@ describe('ChatListItem', () => {
     const desk = props();
     const deskRow = await mount(<ChatListItem {...desk} />);
     expect(buttonLabelled(deskRow, 'Archive Review team')).not.toBeNull();
-    // The one-way door is NOT beside the reversible step — that is the whole
-    // point of the split, so both halves are asserted.
-    expect(buttonLabelled(deskRow, 'Delete Review team')).toBeNull();
     expect(buttonLabelled(deskRow, 'Unarchive Review team')).toBeNull();
+    // The one-way door is NOT beside the reversible step — that is the whole
+    // point of the split, so both halves are asserted, and both now in the
+    // menu, where a row-button check would pass on either side and pin
+    // nothing.
+    expect(await openMenu(deskRow)).not.toContain('Delete permanently');
 
     const shelf = props({ archived: true });
     const shelfRow = await mount(<ChatListItem {...shelf} />);
     expect(buttonLabelled(shelfRow, 'Unarchive Review team')).not.toBeNull();
-    expect(buttonLabelled(shelfRow, 'Delete Review team')).not.toBeNull();
     expect(buttonLabelled(shelfRow, 'Archive Review team')).toBeNull();
+    expect(await openMenu(shelfRow)).toContain('Delete permanently');
   });
 
   it('archive and unarchive ask the parent WITHOUT activating the row', async () => {

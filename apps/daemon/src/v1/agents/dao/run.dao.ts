@@ -417,9 +417,95 @@ export class RunDao extends BaseDao<Run> {
     const runs = await this.getRepo(txEm).find({ groupId });
     for (const run of runs) {
       run.groupId = null;
+      // The PIN goes with the group, though the chat does not. A pinned
+      // position is contiguous within its own scope, so a released run
+      // carrying its old number lands in the loose band already holding that
+      // slot — two rows claiming one place, in an order the user never made.
+      // Clearing is the one outcome that cannot produce a broken band, and it
+      // costs an arrangement rather than a conversation.
+      run.pinnedPosition = null;
     }
     await em.flush();
     return runs.length;
+  }
+
+  /**
+   * Every PINNED run of one scope — a group, or the loose list when `groupId`
+   * is null — in the order the sidebar draws them.
+   *
+   * The scope is the whole query rather than a filter over every pinned run,
+   * because `Run.pinnedPosition` is contiguous WITHIN a scope: two runs in
+   * different groups legitimately hold position 0, so a scope-blind read
+   * would interleave two bands into one nonsense order.
+   *
+   * Both run kinds, like {@link clearGroup} and for its reason — the sidebar
+   * pins chats and workflow runs into the same bands. The identity map is
+   * deliberately LEFT ON, unlike the read-only listings above: every caller
+   * renumbers what it reads and flushes.
+   */
+  async pinnedInScope(
+    groupId: string | null,
+    txEm?: EntityManager,
+  ): Promise<Run[]> {
+    return this.getRepo(txEm).find(
+      { groupId, pinnedPosition: { $ne: null } },
+      { orderBy: { pinnedPosition: 'asc' } },
+    );
+  }
+
+  /**
+   * Put one run into its scope's pinned band, or take it out, and leave the
+   * band contiguous either way.
+   *
+   * Pinning APPENDS rather than leading the band: the order inside it is the
+   * user's own arrangement, and a newly pinned thread shoving itself into
+   * first place would move every row they placed there. Pinning a run that is
+   * already pinned leaves it exactly where it is, so a replayed request cannot
+   * walk a thread to the end of its own band.
+   */
+  async repin(run: Run, pinned: boolean, txEm?: EntityManager): Promise<void> {
+    const em = txEm ?? this.em;
+    if (!pinned) {
+      run.pinnedPosition = null;
+    } else if (run.pinnedPosition === null) {
+      run.pinnedPosition = (await this.pinnedInScope(run.groupId, txEm)).length;
+    }
+    await em.flush();
+    await this.renumberPinned(run.groupId, txEm);
+  }
+
+  /**
+   * Renumber one scope's pinned band contiguously from 0.
+   *
+   * Run on every write that touches a band rather than only on the ones that
+   * leave a hole, so a band that ever came to share a position — a deleted
+   * run, a re-file, a write interrupted half way — is repaired by the next
+   * pin. The same self-healing `RunGroupsService.reorder` gives group order.
+   */
+  async renumberPinned(
+    groupId: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.applyPinnedOrder(await this.pinnedInScope(groupId, txEm), txEm);
+  }
+
+  /**
+   * Write one band's ARRANGEMENT: the given runs take positions 0..n-1 in the
+   * order they arrive.
+   *
+   * The order is decided by the caller — which runs, and in what sequence, is
+   * policy — while the contiguous numbering and the write are this layer's, so
+   * no caller has to know that the column may not have gaps in it.
+   */
+  async applyPinnedOrder(
+    ordered: readonly Run[],
+    txEm?: EntityManager,
+  ): Promise<void> {
+    const em = txEm ?? this.em;
+    ordered.forEach((row, position) => {
+      row.pinnedPosition = position;
+    });
+    await em.flush();
   }
 
   /**

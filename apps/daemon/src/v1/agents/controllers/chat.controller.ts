@@ -50,6 +50,7 @@ import {
   UpdateChatSettingsDto,
 } from '../dto/chat.dto';
 import { SetRunGroupDto } from '../dto/run-group.dto';
+import { ReorderPinnedDto, SetRunPinnedDto } from '../dto/run-pin.dto';
 import { ChatService } from '../services/chat.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
@@ -121,6 +122,21 @@ export class ChatController {
     return this.chatService.sweepArchived(dto.olderThanDays);
   }
 
+  /**
+   * Rearrange one scope's pinned band, and answer with it.
+   *
+   * Declared BEFORE the `:runId` routes so `reorder-pinned` is never read as a
+   * run id, like its two neighbours above. It names no run in the path because
+   * it is about a BAND rather than a row — the scope is in the body beside the
+   * order it applies to.
+   */
+  @Post('reorder-pinned')
+  @ApiOperation({ operationId: 'reorderPinnedRuns' })
+  @ZodResponse({ status: 200, type: [RunDto] })
+  reorderPinned(@Body() dto: ReorderPinnedDto): Promise<RunWire[]> {
+    return this.chatService.reorderPinned(dto.groupId, dto.ids);
+  }
+
   @Patch(':runId')
   @ApiOperation({ operationId: 'renameRun' })
   @ZodResponse({ status: 200, type: RunDto })
@@ -156,6 +172,29 @@ export class ChatController {
     @Body() dto: SetRunGroupDto,
   ): Promise<RunWire> {
     return this.chatService.setGroup(runId, dto.groupId);
+  }
+
+  /**
+   * Pin this run to the top of its own scope, or unpin it.
+   *
+   * On the RUN's route for {@link setGroup}'s reason, and beside it because it
+   * is the same kind of fact: where the sidebar draws this thread. The scope
+   * is the run's own group, or the loose list when it belongs to none — so
+   * pinning never moves a thread out of the folder it is filed under.
+   *
+   * It answers with every run the write RE-SEATED — the scope's band plus the
+   * pressed row — where its `setGroup` neighbour answers with one run: a pin
+   * renumbers rows the caller did not name, and a client left holding their
+   * old positions draws an order neither side chose.
+   */
+  @Put(':runId/pin')
+  @ApiOperation({ operationId: 'setRunPinned' })
+  @ZodResponse({ status: 200, type: [RunDto] })
+  setPinned(
+    @Param('runId') runId: string,
+    @Body() dto: SetRunPinnedDto,
+  ): Promise<RunWire[]> {
+    return this.chatService.setPinned(runId, dto.pinned);
   }
 
   @Get(':runId/items')

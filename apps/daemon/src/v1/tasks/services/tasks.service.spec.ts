@@ -502,3 +502,99 @@ describe('TasksService (in-memory sqlite)', () => {
     expect(renamed.dueDate).toBe('2026-09-30');
   });
 });
+
+/**
+ * A card's NUMBER — the `12` of `GEN-12`.
+ *
+ * ASKED FOR as Linear's scheme, and the property that makes an identifier worth
+ * having is that it names one card for good.
+ */
+describe('TasksService — card numbering (in-memory sqlite)', () => {
+  let orm: MikroORM;
+  let service: TasksService;
+  let projectDao: ProjectDao;
+  let projectId: string;
+  let em: EntityManager;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init(
+      defineConfig({
+        dbName: ':memory:',
+        entities: [Project, Task],
+        ignoreUndefinedInQuery: true,
+        allowGlobalContext: true,
+        namingStrategy: UnderscoreNamingStrategy,
+        discovery: { checkDuplicateFieldNames: false },
+      }),
+    );
+    await orm.schema.create();
+  });
+
+  afterAll(async () => {
+    await orm.close(true);
+  });
+
+  beforeEach(async () => {
+    await orm.schema.clear();
+    em = orm.em.fork();
+    const taskDao = new TaskDao(em);
+    projectDao = new ProjectDao(em);
+    service = new TasksService(em, taskDao, projectDao, new TaskEventBus());
+    const project = await projectDao.create({
+      name: 'Geniro',
+      taskKey: 'GEN',
+      folder: realpathSync(tmpdir()),
+    });
+    await em.flush();
+    projectId = project.id;
+  });
+
+  it('numbers cards 1, 2, 3 as they are made', async () => {
+    const first = await service.create({ projectId, title: 'one' });
+    const second = await service.create({ projectId, title: 'two' });
+
+    expect(first.number).toBe(1);
+    expect(second.number).toBe(2);
+  });
+
+  it('never REUSES a number, even after the card holding it is deleted', async () => {
+    // The reason the counter is on the project rather than `max(number)`: two
+    // commits naming different work by one identifier is the failure this
+    // whole feature would otherwise introduce.
+    const first = await service.create({ projectId, title: 'one' });
+    await service.remove(first.id);
+    const second = await service.create({ projectId, title: 'two' });
+
+    expect(second.number).toBe(2);
+  });
+
+  it('counts per BOARD, so two projects both start at 1', async () => {
+    const other = await projectDao.create({
+      name: 'Other',
+      taskKey: 'OTH',
+      folder: realpathSync(tmpdir()),
+    });
+    await em.flush();
+
+    const mine = await service.create({ projectId, title: 'one' });
+    const theirs = await service.create({
+      projectId: other.id,
+      title: 'one',
+    });
+
+    expect(mine.number).toBe(1);
+    expect(theirs.number).toBe(1);
+  });
+
+  it('leaves the counter alone when the create is refused', async () => {
+    // The counter is bumped on the entity and written by the SAME flush that
+    // inserts the card, so a refusal further in must not consume a number —
+    // otherwise a board develops gaps for cards that never existed.
+    await expect(
+      service.create({ projectId: 'no-such-project', title: 'x' }),
+    ).rejects.toThrow();
+    const first = await service.create({ projectId, title: 'one' });
+
+    expect(first.number).toBe(1);
+  });
+});

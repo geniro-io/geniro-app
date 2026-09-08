@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 
 import { AgentsModule } from '../agents/agents.module';
+import { GraphsModule } from '../graphs/graphs.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { TasksController } from './controllers/tasks.controller';
 import { TaskDao } from './dao/task.dao';
+import { TaskAttachmentService } from './services/task-attachment.service';
 import { TaskEventBus } from './services/task-events.bus';
+import { TaskFilesService } from './services/task-files.service';
 import { TaskRunsService } from './services/task-runs.service';
 import { TaskSettleService } from './services/task-settle.service';
 import { TasksService } from './services/tasks.service';
@@ -25,13 +28,21 @@ import { TasksService } from './services/tasks.service';
  * growing one. The import runs THIS way only — `AgentsModule` must never
  * import the tasks module back — which is the same direction `GraphsModule`
  * already takes to the same place, and is what keeps the graph acyclic.
+ *
+ * And `GraphsModule`, for `GraphExecutorService`, on exactly the same terms: a
+ * card may name a WORKFLOW instead of an agent, and the second engine is
+ * borrowed rather than rebuilt. Acyclic for the same reason — `GraphsModule`
+ * imports `AgentsModule` and nothing else here, so tasks → graphs → agents runs
+ * one way throughout.
  */
 @Module({
-  imports: [ProjectsModule, AgentsModule],
+  imports: [ProjectsModule, AgentsModule, GraphsModule],
   controllers: [TasksController],
   providers: [
     TaskDao,
     TaskEventBus,
+    TaskAttachmentService,
+    TaskFilesService,
     TasksService,
     TaskRunsService,
     TaskSettleService,

@@ -2,7 +2,7 @@ import { X } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from './button';
-import { MenuAnchorContext } from './menu';
+import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
 
 /** What the focus trap treats as tabbable inside the dialog card. */
@@ -129,8 +129,23 @@ export function Dialog({
           {/* `min-w-0` so a long title (an image viewer's file path) can be
               truncated or wrapped by the title node itself — a flex item
               defaults to `min-width: auto`, which refuses to shrink below its
-              text and pushes the ✕ off the card instead. */}
-          <div className="min-w-0 text-sm font-semibold">{title}</div>
+              text and pushes the ✕ off the card instead.
+
+              `flex-1` so the slot is the ROW rather than the width of its own
+              text. A title is not always a string: the task panel puts its
+              whole header in here — an identifier, Run task, and a run of
+              icon-only controls it pushes to the far edge with `ml-auto` —
+              and a shrink-to-fit slot leaves that `ml-auto` no free space to
+              push into, so every one of them stayed hugging the left with the
+              card's whole width empty beside them. REPORTED twice, the second
+              time as "buttons still from left". It costs a plain string title
+              nothing: text is left-aligned in its box either way, and the ✕
+              was already at the edge through `justify-between`. */}
+          <div
+            data-slot="dialog-title"
+            className="min-w-0 flex-1 text-sm font-semibold">
+            {title}
+          </div>
           <Button
             type="button"
             variant="ghost"

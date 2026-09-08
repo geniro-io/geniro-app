@@ -65,7 +65,7 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { SettingRow } from '../components/setting-row';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { MenuAnchorContext } from '../components/ui/menu';
+import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { createDaemonApis } from '../daemon-api';
 import { useCapabilities } from '../use-capabilities';
 import { useCliLogin } from '../use-cli-login';

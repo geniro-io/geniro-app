@@ -5,9 +5,18 @@ import { NotFoundException } from '@packages/common';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import {
+  NO_RUN_TARGET_REASON,
+  resolveRunTarget,
+} from '../../tasks/utils/run-target';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
-import type { ProjectQueue, QueuedTask } from '../projects.types';
+import type {
+  ActiveTask,
+  BlockedTask,
+  ProjectQueue,
+  QueuedTask,
+} from '../projects.types';
 import { isBreakerOpen } from '../utils/breaker';
 
 /**
@@ -37,7 +46,8 @@ export class ProjectQueueService {
     const project = await this.require(projectId, em);
     const tasks = await this.taskDao.listForProject(projectId, em);
 
-    const running = await this.countRunning(tasks, em);
+    const active = await this.readActive(tasks, em);
+    const running = active.length;
     const breakerOpen = isBreakerOpen(project);
     const free = Math.max(0, project.autopilotMaxConcurrent - running);
     const handOutWork = project.autopilotEnabled && !breakerOpen && free > 0;
@@ -45,6 +55,29 @@ export class ProjectQueueService {
     const waiting = tasks.filter(
       (task) => task.status === project.autopilotIntakeStatus,
     );
+
+    // Split BEFORE the cap is applied, so a blocked card cannot occupy one of
+    // the slots the handout is narrowed to — otherwise a project with a cap of
+    // one and a misconfigured card at the head of the column would starve
+    // every runnable card behind it, which is the loop from the other side.
+    const startable: typeof waiting = [];
+    const blocked: BlockedTask[] = [];
+    for (const task of waiting) {
+      // The same resolution the start route performs, asked here so the
+      // conductor never cuts a worktree for a run that will be refused. It
+      // reads the two rows the route reads and nothing else, which is what
+      // keeps the two answers the same — a second, looser predicate here would
+      // hand out work the route then declines, restoring the churn.
+      if (resolveRunTarget([task, project]) === null) {
+        blocked.push({
+          id: task.id,
+          title: task.title,
+          reason: NO_RUN_TARGET_REASON,
+        });
+        continue;
+      }
+      startable.push(task);
+    }
 
     return {
       projectId: project.id,
@@ -56,42 +89,64 @@ export class ProjectQueueService {
       breakerOpen,
       failureStreak: project.autopilotFailureStreak,
       eligible: handOutWork
-        ? waiting
+        ? startable
             .slice()
             .sort((a, b) => a.position - b.position)
             .slice(0, free)
             .map((task) => toQueued(task, project.folder))
         : [],
+      // Reported whatever the autopilot's own state: a card that names no agent
+      // is broken while the project is disarmed too, and a user who switches
+      // autopilot on to find out why nothing happens has been told nothing.
+      blocked,
+      active,
     };
   }
 
   /**
-   * How many of this project's cards hold a run that is still live.
+   * Which of this project's cards hold a run that is still live.
    *
-   * Asked of the RUNS rather than counted off the `in_progress` column, for
-   * the reason `TaskRunsService.assertNotAlreadyRunning` gives: a card dragged
-   * out of `in_progress` by hand still points at the agent working it, and a
-   * count that believed the column would hand out a slot that is not free.
+   * Asked of the RUNS rather than read off the `in_progress` column, for the
+   * reason `TaskRunsService.assertNotAlreadyRunning` gives: a card dragged out
+   * of `in_progress` by hand still points at the agent working it, and a count
+   * that believed the column would hand out a slot that is not free.
+   *
+   * It returns the LIST rather than a count because the board needs both, and
+   * one query answering both is what keeps them from disagreeing — a card
+   * drawn with a spinner while the header counts one fewer is the same class
+   * of defect as the `waiting` that counted refused cards.
    *
    * One query for every run at once — the alternative is a read per card, on a
    * path a timer walks for every armed project.
    */
-  private async countRunning(
-    tasks: readonly { runId: string | null }[],
+  private async readActive(
+    tasks: readonly { id: string; runId: string | null }[],
     em: EntityManager,
-  ): Promise<number> {
-    const runIds = tasks
-      .map((task) => task.runId)
-      .filter((runId): runId is string => runId !== null);
-    if (runIds.length === 0) {
-      return 0;
+  ): Promise<ActiveTask[]> {
+    const byRunId = new Map(
+      tasks
+        .filter((task) => task.runId !== null)
+        .map((task) => [task.runId as string, task.id]),
+    );
+    if (byRunId.size === 0) {
+      return [];
     }
     const runs = await this.runDao.getAll(
-      { id: { $in: runIds } },
+      { id: { $in: [...byRunId.keys()] } },
       { disableIdentityMap: true },
       em,
     );
-    return runs.filter((run) => !isTerminalRunStatus(run.status)).length;
+    const active: ActiveTask[] = [];
+    for (const run of runs) {
+      const taskId = byRunId.get(run.id);
+      if (taskId === undefined || isTerminalRunStatus(run.status)) {
+        continue;
+      }
+      // The RUN's own kind, not the card's: the card may have been re-pointed
+      // at another agent since, and what is on screen is what is working.
+      active.push({ id: taskId, runId: run.id, agentKind: run.agentKind });
+    }
+    return active;
   }
 
   private async require(

@@ -304,6 +304,28 @@ export class Run extends TimestampsEntity {
   taskId: string | null = null;
 
   /**
+   * What that card is CALLED — `GEN-12` — or null for a run no card started.
+   *
+   * DENORMALIZED, and the module graph is what forces it rather than a
+   * performance argument: the identifier is two rows away (the card's `number`
+   * and its project's `taskKey`), and `v1/agents` — which projects this row
+   * onto the wire — may never import the tasks module, the dependency running
+   * one way only (`TasksModule`'s own note). So the one place that already
+   * holds both halves writes the answer down: `TaskRunsService`, in the same
+   * operation that writes {@link taskId}.
+   *
+   * It is a DISPLAY identity and immutable in practice — a card's number is
+   * handed out once and never reissued, and nothing edits a project's key — so
+   * there is no copy here to drift out of date. A run started before this
+   * column existed carries null and simply draws no label, which is the same
+   * answer as a chat nobody started from a card; it is deliberately not
+   * backfilled, the alternative being a one-time sweep over the two rows in
+   * existence.
+   */
+  @Property({ type: 'string', nullable: true })
+  taskIdentifier: string | null = null;
+
+  /**
    * Where this run sits in the PINNED band at the top of its own scope, or
    * null for one that is not pinned at all.
    *

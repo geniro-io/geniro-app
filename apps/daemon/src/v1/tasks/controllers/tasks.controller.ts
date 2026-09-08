@@ -11,19 +11,28 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
+import type { LocalImageWire } from '../../agents/chat.types';
+import { LocalImageDto } from '../../agents/dto/chat.dto';
+import { LocalImageService } from '../../agents/services/local-image.service';
 import {
+  AddTaskAttachmentDto,
+  AttachTaskFileDto,
   CreateTaskDto,
   ListTasksQueryDto,
   MoveTaskStatusDto,
+  TaskAttachmentDto,
   TaskDeletedDto,
   TaskDto,
+  TaskImageQueryDto,
   UpdateTaskDto,
 } from '../dto/task.dto';
 import { ReconcileTasksDto, StartTaskRunDto } from '../dto/task-run.dto';
+import { TaskAttachmentService } from '../services/task-attachment.service';
+import { TaskFilesService } from '../services/task-files.service';
 import { TaskRunsService } from '../services/task-runs.service';
 import { TaskSettleService } from '../services/task-settle.service';
 import { TasksService } from '../services/tasks.service';
-import type { TaskWire } from '../tasks.types';
+import type { TaskAttachmentWire, TaskWire } from '../tasks.types';
 
 /**
  * Tasks — the cards on a project's board (token-gated by the global
@@ -35,6 +44,9 @@ import type { TaskWire } from '../tasks.types';
 export class TasksController {
   constructor(
     private readonly tasks: TasksService,
+    private readonly attachments: TaskAttachmentService,
+    private readonly files: TaskFilesService,
+    private readonly localImages: LocalImageService,
     private readonly taskRuns: TaskRunsService,
     private readonly settle: TaskSettleService,
   ) {}
@@ -125,5 +137,82 @@ export class TasksController {
     @Body() dto: StartTaskRunDto,
   ): Promise<TaskWire> {
     return this.taskRuns.start(taskId, dto);
+  }
+
+  /**
+   * Take one picture pasted into this card's description and write it where an
+   * agent can open it.
+   *
+   * It answers with the PATH rather than an id, because the caller's next act
+   * is to write `![name](path)` into the description — the reference has to be
+   * something both readers of that markdown can act on. See
+   * `TaskAttachmentService`.
+   */
+  @Post(':taskId/attachments')
+  @ApiOperation({ operationId: 'addTaskAttachment' })
+  @ZodResponse({ status: 201, type: TaskAttachmentDto })
+  async addAttachment(
+    @Param('taskId') taskId: string,
+    @Body() dto: AddTaskAttachmentDto,
+  ): Promise<TaskAttachmentWire> {
+    // The card is required to EXIST before anything is written: without it a
+    // path could be minted under any id a caller invented, and nothing would
+    // ever collect the directory.
+    await this.tasks.get(taskId);
+    return this.attachments.save(taskId, dto.mediaType, dto.data, dto.name);
+  }
+
+  /**
+   * Bind a file the user picked to this card — an archive, a spec, a
+   * spreadsheet.
+   *
+   * A PATH and not bytes, which is the whole design: the file is already on
+   * this machine, the agent that reads the card can open it, and copying it
+   * would go stale the moment the user edited it. See `TaskFileSchema`.
+   *
+   * Answers with the whole CARD rather than the row, because the list is what
+   * the panel redraws and a client that merged one row itself would be a
+   * second place the order is decided.
+   */
+  @Post(':taskId/files')
+  @ApiOperation({ operationId: 'attachTaskFile' })
+  @ZodResponse({ status: 201, type: TaskDto })
+  attachFile(
+    @Param('taskId') taskId: string,
+    @Body() dto: AttachTaskFileDto,
+  ): Promise<TaskWire> {
+    return this.files.attach(taskId, dto.path);
+  }
+
+  /**
+   * Drop one reference. The FILE is left exactly where it is — geniro did not
+   * put it there, and this is not a delete.
+   */
+  @Delete(':taskId/files/:attachmentId')
+  @ApiOperation({ operationId: 'detachTaskFile' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  detachFile(
+    @Param('taskId') taskId: string,
+    @Param('attachmentId') attachmentId: string,
+  ): Promise<TaskWire> {
+    return this.files.detach(taskId, attachmentId);
+  }
+
+  /**
+   * A picture the description references, read back as base64 for the panel.
+   *
+   * The same reader the transcript uses (`LocalImageService`), through its
+   * run-free entry point: a card has no cwd to measure a relative reference
+   * against, so this route takes absolute paths only.
+   */
+  @Get(':taskId/image')
+  @ApiOperation({ operationId: 'readTaskImage' })
+  @ZodResponse({ status: 200, type: LocalImageDto })
+  async readImage(
+    @Param('taskId') taskId: string,
+    @Query() query: TaskImageQueryDto,
+  ): Promise<LocalImageWire> {
+    await this.tasks.get(taskId);
+    return this.localImages.readAbsolute(query.path);
   }
 }

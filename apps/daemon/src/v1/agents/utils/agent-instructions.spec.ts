@@ -16,7 +16,19 @@ describe('GENIRO_UI_PREAMBLE', () => {
   });
 
   it('tells the agent how to embed an image', () => {
-    expect(GENIRO_UI_PREAMBLE).toContain('![alt](path)');
+    expect(GENIRO_UI_PREAMBLE).toContain('![alt](/full/path/to/file.png)');
+  });
+
+  it('asks for the FULL path, and says what a relative one is measured against', () => {
+    // REPORTED against a real transcript: an agent embedded
+    // `out/ci723-assignee-rail.png` and the row drew `could not read` it. The
+    // route resolves a relative path against the RUN's cwd, which is not where
+    // a delegate, a workflow node, or a command run in a subdirectory writes
+    // its files — so the only form that is always right is the absolute one.
+    // The example alone does not carry this: an agent copies the shape of the
+    // example but follows the sentence, so the reason has to be stated.
+    expect(GENIRO_UI_PREAMBLE).toContain('FULL path');
+    expect(GENIRO_UI_PREAMBLE).toContain('working directory');
   });
 
   it('does not send an agent with numbers off to draw its own chart', () => {

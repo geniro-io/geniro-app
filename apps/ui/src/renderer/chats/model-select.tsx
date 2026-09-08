@@ -59,6 +59,7 @@ export function ModelSelect({
   nextTurnOnly = false,
   allowCustom = false,
   onChange,
+  showIcon = true,
   className,
 }: {
   agentKind: CliKind;
@@ -82,6 +83,22 @@ export function ModelSelect({
    */
   allowCustom?: boolean;
   onChange: (model: string | null) => void;
+  /**
+   * The leading glyph, on by default.
+   *
+   * It IDENTIFIES the chip in a row of chips that carry no labels — the
+   * composer's footer, where `opus` beside `high` beside `auto-approve` is
+   * three words with nothing saying which axis each belongs to. In a LABEL
+   * COLUMN there is already a word for that, and the glyph then costs
+   * alignment instead: it pushes this value's text right by its own width, so
+   * a column mixing chips that have one with chips and plain text that do not
+   * has three different left edges. REPORTED as exactly that — "параметр
+   * как-то криво выглядит — может быть за счёт иконок, может быть за счёт
+   * выравнивания" — and it was both, which is one cause.
+   *
+   * The same trade `model-parameter-select`'s `showAxisName` already makes.
+   */
+  showIcon?: boolean;
   className?: string;
 }): React.JSX.Element {
   // Whether free-text entry is open, or null while nothing has decided yet.
@@ -138,7 +155,7 @@ export function ModelSelect({
       }
       className={className}
       searchPlaceholder={rows.length > 8 ? 'Search models…' : undefined}
-      leadingIcon={<Sparkles />}
+      {...(showIcon ? { leadingIcon: <Sparkles /> } : {})}
       value={customMode ? CUSTOM_MODEL : (value ?? CLI_DEFAULT_MODEL)}
       // While the list is still on its way the stored id IS the honest label:
       // with no matching row the trigger would otherwise fall back to the

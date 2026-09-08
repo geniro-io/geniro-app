@@ -214,6 +214,7 @@ function approval(runId: string, seq: number, requestId: string): ChatItem {
 const run1: ChatRun = {
   id: 'r1',
   status: 'running',
+  taskIdentifier: null,
   awaiting: null,
   holdingFor: 0,
   shellsOpen: 0,
@@ -3668,6 +3669,7 @@ describe('Chats workflow runs', () => {
   const wfRun: ChatRun = {
     id: 'w1',
     status: 'running',
+    taskIdentifier: null,
     awaiting: null,
     holdingFor: 0,
     shellsOpen: 0,
@@ -4356,6 +4358,7 @@ describe('Chats — handing a conversation to the user', () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
+      taskIdentifier: null,
       awaiting: null,
       holdingFor: 0,
       shellsOpen: 0,

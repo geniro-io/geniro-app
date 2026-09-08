@@ -22,15 +22,23 @@ vi.mock('../daemon-api', async (importOriginal) => ({
   createDaemonApis: () => ({
     projects: {
       listProjects: mocks.listProjects,
-      readProjectQueue: vi
-        .fn()
-        .mockResolvedValue({ running: 0, waiting: 0, eligible: [] }),
+      readProjectQueue: vi.fn().mockResolvedValue({
+        running: 0,
+        waiting: 0,
+        eligible: [],
+        blocked: [],
+      }),
     },
     tasks: {
       listTasks: mocks.listTasks,
       reconcileTasks: mocks.reconcileTasks,
       moveTaskStatus: mocks.moveTaskStatus,
     },
+    // The board reads the library for its target pickers; the real
+    // `createDaemonApis` returns every API class, so an omission here is the
+    // double drifting rather than a case the screen should guard for.
+    workflows: { listWorkflows: vi.fn().mockResolvedValue([]) },
+    agents: {},
   }),
 }));
 

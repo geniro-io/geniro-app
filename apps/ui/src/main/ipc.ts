@@ -96,6 +96,16 @@ export function registerIpc(
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
 
+  ipcMain.handle(IPC.pickTaskFiles, async () => {
+    const result = await dialog.showOpenDialog({
+      // No `filters`: a task's attachment is whatever the work needs — an
+      // archive, a spreadsheet, a log, a design file — and a filter list here
+      // could only ever be a guess that hides the one the user came for.
+      properties: ['openFile', 'multiSelections'],
+    });
+    return result.canceled ? [] : result.filePaths;
+  });
+
   ipcMain.handle(IPC.getSettings, () => readSettings());
 
   ipcMain.handle(IPC.updateSettings, async (event, patch: unknown) => {

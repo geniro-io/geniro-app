@@ -49,7 +49,7 @@ import { PanelResizeHandle, usePanelWidth } from '../components/panel-resize';
 import { Button } from '../components/ui/button';
 import { Chip } from '../components/ui/chip';
 import { Dialog } from '../components/ui/dialog';
-import { MenuAnchorContext } from '../components/ui/menu';
+import { MenuAnchorContext } from '../components/ui/menu-anchor';
 import { Select } from '../components/ui/select';
 import { Spinner } from '../components/ui/spinner';
 import { Textarea } from '../components/ui/textarea';
@@ -482,6 +482,8 @@ export function Chats({
   client,
   handle,
   active = true,
+  openRunId = null,
+  onRunOpened,
   onTitleChange,
   onOpenSettings,
 }: {
@@ -496,6 +498,19 @@ export function Chats({
    * callback rather than a dialog of its own.
    */
   onOpenSettings?: (section: SettingsSection) => void;
+  /**
+   * A thread another screen has asked to have opened, or null.
+   *
+   * The task board's cards each hold a run, so "follow what the agent is
+   * doing" is a jump from that screen to this one. It arrives as a prop rather
+   * than through the notification channel both already listen on, because
+   * there is no main-process event behind it — and it is CLEARED by
+   * {@link onRunOpened} rather than read once, or a user who navigated away
+   * from the thread and came back to Tasks would be sent to it again.
+   */
+  openRunId?: string | null;
+  /** Told once the request above has been honoured, so the caller can drop it. */
+  onRunOpened?: () => void;
   /** False while another view is shown (the tab stays mounted, hidden). */
   active?: boolean;
   /**
@@ -6488,6 +6503,23 @@ export function Chats({
     [handleActivateRun],
   );
 
+  /**
+   * Open the thread another screen asked for — the task board's "follow this
+   * card's agent".
+   *
+   * The same activation the notification path takes, so a thread opened this
+   * way joins its room and replays exactly as a clicked one does. The request
+   * is acknowledged AFTER the activation, which is what stops the effect from
+   * firing again on the next render with the same id still standing.
+   */
+  useEffect(() => {
+    if (openRunId === null) {
+      return;
+    }
+    handleActivateRun(openRunId);
+    onRunOpened?.();
+  }, [openRunId, handleActivateRun, onRunOpened]);
+
   // Ordered BEFORE the fold, not inside it: `runGroupSections` preserves the
   // order it is given and `previewSectionRuns` decides what a folded section
   // shows from that same order, so sorting here is what puts a thread waiting
@@ -6727,6 +6759,7 @@ export function Chats({
                               activity={activities.get(run.id) ?? null}
                               awaiting={run.awaiting}
                               agentKind={run.agentKind}
+                              taskIdentifier={run.taskIdentifier}
                               pullRequest={
                                 rowPullRequestByRun.get(run.id) ?? null
                               }

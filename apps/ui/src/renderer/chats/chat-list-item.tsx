@@ -104,6 +104,7 @@ export const ChatListItem = memo(function ChatListItem({
   activity = null,
   awaiting = null,
   agentKind = null,
+  taskIdentifier = null,
   pullRequest = null,
   active,
   unseen = false,
@@ -162,6 +163,15 @@ export const ChatListItem = memo(function ChatListItem({
    * {@link agentLabel}.
    */
   agentKind?: string | null;
+  /**
+   * The board card this thread is the work for — `GEN-12` — or null for a
+   * conversation nobody started from one.
+   *
+   * Read off the RUN row, which carries it denormalized: the sidebar holds
+   * runs and no board, and the identifier is two rows away on the daemon side
+   * (see `Run.taskIdentifier`).
+   */
+  taskIdentifier?: string | null;
   /**
    * The pull request this thread's folder is on, or null when there is none.
    *
@@ -627,6 +637,23 @@ export const ChatListItem = memo(function ChatListItem({
           and goes; the agent is on every row, so it reads as the column it is
           rather than as news. */}
       <span data-slot="chat-row-labels" className="flex items-center gap-1">
+        {/* The card LEADS, unlike the volatile-first order the other two
+            follow, and its own job is what decides that: it is an IDENTIFIER —
+            asked for as "to make those threads identifiable in the list" — so
+            it is scanned down a column, which only works while it sits at the
+            same x on every row that has one. It can afford to: unlike the pull
+            request, it never appears or disappears mid-session, so leading
+            with it shifts nothing. Monospaced for the reason the card and the
+            panel set it that way: it is a key, not a word. */}
+        {taskIdentifier === null ? null : (
+          <Badge
+            data-slot="task-identifier"
+            variant="muted"
+            title={`Working the board card ${taskIdentifier}`}
+            className="px-1.5 py-0 font-mono font-normal">
+            {taskIdentifier}
+          </Badge>
+        )}
         {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
         <Badge
           data-slot="agent-kind"

@@ -8,6 +8,8 @@ import {
 } from '@mikro-orm/decorators/legacy';
 import { TimestampsEntity } from '@packages/mikroorm';
 
+import type { ChatApprovalMode } from '../../agents/chat.types';
+import type { AgentKind } from '../../runs/runs.types';
 import type { TaskPriority, TaskSource, TaskStatus } from '../tasks.types';
 
 /**
@@ -36,8 +38,32 @@ export class Task extends TimestampsEntity {
   @Property({ type: 'text' })
   title!: string;
 
+  /**
+   * This card's number within its project — the `12` of `GEN-12`.
+   *
+   * Handed out by the project's own counter at creation and never reused, so
+   * an identifier names one card for good. Nullable only for rows that predate
+   * numbering; the backfill assigns those in creation order on the next
+   * launch.
+   */
+  @Property({ type: 'integer', nullable: true })
+  number: number | null = null;
+
   @Property({ type: 'text', nullable: true })
   description: string | null = null;
+
+  /**
+   * Files bound to this card, as a JSON array — see `TaskAttachmentSchema`.
+   *
+   * A JSON column rather than a table, on `labels`' own reasoning: this is a
+   * short list read and written only with the card it belongs to, and nothing
+   * ever queries across cards by attachment.
+   *
+   * Every entry is a REFERENCE to a file that is already on this machine, and
+   * that is the decision the rest follows from — see the route's own doc.
+   */
+  @Property({ type: 'text' })
+  attachments: string = '[]';
 
   @Property({ type: 'string' })
   status: TaskStatus = 'backlog';
@@ -79,6 +105,39 @@ export class Task extends TimestampsEntity {
    */
   @Property({ type: 'text', nullable: true })
   folder: string | null = null;
+
+  // ── Run configuration ───────────────────────────────────────────────────
+  // The project's standing answers overridden for THIS card, on `folder`'s own
+  // rule above: null means INHERIT rather than "none", so re-pointing a project
+  // moves every card that named nothing of its own. `Project`'s block carries
+  // the same six fields and the same null-means-unset reading — the two are
+  // resolved together, most specific first, by `TaskRunsService.startClaimed`.
+  //
+  // A card names an agent OR a workflow, never both: `workflowSlug` wins where
+  // a task sets one, and the CLI-only fields beside it are meaningless to a
+  // graph, whose nodes carry their own. Nothing here is enforced at the column
+  // level, because the inheritance makes "both set" reachable without either
+  // row being wrong on its own — a project pinning an agent and a card pinning
+  // a workflow is exactly the override this exists for.
+
+  @Property({ type: 'string', nullable: true })
+  agentKind: AgentKind | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  model: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  effort: string | null = null;
+
+  @Property({ type: 'string', nullable: true })
+  approval: ChatApprovalMode | null = null;
+
+  @Property({ type: 'text', nullable: true })
+  configDir: string | null = null;
+
+  /** A workflow to run this card through, instead of a single agent. */
+  @Property({ type: 'string', nullable: true })
+  workflowSlug: string | null = null;
 
   /** The branch an agent works this task on — null until one runs. */
   @Property({ type: 'string', nullable: true })

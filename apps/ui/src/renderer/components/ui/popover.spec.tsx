@@ -305,3 +305,95 @@ describe('Popover — anchor="viewport"', () => {
     expect(panelOf(container)).toBeNull();
   });
 });
+
+/**
+ * A picker opened from INSIDE a floating panel.
+ *
+ * REPORTED as "вот здесь у нас сломан UI… я не скроллить не могу, не выбрать
+ * ничего", against the board's Run settings: the popover's own box carries
+ * `overflowY: auto` — how a panel too tall for the window scrolls rather than
+ * overflowing — and CSS forces the other axis non-visible with it, so the
+ * agent picker's `absolute` menu was cut on every side by the panel it opened
+ * inside. The rows the user aimed at were outside the scroll box, so the
+ * presses landed on nothing.
+ */
+describe('Popover — a menu opened inside it', () => {
+  /** A popover holding a picker, both measured off stubbed rects. */
+  function Nested({
+    anchor,
+  }: {
+    anchor?: 'ancestor' | 'viewport';
+  }): React.JSX.Element {
+    const trigger = { current: null as HTMLButtonElement | null };
+    const inner = { current: null as HTMLButtonElement | null };
+    const stub =
+      (ref: { current: HTMLButtonElement | null }, rect: Partial<DOMRect>) =>
+      (node: HTMLButtonElement | null): void => {
+        ref.current = node;
+        if (node) {
+          node.getBoundingClientRect = () =>
+            ({ top: 0, left: 0, bottom: 0, right: 0, ...rect }) as DOMRect;
+        }
+      };
+    return (
+      <span className="relative">
+        <button ref={stub(trigger, { bottom: 40, right: 300 })} type="button">
+          settings
+        </button>
+        <Popover
+          open
+          onClose={vi.fn()}
+          triggerRef={trigger}
+          side="bottom"
+          align="start"
+          anchor={anchor}
+          label="panel">
+          <button
+            ref={stub(inner, { top: 120, left: 60, bottom: 148, right: 220 })}
+            type="button">
+            pick
+          </button>
+          <Menu
+            open
+            side="bottom"
+            triggerRef={inner}
+            groups={[{ items: [{ value: 'a', label: 'A' }] }]}
+            onSelect={vi.fn()}
+            onClose={vi.fn()}
+          />
+        </Popover>
+      </span>
+    );
+  }
+
+  const menuOf = (container: HTMLElement): HTMLElement | null =>
+    container.querySelector('[data-slot="menu-panel"]');
+
+  it('lets it escape the panel, measured off its own trigger', () => {
+    const container = render(<Nested anchor="viewport" />);
+    const menu = menuOf(container);
+
+    // `fixed` is what leaves the scroll box; the offsets are the inner
+    // trigger's own rect, so the menu hangs off the control that opened it
+    // rather than off the popover.
+    expect(menu?.style.position).toBe('fixed');
+    expect(menu?.style.top).toBe('154px'); // 148 + the 6px gap
+    expect(menu?.style.left).toBe('60px');
+  });
+
+  it('keeps it INSIDE the popover’s DOM while it escapes visually', () => {
+    // The two are not in tension and both are required: the popover closes on
+    // a press it does not contain, so a menu portalled out of the panel would
+    // close the popover under itself on the way to choosing a row. Escaping is
+    // a matter of `position`, never of where the node lives.
+    const container = render(<Nested anchor="viewport" />);
+
+    expect(panelOf(container)?.contains(menuOf(container))).toBe(true);
+  });
+
+  it('leaves an ANCESTOR-anchored popover’s menus alone', () => {
+    // That mode sets no overflow of its own, so it clips nothing and the
+    // menus inside it keep the placement they already had.
+    expect(menuOf(render(<Nested />))?.style.position).toBe('');
+  });
+});

@@ -7,6 +7,7 @@ import { TaskDao } from '../../tasks/dao/task.dao';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
 import type { ProjectWire } from '../projects.types';
+import { projectKey } from '../utils/project-key';
 
 /** How many projects one machine may hold — a guard, not a design limit. */
 const MAX_PROJECTS = 200;
@@ -69,6 +70,9 @@ export class ProjectsService {
     const created = await this.projectDao.create(
       {
         name: input.name,
+        // Derived ONCE, here, and owned by the row from then on: a rename must
+        // not renumber cards that have already been quoted somewhere.
+        taskKey: projectKey(input.name),
         folder,
         groupId: input.groupId ?? null,
         agentKind: input.agentKind ?? null,
@@ -267,6 +271,7 @@ function toWire(project: Project): ProjectWire {
   return {
     id: project.id,
     name: project.name,
+    taskKey: project.taskKey,
     folder: project.folder,
     groupId: project.groupId,
     agentKind: project.agentKind,

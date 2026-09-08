@@ -65,6 +65,11 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     const project = await projectDao.create({
       name: 'board',
       folder,
+      // Names an agent, because the handout now asks whether each card COULD
+      // be started: a project with no agent and no workflow blocks every card
+      // on its board, which is its own group of cases below rather than the
+      // background condition for the ones about capacity and ordering.
+      agentKind: 'claude',
       autopilotEnabled: true,
       autopilotIntakeStatus: 'todo',
       autopilotMaxConcurrent: 2,
@@ -90,8 +95,11 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     return task;
   }
 
-  async function addRun(status: Run['status']): Promise<Run> {
-    const run = await runDao.create({ status });
+  async function addRun(
+    status: Run['status'],
+    agentKind: Run['agentKind'] = 'claude',
+  ): Promise<Run> {
+    const run = await runDao.create({ status, agentKind });
     await em.flush();
     return run;
   }
@@ -142,6 +150,84 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     }
   });
 
+  // The conductor cuts a worktree BEFORE it asks the daemon to start the run,
+  // so a card the start route would refuse costs a `git worktree add` and a
+  // prune every tick, forever — the breaker cannot end it, because a run that
+  // never started never failed. Keeping such a card out of `eligible` is what
+  // stops that, and naming it is what lets the board explain itself.
+  it('blocks a card no rung names an agent or a workflow for', async () => {
+    await arm({ agentKind: null, workflowSlug: null });
+    const orphan = await addTask('nothing to run me', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible).toEqual([]);
+    expect(queue.blocked).toEqual([
+      { id: orphan.id, title: 'nothing to run me', reason: expect.any(String) },
+    ]);
+    // Still WAITING: it is in the intake column, which is what that count
+    // means. `blocked` is what tells the two apart.
+    expect(queue.waiting).toBe(1);
+  });
+
+  it('starts a card the CARD itself names an agent for, project silent', async () => {
+    await arm({ agentKind: null, workflowSlug: null });
+    const own = await addTask('names its own agent', 'todo', 0);
+    own.agentKind = 'cursor-agent';
+    await em.flush();
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.id)).toEqual([own.id]);
+    expect(queue.blocked).toEqual([]);
+  });
+
+  it('starts a card whose only target is a WORKFLOW', async () => {
+    await arm({ agentKind: null, workflowSlug: 'dev-team' });
+    const card = await addTask('run me as a graph', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.id)).toEqual([card.id]);
+    expect(queue.blocked).toEqual([]);
+  });
+
+  // A blocked card must not occupy one of the slots the handout is narrowed
+  // to, or one misconfigured card at the head of a cap-1 column would starve
+  // every runnable card behind it — the same standstill, reached the other way.
+  it('does not let a blocked card consume a free slot', async () => {
+    // The project names nothing, so a card is runnable only if it says so
+    // itself. `blocked` sits at position 0 — ahead of `runnable` in the very
+    // ordering the cap is applied to.
+    await arm({
+      agentKind: null,
+      workflowSlug: null,
+      autopilotMaxConcurrent: 1,
+    });
+    await addTask('blocked', 'todo', 0);
+    const runnable = await addTask('runnable', 'todo', 1);
+    runnable.agentKind = 'claude';
+    await em.flush();
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.title)).toEqual(['runnable']);
+    expect(queue.blocked.map((task) => task.title)).toEqual(['blocked']);
+  });
+
+  it('reports blocked cards even while the autopilot is disarmed', async () => {
+    // A card naming nothing is broken whether or not the timer is running, and
+    // a user who arms the project to find out why nothing happens has been
+    // told nothing.
+    await arm({ agentKind: null, workflowSlug: null, autopilotEnabled: false });
+    await addTask('nothing to run me', 'todo', 0);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible).toEqual([]);
+    expect(queue.blocked).toHaveLength(1);
+  });
+
   it('narrows the handout to the free slots', async () => {
     const run = await addRun('running');
     await addTask('working', 'in_progress', 0, run.id);
@@ -154,6 +240,52 @@ describe('ProjectQueueService (in-memory sqlite)', () => {
     // Two waiting, a cap of two, one slot taken — so one goes out, not two.
     expect(queue.waiting).toBe(2);
     expect(queue.eligible.map((task) => task.title)).toEqual(['a']);
+  });
+
+  /**
+   * The card-level half of the same read.
+   *
+   * The board draws a live card differently from a resting one, and neither
+   * fact is derivable on the client: `Task.runId` OUTLIVES the run it names
+   * (the settled report is read through it), and the agent a run was started
+   * as is the run's own column rather than the card's.
+   */
+  describe('the cards that are actually working', () => {
+    it('names each one, its run and the CLI running it', async () => {
+      const run = await addRun('running', 'cursor-agent');
+      const task = await addTask('working', 'in_progress', 0, run.id);
+      await addTask('waiting', 'todo', 1);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.active).toEqual([
+        { id: task.id, runId: run.id, agentKind: 'cursor-agent' },
+      ]);
+    });
+
+    it('is the same set the count is taken from', async () => {
+      // One query answering both is what stops a card drawn with a spinner
+      // while the header counts one fewer.
+      const run = await addRun('running');
+      await addTask('working', 'in_progress', 0, run.id);
+      await addTask('finished', 'in_review', 1, (await addRun('completed')).id);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.running).toBe(queue.active.length);
+      expect(queue.active).toHaveLength(1);
+    });
+
+    it('leaves out a card whose run is over but still recorded', async () => {
+      // `runId !== null` is not liveness — the settled report is read through
+      // exactly that id, so it stays put after the agent has gone.
+      const run = await addRun('completed');
+      await addTask('reported', 'in_review', 0, run.id);
+
+      const queue = await service.read(projectId);
+
+      expect(queue.active).toEqual([]);
+    });
   });
 
   // The reason the count asks the RUNS and not the `in_progress` column: a card

@@ -1,5 +1,6 @@
 import * as React from 'react';
 
+import { MenuAnchorContext } from './menu-anchor';
 import { cn } from './utils';
 
 /**
@@ -268,7 +269,32 @@ export function Popover({
         box === null && (align === 'start' ? 'left-0' : 'right-0'),
         className,
       )}>
-      {children}
+      {/* A FLOATING panel is a clipping container, so it declares itself one.
+          Its own box carries `overflowY: auto` — that is how a panel too tall
+          for the window scrolls instead of overflowing — and CSS forces the
+          other axis non-visible with it, so a picker opened from a control
+          INSIDE this panel is cut on all four sides by it.
+
+          REPORTED against the board's Run settings ("вот здесь у нас сломан
+          UI… я не скроллить не могу, не выбрать ничего"): the agent picker's
+          menu is `absolute` by default, which places it against this panel and
+          then clips it — the rows the user was aiming at were outside the
+          panel's scroll box, so the presses landed on nothing.
+
+          Declared HERE rather than at each call site, exactly as `Dialog` does
+          for its scrolling body: every popover in the app that holds a picker
+          has this defect, and a prop threaded through the chip that renders
+          the picker is a fix each new caller has to remember.
+
+          `ancestor` mode sets no overflow of its own, so it clips nothing and
+          the menus inside it keep the placement they have today. */}
+      {box === null ? (
+        children
+      ) : (
+        <MenuAnchorContext.Provider value="viewport">
+          {children}
+        </MenuAnchorContext.Provider>
+      )}
     </div>
   );
 }

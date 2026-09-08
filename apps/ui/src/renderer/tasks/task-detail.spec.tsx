@@ -35,11 +35,22 @@ const task = (over: Partial<TaskDto> = {}): TaskDto =>
 function detail(
   over: Partial<TaskDto> & {
     onRun?: () => void;
+    onOpenThread?: (runId: string) => void;
     task?: TaskDto;
     report?: ItemDto | null;
+    projectName?: string | null;
+    projectTaskKey?: string | null;
   } = {},
 ): HTMLDivElement {
-  const { onRun, task: given, report, ...fields } = over;
+  const {
+    onRun,
+    onOpenThread,
+    task: given,
+    report,
+    projectName,
+    projectTaskKey,
+    ...fields
+  } = over;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -50,6 +61,9 @@ function detail(
         onClose={vi.fn()}
         onSave={vi.fn()}
         onRun={onRun}
+        onOpenThread={onOpenThread}
+        projectName={projectName ?? null}
+        projectTaskKey={projectTaskKey ?? null}
         report={report ?? null}
       />,
     );
@@ -66,10 +80,14 @@ function detailWith({
   onSave = saveSpy(),
   task: over = {},
   projectFolder = null,
+  projectTarget = null,
+  workflows = [],
 }: {
   onSave?: ReturnType<typeof saveSpy>;
   task?: Partial<TaskDto>;
   projectFolder?: string | null;
+  projectTarget?: string | null;
+  workflows?: readonly { slug: string; name: string }[];
 }): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -81,6 +99,8 @@ function detailWith({
         onClose={vi.fn()}
         onSave={onSave}
         projectFolder={projectFolder}
+        projectTarget={projectTarget}
+        workflows={workflows}
       />,
     );
   });
@@ -187,6 +207,45 @@ describe('TaskDetail', () => {
 
     expect(el.querySelector('strong')?.textContent).toBe('bold');
     expect(el.textContent).not.toContain('**');
+  });
+});
+
+describe('the header row', () => {
+  it('keeps every icon-only control in the group at the right edge', () => {
+    // REPORTED as "those icons should be from right side". A glyph with no
+    // label is read by POSITION, so one adrift among the labelled controls
+    // while two more sit in the corner reads as two groups that disagree.
+    // jsdom computes no layout, so the observable is which element they are
+    // IN and what that element carries — and here the class IS the mechanism:
+    // `ml-auto` on the group is what puts the run of them at the edge.
+    const el = detail({ runId: 'run-1', onOpenThread: vi.fn() });
+
+    const actions = el.querySelector(
+      '[data-slot="task-detail-actions"]',
+    ) as HTMLElement;
+    expect(actions.className).toContain('ml-auto');
+    expect(
+      [...actions.querySelectorAll('button')].map((node) =>
+        node.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Open the thread', 'Open in a popup', 'Close']);
+  });
+
+  it('holds the group at the edge on a card with no thread', () => {
+    // The `ml-auto` belongs to the GROUP rather than to whichever control
+    // renders first: hung off the thread button it would vanish with it, and
+    // the toggle and the ✕ would float in the middle of the row.
+    const el = detail();
+
+    const actions = el.querySelector(
+      '[data-slot="task-detail-actions"]',
+    ) as HTMLElement;
+    expect(actions.className).toContain('ml-auto');
+    expect(
+      [...actions.querySelectorAll('button')].map((node) =>
+        node.getAttribute('aria-label'),
+      ),
+    ).toEqual(['Open in a popup', 'Close']);
   });
 });
 
@@ -300,6 +359,111 @@ describe('priority and due date', () => {
     expect(el.textContent).toContain('off by one');
   });
 
+  /** Mount with a follow-up handler, which neither helper above offers. */
+  function withFollowUp(over: Partial<TaskDto> = {}): {
+    el: HTMLDivElement;
+    onFollowUp: ReturnType<typeof vi.fn<(text: string) => void>>;
+  } {
+    const onFollowUp = vi.fn<(text: string) => void>();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <TaskDetail
+          task={task({ runId: 'run-1', status: 'in_review', ...over })}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          onFollowUp={onFollowUp}
+        />,
+      );
+    });
+    return { el: container, onFollowUp };
+  }
+
+  it('offers a follow-up on a card whose thread already exists', () => {
+    // ASKED FOR as "we should have ability there to add follow up message
+    // right from task": reading the report and having something to say about
+    // it is one gesture, and it used to be four.
+    const { el } = withFollowUp();
+
+    expect(el.querySelector('#task-follow-up')).not.toBeNull();
+  });
+
+  it('offers NO follow-up on a card that has never run', () => {
+    // Nothing to follow up: Run is the control for that card, and it asks for
+    // the same words in its own dialog.
+    const { el } = withFollowUp({ runId: null, status: 'todo' });
+
+    expect(el.querySelector('#task-follow-up')).toBeNull();
+  });
+
+  it('sends what was typed, trimmed, and empties the box', () => {
+    const { el, onFollowUp } = withFollowUp();
+    const box = el.querySelector('#task-follow-up') as HTMLTextAreaElement;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    act(() => {
+      setValue?.call(box, '  Now do the other half.  ');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    act(() => {
+      buttonNamed(el, 'Send').click();
+    });
+
+    expect(onFollowUp).toHaveBeenCalledWith('Now do the other half.');
+    expect(
+      (el.querySelector('#task-follow-up') as HTMLTextAreaElement).value,
+    ).toBe('');
+  });
+
+  it('withholds the box while an agent is working the card', () => {
+    // Rather than queueing: this box has no queue and no strip to show one, so
+    // an accepted message would vanish into a run the card cannot display. The
+    // sentence that replaces it says where the live conversation is.
+    const { el } = withFollowUp({ status: 'in_progress' });
+
+    expect(el.querySelector('#task-follow-up')).toBeNull();
+    expect(el.textContent).toContain('Open its thread');
+  });
+
+  it('frames a FAILED card’s last words as a failure, not as a report', () => {
+    // REPORTED over a card whose Status read `Failed` while the section under
+    // it was headed `Report` and held the agent's opening line. The settle
+    // path takes the newest assistant message when nothing wrote a closing
+    // report — right for a run that finished, and exactly wrong-looking for
+    // one that died on its first step.
+    const el = detail({
+      status: 'failed',
+      report: anItem({ payload: { text: 'I’ll start by getting oriented' } }),
+    });
+
+    expect(el.textContent).toContain('Run failed');
+    // Case-SENSITIVE and on the source word: the caption is uppercased in CSS,
+    // so `textContent` still reads `Report` if the framing regresses — a check
+    // against `REPORT` would pass either way and pin nothing.
+    expect(el.textContent).not.toContain('Report');
+    expect(el.textContent).toContain('The last thing it said');
+  });
+
+  it('says so even when the failed run left nothing behind', () => {
+    // The commonest failure: the agent died before it said anything. With the
+    // section withheld the status chip was the only word on what happened.
+    const el = detail({ status: 'failed', report: null });
+
+    expect(el.textContent).toContain('Run failed');
+    expect(el.textContent).toContain('left nothing behind');
+  });
+
+  it('draws NO failure section for a card that merely has no report', () => {
+    const el = detail({ status: 'in_review', report: null });
+
+    expect(el.textContent).not.toContain('Run failed');
+  });
+
   it('draws nothing for a row whose payload reads as neither', () => {
     const el = detail({ report: anItem({ payload: { nothing: true } }) });
 
@@ -376,5 +540,475 @@ describe('status', () => {
   it('locks the picker when the board cannot move the card', () => {
     // Same rule the Run button follows: shown-and-disabled, never withheld.
     expect(statusTrigger(detail()).disabled).toBe(true);
+  });
+
+  describe('the Agent row', () => {
+    const agentTrigger = (el: HTMLElement): HTMLButtonElement =>
+      el.querySelector<HTMLButtonElement>(
+        '[aria-label="Agent or workflow for this task"]',
+      )!;
+
+    it('shows the PROJECT’s agent on a card that names none, tagged as inherited', () => {
+      const el = detailWith({
+        projectTarget: 'claude',
+        task: { agentKind: null, workflowSlug: null },
+      });
+
+      expect(agentTrigger(el).textContent).toContain('claude');
+      // Same rule the Folder row states: a reader deciding whether to override
+      // has to see what they would be overriding, and that it is not theirs.
+      expect(el.textContent).toContain('project');
+      expect(buttonNamed(el, 'Use project agent')).toBeUndefined();
+    });
+
+    it('names a workflow by its NAME rather than the slug on the wire', () => {
+      const el = detailWith({
+        task: { agentKind: null, workflowSlug: 'dev-team' },
+        workflows: [{ slug: 'dev-team', name: 'Dev team' }],
+      });
+
+      expect(agentTrigger(el).textContent).toContain('Dev team');
+    });
+
+    it('says the choice has not been made when neither row names one', () => {
+      // The state that makes every start on this board fail, and the ONLY
+      // thing on screen that can explain it — so a blank chip is not an
+      // option.
+      const el = detailWith({
+        projectTarget: null,
+        task: { agentKind: null, workflowSlug: null },
+      });
+
+      expect(agentTrigger(el).textContent).toContain('Choose an agent');
+    });
+
+    it('offers a way back to the project agent, clearing BOTH fields', () => {
+      const onSave = saveSpy();
+      const el = detailWith({
+        onSave,
+        projectTarget: 'claude',
+        task: { agentKind: 'cursor-agent', workflowSlug: null },
+      });
+
+      act(() => {
+        buttonNamed(el, 'Use project agent').click();
+      });
+
+      // Both, always: a reset that cleared only the agent would leave a card
+      // that had once named a workflow still running it.
+      expect(onSave).toHaveBeenCalledWith({
+        agentKind: null,
+        workflowSlug: null,
+      });
+    });
+  });
+
+  // REPORTED as "first we should see parameters, and then only description".
+  // Asserted on DOCUMENT ORDER rather than on geometry, which jsdom does not
+  // compute — and document order is what the reading order actually is.
+  it('puts the properties above the description', () => {
+    const el = detailWith({ projectFolder: '/repo' });
+
+    const folder = el.querySelector('[data-slot="task-folder"]')!;
+    const description = el.querySelector('[aria-label="Edit description"]')!;
+    expect(
+      folder.compareDocumentPosition(description) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // REPORTED as the Folder row breaking onto a second line. A wrapping flex
+  // item does not shrink, so `truncate` on the path could never take effect
+  // and the `project` tag dropped beneath it — the class IS the mechanism.
+  it('keeps the Folder row on one line', () => {
+    const el = detailWith({ projectFolder: '/a/very/long/path/to/a/repo' });
+
+    const row = el.querySelector('[data-slot="task-folder"]')!.parentElement!;
+    expect(row.className).not.toContain('flex-wrap');
+  });
+
+  it('still lets the LABELS row reflow, which is a set rather than one value', () => {
+    const el = detailWith({ task: { labels: ['one', 'two'] } });
+
+    const wrapping = [...el.querySelectorAll('div')].filter((node) =>
+      node.className.includes('flex-wrap'),
+    );
+    expect(wrapping.length).toBeGreaterThan(0);
+  });
+
+  it('can be resized, and remembers the width', () => {
+    const el = detailWith({});
+
+    const handle = el.querySelector('[role="separator"]');
+    expect(handle).not.toBeNull();
+    expect(handle?.getAttribute('aria-orientation')).toBe('vertical');
+  });
+
+  describe('the popup', () => {
+    const toggle = (name: string): HTMLButtonElement =>
+      document.body.querySelector<HTMLButtonElement>(
+        `[aria-label="${name}"]`,
+      ) as HTMLButtonElement;
+
+    afterEach(() => {
+      localStorage.clear();
+    });
+
+    it('opens the card as a modal, keeping the same body', () => {
+      const el = detailWith({ projectFolder: '/repo' });
+      expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+
+      act(() => {
+        toggle('Open in a popup').click();
+      });
+
+      const dialog = document.body.querySelector('[role="dialog"]');
+      expect(dialog).not.toBeNull();
+      expect(dialog?.getAttribute('aria-modal')).toBe('true');
+      // The SAME content, not a second copy of it: the properties the panel
+      // draws are the properties the popup draws.
+      expect(dialog?.querySelector('[data-slot="task-folder"]')).not.toBeNull();
+      expect(dialog?.querySelector('[aria-label="Status"]')).not.toBeNull();
+      void el;
+    });
+
+    it('drops the resize handle, which a centred modal has no edge for', () => {
+      detailWith({});
+
+      act(() => {
+        toggle('Open in a popup').click();
+      });
+
+      expect(document.body.querySelector('[role="separator"]')).toBeNull();
+    });
+
+    it('draws ONE close control, the dialog’s own', () => {
+      // The panel's ✕ is withheld in this arm — two of them a few pixels apart
+      // is the shape a shared header takes when neither shell gives one up.
+      detailWith({});
+
+      act(() => {
+        toggle('Open in a popup').click();
+      });
+
+      expect(
+        document.body.querySelectorAll('[aria-label="Close"]'),
+      ).toHaveLength(1);
+    });
+
+    it('goes back to the side panel from inside the popup', () => {
+      detailWith({});
+
+      act(() => {
+        toggle('Open in a popup').click();
+      });
+      act(() => {
+        toggle('Show in the side panel').click();
+      });
+
+      expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+      expect(document.body.querySelector('[role="separator"]')).not.toBeNull();
+    });
+
+    it('remembers the choice, so the next card opens the same way', () => {
+      // A preference rather than a per-open gesture: the panel is REMOUNTED
+      // per task id, so component state would forget this on the next card.
+      detailWith({});
+      act(() => {
+        toggle('Open in a popup').click();
+      });
+
+      act(() => {
+        root?.unmount();
+      });
+      container?.remove();
+      detailWith({ task: { id: 'another' } });
+
+      expect(document.body.querySelector('[role="dialog"]')).not.toBeNull();
+    });
+  });
+});
+
+/**
+ * A task IS a conversation with an agent, and the panel is where you reach it.
+ *
+ * REPORTED as "у меня должна быть возможность, прямо из таски, которая сейчас
+ * в прогрессе, когда я на неё нажимаю, перейти прямо в её текущий тред": until
+ * this existed the only route to that thread was to leave the board, open
+ * Chats and find it by name among every other conversation.
+ */
+describe('TaskDetail — the card’s own thread', () => {
+  // ICON-ONLY in the header, so the accessible name is the observable — which
+  // is also the whole of what a screen reader gets, and therefore the thing
+  // worth pinning.
+  const threadButton = (el: HTMLElement): HTMLElement | null =>
+    el.querySelector(
+      '[aria-label="Follow the agent"], [aria-label="Open the thread"]',
+    );
+
+  it('offers it, and hands back the run to open', () => {
+    const onOpenThread = vi.fn();
+    const el = detail({ runId: 'run-7', status: 'in_progress', onOpenThread });
+
+    act(() => {
+      (threadButton(el) as HTMLButtonElement).click();
+    });
+
+    expect(onOpenThread).toHaveBeenCalledWith('run-7');
+  });
+
+  it('says FOLLOW while the agent is in there, and OPEN once it is not', () => {
+    const working = detail({
+      runId: 'run-7',
+      status: 'in_progress',
+      onOpenThread: vi.fn(),
+    });
+    // Scoped to a working card the control would be missing from exactly the
+    // cards a reviewer opens: the conversation is the record of what was done.
+    const reviewed = detail({
+      runId: 'run-7',
+      status: 'in_review',
+      onOpenThread: vi.fn(),
+    });
+
+    expect(threadButton(working)?.getAttribute('aria-label')).toBe(
+      'Follow the agent',
+    );
+    expect(threadButton(reviewed)?.getAttribute('aria-label')).toBe(
+      'Open the thread',
+    );
+  });
+
+  it('draws nothing for a card that has never been run', () => {
+    expect(
+      threadButton(detail({ runId: null, onOpenThread: vi.fn() })),
+    ).toBeNull();
+  });
+
+  it('draws nothing where there is no way to navigate', () => {
+    // The harness, and any caller with no route out of the board — a control
+    // that cannot work is worse than its absence.
+    expect(
+      threadButton(detail({ runId: 'run-7', status: 'in_progress' })),
+    ).toBeNull();
+  });
+});
+
+/**
+ * The panel's own shape, after the Linear-shaped rework.
+ *
+ * Three separate reports in one sitting: "статус должен быть также в лейблах,
+ * то есть в этих параметрах, а не в хедере"; "кнопочку Run task нужно тоже
+ * передизайнить: сделать её меньше… переместить как-то в header"; and "футер
+ * мне не нравится: вот это «Created», когда «Updated»… нужно как-то под
+ * заголовок переместить".
+ */
+describe('TaskDetail — where things live', () => {
+  const slot = (el: HTMLElement, name: string): Element | null => {
+    const rows = [...el.querySelectorAll('div')];
+    return (
+      rows.find((row) => row.firstElementChild?.textContent === name) ?? null
+    );
+  };
+
+  it('puts Status among the properties, and not in the header', () => {
+    const el = detail({ status: 'todo' });
+
+    // The picker is still a picker — moving a card was reachable only by
+    // dragging it across the board before it existed.
+    const status = el.querySelector('[aria-label="Status"]');
+    expect(status).not.toBeNull();
+    expect(slot(el, 'Status')?.contains(status as Node)).toBe(true);
+  });
+
+  it('leads the HEADER with Run, above the title', () => {
+    const el = detail({ onRun: vi.fn() });
+    const run = buttonNamed(el, 'Run task');
+    const title = el.querySelector('[aria-label="Edit title"]');
+
+    expect(run).toBeDefined();
+    // Document order is the observable — jsdom computes no layout, and "is it
+    // in the header" is exactly "does it come before the title".
+    expect(
+      run.compareDocumentPosition(title as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('states when it was created directly under the title, not at the foot', () => {
+    const el = detail({});
+    // Found by its `<time>` elements rather than by a word, so the assertion
+    // survives a rewording of the line it is about.
+    const stamp = [...el.querySelectorAll('p')].find(
+      (node) => node.querySelector('time') !== null,
+    );
+    const properties = el.querySelector('h3');
+
+    expect(stamp).toBeDefined();
+    expect(
+      stamp!.compareDocumentPosition(properties as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('says only WHEN, never where the card came from', () => {
+    // `TASK_SOURCES` holds one member, so the word was a constant — and on a
+    // board called Geniro it rendered as `geniro`, which reads as the project
+    // name two rows above it. REPORTED as exactly that duplication.
+    const el = detail({ projectName: 'Geniro' });
+    const stamp = [...el.querySelectorAll('p')].find(
+      (node) => node.querySelector('time') !== null,
+    );
+
+    expect(stamp?.textContent).not.toContain('geniro');
+    expect(stamp?.textContent).toContain('Created');
+  });
+
+  it('groups the run configuration under its own caption', () => {
+    // Eleven rows in one undifferentiated column read as a form to fill in;
+    // the captions say which question each stretch answers.
+    const captions = [...detail({}).querySelectorAll('h3')].map(
+      (node) => node.textContent,
+    );
+
+    expect(captions).toEqual([
+      'Properties',
+      'Run configuration',
+      'Description',
+    ]);
+  });
+});
+
+/**
+ * The three smaller reports from the same sitting.
+ */
+const slotOf = (el: HTMLElement, name: string): Element | null => {
+  const rows = [...el.querySelectorAll('div')];
+  return (
+    rows.find((row) => row.firstElementChild?.textContent === name) ?? null
+  );
+};
+
+describe('TaskDetail — the panel’s remaining corrections', () => {
+  it('leads the header with the card’s identifier', () => {
+    // Where Linear puts its breadcrumb: it is the one string a user quotes
+    // elsewhere, so it leads the panel rather than sitting among properties.
+    const el = detail({ number: 12, projectTaskKey: 'GEN' });
+    const stamp = [...el.querySelectorAll('span')].find(
+      (node) => node.textContent === 'GEN-12',
+    );
+    const title = el.querySelector('[aria-label="Edit title"]');
+
+    expect(stamp).toBeDefined();
+    // Document order is the observable — jsdom computes no layout, so "is it
+    // in the header" is exactly "does it come before the title".
+    expect(
+      stamp!.compareDocumentPosition(title as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('draws no identifier for a card the backfill has not reached', () => {
+    expect(
+      detail({ number: null, projectTaskKey: 'GEN' }).textContent,
+    ).not.toContain('GEN-');
+  });
+
+  it('names the board the card is on, as a property row', () => {
+    // A readout for now, and a ROW because it is the one property here that
+    // will become a picker — "мы, возможно, сможем сменить проект в будущем".
+    const el = detail({ projectName: 'Geniro' });
+
+    expect(slotOf(el, 'Project')?.textContent).toContain('Geniro');
+  });
+
+  it('draws NO pencil over the description', () => {
+    // REPORTED as "когда мы наводим, там появляется какая-то иконка пэнсил…
+    // Нам она не нужна, она только портит всё". The border at rest is what
+    // answers "is this editable", and it does so without hovering — which is
+    // why the hover glyph was never carrying its weight, while it did sit over
+    // the corner where a description's first line ends.
+    const editor = detail({}).querySelector('[aria-label="Edit description"]');
+
+    expect(editor).not.toBeNull();
+    expect(editor?.querySelector('svg')).toBeNull();
+  });
+});
+
+/**
+ * Where a property's NAME sits against a value taller than one row.
+ *
+ * REPORTED against the Files row as "it's not on same line… like vertically":
+ * that row draws a row per file and then its own Attach control, and centring
+ * the name against the whole stack put `Files` in the gap between them, level
+ * with neither.
+ *
+ * jsdom computes no layout, so the classes are the observable — and here they
+ * ARE the mechanism rather than a proxy for it: the alignment is entirely the
+ * choice between centring the name against the stack and giving it a row box
+ * of the stack's own first-row height.
+ */
+describe('TaskDetail — a property name beside a stacked value', () => {
+  const rowFor = (el: HTMLElement, name: string): Element | null => {
+    const rows = [...el.querySelectorAll('div')];
+    return (
+      rows.find((row) => row.firstElementChild?.textContent === name) ?? null
+    );
+  };
+
+  it('aligns the Files name to the FIRST row, not to the middle', () => {
+    const el = detail({});
+    const row = rowFor(el, 'Files');
+
+    expect(row?.className).toContain('items-start');
+    // The name takes a box of the panel's own row height, which is what the
+    // list's first row also takes — so the two line up by construction rather
+    // than by an offset somebody has to re-tune.
+    expect(row?.firstElementChild?.className).toContain('min-h-8');
+  });
+
+  it('leaves a one-line row CENTRED, which is right for it', () => {
+    // Labels reflows within a line box the name is centred in the same 32px
+    // as; switching it to top alignment would break what already reads well.
+    const row = rowFor(detail({}), 'Labels');
+
+    expect(row?.className).toContain('items-center');
+    expect(row?.className).not.toContain('items-start');
+  });
+});
+
+/**
+ * One left edge down the value column.
+ *
+ * REPORTED as "параметр как-то криво выглядит — может быть за счёт иконок,
+ * может быть за счёт выравнивания", and it was BOTH, which is one cause: a
+ * ghost picker insets its label by its own `px-2` while a bare string sits at
+ * 0, and a leading glyph pushes the text right again by its own width — so the
+ * column had three different starts (plain text, a chip, a chip with a mark).
+ *
+ * The classes are the observable and here they ARE the mechanism: jsdom
+ * computes no layout, and the alignment is entirely which inset each value
+ * carries and whether a glyph precedes it.
+ */
+describe('TaskDetail — the value column’s left edge', () => {
+  it('insets a PLAIN value the way a picker insets its own label', () => {
+    const el = detail({ projectName: 'Geniro' });
+    const value = [...el.querySelectorAll('span')].find(
+      (node) => node.textContent === 'Geniro',
+    );
+
+    expect(value?.className).toContain('px-2');
+  });
+
+  it('drops the glyph from the STATUS trigger, keeping it on the rows', () => {
+    // The label beside it already says `Status`, so the mark said nothing the
+    // word did not — while costing this row its place in the column. The menu
+    // keeps its icons, where they help a reader pick.
+    const el = detail({ status: 'backlog' });
+    const trigger = el.querySelector('[aria-label="Status"]');
+
+    expect(trigger?.textContent).toContain('Backlog');
+    // The chevron is the picker's own affordance and is not a leading mark.
+    expect(trigger?.querySelectorAll('svg').length).toBe(1);
   });
 });

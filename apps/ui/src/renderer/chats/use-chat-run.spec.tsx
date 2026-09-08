@@ -24,6 +24,7 @@ import { type ChatRunState, useChatRun } from './use-chat-run';
 const run1: ChatRun = {
   id: 'r1',
   status: 'running',
+  taskIdentifier: null,
   awaiting: null,
   holdingFor: 0,
   shellsOpen: 0,
@@ -273,6 +274,61 @@ describe('useChatRun', () => {
 
     expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
     expect(harness.state().runsLoaded).toBe(true);
+  });
+
+  it('takes a run it has never listed into the sidebar when it announces', async () => {
+    // REPORTED as "i see task is running, but i dont see chat". A run started
+    // from the BOARD exists before this window hears of it, and the row update
+    // is a `prev.map` — so its announcements were dropped and the thread
+    // worked away unlisted.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    expect(harness.state().runs.map((run) => run.id)).toEqual(['r1', 'r2']);
+
+    const fromTheBoard = { ...run1, id: 'r9', title: 'Test task' };
+    chatApi.listChats.mockResolvedValue([fromTheBoard, run1, run2]);
+    await act(async () => {
+      emitRunStatus({ runId: 'r9', status: null, activity: 'Bash' });
+    });
+
+    expect(harness.state().runs.map((run) => run.id)).toEqual([
+      'r9',
+      'r1',
+      'r2',
+    ]);
+  });
+
+  it('asks for the listing ONCE per unknown run, not once per announcement', async () => {
+    // An activity announce fires on every tool call, several times a second,
+    // and the listing runs the pull-request capture pass over every run — so
+    // an unguarded adopt would be a fetch storm for the whole turn.
+    const { client, emitRunStatus } = makeClient();
+    await mount(client);
+    const before = chatApi.listChats.mock.calls.length;
+
+    for (const activity of ['Bash', 'Read', 'Edit']) {
+      await act(async () => {
+        emitRunStatus({ runId: 'r9', status: null, activity });
+      });
+    }
+
+    expect(chatApi.listChats.mock.calls.length).toBe(before + 1);
+  });
+
+  it('takes an unlisted run into the sidebar when the board opens it directly', async () => {
+    // The other half of the same report: "when i click on button chat inside
+    // task - i can see it, but not in list". Activating a run opens its
+    // transcript without ever consulting the listing, so the header had no
+    // row to draw a title, a status or a Stop from and read "New chat" over a
+    // working conversation.
+    const { client } = makeClient();
+    const harness = await mount(client);
+
+    const fromTheBoard = { ...run1, id: 'r9', title: 'Test task' };
+    chatApi.listChats.mockResolvedValue([fromTheBoard, run1, run2]);
+    await open(harness, 'r9');
+
+    expect(harness.state().runs.map((run) => run.id)).toContain('r9');
   });
 
   it('leaves the previous room before joining the next, and empties the transcript', async () => {

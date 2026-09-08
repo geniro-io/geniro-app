@@ -137,9 +137,12 @@ describe('AutopilotConductor', () => {
     expect(starts).toHaveLength(1);
   });
 
-  // `ask` would park forever: no approval expires, and a turn's silence
-  // deadline is suspended while it waits on a verdict.
-  it('forces acceptEdits and names itself as the starter', async () => {
+  // Any mode that can ASK parks forever: no approval expires, and a turn's
+  // silence deadline is suspended while it waits on a verdict. That included
+  // `acceptEdits`, which this used to send — it auto-accepts EDITS and routes
+  // every Bash call to the approval seam, so an unattended run stopped at the
+  // first command it wanted to run.
+  it('forces auto-approval and names itself as the starter', async () => {
     const { fetchMock, starts } = daemon({
       p1: {
         projectId: 'p1',
@@ -151,7 +154,7 @@ describe('AutopilotConductor', () => {
     await new AutopilotConductor(deps()).tick();
 
     expect(starts[0]?.body).toMatchObject({
-      approval: 'acceptEdits',
+      approval: 'auto',
       startedBy: 'autopilot',
       from: 'todo',
       cwd: '/wt/t1',

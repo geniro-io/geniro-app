@@ -2,6 +2,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import * as React from 'react';
 
 import type { ProfileColor } from '../../../shared/contracts';
+import { MenuAnchorContext } from './menu-anchor';
 import { PALETTE_BORDER_CLASS } from './palette';
 import { popoverSurface } from './popover';
 import { cn } from './utils';
@@ -136,17 +137,6 @@ const VIEWPORT_MARGIN = 8;
 
 /** Gap between a viewport-anchored panel and the trigger it hangs off. */
 const TRIGGER_GAP = 6;
-
-/**
- * What menus in this subtree are positioned against — see {@link Menu}'s
- * `anchor`. A container that CLIPS (`Dialog`, whose body scrolls) provides
- * `viewport`, so every picker inside it escapes without each one being passed a
- * prop through the chip that renders it. Defaults to `ancestor`, which is what
- * a menu in open layout wants.
- */
-export const MenuAnchorContext = React.createContext<'ancestor' | 'viewport'>(
-  'ancestor',
-);
 
 /**
  * The shortest a panel is shortened to, however little room there is.

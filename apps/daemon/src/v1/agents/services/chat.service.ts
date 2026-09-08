@@ -683,6 +683,12 @@ export class ChatService implements OnModuleInit {
      */
     taskId?: string;
     /**
+     * That card's own identifier (`GEN-12`), passed in rather than looked up:
+     * this module may not read the tasks module, and the caller holds both
+     * halves of it already. See `Run.taskIdentifier`.
+     */
+    taskIdentifier?: string;
+    /**
      * Which group to file this chat under, when the caller knows better than
      * the folder rule below.
      *
@@ -758,6 +764,7 @@ export class ChatService implements OnModuleInit {
         cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
         taskId: input.taskId ?? null,
+        taskIdentifier: input.taskIdentifier ?? null,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.

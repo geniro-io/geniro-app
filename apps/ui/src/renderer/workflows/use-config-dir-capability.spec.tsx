@@ -55,8 +55,12 @@ function caps(
  * and retry loop for an endpoint whose whole point is having one.
  */
 function Probe({ api }: { api: DaemonApis['capabilities'] | null }): null {
-  const capabilities = useCapabilities(api);
-  latest = configDirCapabilityFrom(capabilities, api !== null);
+  // BOTH halves of the widened return are taken: the selector no longer
+  // derives a `loading` of its own, because a derived one cannot clear after a
+  // failed read — that read fails open to `capabilities: null`, which is
+  // indistinguishable from "not answered yet" from out here.
+  const { capabilities, loading } = useCapabilities(api);
+  latest = configDirCapabilityFrom(capabilities, loading);
   return null;
 }
 
@@ -121,7 +125,7 @@ describe('configDirCapabilityFrom over useCapabilities', () => {
     expect(latest().unavailableReasonFor('cursor-agent')).toBeUndefined();
   });
 
-  it('stays UNKNOWN when the read fails, never falling back to "cannot"', async () => {
+  it('stays UNKNOWN when the read fails, never falling back to "cannot", and STOPS loading', async () => {
     // A failed capabilities read is not evidence about any CLI. Treating it as
     // a refusal would hide the field from the agent that does support one, and
     // the user would have no way to tell a broken daemon from a CLI limit.
@@ -130,6 +134,13 @@ describe('configDirCapabilityFrom over useCapabilities', () => {
     );
 
     expect(latest().unavailableReasonFor('claude')).toBeUndefined();
+    // The second half is the one this selector used to get wrong. `loading` was
+    // derived as `byAgent === null && hasApi`, and a failed read leaves
+    // `capabilities` null forever — so the waiting state never ended and
+    // `ConfigDirSelect` sat spinning for the life of the daemon handle, saying
+    // "still asking" about a probe that had given up. Unknown and SETTLED are
+    // two different answers and the caller needs both.
+    expect(latest().loading).toBe(false);
   });
 
   it('is not loading, and knows nothing, before a daemon handle exists', async () => {

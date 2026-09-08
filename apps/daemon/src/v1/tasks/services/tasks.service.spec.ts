@@ -1,4 +1,11 @@
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,6 +22,7 @@ import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TasksService } from './tasks.service';
 
@@ -24,6 +32,16 @@ import { TasksService } from './tasks.service';
  * would return whatever the test told it to and the conflict branch would
  * never be entered.
  */
+/**
+ * Where this spec's attachment deletes are aimed.
+ *
+ * Named explicitly rather than left to the service's default, which resolves
+ * `environment.userDataDir` — the one shared resource the specs redirect for
+ * themselves. Nothing is written here; the service only ever removes
+ * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ */
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
 describe('TasksService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: TasksService;
@@ -77,7 +95,13 @@ describe('TasksService (in-memory sqlite)', () => {
     events = new TaskEventBus();
     changes = [];
     events.allChanges().subscribe((e) => changes.push(e));
-    service = new TasksService(em, taskDao, projectDao, events);
+    service = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      events,
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
     const project = await projectDao.create({
       name: 'Board',
       folder: '/tmp/geniro-tasks-spec',
@@ -141,6 +165,20 @@ describe('TasksService (in-memory sqlite)', () => {
     // One winner means one redraw. A board told twice that the same card
     // arrived would be the same double-start seen from the client side.
     expect(changes).toHaveLength(1);
+  });
+
+  it('drops the card’s pasted images when the card is deleted', async () => {
+    // Nothing else can reach them once the row is gone — there is no surface
+    // in the app that lists a deleted card's files — so a screenshot of a
+    // console or a private repository would sit on disk for good.
+    const task = await service.create({ projectId, title: 'has a paste' });
+    const dir = join(ATTACHMENTS_ROOT, task.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'shot.png'), 'bytes');
+
+    await service.remove(task.id);
+
+    expect(existsSync(dir)).toBe(false);
   });
 
   it('emits on the task bus after a create, with the fixed board payload', async () => {
@@ -220,6 +258,23 @@ describe('TasksService (in-memory sqlite)', () => {
     // so the status alone would pass on both sides of the branch.
     expect(moved.position).toBe(0);
     expect((await taskDao.getById(task.id))?.position).toBe(0);
+  });
+
+  it('gives two SIMULTANEOUS creates different numbers and positions', async () => {
+    // The counter is bumped and read back across an await (`nextPositionIn`),
+    // on a per-request fork, so without a transaction around the pair both
+    // creates read the same counter and write the same absolute value — two
+    // cards holding one user-visible `GEN-12`, drawn on the board and, through
+    // `Run.taskIdentifier`, in the chat sidebar. Taking the number from the
+    // counter rather than from `max(number)` exists to prevent exactly that.
+    const [first, second] = await Promise.all([
+      service.create({ projectId, title: 'first' }),
+      service.create({ projectId, title: 'second' }),
+    ]);
+
+    expect(first.number).not.toBe(second.number);
+    expect(new Set([first.number, second.number]).size).toBe(2);
+    expect(first.position).not.toBe(second.position);
   });
 
   it('appends each new task to the end of its column', async () => {
@@ -500,5 +555,107 @@ describe('TasksService (in-memory sqlite)', () => {
     const renamed = await service.update(task.id, { title: 'renamed' });
 
     expect(renamed.dueDate).toBe('2026-09-30');
+  });
+});
+
+/**
+ * A card's NUMBER — the `12` of `GEN-12`.
+ *
+ * ASKED FOR as Linear's scheme, and the property that makes an identifier worth
+ * having is that it names one card for good.
+ */
+describe('TasksService — card numbering (in-memory sqlite)', () => {
+  let orm: MikroORM;
+  let service: TasksService;
+  let projectDao: ProjectDao;
+  let projectId: string;
+  let em: EntityManager;
+
+  beforeAll(async () => {
+    orm = await MikroORM.init(
+      defineConfig({
+        dbName: ':memory:',
+        entities: [Project, Task],
+        ignoreUndefinedInQuery: true,
+        allowGlobalContext: true,
+        namingStrategy: UnderscoreNamingStrategy,
+        discovery: { checkDuplicateFieldNames: false },
+      }),
+    );
+    await orm.schema.create();
+  });
+
+  afterAll(async () => {
+    await orm.close(true);
+  });
+
+  beforeEach(async () => {
+    await orm.schema.clear();
+    em = orm.em.fork();
+    const taskDao = new TaskDao(em);
+    projectDao = new ProjectDao(em);
+    service = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      new TaskEventBus(),
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
+    const project = await projectDao.create({
+      name: 'Geniro',
+      taskKey: 'GEN',
+      folder: realpathSync(tmpdir()),
+    });
+    await em.flush();
+    projectId = project.id;
+  });
+
+  it('numbers cards 1, 2, 3 as they are made', async () => {
+    const first = await service.create({ projectId, title: 'one' });
+    const second = await service.create({ projectId, title: 'two' });
+
+    expect(first.number).toBe(1);
+    expect(second.number).toBe(2);
+  });
+
+  it('never REUSES a number, even after the card holding it is deleted', async () => {
+    // The reason the counter is on the project rather than `max(number)`: two
+    // commits naming different work by one identifier is the failure this
+    // whole feature would otherwise introduce.
+    const first = await service.create({ projectId, title: 'one' });
+    await service.remove(first.id);
+    const second = await service.create({ projectId, title: 'two' });
+
+    expect(second.number).toBe(2);
+  });
+
+  it('counts per BOARD, so two projects both start at 1', async () => {
+    const other = await projectDao.create({
+      name: 'Other',
+      taskKey: 'OTH',
+      folder: realpathSync(tmpdir()),
+    });
+    await em.flush();
+
+    const mine = await service.create({ projectId, title: 'one' });
+    const theirs = await service.create({
+      projectId: other.id,
+      title: 'one',
+    });
+
+    expect(mine.number).toBe(1);
+    expect(theirs.number).toBe(1);
+  });
+
+  it('leaves the counter alone when the create is refused', async () => {
+    // The counter is bumped on the entity and written by the SAME flush that
+    // inserts the card, so a refusal further in must not consume a number —
+    // otherwise a board develops gaps for cards that never existed.
+    await expect(
+      service.create({ projectId: 'no-such-project', title: 'x' }),
+    ).rejects.toThrow();
+    const first = await service.create({ projectId, title: 'one' });
+
+    expect(first.number).toBe(1);
   });
 });

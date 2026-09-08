@@ -36,10 +36,16 @@ interface Stub {
   listTasks: ReturnType<typeof vi.fn>;
   reconcileTasks: ReturnType<typeof vi.fn>;
   moveTaskStatus: ReturnType<typeof vi.fn>;
+  attachTaskFile: ReturnType<typeof vi.fn>;
+  detachTaskFile: ReturnType<typeof vi.fn>;
 }
 
 function stubApis(
-  over: { moveTaskStatus?: ReturnType<typeof vi.fn> } = {},
+  over: {
+    moveTaskStatus?: ReturnType<typeof vi.fn>;
+    attachTaskFile?: ReturnType<typeof vi.fn>;
+    detachTaskFile?: ReturnType<typeof vi.fn>;
+  } = {},
 ): Stub {
   const listTasks = vi.fn().mockResolvedValue([task()]);
   // The board LOADS through reconcile: one call that also settles any run
@@ -52,6 +58,10 @@ function stubApis(
       .mockImplementation(({ moveTaskStatusDto }) =>
         Promise.resolve(task({ status: moveTaskStatusDto.to })),
       );
+  const attachTaskFile =
+    over.attachTaskFile ?? vi.fn().mockResolvedValue(task());
+  const detachTaskFile =
+    over.detachTaskFile ?? vi.fn().mockResolvedValue(task());
   const apis = {
     projects: {
       listProjects: vi.fn().mockResolvedValue([project()]),
@@ -62,9 +72,22 @@ function stubApis(
         .fn()
         .mockResolvedValue({ running: 0, waiting: 0, eligible: [] }),
     },
-    tasks: { listTasks, moveTaskStatus, reconcileTasks },
+    tasks: {
+      listTasks,
+      moveTaskStatus,
+      reconcileTasks,
+      attachTaskFile,
+      detachTaskFile,
+    },
   } as unknown as DaemonApis;
-  return { apis, listTasks, reconcileTasks, moveTaskStatus };
+  return {
+    apis,
+    listTasks,
+    reconcileTasks,
+    moveTaskStatus,
+    attachTaskFile,
+    detachTaskFile,
+  };
 }
 
 /** Mount the hook and hand back a live handle to its latest return value. */
@@ -182,6 +205,80 @@ describe('useBoard', () => {
     });
 
     expect(listTasks.mock.calls.length).toBe(before);
+  });
+
+  describe('attaching files', () => {
+    it('sends each attachment SEQUENTIALLY, in the order given', async () => {
+      // The hook's own doc block states this as a correctness property — "a
+      // batch sent in parallel would race past the daemon's cap" — so the
+      // ORDERING is what has to be pinned, not merely the eventual call count,
+      // which a `Promise.all` would satisfy just as well.
+      const releases: ((value: TaskDto) => void)[] = [];
+      const attachTaskFile = vi.fn().mockImplementation(
+        () =>
+          new Promise<TaskDto>((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      const { apis } = stubApis({ attachTaskFile });
+      const board = await mount(apis);
+
+      let pending: Promise<void> | null = null;
+      await act(async () => {
+        pending = board.current.attachFiles('t1', ['/a', '/b', '/c']);
+      });
+
+      // Only the FIRST call has gone out — a parallel fan-out would have
+      // invoked all three synchronously by now.
+      expect(attachTaskFile).toHaveBeenCalledTimes(1);
+      expect(attachTaskFile).toHaveBeenNthCalledWith(1, {
+        taskId: 't1',
+        attachTaskFileDto: { path: '/a' },
+      });
+
+      await act(async () => {
+        releases[0]?.(task());
+        await Promise.resolve();
+      });
+      expect(attachTaskFile).toHaveBeenCalledTimes(2);
+      expect(attachTaskFile).toHaveBeenNthCalledWith(2, {
+        taskId: 't1',
+        attachTaskFileDto: { path: '/b' },
+      });
+
+      await act(async () => {
+        releases[1]?.(task());
+        await Promise.resolve();
+      });
+      expect(attachTaskFile).toHaveBeenCalledTimes(3);
+      expect(attachTaskFile).toHaveBeenNthCalledWith(3, {
+        taskId: 't1',
+        attachTaskFileDto: { path: '/c' },
+      });
+
+      await act(async () => {
+        releases[2]?.(task());
+        await pending;
+      });
+    });
+
+    it('stops at the first refusal, having sent only what came before it', async () => {
+      const attachTaskFile = vi
+        .fn()
+        .mockResolvedValueOnce(task())
+        .mockRejectedValueOnce(new Error('daemon refused /b'));
+      const { apis } = stubApis({ attachTaskFile });
+      const board = await mount(apis);
+
+      await act(async () => {
+        await board.current.attachFiles('t1', ['/a', '/b', '/c']);
+      });
+
+      // The third file is never sent — a sequential loop that stops on error
+      // does not press on past the one that failed.
+      expect(attachTaskFile).toHaveBeenCalledTimes(2);
+      expect(board.current.error).toContain('daemon refused /b');
+    });
   });
 
   describe('collecting a settled run’s worktree', () => {

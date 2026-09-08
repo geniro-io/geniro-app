@@ -30,7 +30,17 @@
  * - GFM renders — `markdown-content.tsx` is ReactMarkdown + remarkGfm.
  * - A markdown image with a LOCAL path renders — `markdown-image.tsx` resolves
  *   it through `GET /v1/chats/:runId/image?path=`, which takes an absolute path
- *   or one relative to the run's cwd.
+ *   or one relative to the run's cwd. The bullet asks for the ABSOLUTE one
+ *   regardless, and that is a REPORT rather than a preference: an agent wrote
+ *   `![](out/ci723-assignee-rail.png)` and the transcript drew
+ *   `could not read out/ci723-assignee-rail.png`, because the base a relative
+ *   reference is measured against is the RUN's cwd and the agent had written
+ *   the file somewhere else — routinely, since a delegate, a workflow node or
+ *   a command run in a subdirectory all write relative to their own place. The
+ *   route still accepts a relative path (old transcripts are full of them, and
+ *   it is right when the two agree); the instruction simply stops recommending
+ *   the form that can be wrong, since the agent is the one party that knows
+ *   the absolute path for certain.
  * - A REMOTE image does not, and saying otherwise would be the one instruction
  *   here that produces a visibly broken transcript: the renderer's CSP is
  *   `img-src 'self' data:`, so an `http(s):` source is refused outright.
@@ -64,7 +74,7 @@ You are running inside Geniro, a desktop app. Your replies are rendered in a cha
 
 Renders:
 - GitHub-flavored markdown — headings, lists, tables, task lists, syntax-highlighted code fences, links, blockquotes.
-- Images, written as markdown: \`![alt](path)\`. The path must be a file on this machine, either absolute or relative to your working directory. When you have an image the user should see — a screenshot you captured, a diagram you rendered to a file — embed it this way instead of only naming its path. This is for a picture you already have: where a tool is offered for drawing the thing itself, that tool's output is a live card in this transcript, so prefer it over rendering your own image of the same thing.
+- Images, written as markdown: \`![alt](/full/path/to/file.png)\`. Give the FULL path to a file on this machine, always — a relative path is measured against this conversation's own working directory, which is frequently not the directory you wrote the file in, and the picture then fails to load. When you have an image the user should see — a screenshot you captured, a diagram you rendered to a file — embed it this way instead of only naming its path. This is for a picture you already have: where a tool is offered for drawing the thing itself, that tool's output is a live card in this transcript, so prefer it over rendering your own image of the same thing.
 
 Does not render:
 - Remote image URLs (\`http://\`, \`https://\`). This app's content security policy refuses them; only local file paths work.

@@ -981,6 +981,27 @@ describe('ChatService', () => {
     expect(run.cwd).toBe(realpathSync(dir));
   });
 
+  it('createChat carries the board task’s own identifier onto the RUN ROW', async () => {
+    // `BaseDao.create` takes a `Partial<Run>`, so deleting the
+    // `taskIdentifier:` line at the write site type-checks with no error —
+    // nothing here forwards the field for the compiler to catch. Read off the
+    // DAO's row rather than the returned wire object: `TaskRunsService`'s own
+    // spec asserts against a MOCKED `createChat` and `chat-list-item.spec.tsx`
+    // renders the component with a literal, so neither pins this hop. Without
+    // it a task run's sidebar card and every other reader of `Run.taskIdentifier`
+    // (see `persist-item.ts:160`'s wire projection) would carry `GEN-12`
+    // nowhere at all.
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      taskId: 'task-1',
+      taskIdentifier: 'GEN-12',
+    });
+
+    expect(runDao.runs.get(run.id)?.taskIdentifier).toBe('GEN-12');
+  });
+
   describe('createChat taking over a conversation the CLI already holds', () => {
     /** The three ordering invariants the adoption path states about itself. */
     it('leaves NO run behind when the CLI refuses the session', async () => {

@@ -7,6 +7,7 @@ import {
   computeRunOrder,
   isNonExecutableNode,
   onDemandNodeIds,
+  terminalNodeIds,
 } from './graph-order';
 
 function node(id: string): WorkflowNode {
@@ -157,6 +158,49 @@ describe('isNonExecutableNode', () => {
     expect(isNonExecutableNode(instructionBlock('note'))).toBe(true);
     expect(isNonExecutableNode(node('a'))).toBe(false);
     expect(isNonExecutableNode({ kind: 'trigger' })).toBe(false);
+  });
+});
+
+describe('terminalNodeIds', () => {
+  it('is the node a fan-out collects into, not every leaf that wrote late', () => {
+    const nodes = ['plan', 'a', 'b', 'sum'].map(node);
+    const edges = [
+      data('plan', 'a'),
+      data('plan', 'b'),
+      data('a', 'sum'),
+      data('b', 'sum'),
+    ];
+    expect([...terminalNodeIds(nodes, edges)]).toEqual(['sum']);
+  });
+
+  // A call edge grants a tool and orders nothing (`buildEdgeMaps`' own rule),
+  // so a node that answers callers and feeds no consumer is still where the
+  // walk finishes — counting call edges would leave a run with no conclusion.
+  it('is unaffected by a call edge leaving the node', () => {
+    const nodes = [node('worker'), node('helper')];
+    const edges = [call('worker', 'helper'), data('helper', 'worker')];
+    expect([...terminalNodeIds(nodes, edges)]).toEqual(['worker']);
+  });
+
+  it('excludes an on-demand callee, whose output answers its caller', () => {
+    // Called and fed by nothing: it produces one answer per call rather than
+    // the run's conclusion, however late the last of them arrives.
+    const nodes = [node('driver'), node('oracle')];
+    const edges = [call('driver', 'oracle')];
+    expect([...terminalNodeIds(nodes, edges)]).toEqual(['driver']);
+  });
+
+  it('excludes an instruction block, which never runs at all', () => {
+    const nodes = [node('writer'), instructionBlock('style')];
+    const edges = [instructionEdge('style', 'writer')];
+    expect([...terminalNodeIds(nodes, edges)]).toEqual(['writer']);
+  });
+
+  it('is empty when nothing qualifies, rather than naming a node that never ran', () => {
+    // The caller reads empty as "no opinion" and falls back to the whole
+    // transcript — naming a block here would file a report on a node with no
+    // transcript rows of its own, which is a card with no report at all.
+    expect([...terminalNodeIds([instructionBlock('style')], [])]).toEqual([]);
   });
 });
 

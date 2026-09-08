@@ -21,7 +21,9 @@ const mocks = vi.hoisted(() => ({
     running: 0,
     waiting: 0,
     eligible: [],
+    blocked: [],
   })),
+  listWorkflows: vi.fn(async () => []),
 }));
 
 vi.mock('../daemon-api', async (importOriginal) => ({
@@ -39,6 +41,11 @@ vi.mock('../daemon-api', async (importOriginal) => ({
       reconcileTasks: mocks.reconcileTasks,
     },
     chats: { listRunItems: mocks.listRunItems },
+    // The board reads the workflow library for its two target pickers. The
+    // real `createDaemonApis` returns every API class, so a double that omits
+    // one is the double drifting rather than a case worth guarding for.
+    workflows: { listWorkflows: mocks.listWorkflows },
+    agents: {},
   }),
 }));
 
@@ -137,6 +144,32 @@ describe('Tasks board', () => {
     expect(el.querySelectorAll('[role="group"]').length).toBe(
       Object.keys(TaskStatus).length,
     );
+  });
+
+  it('detects the machine’s CLIs once, never again on a later Chats→Tasks visit', async () => {
+    // The board is latch-mounted (see `App.tsx`) and only ever hidden with a
+    // class, so a Chats→Tasks→Chats→Tasks trip is `active` toggling on the
+    // SAME instance — re-probing on every one of those toggles spawns five
+    // child processes and two authenticated network calls for a list that is
+    // only ever consumed inside pickers the user has not opened yet.
+    window.geniro.detectClis = vi.fn(window.geniro.detectClis);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active={false} />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active={false} />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active />);
+    });
+
+    expect(window.geniro.detectClis).toHaveBeenCalledTimes(1);
   });
 
   it('moves a card on drop, telling the daemon which column it left', async () => {
@@ -354,10 +387,11 @@ describe('the column surface', () => {
     });
   });
 
-  it('leaves the status unstated when the board-level New task is used', async () => {
-    // Absent, not null: the daemon defaults an unstated status to `backlog`,
-    // and sending one explicitly would make the board own a default the
-    // daemon already owns.
+  it('files a board-level New task into the backlog it says it will', async () => {
+    // The dialog now DRAWS the status — the same picker the card's own panel
+    // draws — so it sends the value on screen rather than leaving the field
+    // absent for the daemon to default. The card is the same either way; what
+    // changed is that a form stating an answer has to create that answer.
     const el = await board();
 
     const add = [...el.querySelectorAll('button')].find((node) =>
@@ -387,7 +421,60 @@ describe('the column surface', () => {
     const sent = mocks.createTask.mock.calls[0]?.[0] as {
       createTaskDto: Record<string, unknown>;
     };
-    expect('status' in sent.createTaskDto).toBe(false);
+    expect(sent.createTaskDto.status).toBe('backlog');
+  });
+
+  it('creates the card with the properties the dialog was given', async () => {
+    // The report this dialog was rebuilt for: it could name a title, a
+    // description and a folder, so every other property of a new card had to
+    // be set by creating it and opening it again. The rows are the panel's
+    // own now, and what they hold is what gets created.
+    const el = await board();
+
+    const add = [...el.querySelectorAll('button')].find(
+      (node) => node.getAttribute('aria-label') === 'Add a task to To do',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      add.click();
+    });
+    const title = document.body.querySelector(
+      '#new-task-title',
+    ) as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set;
+    await act(async () => {
+      setter?.call(title, 'Triaged on the way in');
+      title.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      (
+        document.body.querySelector(
+          '[data-menu-trigger][aria-label="Priority"]',
+        ) as HTMLButtonElement
+      ).click();
+    });
+    const urgent = [...document.body.querySelectorAll('[role="option"]')].find(
+      (node) => node.textContent === 'Urgent',
+    ) as HTMLElement;
+    await act(async () => {
+      urgent.click();
+    });
+    const submit = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Add task',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      submit.click();
+    });
+
+    expect(mocks.createTask).toHaveBeenCalledWith({
+      createTaskDto: expect.objectContaining({
+        title: 'Triaged on the way in',
+        status: 'todo',
+        priority: 'urgent',
+      }),
+    });
   });
 
   it('says where to drop while a card is over the column', async () => {
@@ -572,6 +659,22 @@ describe('the column surface', () => {
     expect(lifted).toEqual([]);
   });
 
+  // New task is GHOST, matching the panel's Run task — asked for in those
+  // words. It was the filled `default`, whose amber block was the loudest
+  // thing on a screen whose subject is the cards below it. jsdom computes no
+  // layout, but the variant IS a class list, so this is the mechanism rather
+  // than a proxy: the fill and the hover tint are what the two variants differ
+  // by, and nothing else here can distinguish them.
+  it('draws New task as quietly as the panel draws Run task', async () => {
+    const el = await board();
+
+    const button = [...el.querySelectorAll('header button')].find((node) =>
+      node.textContent?.includes('New task'),
+    ) as HTMLButtonElement;
+    expect(button.className).not.toContain('bg-primary');
+    expect(button.className).toContain('hover:bg-accent');
+  });
+
   // The REVERSE of what an earlier pass pinned, and the defect it was written
   // against is still closed — by a different mechanism.
   //
@@ -622,13 +725,45 @@ describe('the column surface', () => {
       /^(Run task|Starting…|Running)$/.test((node.textContent ?? '').trim()),
     ) as HTMLButtonElement;
 
+  /**
+   * Press Run and confirm the dialog it opens.
+   *
+   * A press no longer starts the agent by itself: every run may carry a
+   * sentence of its own ("the tests still fail"), so the button opens
+   * `RunTaskDialog` and the dialog is what starts the run. Both controls read
+   * `Run task`, so the confirm is found INSIDE the dialog rather than by its
+   * words.
+   */
+  const runTask = async (el: HTMLElement, prompt = ''): Promise<void> => {
+    await act(async () => {
+      runButton(el).click();
+    });
+    if (prompt !== '') {
+      const box = el.querySelector('#run-task-prompt') as HTMLTextAreaElement;
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )?.set;
+      await act(async () => {
+        setValue?.call(box, prompt);
+        box.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }
+    const confirm = [
+      ...el.querySelectorAll<HTMLButtonElement>(
+        '[data-slot="run-task"] button',
+      ),
+    ].find((node) => (node.textContent ?? '').trim() === 'Run task')!;
+    await act(async () => {
+      confirm.click();
+    });
+  };
+
   it('runs a task: worktree first, then the agent inside it', async () => {
     const el = await board();
     await openDetail(el);
 
-    await act(async () => {
-      runButton(el).click();
-    });
+    await runTask(el);
 
     // The worktree must exist before the daemon is asked to run in it — the
     // daemon runs no git and cannot make one for itself.
@@ -653,6 +788,53 @@ describe('the column surface', () => {
     expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
   });
 
+  it('asks what to add before it starts anything', async () => {
+    // ASKED FOR as "it should always ask for additional prompt optional". A
+    // press that ran the agent on the spot left nowhere to say the one thing
+    // the card does not already say — which on a SECOND press is the whole
+    // message ("the tests still fail").
+    const el = await board();
+    await openDetail(el);
+
+    await act(async () => {
+      runButton(el).click();
+    });
+
+    expect(el.querySelector('[data-slot="run-task"]')).not.toBeNull();
+    expect(mocks.startTaskRun).not.toHaveBeenCalled();
+    expect(window.geniro.prepareTaskWorktree).not.toHaveBeenCalled();
+  });
+
+  it('carries what was typed there into the run', async () => {
+    const el = await board();
+    await openDetail(el);
+
+    await runTask(el, 'The tests still fail.');
+
+    expect(mocks.startTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startTaskRunDto: expect.objectContaining({
+          prompt: 'The tests still fail.',
+        }),
+      }),
+    );
+  });
+
+  it('sends NO prompt when the dialog was left empty', async () => {
+    // Absent rather than blank: the daemon reads an absent prompt as "the
+    // press said nothing", which is what makes a continued thread receive the
+    // card's own brief instead of an empty message.
+    const el = await board();
+    await openDetail(el);
+
+    await runTask(el);
+
+    const sent = mocks.startTaskRun.mock.calls[0]?.[0] as {
+      startTaskRunDto: Record<string, unknown>;
+    };
+    expect('prompt' in sent.startTaskRunDto).toBe(false);
+  });
+
   // A project's folder is the DEFAULT for its board, not the law: one board
   // routinely holds work across several checkouts. A card that names its own
   // is cut from that one, and the project's is what an unnamed card takes —
@@ -662,9 +844,7 @@ describe('the column surface', () => {
     const el = await board();
     await openDetail(el);
 
-    await act(async () => {
-      runButton(el).click();
-    });
+    await runTask(el);
 
     expect(window.geniro.prepareTaskWorktree).toHaveBeenCalledWith({
       taskId: 't1',
@@ -677,9 +857,7 @@ describe('the column surface', () => {
     const el = await board();
     await openDetail(el);
 
-    await act(async () => {
-      runButton(el).click();
-    });
+    await runTask(el);
 
     // Otherwise every failed press leaves a checkout on disk that nothing
     // collects: the boot reaper only ever sees what a previous SESSION left.
@@ -700,9 +878,7 @@ describe('the column surface', () => {
     const el = await board();
     await openDetail(el);
 
-    await act(async () => {
-      runButton(el).click();
-    });
+    await runTask(el);
 
     expect(mocks.startTaskRun).not.toHaveBeenCalled();
     expect(el.textContent).toContain('fatal: not a git repository');

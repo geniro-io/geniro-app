@@ -624,9 +624,25 @@ export class ItemDao extends BaseDao<Item> {
     kind: ItemKind,
     role?: string,
     txEm?: EntityManager,
+    /**
+     * Narrow to rows written by particular NODES of a workflow run.
+     *
+     * Absent means every node, which is what a chat run wants — it has one, and
+     * its rows carry no node id at all. A workflow run's transcript is N nodes
+     * interleaved in one stream, so "the latest row" is whichever of them wrote
+     * last; the task board passes the run's terminal nodes here to ask for the
+     * conclusion instead. An EMPTY set is not the same as absent and is the
+     * caller's to avoid: it would match nothing.
+     */
+    nodeIds?: readonly string[],
   ): Promise<Pick<Item, 'id'> | null> {
     const [row] = await this.getRepo(txEm).find(
-      { runId, kind, ...(role === undefined ? {} : { role }) },
+      {
+        runId,
+        kind,
+        ...(role === undefined ? {} : { role }),
+        ...(nodeIds === undefined ? {} : { nodeId: { $in: [...nodeIds] } }),
+      },
       {
         orderBy: { seq: 'desc' },
         limit: 1,

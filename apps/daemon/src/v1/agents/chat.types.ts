@@ -2763,6 +2763,12 @@ export const RunWireSchema = z.object({
     .describe(
       'Board task this run was started for; null for a run nobody started from a card. The board reads it to tell its own runs apart from every other conversation on the machine',
     ),
+  taskIdentifier: z
+    .string()
+    .nullable()
+    .describe(
+      "That card's own identifier — `GEN-12` — or null for a run no card started, and for a task run made before this was recorded. Denormalized onto the run so the chat list can label a thread with the card it is working without joining two more tables",
+    ),
   /**
    * Where this run sits in the pinned band at the top of its own group (or of
    * the loose list, when it belongs to none); null while it is not pinned.

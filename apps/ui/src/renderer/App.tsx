@@ -63,6 +63,19 @@ const VIEW_TITLE: Record<AppView, string> = {
 export function App(): React.JSX.Element {
   const [phase, setPhase] = useState<Phase>('loading');
   const [view, setView] = useState<AppView>('chats');
+  /**
+   * A thread another view asked to have opened, held until `Chats` takes it.
+   *
+   * The board's cards each carry a run — a task IS a conversation with an
+   * agent — and "open the thread this card is being worked in" therefore has
+   * to cross two screens. It is App state for the same reason the view is:
+   * `Chats` owns which run is active but not which SCREEN is on show, and a
+   * jump has to do both. The same split the notification path already uses,
+   * except that one is two independent listeners on one main-process event and
+   * this one has no event to share, so the run id travels as a prop and is
+   * cleared by the callback once opened.
+   */
+  const [threadRequest, setThreadRequest] = useState<string | null>(null);
   // Workflows mounts lazily on first visit, then stays mounted (hidden) like
   // Chats — unmounting on nav used to silently discard every unsaved builder
   // edit when the user glanced at Chats/Settings mid-composition.
@@ -382,6 +395,10 @@ export function App(): React.JSX.Element {
                   setSettingsSection(section);
                   setView('settings');
                 }}
+                openRunId={threadRequest}
+                onRunOpened={() => {
+                  setThreadRequest(null);
+                }}
               />
             ) : (
               <EmptyState>Connecting to the daemon…</EmptyState>
@@ -407,6 +424,13 @@ export function App(): React.JSX.Element {
                   handle={handle}
                   client={clientRef.current}
                   active={view === 'tasks'}
+                  // Both writes, in this order: the request is what `Chats`
+                  // acts on, and switching first would show the previous
+                  // thread for a frame.
+                  onOpenThread={(runId) => {
+                    setThreadRequest(runId);
+                    setView('chats');
+                  }}
                 />
               ) : null}
             </div>

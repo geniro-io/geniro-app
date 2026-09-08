@@ -117,4 +117,34 @@ describe('Dialog — pickers inside the scrolling body', () => {
     )!;
     expect(panel.style.position).toBe('fixed');
   });
+
+  it('gives the title slot the whole row, so a rich title can use its own edge', () => {
+    // A title is not always a string — the task panel puts its whole header in
+    // here and pushes the icon-only controls to the far edge with `ml-auto`.
+    // A shrink-to-fit slot leaves that nothing to push into, and every control
+    // stayed hugging the left with the card's width empty beside it: REPORTED
+    // as "buttons still from left". jsdom computes no layout, so the class IS
+    // the mechanism rather than a proxy for it.
+    act(() => {
+      root.render(
+        <Dialog
+          open
+          onClose={vi.fn()}
+          title={
+            <div className="flex">
+              <span>GEN-7</span>
+              <button type="button" className="ml-auto">
+                Open
+              </button>
+            </div>
+          }>
+          body
+        </Dialog>,
+      );
+    });
+
+    const slot = document.querySelector('[data-slot="dialog-title"]')!;
+    expect(slot.className).toContain('flex-1');
+    expect(slot.querySelector('button')?.className).toContain('ml-auto');
+  });
 });

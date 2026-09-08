@@ -15,14 +15,28 @@
 
 import * as runtime from '../runtime';
 import type {
+  AddTaskAttachmentDto,
+  AttachTaskFileDto,
   CreateTaskDto,
+  LocalImageDto,
   MoveTaskStatusDto,
   ReconcileTasksDto,
   StartTaskRunDto,
+  TaskAttachment,
   TaskDeletedDto,
   TaskDto,
   UpdateTaskDto,
 } from '../models/index';
+
+export interface TasksApiAddTaskAttachmentRequest {
+    taskId: string;
+    addTaskAttachmentDto: AddTaskAttachmentDto;
+}
+
+export interface TasksApiAttachTaskFileRequest {
+    taskId: string;
+    attachTaskFileDto: AttachTaskFileDto;
+}
 
 export interface TasksApiCreateTaskRequest {
     createTaskDto: CreateTaskDto;
@@ -30,6 +44,11 @@ export interface TasksApiCreateTaskRequest {
 
 export interface TasksApiDeleteTaskRequest {
     taskId: string;
+}
+
+export interface TasksApiDetachTaskFileRequest {
+    taskId: string;
+    attachmentId: string;
 }
 
 export interface TasksApiListTasksRequest {
@@ -43,6 +62,11 @@ export interface TasksApiMoveTaskStatusRequest {
 
 export interface TasksApiReadTaskRequest {
     taskId: string;
+}
+
+export interface TasksApiReadTaskImageRequest {
+    taskId: string;
+    path: string;
 }
 
 export interface TasksApiReconcileTasksRequest {
@@ -63,6 +87,116 @@ export interface TasksApiUpdateTaskRequest {
  * 
  */
 export class TasksApi extends runtime.BaseAPI {
+
+    /**
+     * 
+     */
+    async addTaskAttachmentRaw(requestParameters: TasksApiAddTaskAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskAttachment>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling addTaskAttachment().'
+            );
+        }
+
+        if (requestParameters['addTaskAttachmentDto'] == null) {
+            throw new runtime.RequiredError(
+                'addTaskAttachmentDto',
+                'Required parameter "addTaskAttachmentDto" was null or undefined when calling addTaskAttachment().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/attachments`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['addTaskAttachmentDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async addTaskAttachment(requestParameters: TasksApiAddTaskAttachmentRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskAttachment> {
+        const response = await this.addTaskAttachmentRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async attachTaskFileRaw(requestParameters: TasksApiAttachTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling attachTaskFile().'
+            );
+        }
+
+        if (requestParameters['attachTaskFileDto'] == null) {
+            throw new runtime.RequiredError(
+                'attachTaskFileDto',
+                'Required parameter "attachTaskFileDto" was null or undefined when calling attachTaskFile().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/files`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['attachTaskFileDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async attachTaskFile(requestParameters: TasksApiAttachTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.attachTaskFileRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
 
     /**
      * 
@@ -153,6 +287,59 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async deleteTask(requestParameters: TasksApiDeleteTaskRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDeletedDto> {
         const response = await this.deleteTaskRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async detachTaskFileRaw(requestParameters: TasksApiDetachTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling detachTaskFile().'
+            );
+        }
+
+        if (requestParameters['attachmentId'] == null) {
+            throw new runtime.RequiredError(
+                'attachmentId',
+                'Required parameter "attachmentId" was null or undefined when calling detachTaskFile().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/files/{attachmentId}`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+        urlPath = urlPath.replace(`{${"attachmentId"}}`, encodeURIComponent(String(requestParameters['attachmentId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'DELETE',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async detachTaskFile(requestParameters: TasksApiDetachTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.detachTaskFileRaw(requestParameters, initOverrides);
         return await response.value();
     }
 
@@ -301,6 +488,62 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async readTask(requestParameters: TasksApiReadTaskRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
         const response = await this.readTaskRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readTaskImageRaw(requestParameters: TasksApiReadTaskImageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<LocalImageDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling readTaskImage().'
+            );
+        }
+
+        if (requestParameters['path'] == null) {
+            throw new runtime.RequiredError(
+                'path',
+                'Required parameter "path" was null or undefined when calling readTaskImage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['path'] != null) {
+            queryParameters['path'] = requestParameters['path'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/image`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readTaskImage(requestParameters: TasksApiReadTaskImageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<LocalImageDto> {
+        const response = await this.readTaskImageRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

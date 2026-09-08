@@ -47,6 +47,28 @@ export class Project extends TimestampsEntity {
   folder!: string;
 
   /**
+   * The short prefix every card on this board is numbered under — `GEN-12`.
+   *
+   * DERIVED from the name at creation (`projectKey`) and then owned by the row:
+   * renaming a project must not renumber cards that have already been quoted
+   * in a commit message or a chat. Nullable only for rows that predate
+   * numbering, which the backfill fills in on the next launch.
+   */
+  @Property({ type: 'string', nullable: true })
+  taskKey: string | null = null;
+
+  /**
+   * The highest card number handed out on this board.
+   *
+   * On the PROJECT rather than computed from `max(task.number)`, because the
+   * cards it counts are deletable: numbering off a live maximum would hand the
+   * next card the number of one that was thrown away, and two commits would
+   * then name different work by the same identifier.
+   */
+  @Property({ type: 'integer' })
+  taskCounter: number = 0;
+
+  /**
    * The sidebar group this project's task runs file themselves into. A plain
    * id with no FK, matching `Run.groupId`: deleting the group must release the
    * project rather than delete it, so this is nulled and never cascaded.

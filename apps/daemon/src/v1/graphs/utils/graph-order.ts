@@ -81,6 +81,48 @@ export function onDemandNodeIds(
 }
 
 /**
+ * The nodes a workflow ENDS at: executable nodes whose output feeds nobody.
+ *
+ * "Feeds nobody" is asked of DATA edges alone, on `buildEdgeMaps`' own rule —
+ * a call edge grants a tool and orders nothing, so a node that answers callers
+ * and hands its own text to no consumer is still where the walk finishes.
+ *
+ * It exists for the task board: a workflow run's closing report is whatever a
+ * terminal node said last, and asking the transcript for its highest `seq`
+ * instead returns whichever node of a fan-out happened to write last — which,
+ * for the shape workflows are actually built in, is arbitrary.
+ *
+ * An on-demand callee is excluded for the same reason it is excluded from the
+ * walk: it produces one answer per call to whoever called it, so its output is
+ * not the run's conclusion however late it arrives. A graph whose every node is
+ * one (or that has no executable node at all) yields the empty set, which the
+ * caller must read as "no opinion" rather than as "no report".
+ */
+export function terminalNodeIds(
+  nodes: readonly { id: string; kind: string }[],
+  edges: readonly { from: string; to: string; kind: string }[],
+): Set<string> {
+  const feedsSomeone = new Set<string>();
+  for (const edge of edges) {
+    if (edge.kind === 'data') {
+      feedsSomeone.add(edge.from);
+    }
+  }
+  const onDemand = onDemandNodeIds(nodes, edges);
+  const terminal = new Set<string>();
+  for (const node of nodes) {
+    if (
+      !isNonExecutableNode(node) &&
+      !feedsSomeone.has(node.id) &&
+      !onDemand.has(node.id)
+    ) {
+      terminal.add(node.id);
+    }
+  }
+  return terminal;
+}
+
+/**
  * The node kinds the DAG walk can launch. Everything else is a node that never
  * runs at all — today an instruction block, whose text is composed into the
  * turns of the agents it is wired to and which starts no CLI of its own.

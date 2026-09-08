@@ -8,16 +8,32 @@ import {
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
+import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
+import { taskIdentifier } from '../../projects/utils/project-key';
+import { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
-import type { StartTaskRun, TaskWire } from '../tasks.types';
+import {
+  type ResolvedAgentTarget,
+  type ResolvedRunTarget,
+  type StartTaskRun,
+  type TaskWire,
+} from '../tasks.types';
+import {
+  isRunTargetProblem,
+  resolveRunTarget,
+  RUN_TARGET_PROBLEM_CODE,
+  RUN_TARGET_PROBLEM_REASON,
+} from '../utils/run-target';
+import { parseTaskFiles } from '../utils/task-files';
 import {
   composeTaskPrompt,
   TASK_REPORT_INSTRUCTIONS,
+  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
 } from '../utils/task-prompt';
 import { TasksService } from './tasks.service';
 
@@ -74,6 +90,7 @@ export class TaskRunsService {
     private readonly tasks: TasksService,
     private readonly chats: ChatService,
     private readonly queue: ProjectQueueService,
+    private readonly executor: GraphExecutorService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -138,11 +155,13 @@ export class TaskRunsService {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
     const project = await this.requireProject(task.projectId, em);
-    const agentKind = input.agentKind ?? project.agentKind;
-    if (agentKind === null || agentKind === undefined) {
+    // Most specific first: this press, then the card, then the project. The
+    // first rung naming a target decides whether an agent or a workflow runs.
+    const target = resolveRunTarget([input, task, project], input.startedBy);
+    if (isRunTargetProblem(target)) {
       throw new BadRequestException(
-        'TASK_RUN_NO_AGENT',
-        `neither this request nor project ${project.id} names an agent to run`,
+        RUN_TARGET_PROBLEM_CODE[target.reason],
+        `${RUN_TARGET_PROBLEM_REASON[target.reason]} (${project.id})`,
       );
     }
     await this.assertNotAlreadyRunning(task, em);
@@ -157,44 +176,277 @@ export class TaskRunsService {
       to: 'in_progress',
     });
 
+    // A card that has already been worked CONTINUES its own thread rather than
+    // opening a second one beside it. REPORTED as "now i can run already
+    // completed task - and it will create new thread", then settled in one
+    // line: "let's even not ask user to create new chat - let's always continue
+    // in existing one". The conversation IS the card's history — what was
+    // tried, what the user said about it, what the agent found — and starting
+    // cold discards all of it and leaves two threads for one card in a sidebar
+    // that now labels both `GEN-12`.
+    //
+    // Before the create arms rather than inside them, because both are the
+    // same decision: the run this card already holds is the run it should be
+    // worked in, whichever engine made it.
+    // A workflow target never continues a chat thread — the two engines share
+    // no channel — and the reverse is ruled out inside `resumableRun`. Between
+    // them a press only ever resumes a run of the engine it resolved to.
+    if (target.kind === 'agent') {
+      const resumed = await this.resume(task, input, target, em);
+      if (resumed !== null) {
+        return resumed;
+      }
+    }
+
     // Held so `abandon` can take the run down with the rest. Without it a
-    // failure after creation leaves a chat whose `taskId` points at a card that
+    // failure after creation leaves a run whose `taskId` points at a card that
     // no longer names it, working directory already pruned by the caller.
     let runId: string | null = null;
     try {
+      if (target.kind === 'workflow') {
+        const run = await this.startWorkflowRun(target.workflowSlug, {
+          task,
+          project,
+          input,
+        });
+        runId = run.id;
+        // No `sendMessage` here, and that is the arm's whole difference: a
+        // graph's seed prompt IS its opening message, persisted by the
+        // executor before it walks. There is no second channel to send on —
+        // `POST /v1/chats/:runId/messages` is chat-only.
+        return await this.recordRun(taskId, run.id, input);
+      }
+
       const run = await this.chats.createChat({
-        agentKind,
+        agentKind: target.agentKind,
         cwd: input.cwd,
         startSha: input.startSha,
         startDirty: input.startDirty,
-        model: input.model ?? project.model ?? undefined,
-        effort: input.effort ?? project.effort ?? undefined,
-        approval: input.approval ?? project.approval ?? undefined,
-        configDir: input.configDir ?? project.configDir ?? undefined,
-        customInstructions: this.composeInstructions(input.customInstructions),
+        model: target.model ?? undefined,
+        effort: target.effort ?? undefined,
+        approval: target.approval ?? undefined,
+        configDir: target.configDir ?? undefined,
+        customInstructions: this.composeInstructions(
+          input.customInstructions,
+          'agent',
+        ),
         // The card's own title, so the thread is findable in a sidebar that
         // lists it beside every other conversation. `ChatTitleService` leaves
         // a titled run alone, so this is not overwritten later.
         title: task.title,
         taskId: task.id,
+        // And what that card is CALLED, written onto the run beside the id it
+        // belongs to. The chat list draws it as the thread's own label, which
+        // is the whole reason it is denormalized: the sidebar holds run rows
+        // and no board — see `Run.taskIdentifier`.
+        ...identifierOf(task, project),
         // The PROJECT's group rather than the folder rule: the run works in a
         // worktree, a path nothing has ever been filed under.
         groupId: project.groupId,
       });
 
       runId = run.id;
-      const wire = await this.tasks.update(taskId, {
-        runId: run.id,
-        branch: input.branch,
-        worktreePath: input.cwd,
-      });
-
-      await this.chats.sendMessage(run.id, composeTaskPrompt(task));
+      const wire = await this.recordRun(taskId, run.id, input);
+      await this.chats.sendMessage(run.id, this.brief(task, input));
       return wire;
     } catch (error) {
-      await this.abandon(taskId, input.from, runId);
+      await this.abandon(taskId, input.from, runId, target.kind);
       throw error;
     }
+  }
+
+  /**
+   * Start the graph arm.
+   *
+   * The three overrides it passes are the whole of what a task run needs the
+   * executor to do differently, and each is an answer the library route has no
+   * way to give: the card's `taskId` (so `TaskSettleService` can move it when
+   * the graph finishes), the card's own title (so the sidebar names the WORK
+   * rather than restating which workflow ran), and the project's group (a
+   * worktree being a path no auto-file rule has ever seen).
+   */
+  private startWorkflowRun(
+    slug: string,
+    context: { task: Task; project: Project; input: StartTaskRun },
+  ): Promise<{ id: string }> {
+    const { task, project, input } = context;
+    return this.executor.startRunBySlug(slug, {
+      cwd: input.cwd,
+      prompt: this.brief(task, input),
+      customInstructions: this.composeInstructions(
+        input.customInstructions,
+        'workflow',
+      ),
+      taskId: task.id,
+      ...identifierOf(task, project),
+      title: task.title,
+      groupId: project.groupId,
+    });
+  }
+
+  /**
+   * Continue the card's existing thread, or answer null when there is none to
+   * continue and a new one has to be made.
+   *
+   * The thread is continued only when it is the thread this press RESOLVES to.
+   * Continuity is worth having because the conversation is the card's history,
+   * but it is worth having only for the target the card now names: a card
+   * re-pointed at another agent, or at a workflow, would otherwise go on
+   * running the old one for good, with the panel showing the new one and no
+   * way out short of deleting the run.
+   *
+   * The resolved settings are applied to the thread before the turn starts, for
+   * the same reason — a model or an approval mode changed on the card is a
+   * change to how the next turn runs, not to how the next NEW thread runs. This
+   * is also what makes the autopilot's forced approval hold on this path:
+   * `chat.service.ts` reads the mode off the RUN row and falls back to `ask`,
+   * so a resumed unattended turn would otherwise park on a permission card
+   * forever, holding its slot and its worktree while the failure breaker sees
+   * nothing wrong.
+   *
+   * A run still WORKING is not a disqualifier — `assertNotAlreadyRunning` has
+   * already refused the press by the time this is reached.
+   *
+   * On failure the card is put back where it came from, and the RUN is left
+   * exactly as it is. That is the whole difference from `abandon`, which
+   * deletes what it started: this thread is the card's history, and a send
+   * that failed is not a reason to destroy it.
+   */
+  private async resume(
+    task: Task,
+    input: StartTaskRun,
+    target: ResolvedAgentTarget,
+    em: EntityManager,
+  ): Promise<TaskWire | null> {
+    const run = await this.resumableRun(task, target, em);
+    if (run === null) {
+      return null;
+    }
+    try {
+      // The card is re-pointed at its own run BEFORE the turn starts, on the
+      // create path's own reasoning: `recordRun` also writes the worktree and
+      // branch this press prepared, and the settle path reads them.
+      const wire = await this.recordRun(task.id, run.id, input);
+      // ONLY the fields that actually resolved, because `updateSettings`
+      // branches on a key's PRESENCE and not on its value. A null carried
+      // through is not "leave it alone" but an instruction: `configDir: null`
+      // reaches `moveToConfigDir`, which refuses outright for a CLI that reads
+      // no config directory at all — so every re-press on a cursor-agent card
+      // would 400 — and `model: null` is a CLEAR that takes the run's context
+      // window and model parameters with it. An unset rung omits the key,
+      // which is what the create arm's `?? undefined` already does.
+      const resolved = {
+        ...(target.approval === null ? {} : { approval: target.approval }),
+        // Omitted when it already IS the run's model, not only when it is
+        // unset. `updateSettings` reads a PRESENT `model` as a CHANGE and
+        // clears the run's context window and model parameters with it, so a
+        // re-press on an unchanged card would silently drop a `1m` window or
+        // an `optimize_for` the user picked inside that thread — the very loss
+        // the null-vs-absent split above exists to prevent, reached by sending
+        // a value rather than a null. `moveToConfigDir` takes the same stance
+        // one field over: a picker can re-choose what is already chosen.
+        ...(target.model === null || target.model === run.model
+          ? {}
+          : { model: target.model }),
+        ...(target.effort === null ? {} : { effort: target.effort }),
+        ...(target.configDir === null ? {} : { configDir: target.configDir }),
+      };
+      if (Object.keys(resolved).length > 0) {
+        await this.chats.updateSettings(run.id, resolved);
+      }
+      await this.chats.sendMessage(run.id, this.continuation(task, input));
+      return wire;
+    } catch (error) {
+      await this.tasks.moveStatus(task.id, {
+        from: 'in_progress',
+        to: input.from,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * The card's own run, when it is one this press can actually continue.
+   *
+   * FIVE states disqualify a run, and each one is a real card rather than a
+   * defensive branch: the card has never been run; its run was DELETED by the
+   * user (the conversation is gone, so there is nothing to continue); its run
+   * is a WORKFLOW run, which has no chat channel to send on — `sendMessage` is
+   * guarded by `assertChatRun` and would throw `NOT_A_CHAT_RUN`; its run is
+   * ARCHIVED, which the daemon holds inert on purpose (`RUN_ARCHIVED`); or the
+   * card has since been re-pointed at a DIFFERENT agent, so continuing would
+   * send the new target's brief to the old CLI. In every one of them the answer
+   * is the same and it is not an error: make a new thread.
+   */
+  private async resumableRun(
+    task: Task,
+    target: ResolvedAgentTarget,
+    em: EntityManager,
+  ): Promise<Run | null> {
+    if (task.runId === null) {
+      return null;
+    }
+    const run = await this.runDao.getById(task.runId, em);
+    if (
+      !run ||
+      run.workflowId !== null ||
+      run.archivedAt !== null ||
+      !isTerminalRunStatus(run.status) ||
+      run.agentKind !== target.agentKind
+    ) {
+      return null;
+    }
+    return run;
+  }
+
+  /**
+   * What a NEW thread opens with: the card's brief, plus whatever the user
+   * added to this press.
+   *
+   * The addition goes after the description and BEFORE the attachment list,
+   * which stays last for the reason `composeTaskPrompt` records — a CLI names
+   * the conversation from this text, and a list of paths at the top titles the
+   * chat after somebody's folder.
+   */
+  private brief(task: Task, input: StartTaskRun): string {
+    return composeTaskPrompt(
+      task,
+      parseTaskFiles(task.attachments),
+      input.prompt,
+    );
+  }
+
+  /**
+   * What a CONTINUED thread is sent, which is deliberately not the same thing.
+   *
+   * The user's own words when they wrote any: the brief is already in this
+   * conversation, and repeating it would bury the one new sentence under a
+   * paragraph the agent has read before.
+   *
+   * The brief again when they wrote none, and that is the useful default
+   * rather than a filler: pressing Run a second time with nothing to add means
+   * "work this card again", and the card may have CHANGED since the first
+   * press — an edited description, a file attached — so the brief is both the
+   * honest restatement and the only way those edits reach the agent.
+   */
+  private continuation(task: Task, input: StartTaskRun): string {
+    const added = input.prompt?.trim() ?? '';
+    return added === '' ? this.brief(task, input) : added;
+  }
+
+  /**
+   * Write the run onto the card — the other end of the edge, in one update.
+   */
+  private recordRun(
+    taskId: string,
+    runId: string,
+    input: StartTaskRun,
+  ): Promise<TaskWire> {
+    return this.tasks.update(taskId, {
+      runId,
+      branch: input.branch,
+      worktreePath: input.cwd,
+    });
   }
 
   /**
@@ -208,6 +460,7 @@ export class TaskRunsService {
     taskId: string,
     from: Task['status'],
     runId: string | null,
+    kind: ResolvedRunTarget['kind'] = 'agent',
   ): Promise<void> {
     try {
       // The CARD first. Everything here is best-effort, and of the two the card
@@ -232,9 +485,17 @@ export class TaskRunsService {
     // `Task.runId` are two ends of one edge, and a chat left naming a card
     // that no longer names it back is the disagreement `run.entity.ts` says
     // nothing writes.
+    //
+    // Routed by ENGINE, because both deletes are kind-guarded: `chats.delete`
+    // asserts a chat run and `deleteRun` asserts a workflow one, so sending a
+    // graph run to the chat teardown throws `NOT_A_CHAT_RUN` — swallowed by
+    // the catch below, leaving exactly the orphaned run row this block exists
+    // to prevent, and leaving it silently.
     if (runId !== null) {
       try {
-        await this.chats.delete(runId);
+        await (kind === 'workflow'
+          ? this.executor.deleteRun(runId)
+          : this.chats.delete(runId));
       } catch (error) {
         this.logger.warn(
           `could not delete run ${runId} after a failed start: ${
@@ -251,11 +512,16 @@ export class TaskRunsService {
    * Theirs first, on `composeSystemPrompt`'s ordering: general before
    * specific, and the report is the specific half.
    */
-  private composeInstructions(own: string | undefined): string {
+  private composeInstructions(
+    own: string | undefined,
+    kind: ResolvedRunTarget['kind'],
+  ): string {
+    const ask =
+      kind === 'workflow'
+        ? TASK_REPORT_INSTRUCTIONS_WORKFLOW
+        : TASK_REPORT_INSTRUCTIONS;
     const user = own?.trim() ?? '';
-    return user === ''
-      ? TASK_REPORT_INSTRUCTIONS
-      : `${user}\n\n${TASK_REPORT_INSTRUCTIONS}`;
+    return user === '' ? ask : `${user}\n\n${ask}`;
   }
 
   /**
@@ -291,7 +557,7 @@ export class TaskRunsService {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return;
     }
-    const queue = await this.queue.read(project.id);
+    const queue = await this.queue.readRaw(project.id);
     if (queue.breakerOpen) {
       throw new ConflictException(
         'AUTOPILOT_BREAKER_OPEN',
@@ -346,4 +612,21 @@ export class TaskRunsService {
     }
     return project;
   }
+}
+
+/**
+ * The card's identifier for the run row, or nothing at all.
+ *
+ * A SPREAD rather than a value, because both create inputs spell the field
+ * `taskIdentifier?: string` — optional, not nullable, exactly as `taskId` is —
+ * so a board that predates numbering says nothing rather than sending a null
+ * the input has no shape for. `taskIdentifier` itself already answers null for
+ * a card with no number or a project with no key.
+ */
+function identifierOf(
+  task: Task,
+  project: Project,
+): { taskIdentifier?: string } {
+  const identifier = taskIdentifier(project.taskKey, task.number);
+  return identifier === null ? {} : { taskIdentifier: identifier };
 }

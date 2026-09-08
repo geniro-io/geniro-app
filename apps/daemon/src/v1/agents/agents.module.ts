@@ -361,6 +361,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // what it loaded, and that report is what keeps the MCP panel off a cold
     // re-dial.
     McpHarvestStore,
+    // Exported for the tasks module: a card's description holds pictures too —
+    // a pasted screenshot, a diagram dropped in — and how a local picture
+    // reaches the screen has ONE reader in this app.
+    LocalImageService,
     ItemDao,
     NodeStateDao,
     CallContextDao,

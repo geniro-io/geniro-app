@@ -21,6 +21,7 @@ import {
 import type { RunWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
+import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
@@ -29,7 +30,12 @@ import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { StartTaskRun } from '../tasks.types';
+import {
+  AUTOPILOT_APPROVAL,
+  RUN_TARGET_PROBLEM_CODE,
+} from '../utils/run-target';
 import { TASK_REPORT_INSTRUCTIONS } from '../utils/task-prompt';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TaskRunsService } from './task-runs.service';
 import { TasksService } from './tasks.service';
@@ -41,6 +47,16 @@ import { TasksService } from './tasks.service';
  * entered. `ChatService` is the one double — it needs the whole agent
  * substrate, and what this service asks of it is two calls.
  */
+/**
+ * Where this spec's attachment deletes are aimed.
+ *
+ * Named explicitly rather than left to the service's default, which resolves
+ * `environment.userDataDir` — the one shared resource the specs redirect for
+ * themselves. Nothing is written here; the service only ever removes
+ * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ */
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
 describe('TaskRunsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: TaskRunsService;
@@ -58,6 +74,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let worktree: string;
   let createChat: ReturnType<typeof vi.fn>;
   let sendMessage: ReturnType<typeof vi.fn>;
+  let updateSettings: ReturnType<typeof vi.fn>;
+  let startWorkflowRun: ReturnType<typeof vi.fn>;
+  let deleteWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteChat: ReturnType<typeof vi.fn>;
 
   /**
@@ -69,6 +88,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   const runWire = (id: string): RunWire => ({
     id,
     status: 'pending',
+    taskIdentifier: null,
     awaiting: null,
     holdingFor: 0,
     shellsOpen: 0,
@@ -134,7 +154,13 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     taskDao = new TaskDao(em);
     projectDao = new ProjectDao(em);
     runDao = new RunDao(em);
-    tasks = new TasksService(em, taskDao, projectDao, new TaskEventBus());
+    tasks = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      new TaskEventBus(),
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and
     // wave every second start through.
@@ -152,12 +178,48 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       return runWire(id);
     });
     sendMessage = vi.fn(async () => undefined);
-    deleteChat = vi.fn(async () => ({ deleted: true }));
+    // A REAL purge, not a stub answering `{ deleted: true }` about nothing —
+    // the "does NOT delete the run" spec below asserts the row SURVIVES, and
+    // that assertion means nothing against a double that removes no row.
+    deleteChat = vi.fn(async (id: string) => {
+      await runDao.hardDeleteIncludingSoftDeleted({ id }, em);
+      return { deleted: true };
+    });
+    updateSettings = vi.fn(async () => undefined);
     const chats = {
       createChat,
       sendMessage,
+      updateSettings,
       delete: deleteChat,
     } as unknown as ChatService;
+    // The graph engine's double writes a real run row for `createChat`'s own
+    // reason: the double-start guard asks the RUN whether it has settled, and
+    // a workflow-targeted card must be refused a second start exactly as an
+    // agent-targeted one is.
+    startWorkflowRun = vi.fn(
+      async (
+        slug: string,
+        input: { taskId?: string; title?: string; groupId?: string | null },
+      ) => {
+        const id = `wf-run-${(runSeq += 1)}`;
+        await runDao.create({
+          id,
+          workflowId: slug,
+          status: 'running',
+          agentKind: null,
+          cwd: worktree,
+          taskId: input.taskId ?? null,
+          groupId: input.groupId ?? null,
+          title: input.title ?? null,
+        });
+        return runWire(id);
+      },
+    );
+    deleteWorkflowRun = vi.fn(async () => ({ deleted: true }));
+    const executor = {
+      startRunBySlug: startWorkflowRun,
+      deleteRun: deleteWorkflowRun,
+    } as unknown as GraphExecutorService;
     service = new TaskRunsService(
       em,
       taskDao,
@@ -166,6 +228,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       tasks,
       chats,
       new ProjectQueueService(em, projectDao, taskDao, runDao),
+      executor,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -185,6 +248,154 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
     return task;
   };
+
+  describe('the workflow arm', () => {
+    /** Point the CARD at a workflow, leaving the project's agent in place. */
+    const seedWorkflowCard = async (slug = 'dev-team') => {
+      const task = await seed();
+      const row = await taskDao.getById(task.id);
+      (row as Task).workflowSlug = slug;
+      await em.flush();
+      return task;
+    };
+
+    it('starts a graph run instead of a chat when the card names a workflow', async () => {
+      const task = await seedWorkflowCard();
+
+      const started = await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+      expect(createChat).not.toHaveBeenCalled();
+      expect(started).toMatchObject({
+        status: 'in_progress',
+        runId: 'wf-run-1',
+        worktreePath: worktree,
+      });
+    });
+
+    it('hands the executor the card id, its title and the project’s group', async () => {
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledWith(
+        'dev-team',
+        expect.objectContaining({
+          taskId: task.id,
+          title: 'ship it',
+          groupId: 'group-7',
+          cwd: worktree,
+        }),
+      );
+    });
+
+    it('seeds the graph with the card’s brief and sends no second message', async () => {
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, start());
+
+      // A graph's seed prompt IS its opening message — there is no
+      // `POST /messages` for a workflow run to follow up on.
+      expect(startWorkflowRun.mock.calls[0]?.[1]).toMatchObject({
+        prompt: 'ship it',
+      });
+      expect(sendMessage).not.toHaveBeenCalled();
+      void task;
+    });
+
+    it('asks a graph for a PROSE report, never naming a tool it cannot see', async () => {
+      const task = await seedWorkflowCard();
+
+      await service.start(task.id, start());
+
+      // The render family is registered by `ChatService` alone, so no node of
+      // this graph can call `report_findings`. Naming it would ask every node
+      // for a call it will look for and fail to find.
+      const instructions = String(
+        startWorkflowRun.mock.calls[0]?.[1]?.customInstructions ?? '',
+      );
+      expect(instructions).not.toContain('report_findings');
+      expect(instructions).toContain('close with a report');
+      void task;
+    });
+
+    it('deletes the GRAPH run when the start fails, not through the chat path', async () => {
+      const task = await seedWorkflowCard();
+      // Fail after the run exists, which is the window `abandon` is for. The
+      // real method is captured BEFORE the spy replaces it: binding
+      // `tasks.update` afterwards binds the SPY, so every later call re-enters
+      // it and the recursion is swallowed by `abandon`'s own catch — the test
+      // then passes while reverting nothing.
+      const real = tasks.update.bind(tasks);
+      const boom = new Error('worktree vanished');
+      const update = vi
+        .spyOn(tasks, 'update')
+        .mockRejectedValueOnce(boom)
+        .mockImplementation(real);
+
+      await expect(service.start(task.id, start())).rejects.toThrow(boom);
+
+      // `chats.delete` asserts a CHAT run, so sending a graph run there throws
+      // `NOT_A_CHAT_RUN` into a catch that swallows it — leaving the orphaned
+      // run row this routing exists to prevent, and leaving it silently.
+      expect(deleteWorkflowRun).toHaveBeenCalledWith('wf-run-1');
+      expect(deleteChat).not.toHaveBeenCalled();
+      // The card really did come back, which is what proves `abandon` ran to
+      // completion rather than dying partway and being swallowed.
+      expect((await taskDao.getById(task.id))?.status).toBe('todo');
+      update.mockRestore();
+    });
+
+    it('lets the PROJECT name the workflow for every card on its board', async () => {
+      const project = await projectDao.getById(projectId);
+      (project as Project).agentKind = null;
+      (project as Project).workflowSlug = 'board-wide';
+      await em.flush();
+      const task = await seed();
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).toHaveBeenCalledWith(
+        'board-wide',
+        expect.anything(),
+      );
+    });
+
+    it('lets a CARD’s agent override a project pinned to a workflow', async () => {
+      const project = await projectDao.getById(projectId);
+      (project as Project).agentKind = null;
+      (project as Project).workflowSlug = 'board-wide';
+      await em.flush();
+      const task = await seed();
+      const row = await taskDao.getById(task.id);
+      (row as Task).agentKind = 'cursor-agent';
+      await em.flush();
+
+      await service.start(task.id, start());
+
+      expect(startWorkflowRun).not.toHaveBeenCalled();
+      expect(createChat).toHaveBeenCalledWith(
+        expect.objectContaining({ agentKind: 'cursor-agent' }),
+      );
+    });
+
+    it('refuses to start a workflow-targeted card unattended', async () => {
+      // The resolver's own refusal is pinned in `run-target.spec.ts` and the
+      // queue's handout keeps such a card out of `eligible` in
+      // `task-queue.service.spec.ts` — but neither reaches this throw, which is
+      // the line: a workflow's nodes each carry their own approval mode, so
+      // there is no single field to force the way an agent run's is, and an
+      // autopilot start against one must never reach the executor at all.
+      const task = await seedWorkflowCard();
+
+      await expect(
+        service.start(task.id, { ...start(), startedBy: 'autopilot' }),
+      ).rejects.toMatchObject({
+        errorCode: RUN_TARGET_PROBLEM_CODE['workflow-unattended'],
+      });
+      expect(startWorkflowRun).not.toHaveBeenCalled();
+    });
+  });
 
   it('records the run, its branch and its worktree on the card', async () => {
     const task = await seed();
@@ -211,6 +422,40 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(createChat).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id, groupId: 'group-7' }),
     );
+  });
+
+  it('hands the chat the card’s IDENTIFIER as well as its id', async () => {
+    // The sidebar labels a task thread `GEN-12`, and it holds run rows and no
+    // board — so the run has to carry the name. It is two rows away (the
+    // card's number, the project's key) and `v1/agents` may not read either,
+    // which is why this service is what writes it down.
+    const named = await projectDao.create({
+      name: 'Geniro',
+      folder: '/tmp/geniro-task-runs-named',
+      agentKind: 'claude',
+      taskKey: 'GEN',
+    });
+    const task = await tasks.create({ projectId: named.id, title: 'ship it' });
+    await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+
+    await service.start(task.id, start());
+
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ taskIdentifier: `GEN-${task.number}` }),
+    );
+  });
+
+  it('says NOTHING for a board that has no key', async () => {
+    // Absent rather than null: the create input spells it `taskIdentifier?:
+    // string`, exactly as `taskId` is spelled, so a board from before
+    // identifiers existed sends no field at all and the thread simply draws no
+    // label — the same answer as a chat nobody started from a card.
+    const task = await seed();
+
+    await service.start(task.id, start());
+
+    const sent = createChat.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect('taskIdentifier' in sent).toBe(false);
   });
 
   it('falls back to the project’s standing run configuration', async () => {
@@ -277,23 +522,292 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     });
   });
 
-  it('allows a re-run once the previous run has SETTLED', async () => {
-    const task = await seed();
-    await service.start(task.id, start());
-    // Review sent it back. The card still names the run that did the work —
-    // that is its history, not a claim on it.
+  /** Work the card, settle its run, and send it back to `todo` for a re-run. */
+  const settleAndReturn = async (taskId: string): Promise<void> => {
     const finished = await runDao.getById('run-1');
     if (finished) {
       finished.status = 'completed';
       await em.flush();
     }
-    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'todo' });
+    await tasks.moveStatus(taskId, { from: 'in_progress', to: 'todo' });
     createChat.mockClear();
+    sendMessage.mockClear();
+  };
+
+  it('re-runs a settled card in the thread it already has', async () => {
+    // REPORTED as "now i can run already completed task - and it will create
+    // new thread", and settled as "let's always continue in existing one". The
+    // conversation is the card's history; a second thread discards it and
+    // leaves two rows in the sidebar under one card's identifier.
+    //
+    // Continuity is the point here, and a matching agent must not be read as a
+    // change just because the target is now consulted on every start.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
 
     await expect(service.start(task.id, start())).resolves.toMatchObject({
       status: 'in_progress',
+      runId: 'run-1',
     });
+    expect(createChat).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+  });
+
+  it('sends a continued thread the user’s OWN words, not the brief again', async () => {
+    // The brief is already in this conversation. Repeating it buries the one
+    // new sentence under a paragraph the agent has read before.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+
+    await service.start(task.id, start({ prompt: 'The tests still fail.' }));
+
+    expect(sendMessage).toHaveBeenCalledWith('run-1', 'The tests still fail.');
+  });
+
+  it('opens a NEW thread when the old one was deleted', async () => {
+    // A card whose conversation the user threw away has nothing to continue,
+    // and that is not an error — it is the ordinary way back to a fresh start.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    await runDao.hardDeleteIncludingSoftDeleted({ id: 'run-1' }, em);
+
+    await service.start(task.id, start());
+
     expect(createChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a NEW thread when the old one is ARCHIVED', async () => {
+    // An archived chat is inert by design — `sendMessage` refuses it with
+    // `RUN_ARCHIVED` — so continuing into one would turn a press of Run into a
+    // failure the user cannot act on from the board.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const shelved = await runDao.getById('run-1');
+    if (shelved) {
+      shelved.archivedAt = new Date();
+      await em.flush();
+    }
+
+    await service.start(task.id, start());
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a NEW thread when the card has been re-pointed at another agent', async () => {
+    // The Agent control is settable per card, and a card that has run once
+    // would otherwise keep running the CLI it was first started on — panel
+    // showing the new one, every press continuing the old thread, and no way
+    // out short of deleting the run.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const row = await taskDao.getById(task.id);
+    (row as Task).agentKind = 'cursor-agent';
+    await em.flush();
+
+    await service.start(task.id, start());
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    expect(createChat.mock.calls[0]?.[0]).toMatchObject({
+      agentKind: 'cursor-agent',
+    });
+    expect(sendMessage).not.toHaveBeenCalledWith('run-1', expect.anything());
+  });
+
+  it('forces the autopilot approval onto a thread it CONTINUES', async () => {
+    // The deadlock the design calls non-negotiable, reached by the re-run path:
+    // `ChatService` reads the mode off the RUN row and falls back to `ask`, so
+    // an unattended turn resumed into a thread opened under any other mode
+    // parks on a permission card forever — holding its slot and its worktree,
+    // and invisible to the failure breaker, because parked is not failed.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    updateSettings.mockClear();
+
+    await service.start(task.id, { ...start(), startedBy: 'autopilot' });
+
+    expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+    // EXACTLY that key and no other — not `objectContaining`, which is what let
+    // the defect below through review. `updateSettings` branches on a key being
+    // PRESENT, so an unresolved rung carried as an explicit null is an
+    // instruction rather than silence.
+    expect(updateSettings).toHaveBeenCalledWith('run-1', {
+      approval: AUTOPILOT_APPROVAL,
+    });
+  });
+
+  it('sends NO settings patch when the card resolves none of them', async () => {
+    // `configDir: null` is not "leave it alone": it reaches `moveToConfigDir`,
+    // which refuses outright for a CLI that reads no config directory, so every
+    // re-press on a cursor-agent card answered 400 — and `model: null` is a
+    // CLEAR that takes the run's context window and model parameters with it.
+    // This project names an agent and nothing else, so the correct patch is no
+    // call at all.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    updateSettings.mockClear();
+
+    await service.start(task.id, start());
+
+    expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('sends ONLY the rungs that resolved, never the ones that did not', async () => {
+    // The mixed case the two specs above cannot reach on their own: one field
+    // set on the card leaves the other three unresolved, and each of those is
+    // destructive if carried through as a null.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const row = await taskDao.getById(task.id);
+    (row as Task).effort = 'high';
+    await em.flush();
+    updateSettings.mockClear();
+
+    await service.start(task.id, start());
+
+    expect(updateSettings).toHaveBeenCalledWith('run-1', { effort: 'high' });
+  });
+
+  it('sends the two DESTRUCTIVE rungs when they resolve, and nothing else', async () => {
+    // `model` and `configDir` are the pair whose presence carries a side
+    // effect, so each needs a positive case of its own: with only the
+    // absent-case and `effort` covered, a mistyped arm (`configDir:
+    // target.model`) or a dropped `model` line would pass every other spec
+    // here.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const row = await taskDao.getById(task.id);
+    (row as Task).model = 'opus';
+    (row as Task).configDir = '/tmp/geniro-profile';
+    await em.flush();
+    updateSettings.mockClear();
+
+    await service.start(task.id, start());
+
+    expect(updateSettings).toHaveBeenCalledWith('run-1', {
+      model: 'opus',
+      configDir: '/tmp/geniro-profile',
+    });
+  });
+
+  it('omits a model the run is ALREADY on', async () => {
+    // `updateSettings` reads a present `model` as a CHANGE and clears the
+    // run's context window and model parameters with it, so re-pressing Run on
+    // an unchanged card would silently drop a `1m` window the user set inside
+    // that thread. Sending the value is as destructive as sending a null here;
+    // only sending nothing is safe.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    const row = await taskDao.getById(task.id);
+    (row as Task).model = 'opus';
+    const runRow = await runDao.getById('run-1');
+    (runRow as Run).model = 'opus';
+    await em.flush();
+    updateSettings.mockClear();
+
+    await service.start(task.id, start());
+
+    expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('does NOT delete the run when continuing it fails', async () => {
+    // The whole difference between `resume`'s failure branch and `abandon`:
+    // this thread is the card's history, and a transient send failure is not a
+    // reason to destroy the conversation, its items and its attachments.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    sendMessage.mockRejectedValueOnce(new Error('agent refused'));
+
+    await expect(service.start(task.id, start())).rejects.toThrow(
+      'agent refused',
+    );
+
+    expect(deleteChat).not.toHaveBeenCalled();
+    expect(await runDao.getById('run-1')).not.toBeNull();
+    const stored = await taskDao.getById(task.id);
+    expect(stored?.status).toBe('todo');
+  });
+
+  /** Run a workflow-targeted card once, settle it, and return it to `todo`. */
+  const runWorkflowAndReturn = async (taskId: string): Promise<void> => {
+    const row = await taskDao.getById(taskId);
+    (row as Task).workflowSlug = 'dev-team';
+    await em.flush();
+    await service.start(taskId, start());
+    const finished = await runDao.getById('wf-run-1');
+    if (finished) {
+      finished.status = 'completed';
+      await em.flush();
+    }
+    await tasks.moveStatus(taskId, { from: 'in_progress', to: 'todo' });
+    createChat.mockClear();
+    sendMessage.mockClear();
+    startWorkflowRun.mockClear();
+  };
+
+  it('opens a second WORKFLOW run rather than continuing the old one', async () => {
+    // A workflow target never resumes: the two engines share no channel, so a
+    // re-run of a graph card is a second walk of the graph.
+    const task = await seed();
+    await runWorkflowAndReturn(task.id);
+
+    await service.start(task.id, start());
+
+    expect(startWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('refuses to send a chat message into a WORKFLOW run', async () => {
+    // The card is re-pointed at an agent AFTER a graph run, so the press now
+    // resolves to the agent arm while the run it holds is still a workflow
+    // run. `sendMessage` is guarded by `assertChatRun` and would answer
+    // `NOT_A_CHAT_RUN`, leaving the card permanently un-runnable.
+    //
+    // The row carries an `agentKind` as well, which a workflow run does not
+    // normally have: without it the agent-match disqualifier one line below
+    // already refuses this run, and the `workflowId` clause — the one this
+    // test exists for — is never reached.
+    const task = await seed();
+    await runWorkflowAndReturn(task.id);
+    const graphRun = await runDao.getById('wf-run-1');
+    if (graphRun) {
+      graphRun.agentKind = 'claude';
+      await em.flush();
+    }
+    const row = await taskDao.getById(task.id);
+    (row as Task).workflowSlug = null;
+    await em.flush();
+
+    await service.start(task.id, start());
+
+    expect(createChat).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalledWith('wf-run-1', expect.anything());
+  });
+
+  it('carries the press’s own words into a NEW thread’s brief', async () => {
+    const task = await seed({
+      title: 'Fix the cap',
+      description: 'Off by one.',
+    });
+
+    await service.start(task.id, start({ prompt: 'Start with the parser.' }));
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      'run-1',
+      'Fix the cap\n\nOff by one.\n\nStart with the parser.',
+    );
   });
 
   it('returns the card to where it was when the chat cannot be created', async () => {
@@ -334,7 +848,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
 
     await expect(service.start(task.id, start())).rejects.toMatchObject({
-      message: expect.stringContaining('names an agent to run'),
+      message: expect.stringContaining('no agent or workflow'),
     });
     expect(createChat).not.toHaveBeenCalled();
   });

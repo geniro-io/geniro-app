@@ -6,17 +6,31 @@ const TICK_INTERVAL_MS = 20_000;
 /** How long any one daemon call may take before the tick gives up on it. */
 const FETCH_TIMEOUT_MS = 10_000;
 
+/** How much of an unparseable error body one log line may carry. */
+const MAX_DETAIL_CHARS = 300;
+
 /**
  * The approval mode an autopilot run is forced to.
  *
- * `ask` is refused rather than discouraged: no approval request expires
- * (`approval-registry.ts` holds a plain Map with no timer), and a turn's own
- * silence deadline is SUSPENDED while it waits on a verdict — so an unattended
- * `ask` turn does not time out, it waits forever, holding its slot against the
- * cap and its worktree on disk. `acceptEdits` auto-approves edit-kind requests
- * and parks the rest, which is what an unattended run needs.
+ * A mode that can ASK is refused rather than discouraged: no approval request
+ * expires (`approval-registry.ts` holds a plain Map with no timer), and a
+ * turn's own silence deadline is SUSPENDED while it waits on a verdict — so an
+ * unattended turn does not time out, it waits forever, holding its slot against
+ * the cap and its worktree on disk.
+ *
+ * `acceptEdits` cannot serve: it auto-accepts EDITS and routes every Bash call
+ * to the approval seam anyway, so an unattended run parks on the first command
+ * it wants to run — the deadlock above, reached by the value chosen to prevent
+ * it.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/tasks/utils/run-target.ts`
+ * `AUTOPILOT_APPROVAL`, which states the whole measurement and is the one that
+ * ENFORCES this — it overrides whatever the request carried. The copy here is
+ * only what the request carries. This process imports no daemon source (that
+ * would pull the Nest graph into the main bundle), so the value is spelled
+ * once on each side; change one and change the other.
  */
-const AUTOPILOT_APPROVAL = 'acceptEdits';
+const AUTOPILOT_APPROVAL = 'auto';
 
 interface QueuedTask {
   id: string;
@@ -217,7 +231,7 @@ export class AutopilotConductor {
       signal: AbortSignal.timeout(this.deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      throw new Error(`GET ${path} answered ${res.status}`);
+      throw new Error(await describeFailure('GET', path, res));
     }
     return (await res.json()) as T;
   }
@@ -237,11 +251,77 @@ export class AutopilotConductor {
       signal: AbortSignal.timeout(this.deps.fetchTimeoutMs ?? FETCH_TIMEOUT_MS),
     });
     if (!res.ok) {
-      throw new Error(`POST ${path} answered ${res.status}`);
+      throw new Error(await describeFailure('POST', path, res));
     }
   }
 }
 
 function reason(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * What a refused call actually said.
+ *
+ * The status code alone was all this logged, and it is not enough to act on:
+ * `autopilot did not start "Feedback": POST … answered 400` was the ONLY record
+ * of a project with no agent configured, repeated every twenty seconds for
+ * hours. The daemon's refusals carry a `code` and a sentence written for the
+ * user (`ValidationException` and friends put both in the body), so reading it
+ * turns the same line into one naming the cause.
+ *
+ * Best-effort by construction: an unreadable or empty body degrades to the
+ * status code, which is exactly what was logged before. Failing to read the
+ * body must never become a second failure on top of the one being reported.
+ */
+async function describeFailure(
+  method: string,
+  path: string,
+  res: Response,
+): Promise<string> {
+  const detail = await res
+    .text()
+    .then((body) => detailOf(body))
+    .catch(() => null);
+  return detail === null
+    ? `${method} ${path} answered ${res.status}`
+    : `${method} ${path} answered ${res.status}: ${detail}`;
+}
+
+/**
+ * The human half of a daemon error body.
+ *
+ * The shape is the vendored exception filter's, and it is read defensively
+ * rather than typed: this runs in the Electron main process, which shares no
+ * code with the daemon and holds none of its generated types, so the body is
+ * untrusted JSON. A body that is not the expected shape falls back to its own
+ * text, trimmed to something a log line can hold.
+ */
+function detailOf(body: string): string | null {
+  const text = body.trim();
+  if (text === '') {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === 'object') {
+      const row = parsed as Record<string, unknown>;
+      const message =
+        typeof row.description === 'string'
+          ? row.description
+          : typeof row.message === 'string'
+            ? row.message
+            : null;
+      if (message !== null) {
+        return typeof row.errorCode === 'string'
+          ? `${row.errorCode} — ${message}`
+          : message;
+      }
+    }
+  } catch {
+    // Not JSON: the raw text below is the best that can be said.
+  }
+  return text.length > MAX_DETAIL_CHARS
+    ? `${text.slice(0, MAX_DETAIL_CHARS)}…`
+    : text;
 }

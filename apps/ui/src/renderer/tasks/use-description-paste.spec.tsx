@@ -13,14 +13,17 @@ import { useDescriptionPaste } from './use-description-paste';
 
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
+let pasteField: HTMLTextAreaElement | null = null;
 
 afterEach(() => {
   act(() => {
     root?.unmount();
   });
   container?.remove();
+  pasteField?.remove();
   root = null;
   container = null;
+  pasteField = null;
   vi.restoreAllMocks();
 });
 
@@ -52,11 +55,20 @@ function mount(tasksApi: DaemonApis['tasks'] | null): Harness {
   act(() => {
     root!.render(<Probe />);
   });
+  // A real, focusable element standing in for the field the paste landed on —
+  // `document.activeElement` is what the fix reads back once the upload
+  // lands. Appended AFTER the render: React's own mount into `container`
+  // would otherwise carry it away.
+  const field = document.createElement('textarea');
+  document.body.appendChild(field);
+  pasteField = field;
   return {
     paste: (data) => {
+      field.focus();
       let prevented = false;
       const event = {
         clipboardData: data,
+        currentTarget: field,
         preventDefault: () => {
           prevented = true;
         },
@@ -91,11 +103,41 @@ function stubExecCommand(returns: boolean): ReturnType<typeof vi.fn> {
   return exec;
 }
 
-const settle = async (): Promise<void> => {
+/** Bounded so a genuinely stuck chain FAILS rather than hanging the suite. */
+const MAX_SETTLE_TURNS = 50;
+
+/** One macrotask turn, with React's own work flushed around it. */
+const turn = async (): Promise<void> => {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
   });
+};
+
+/**
+ * Drain the paste chain.
+ *
+ * `readAsBase64` is a `FileReader`, and its `onload` is an EVENT rather than a
+ * microtask, so the number of turns before the two promise hops behind it
+ * resolve is NOT fixed. This was a pair of `setTimeout(0)`s, which is enough
+ * almost always and not always: measured as one failure in six full-suite runs,
+ * where a loaded parallel worker pushed the FileReader event past both timers
+ * and left `error` still null at the assertion — a flake in the test's timing
+ * assumption, not in the hook.
+ *
+ * Every caller passes the CONDITION it is waiting for and this polls until it
+ * holds. Raising the fixed count instead would only have made the flake rarer,
+ * which is the thing the no-flaky-tests rule calls retrying around the problem.
+ */
+const settle = async (done: () => boolean): Promise<void> => {
+  for (let attempt = 0; attempt < MAX_SETTLE_TURNS; attempt += 1) {
+    await turn();
+    if (done()) {
+      return;
+    }
+  }
+  throw new Error(
+    `the paste chain did not settle within ${MAX_SETTLE_TURNS} turns`,
+  );
 };
 
 /**
@@ -121,7 +163,9 @@ describe('useDescriptionPaste', () => {
     // the browser had already pasted the name.
     expect(result.defaultPrevented).toBe(true);
     expect(addTaskAttachment).not.toHaveBeenCalled();
-    await settle();
+    // The chain deliberately never settles here (the api returns a promise that
+    // never resolves), so the dispatched call is the condition to wait on.
+    await settle(() => addTaskAttachment.mock.calls.length > 0);
     expect(addTaskAttachment).toHaveBeenCalledTimes(1);
   });
 
@@ -138,7 +182,7 @@ describe('useDescriptionPaste', () => {
     const harness = mount(api);
 
     harness.paste(clipboard(png()));
-    await settle();
+    await settle(() => !harness.state().uploading);
 
     expect(exec).toHaveBeenCalledWith(
       'insertText',
@@ -156,16 +200,42 @@ describe('useDescriptionPaste', () => {
     const harness = mount(api);
 
     harness.paste(clipboard(png()));
-    await settle();
+    await settle(() => !harness.state().uploading);
 
     expect(harness.state().error).toContain('5MB limit');
     expect(harness.state().uploading).toBe(false);
   });
 
+  it('refuses to insert once focus has left the pasted field, reporting where the image landed instead', async () => {
+    // The title `Input` is `autoFocus` and saves on blur, so a misdirected
+    // insertion is not just a wrong link — it can be persisted as the title.
+    const exec = stubExecCommand(true);
+    const api = {
+      addTaskAttachment: vi.fn().mockResolvedValue({
+        path: '/u/task-attachments/t1/a.png',
+        name: 'Pasted image',
+      }),
+    } as unknown as DaemonApis['tasks'];
+    const harness = mount(api);
+
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+
+    harness.paste(clipboard(png()));
+    // Focus moves away from the pasted-into field while the upload is still
+    // in flight — the bytes are not back yet, so nothing has been written.
+    other.focus();
+    await settle(() => !harness.state().uploading);
+
+    expect(exec).not.toHaveBeenCalled();
+    expect(harness.state().error).toContain('/u/task-attachments/t1/a.png');
+    other.remove();
+  });
+
   it('says so when the file landed but the text did not', async () => {
-    // The field can lose focus while the bytes are in flight, and
-    // `insertText` writes wherever the caret is — the image is already on
-    // disk by then, so silence would leave it unreachable.
+    // The insertion can be REFUSED outright — the image is already on disk by
+    // then, so silence would leave it unreachable. (The focus-loss route into
+    // the same guard is pinned by its own sibling above.)
     stubExecCommand(false);
     const api = {
       addTaskAttachment: vi
@@ -175,7 +245,7 @@ describe('useDescriptionPaste', () => {
     const harness = mount(api);
 
     harness.paste(clipboard(png()));
-    await settle();
+    await settle(() => !harness.state().uploading);
 
     expect(harness.state().error).toContain('/u/a.png');
   });

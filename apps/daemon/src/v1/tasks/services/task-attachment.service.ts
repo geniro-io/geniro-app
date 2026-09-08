@@ -1,16 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
 
-import { environment } from '../../../environments';
 import {
   type AttachmentMediaType,
   MAX_ATTACHMENT_BYTES,
 } from '../../agents/chat.types';
 import type { TaskAttachmentWire } from '../tasks.types';
+import {
+  removeTaskAttachments,
+  taskAttachmentsRoot,
+} from '../utils/task-attachments';
 
 /** The extension each media type is written under — never the caller's. */
 const EXTENSIONS: Record<AttachmentMediaType, string> = {
@@ -50,7 +53,7 @@ export class TaskAttachmentService {
     /** Test seam only — nothing in the app passes it. */
     @Optional() root?: string,
   ) {
-    this.root = root ?? join(environment.userDataDir, 'task-attachments');
+    this.root = root ?? taskAttachmentsRoot();
   }
 
   /**
@@ -60,12 +63,12 @@ export class TaskAttachmentService {
    * base64 inflates by ~4/3, so only this side knows the real figure — the
    * same rule the chat store states.
    */
-  save(
+  async save(
     taskId: string,
     mediaType: AttachmentMediaType,
     base64: string,
     name?: string,
-  ): TaskAttachmentWire {
+  ): Promise<TaskAttachmentWire> {
     const bytes = Buffer.from(base64, 'base64');
     if (bytes.byteLength === 0) {
       throw new BadRequestException(
@@ -86,10 +89,26 @@ export class TaskAttachmentService {
     // onto a path.
     const file = `${randomUUID()}.${EXTENSIONS[mediaType]}`;
     const dir = join(this.root, taskId);
-    mkdirSync(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
     const path = join(dir, file);
-    writeFileSync(path, bytes);
+    await writeFile(path, bytes);
     return { path, name: markdownName(name) };
+  }
+
+  /**
+   * Drop every image pasted into one card.
+   *
+   * A card's screenshots are routinely a console, a token or a private
+   * repository, and deleting the card left them on disk with nothing in the
+   * app able to reach or remove them. `RunTeardownService` already does this
+   * for a chat's attachments; a task's are the same bytes one column over.
+   *
+   * The work lives in `utils/task-attachments.ts`, so the board-delete path can
+   * do the same thing without reaching across a module boundary for this
+   * service.
+   */
+  removeTask(taskId: string): Promise<void> {
+    return removeTaskAttachments(taskId, this.root);
   }
 }
 

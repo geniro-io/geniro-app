@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { AUTOPILOT_APPROVAL, resolveRunTarget } from './run-target';
+import {
+  AUTOPILOT_APPROVAL,
+  resolveRunTarget,
+  RUN_TARGET_PROBLEM_CODE,
+  RUN_TARGET_PROBLEM_REASON,
+} from './run-target';
 
 /**
  * The three rungs, in the order the start route passes them: this press, the
@@ -47,8 +52,11 @@ describe('resolveRunTarget', () => {
     expect(target).toMatchObject({ kind: 'agent', agentKind: 'claude' });
   });
 
-  it('answers null when no rung names an agent or a workflow', () => {
-    expect(resolveRunTarget([press(), press(), { model: 'opus' }])).toBeNull();
+  it('names the PROBLEM when no rung names an agent or a workflow', () => {
+    expect(resolveRunTarget([press(), press(), { model: 'opus' }])).toEqual({
+      kind: 'problem',
+      reason: 'no-target',
+    });
   });
 
   it('reads a workflow as the whole answer, dropping the CLI-only fields', () => {
@@ -62,6 +70,40 @@ describe('resolveRunTarget', () => {
     // effort in the YAML, so carrying the project's down would be a run-level
     // answer with nothing to apply it to.
     expect(target).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+  });
+
+  it('REFUSES a workflow the autopilot would run, naming that problem', () => {
+    // The approval forcing below reaches the agent arm only. A workflow carries
+    // `approval` per NODE, so there is no single field to force — an unattended
+    // run of one parks on the first node that asks, holding its slot and its
+    // worktree, and the breaker never trips because parked is not failed.
+    expect(
+      resolveRunTarget(
+        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        'autopilot',
+      ),
+    ).toEqual({ kind: 'problem', reason: 'workflow-unattended' });
+  });
+
+  it('lets a USER start the same workflow', () => {
+    // The refusal is about nobody being there to answer, not about workflows.
+    expect(
+      resolveRunTarget(
+        [press(), { workflowSlug: 'dev-team' }, { agentKind: 'claude' }],
+        'user',
+      ),
+    ).toEqual({ kind: 'workflow', workflowSlug: 'dev-team' });
+  });
+
+  it('distinguishes the two refusals by their sentence', () => {
+    // One reason for both is what made a card naming a workflow tell its user
+    // to "set an agent or workflow" — advice it had already followed.
+    expect(RUN_TARGET_PROBLEM_REASON['no-target']).not.toBe(
+      RUN_TARGET_PROBLEM_REASON['workflow-unattended'],
+    );
+    expect(RUN_TARGET_PROBLEM_CODE['no-target']).not.toBe(
+      RUN_TARGET_PROBLEM_CODE['workflow-unattended'],
+    );
   });
 
   it('lets a lower rung name the agent while a higher one is silent', () => {

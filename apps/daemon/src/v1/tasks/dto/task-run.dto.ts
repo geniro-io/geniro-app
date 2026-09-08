@@ -7,7 +7,11 @@ import {
 } from '../../agents/chat.types';
 import { commitShaSchema } from '../../agents/dto/chat.dto';
 import { AgentKindSchema } from '../../runs/runs.types';
-import { TASK_RUN_PROMPT_MAX, TaskStatusSchema } from '../tasks.types';
+import {
+  TASK_RUN_PROMPT_MAX,
+  TaskRunStarterSchema,
+  TaskStatusSchema,
+} from '../tasks.types';
 
 /**
  * HTTP DTOs for starting a task's run and recording its report.
@@ -98,6 +102,22 @@ export const startTaskRunSchema = z.object({
    * every agent.
    */
   customInstructions: CustomInstructionsSchema.optional(),
+  /**
+   * WHO pressed Run — the person, or the autopilot timer in the Electron
+   * process. Absent reads as `user`.
+   *
+   * It has to be on the SCHEMA and not merely on the service's input type:
+   * zod strips unknown keys, so a field the DTO does not declare never reaches
+   * the service however faithfully the client sends it — and three controls
+   * key off this one. The concurrency cap and the failure breaker refuse an
+   * unattended start; `resolveRunTarget` forces the approval mode an unattended
+   * run must have, and refuses a workflow it could not force one for. Each is
+   * documented as the line the queue's own narrowing is only a convenience in
+   * front of, so each is inert while this is dropped at the edge.
+   */
+  startedBy: TaskRunStarterSchema.optional().describe(
+    'Who pressed Run — `user` (default) or the `autopilot` timer, which is held to the project cap, the failure breaker and a forced approval mode',
+  ),
 });
 export class StartTaskRunDto extends createZodDto(startTaskRunSchema) {}
 

@@ -1785,7 +1785,9 @@ export function Chats({
     };
   }, [workflowSlug, workflowApi]);
 
-  const capabilities = useCapabilities(capabilitiesApi);
+  // Only the data is wanted here — every read below is a plain
+  // `capabilities?.…`, never a loading readout of its own.
+  const { capabilities } = useCapabilities(capabilitiesApi);
   /**
    * Per CLI: `null` if it can reopen a conversation interactively
    * (`--resume`), else the daemon's own sentence for why it cannot. Derived,

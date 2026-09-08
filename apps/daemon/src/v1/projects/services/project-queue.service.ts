@@ -5,18 +5,9 @@ import { NotFoundException } from '@packages/common';
 import { RunDao } from '../../agents/dao/run.dao';
 import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../../tasks/dao/task.dao';
-import {
-  NO_RUN_TARGET_REASON,
-  resolveRunTarget,
-} from '../../tasks/utils/run-target';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
-import type {
-  ActiveTask,
-  BlockedTask,
-  ProjectQueue,
-  QueuedTask,
-} from '../projects.types';
+import type { ActiveTask, ProjectQueueRaw } from '../projects.types';
 import { isBreakerOpen } from '../utils/breaker';
 
 /**
@@ -31,6 +22,10 @@ import { isBreakerOpen } from '../utils/breaker';
  * That narrowing is not the whole guard and is not meant to be: a conductor
  * that ignored it, or two that polled in the same instant, are refused again
  * at the start route. This is the fast answer; that is the line.
+ *
+ * This service answers RAW state only — it does not decide which waiting
+ * cards may actually start. See `ProjectQueueRaw`'s own doc for why that
+ * split moved to `TaskQueueService`.
  */
 @Injectable()
 export class ProjectQueueService {
@@ -41,7 +36,7 @@ export class ProjectQueueService {
     private readonly runDao: RunDao,
   ) {}
 
-  async read(projectId: string): Promise<ProjectQueue> {
+  async readRaw(projectId: string): Promise<ProjectQueueRaw> {
     const em = this.em.fork();
     const project = await this.require(projectId, em);
     const tasks = await this.taskDao.listForProject(projectId, em);
@@ -49,35 +44,13 @@ export class ProjectQueueService {
     const active = await this.readActive(tasks, em);
     const running = active.length;
     const breakerOpen = isBreakerOpen(project);
-    const free = Math.max(0, project.autopilotMaxConcurrent - running);
-    const handOutWork = project.autopilotEnabled && !breakerOpen && free > 0;
+    const freeSlots = Math.max(0, project.autopilotMaxConcurrent - running);
+    const handOutWork =
+      project.autopilotEnabled && !breakerOpen && freeSlots > 0;
 
-    const waiting = tasks.filter(
+    const waitingTasks = tasks.filter(
       (task) => task.status === project.autopilotIntakeStatus,
     );
-
-    // Split BEFORE the cap is applied, so a blocked card cannot occupy one of
-    // the slots the handout is narrowed to — otherwise a project with a cap of
-    // one and a misconfigured card at the head of the column would starve
-    // every runnable card behind it, which is the loop from the other side.
-    const startable: typeof waiting = [];
-    const blocked: BlockedTask[] = [];
-    for (const task of waiting) {
-      // The same resolution the start route performs, asked here so the
-      // conductor never cuts a worktree for a run that will be refused. It
-      // reads the two rows the route reads and nothing else, which is what
-      // keeps the two answers the same — a second, looser predicate here would
-      // hand out work the route then declines, restoring the churn.
-      if (resolveRunTarget([task, project]) === null) {
-        blocked.push({
-          id: task.id,
-          title: task.title,
-          reason: NO_RUN_TARGET_REASON,
-        });
-        continue;
-      }
-      startable.push(task);
-    }
 
     return {
       projectId: project.id,
@@ -85,21 +58,20 @@ export class ProjectQueueService {
       intakeStatus: project.autopilotIntakeStatus,
       cap: project.autopilotMaxConcurrent,
       running,
-      waiting: waiting.length,
+      waiting: waitingTasks.length,
       breakerOpen,
       failureStreak: project.autopilotFailureStreak,
-      eligible: handOutWork
-        ? startable
-            .slice()
-            .sort((a, b) => a.position - b.position)
-            .slice(0, free)
-            .map((task) => toQueued(task, project.folder))
-        : [],
-      // Reported whatever the autopilot's own state: a card that names no agent
-      // is broken while the project is disarmed too, and a user who switches
-      // autopilot on to find out why nothing happens has been told nothing.
-      blocked,
       active,
+      folder: project.folder,
+      agentKind: project.agentKind,
+      model: project.model,
+      effort: project.effort,
+      approval: project.approval,
+      configDir: project.configDir,
+      workflowSlug: project.workflowSlug,
+      waitingTasks,
+      freeSlots,
+      handOutWork,
     };
   }
 
@@ -162,27 +134,4 @@ export class ProjectQueueService {
     }
     return project;
   }
-}
-
-function toQueued(
-  task: {
-    id: string;
-    title: string;
-    status: QueuedTask['status'];
-    position: number;
-    folder: string | null;
-  },
-  projectFolder: string,
-): QueuedTask {
-  return {
-    id: task.id,
-    title: task.title,
-    status: task.status,
-    position: task.position,
-    // The inheritance is resolved HERE and nowhere downstream: the conductor
-    // runs in the Electron process off this handout alone, and a second copy
-    // of "null means the project's" is how the timer and the board come to cut
-    // worktrees from two different repositories.
-    folder: task.folder ?? projectFolder,
-  };
 }

@@ -68,7 +68,19 @@ export interface BoardApi {
    * been worked is CONTINUED in the thread it already has, so a second press
    * is where "the tests still fail" belongs — see `TaskRunsService.resume`.
    */
-  runTask: (taskId: string, prompt?: string) => Promise<void>;
+  /**
+   * Start (or continue) a card's run. Resolves TRUE when a run was actually
+   * started and FALSE when the press was refused — the worktree could not be
+   * made, or the daemon declined it.
+   *
+   * A boolean rather than a rejection: a refusal is an ordinary outcome here
+   * (the card moved, the board is at its cap) and is already surfaced through
+   * `error`, so throwing would make every fire-and-forget caller handle a
+   * rejection to avoid an unhandled one. What the boolean buys is that the
+   * follow-up box can keep what the user typed instead of clearing it into a
+   * run that never began.
+   */
+  runTask: (taskId: string, prompt?: string) => Promise<boolean>;
   /** The card whose run is being started right now, or null. */
   startingTaskId: string | null;
   /**
@@ -452,11 +464,11 @@ export function useBoard(
    * collect, since the boot reaper only sees what a previous SESSION left.
    */
   const runTask = useCallback(
-    async (taskId: string, prompt = ''): Promise<void> => {
+    async (taskId: string, prompt = ''): Promise<boolean> => {
       const task = tasks.find((row) => row.id === taskId);
       const project = projects.find((row) => row.id === selectedProjectId);
       if (!apis || task === undefined || project === undefined) {
-        return;
+        return false;
       }
       setStartingTaskId(taskId);
       try {
@@ -471,7 +483,7 @@ export function useBoard(
         });
         if (!made.ok || made.path === null || made.branch === null) {
           setError(made.error ?? 'the worktree could not be created');
-          return;
+          return false;
         }
         try {
           // The client's own reading of the folder, taken now — the fixed
@@ -503,9 +515,11 @@ export function useBoard(
           setTasks((current) =>
             current.map((row) => (row.id === taskId ? started : row)),
           );
+          return true;
         } catch (err: unknown) {
           await window.geniro.pruneTaskWorktree(taskId);
           setError(describe(err));
+          return false;
         }
       } finally {
         setStartingTaskId(null);

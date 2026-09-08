@@ -1,8 +1,16 @@
 import { z } from 'zod';
 
-import { ChatApprovalModeSchema } from '../agents/chat.types';
-import { AgentKindSchema } from '../runs/runs.types';
-import { TaskSourceSchema, TaskStatusSchema } from '../tasks/tasks.types';
+import {
+  type ChatApprovalMode,
+  ChatApprovalModeSchema,
+} from '../agents/chat.types';
+import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
+import type { Task } from '../tasks/entity/task.entity';
+import {
+  TaskSourceSchema,
+  type TaskStatus,
+  TaskStatusSchema,
+} from '../tasks/tasks.types';
 
 /** A project's name — non-blank after trimming, sanely bounded. */
 export const PROJECT_NAME_MAX = 120;
@@ -162,6 +170,72 @@ export const ActiveTaskSchema = z
   })
   .meta({ id: 'ActiveTask' });
 export type ActiveTask = z.infer<typeof ActiveTaskSchema>;
+
+/**
+ * What {@link ProjectQueueService.readRaw} answers: every count and row it can
+ * compute over the `projects` and `tasks` tables alone, WITHOUT deciding which
+ * waiting cards may actually start.
+ *
+ * The eligible/blocked split cannot live here: the WORKFLOW arm of a card's
+ * resolved run target names a slug, and whether that slug still exists is a
+ * question only the workflow LIBRARY can answer — `ProjectsModule` has no way
+ * to ask it without importing `GraphsModule`, which would recreate the very
+ * cycle `ProjectsModule`'s own module doc warns against (`TasksModule`
+ * already imports `ProjectsModule`, so the reverse import would need a
+ * `forwardRef`). So this module answers only what it alone can compute, and
+ * `TaskQueueService` (in the tasks module, which already imports both
+ * `ProjectsModule` and `GraphsModule`) joins it against the library to
+ * produce the real `eligible`/`blocked` split.
+ *
+ * Not a wire schema — nothing outside the daemon ever sees this shape, so it
+ * is a plain interface rather than a zod object, on `RunTargetLevel`'s own
+ * precedent.
+ */
+export interface ProjectQueueRaw {
+  projectId: string;
+  enabled: boolean;
+  intakeStatus: TaskStatus;
+  cap: number;
+  running: number;
+  waiting: number;
+  breakerOpen: boolean;
+  failureStreak: number;
+  active: ActiveTask[];
+  /** What a card inherits when it names no folder of its own. */
+  folder: string;
+  /**
+   * The project's own run-configuration defaults — the fallback level
+   * `resolveRunTarget` reads once a task's own fields have been checked. This
+   * type is deliberately shaped to satisfy `RunTargetLevel` structurally
+   * (same field names, no narrower types) so a caller can pass it straight
+   * into `resolveRunTarget([task, raw], …)` with no re-mapping.
+   */
+  agentKind: AgentKind | null;
+  model: string | null;
+  effort: string | null;
+  approval: ChatApprovalMode | null;
+  configDir: string | null;
+  workflowSlug: string | null;
+  /**
+   * Every task sitting in the intake column, UNFILTERED — the rows a splitter
+   * walks to decide `eligible` vs `blocked`. Full entities rather than a
+   * projection: the split needs nearly every column (`agentKind` through
+   * `workflowSlug` for `resolveRunTarget`, `folder`/`position` for
+   * `toQueued`), so a narrower shape would just restate the entity's own
+   * fields under a new name.
+   */
+  waitingTasks: Task[];
+  /** How many of the project's autopilot slots are free right now. */
+  freeSlots: number;
+  /**
+   * Whether the autopilot may hand out ANY work at all right now — armed, the
+   * breaker shut, and at least one slot free. A splitter must ask this
+   * BEFORE applying the cap: a blocked card must never occupy one of the
+   * slots the handout is narrowed to, or one misconfigured card at the head
+   * of a cap-1 column would starve every runnable card behind it.
+   */
+  handOutWork: boolean;
+}
 
 /**
  * What one project's autopilot may do right now.

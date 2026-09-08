@@ -7609,6 +7609,23 @@ describe('Chats sidebar list', () => {
     expect(row!.textContent).toContain('Merged the fix.');
   });
 
+  it('shows the board card’s identifier as a label on its sidebar row', async () => {
+    // Every run fixture in this file carries `taskIdentifier: null`, which
+    // renders the same whether or not the prop is still wired through — this
+    // is the one case that tells a working badge from a silently dropped one.
+    api.listChats.mockResolvedValue([{ ...run1, taskIdentifier: 'GEN-12' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'));
+    const badge = row?.querySelector('[data-slot="task-identifier"]');
+
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe('GEN-12');
+  });
+
   it('renames a run INLINE in the row — no dialog — and updates the label', async () => {
     api.renameRun.mockResolvedValue({ ...run1, title: 'Auth deep-dive' });
     const { client } = makeClient();

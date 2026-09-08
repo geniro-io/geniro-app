@@ -15,6 +15,7 @@ import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import { TASK_FILES_MAX } from '../tasks.types';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TaskFilesService } from './task-files.service';
 import { TasksService } from './tasks.service';
@@ -27,6 +28,16 @@ import { TasksService } from './tasks.service';
  * because what is under test is a path that has to EXIST and a column that has
  * to round-trip.
  */
+/**
+ * Where this spec's attachment deletes are aimed.
+ *
+ * Named explicitly rather than left to the service's default, which resolves
+ * `environment.userDataDir` — the one shared resource the specs redirect for
+ * themselves. Nothing is written here; the service only ever removes
+ * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ */
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
 describe('TaskFilesService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let em: EntityManager;
@@ -60,7 +71,13 @@ describe('TaskFilesService (in-memory sqlite)', () => {
     em = orm.em.fork();
     const taskDao = new TaskDao(em);
     const projectDao = new ProjectDao(em);
-    tasks = new TasksService(em, taskDao, projectDao, new TaskEventBus());
+    tasks = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      new TaskEventBus(),
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
     service = new TaskFilesService(em, taskDao, tasks);
     const project = await projectDao.create({ name: 'B', folder: dir });
     await em.flush();

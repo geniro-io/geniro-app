@@ -14,25 +14,26 @@ import {
   CreateProjectDto,
   ProjectDeletedDto,
   ProjectDto,
-  ProjectQueueDto,
   UpdateProjectDto,
 } from '../dto/project.dto';
-import type { ProjectQueue, ProjectWire } from '../projects.types';
-import { ProjectQueueService } from '../services/project-queue.service';
+import type { ProjectWire } from '../projects.types';
 import { ProjectsService } from '../services/projects.service';
 
 /**
  * Projects — a folder and the standing answers for the work done in it
  * (token-gated by the global LoopbackTokenGuard).
+ *
+ * The `:projectId/queue` route is served by `TaskQueueController` in the
+ * tasks module rather than by this one — see that controller's own doc for
+ * why — under this exact URL, path and `@ApiTags`, so the committed
+ * generated client and every renderer call site describe the route the same
+ * way regardless of which module answers it.
  */
 @Controller('v1/projects')
 @ApiTags('projects')
 @ApiBearerAuth()
 export class ProjectsController {
-  constructor(
-    private readonly projects: ProjectsService,
-    private readonly queue: ProjectQueueService,
-  ) {}
+  constructor(private readonly projects: ProjectsService) {}
 
   @Get()
   @ApiOperation({ operationId: 'listProjects' })
@@ -53,17 +54,6 @@ export class ProjectsController {
   @ZodResponse({ status: 200, type: ProjectDto })
   read(@Param('projectId') projectId: string): Promise<ProjectWire> {
     return this.projects.get(projectId);
-  }
-
-  /**
-   * What this project's autopilot may start right now — already narrowed to
-   * the free slots, so a conductor never has to count for itself.
-   */
-  @Get(':projectId/queue')
-  @ApiOperation({ operationId: 'readProjectQueue' })
-  @ZodResponse({ status: 200, type: ProjectQueueDto })
-  readQueue(@Param('projectId') projectId: string): Promise<ProjectQueue> {
-    return this.queue.read(projectId);
   }
 
   /**

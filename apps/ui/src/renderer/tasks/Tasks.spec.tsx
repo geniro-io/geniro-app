@@ -146,6 +146,32 @@ describe('Tasks board', () => {
     );
   });
 
+  it('detects the machine’s CLIs once, never again on a later Chats→Tasks visit', async () => {
+    // The board is latch-mounted (see `App.tsx`) and only ever hidden with a
+    // class, so a Chats→Tasks→Chats→Tasks trip is `active` toggling on the
+    // SAME instance — re-probing on every one of those toggles spawns five
+    // child processes and two authenticated network calls for a list that is
+    // only ever consumed inside pickers the user has not opened yet.
+    window.geniro.detectClis = vi.fn(window.geniro.detectClis);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active={false} />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active={false} />);
+    });
+    await act(async () => {
+      root!.render(<Tasks handle={handle} client={null} active />);
+    });
+
+    expect(window.geniro.detectClis).toHaveBeenCalledTimes(1);
+  });
+
   it('moves a card on drop, telling the daemon which column it left', async () => {
     const el = await board();
     const dt = { setData: vi.fn(), dropEffect: '', effectAllowed: '' };

@@ -55,7 +55,7 @@ function ReportSection({
         <h3
           className={cn(
             'flex items-center gap-1.5 text-[10px] font-medium tracking-wider uppercase',
-            alarm ? 'text-destructive' : 'text-muted-foreground/70',
+            alarm ? 'text-destructive' : 'text-muted-foreground',
           )}>
           {alarm ? (
             // Sized to the CAPTION rather than to a control: it is a mark on a
@@ -201,7 +201,7 @@ export function TaskFollowUp({
   running: boolean;
   /** A turn is being started for this card right now. */
   starting?: boolean;
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean | void | Promise<boolean | void>;
 }): React.JSX.Element {
   const [text, setText] = useState('');
   const ready = text.trim() !== '' && !running && !starting;
@@ -239,8 +239,20 @@ export function TaskFollowUp({
               className="shrink-0"
               disabled={!ready}
               onClick={() => {
-                onSend(text.trim());
-                setText('');
+                // Cleared only once the start is CONFIRMED. A refused run
+                // would otherwise take what the user typed with it, and this
+                // box has nothing to recover it from — the composer's own send
+                // path does not behave that way either. The rejection is the
+                // caller's to report (it owns the run), so it is not surfaced
+                // twice here; what this branch owes the user is their words.
+                void Promise.resolve(onSend(text.trim())).then(
+                  (started) => {
+                    if (started !== false) {
+                      setText('');
+                    }
+                  },
+                  () => undefined,
+                );
               }}>
               {starting ? (
                 <Spinner className="size-3.5" />

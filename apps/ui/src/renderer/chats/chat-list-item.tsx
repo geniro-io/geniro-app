@@ -636,7 +636,9 @@ export const ChatListItem = memo(function ChatListItem({
           the thread. The pull request leads, since it is the fact that comes
           and goes; the agent is on every row, so it reads as the column it is
           rather than as news. */}
-      <span data-slot="chat-row-labels" className="flex items-center gap-1">
+      <span
+        data-slot="chat-row-labels"
+        className="flex min-w-0 items-center gap-1">
         {/* The card LEADS, unlike the volatile-first order the other two
             follow, and its own job is what decides that: it is an IDENTIFIER —
             asked for as "to make those threads identifiable in the list" — so
@@ -655,6 +657,12 @@ export const ChatListItem = memo(function ChatListItem({
           </Badge>
         )}
         {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
+        {/* The one label allowed to give up room: the card and the pull
+            request are both short and bounded (a key, a number), where the
+            agent word can be the longest thing on the strip
+            (`cursor-agent`) — so at the rail's narrow end this is the one
+            that degrades, rather than the strip clipping or spilling past
+            its row. */}
         <Badge
           data-slot="agent-kind"
           variant="muted"
@@ -663,7 +671,7 @@ export const ChatListItem = memo(function ChatListItem({
               ? 'A team of agents running as a graph'
               : `Driven by ${agentKind ?? 'an unrecorded CLI'}`
           }
-          className="gap-1 px-1.5 py-0 font-normal">
+          className="min-w-0 shrink gap-1 truncate px-1.5 py-0 font-normal">
           {agentLabel(agentKind, isWorkflow, workflowName)}
         </Badge>
       </span>

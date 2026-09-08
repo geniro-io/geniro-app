@@ -134,8 +134,13 @@ export function AutopilotControl({
             <div className="flex min-w-0 flex-col">
               <span className="text-sm font-medium">Autopilot</span>
               <span className="text-xs text-muted-foreground">
+                {/* What arming AUTHORISES, not just what it does. An
+                    unattended run has to be given a mode that cannot stop and
+                    ask, so the daemon answers permission requests for it —
+                    shell commands included. Saying so here is the only place
+                    the person turning it on can read it. */}
                 {armed
-                  ? 'Starts tasks from the intake column on its own.'
+                  ? 'Starts tasks from the intake column on its own. Agents run unattended and approve their own commands — including shell commands, which the task’s worktree does not confine.'
                   : 'Tasks on this board are started by hand.'}
               </span>
             </div>

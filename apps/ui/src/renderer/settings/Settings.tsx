@@ -321,8 +321,11 @@ export function Settings({
   // config-directory reasons further down — and `useCapabilities` holds its
   // state per CALL, so asking it twice mounts two fetchers and two retry loops
   // against one endpoint. The config-dir slice goes through the pure selector
-  // below rather than through its own hook.
-  const capabilities = useCapabilities(apis?.capabilities ?? null);
+  // below rather than through its own hook. This screen only ever wants the
+  // DATA, never the settled/loading distinction, so only that field is taken.
+  const { capabilities, loading: capabilitiesLoading } = useCapabilities(
+    apis?.capabilities ?? null,
+  );
   // Served by the daemon rather than restated here, so the preview cannot go
   // on describing a preamble the CLIs stopped receiving. Absent until the read
   // lands (and when no daemon is connected) — the honest rendering then is to
@@ -827,7 +830,7 @@ export function Settings({
   // which would fetch the same endpoint a second time from this one screen.
   const configDirCapability = configDirCapabilityFrom(
     capabilities,
-    apis !== null,
+    capabilitiesLoading,
   );
   const profileScopedKinds = useMemo(
     () =>

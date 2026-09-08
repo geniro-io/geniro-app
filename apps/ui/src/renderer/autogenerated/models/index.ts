@@ -3881,8 +3881,23 @@ export interface StartTaskRunDto {
      * @memberof StartTaskRunDto
      */
     customInstructions?: string;
+    /**
+     * Who pressed Run — `user` (default) or the `autopilot` timer, which is held to the project cap, the failure breaker and a forced approval mode
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    startedBy?: StartTaskRunDtoStartedByEnum;
 }
 
+
+/**
+ * @export
+ */
+export const StartTaskRunDtoStartedByEnum = {
+    User: 'user',
+    Autopilot: 'autopilot'
+} as const;
+export type StartTaskRunDtoStartedByEnum = typeof StartTaskRunDtoStartedByEnum[keyof typeof StartTaskRunDtoStartedByEnum];
 
 /**
  * 

@@ -8,7 +8,16 @@ import {
   MikroORM,
   UnderscoreNamingStrategy,
 } from '@mikro-orm/sqlite';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
 import { TaskDao } from '../../tasks/dao/task.dao';
 import { Task } from '../../tasks/entity/task.entity';
@@ -170,5 +179,48 @@ describe('TaskNumberBackfillService (in-memory sqlite)', () => {
     // A fresh install must not re-scan the board for the life of the app.
     expect(await service().backfill()).toBe(0);
     expect(await service().backfill()).toBeNull();
+  });
+
+  it('keeps the numbered count and warns when the done marker cannot be written', async () => {
+    const project = await board('Geniro');
+    await card(project.id, 'a', new Date('2026-01-01'));
+    const unwritable = join(dir, 'no-such-directory', 'marker');
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
+
+    const numbered = await new TaskNumberBackfillService(
+      projectDao,
+      taskDao,
+      em,
+      unwritable,
+    ).backfill();
+
+    // The repair already landed; refusing the boot over an unwritable marker
+    // would cost the user their app for a file write that is not the repair.
+    expect(numbered).toBe(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      'could not record the task-number backfill as done',
+    );
+    warn.mockRestore();
+  });
+
+  it('lets the daemon boot when the sweep itself fails', async () => {
+    const broken = new TaskNumberBackfillService(
+      {
+        listAll: () => Promise.reject(new Error('database is locked')),
+      } as unknown as ProjectDao,
+      taskDao,
+      em,
+      markerPath,
+    );
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
+
+    await expect(broken.backfillQuietly()).resolves.toBeUndefined();
+
+    expect(String(warn.mock.calls[0]?.[0])).toContain('database is locked');
+    warn.mockRestore();
   });
 });

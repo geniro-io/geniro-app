@@ -116,8 +116,12 @@ export function NewProjectDialog({
             agent, and a board routinely mixes a workflow for the big jobs with
             a single agent for the small ones. */}
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="new-project-target">Default agent or workflow</Label>
-          <div id="new-project-target" className="flex">
+          {/* No `htmlFor`: it pointed at the `div` below, so clicking the
+              label did nothing, and `TargetSelect` exposes no id to forward to
+              its trigger. The control is named by its own `aria-label`, which
+              carries this same wording. */}
+          <Label>Default agent or workflow</Label>
+          <div className="flex">
             <TargetSelect
               value={target}
               workflows={workflows}

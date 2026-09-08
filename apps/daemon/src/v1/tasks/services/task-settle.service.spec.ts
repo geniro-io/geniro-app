@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   defineConfig,
   type EntityManager,
@@ -29,6 +32,7 @@ import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TaskSettleService } from './task-settle.service';
 import { TasksService } from './tasks.service';
@@ -38,6 +42,16 @@ import { TasksService } from './tasks.service';
  * transcript row is recorded as its report — both are reads of stored state,
  * so faking the store would leave nothing to observe.
  */
+/**
+ * Where this spec's attachment deletes are aimed.
+ *
+ * Named explicitly rather than left to the service's default, which resolves
+ * `environment.userDataDir` — the one shared resource the specs redirect for
+ * themselves. Nothing is written here; the service only ever removes
+ * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ */
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
 describe('TaskSettleService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: TaskSettleService;
@@ -84,7 +98,13 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     taskEvents = new TaskEventBus();
     changes = [];
     taskEvents.allChanges().subscribe((event) => changes.push(event));
-    tasks = new TasksService(em, taskDao, projectDao, taskEvents);
+    tasks = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      taskEvents,
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
     bus = new AgentEventBus();
     // The library is asked only for a WORKFLOW run's terminal nodes; a chat
     // run never reaches it, which is what `getWorkflow` not being called in
@@ -303,6 +323,41 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       // A workflow edited, renamed or deleted since the run started still
       // settled a real card: the last message of an unknown shape is a better
       // report than none at all.
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+    });
+
+    it('still finds the report when the terminal node ids have moved since the run finished', async () => {
+      const task = await workingGraph();
+      const last = await nodeRow(
+        'wf-1',
+        'sum',
+        'message',
+        'assistant',
+        '{"text":"summed up"}',
+      );
+      // The workflow was edited after the run finished but before it settled:
+      // `sum` now feeds a new node and is no longer terminal, so the run's
+      // own items carry no node id the CURRENT terminal set names.
+      workflows.set('dev-team', {
+        name: 'Dev team',
+        nodes: [
+          { id: 'plan', kind: 'agent', agent: 'claude', label: 'plan' },
+          { id: 'a', kind: 'agent', agent: 'claude', label: 'a' },
+          { id: 'b', kind: 'agent', agent: 'claude', label: 'b' },
+          { id: 'sum', kind: 'agent', agent: 'claude', label: 'sum' },
+          { id: 'final', kind: 'agent', agent: 'claude', label: 'final' },
+        ],
+        edges: [
+          { from: 'plan', to: 'a', kind: 'data' },
+          { from: 'plan', to: 'b', kind: 'data' },
+          { from: 'a', to: 'sum', kind: 'data' },
+          { from: 'b', to: 'sum', kind: 'data' },
+          { from: 'sum', to: 'final', kind: 'data' },
+        ],
+      } as unknown as Workflow);
+
+      await settleRun('wf-1', 'completed');
+
       expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
     });
 

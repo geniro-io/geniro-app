@@ -209,7 +209,7 @@ export function TaskCard({
           card's age is a fact about the card, where "updated" moves every time
           anything touches it and says nothing a reader can act on. */}
       {created === null ? null : (
-        <span className="text-[11px] text-muted-foreground/70">
+        <span className="text-[11px] text-muted-foreground">
           Created {created}
         </span>
       )}

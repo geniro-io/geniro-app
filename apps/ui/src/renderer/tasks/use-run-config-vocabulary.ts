@@ -13,10 +13,27 @@ export interface RunConfigVocabulary {
   /** The effort levels this (CLI, model) pair reports. */
   efforts: ReturnType<typeof useAgentEfforts>['efforts'];
   /**
+   * Whether the effort read is still in flight — `useAgentEfforts` already
+   * carries this; it is surfaced here rather than dropped, on the same
+   * "unread must not read as unavailable" rule `modelsLoading` follows.
+   */
+  effortsLoading: boolean;
+  /**
    * The approval modes this CLI honours — null while capabilities are unread,
    * which the picker renders as nothing rather than as a guess.
    */
   approvalModes: readonly ChatApprovalMode[] | null;
+  /**
+   * Whether `approvalModes` is still unread rather than genuinely empty — the
+   * capabilities probe has not answered yet for an agent one has been chosen.
+   */
+  approvalModesLoading: boolean;
+  /**
+   * Why this CLI cannot be pointed at a config directory (`null` = it can), or
+   * `undefined` while capabilities are unread — `ConfigDirSelect`'s own
+   * vocabulary, read off the same capabilities probe as the approval modes.
+   */
+  configDirUnavailableReason: string | null | undefined;
 }
 
 /**
@@ -52,13 +69,52 @@ export function useRunConfigVocabulary({
   model: string | null;
   configDir: string | null;
 }): RunConfigVocabulary {
-  const { models, loading } = useAgentModels(agentsApi, agentKind, configDir);
-  const { efforts } = useAgentEfforts(agentsApi, agentKind, model, configDir);
-  const capabilities = useCapabilities(capabilitiesApi);
+  const { models, loading: modelsLoading } = useAgentModels(
+    agentsApi,
+    agentKind,
+    configDir,
+  );
+  const { efforts, loading: effortsLoading } = useAgentEfforts(
+    agentsApi,
+    agentKind,
+    model,
+    configDir,
+  );
+  const { capabilities, loading: capabilitiesLoading } =
+    useCapabilities(capabilitiesApi);
   const approvalModes =
     capabilities === null || agentKind === null
       ? null
       : (capabilities.approvals.find((row) => row.agent === agentKind)?.modes ??
         []);
-  return { models, modelsLoading: loading, efforts, approvalModes };
+  // True only while a read is genuinely outstanding. `useCapabilities`'s own
+  // `loading` now tells "still asking" apart from "asked and got nothing", so
+  // a FAILED read — fail-open to `capabilities: null` — clears it instead of
+  // leaving this spinning for the life of the handle, which is what happened
+  // before that field existed: this used to read `capabilities === null`
+  // alone, and a probe that had already given up looked identical to one still
+  // in flight.
+  //
+  // `capabilitiesApi !== null` stays anyway, for a null api: the DEFAULT this
+  // hook is called with (`TaskFieldsContext`, and `Tasks.tsx` for as long as
+  // `apis` is null). `useCapabilities` never starts a read there and already
+  // answers `loading: false` for it, so the clause changes nothing today — it
+  // is kept because a caller reasoning about this line should not have to
+  // trust the hook's own null-handling to know an unmade request cannot spin.
+  const approvalModesLoading =
+    capabilitiesApi !== null && agentKind !== null && capabilitiesLoading;
+  const configDirUnavailableReason =
+    capabilities === null
+      ? undefined
+      : capabilities.configDirs.find((row) => row.agent === agentKind)
+          ?.unavailableReason;
+  return {
+    models,
+    modelsLoading,
+    efforts,
+    effortsLoading,
+    approvalModes,
+    approvalModesLoading,
+    configDirUnavailableReason,
+  };
 }

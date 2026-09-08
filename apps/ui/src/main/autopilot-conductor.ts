@@ -18,12 +18,17 @@ const MAX_DETAIL_CHARS = 300;
  * unattended turn does not time out, it waits forever, holding its slot against
  * the cap and its worktree on disk.
  *
- * This was `acceptEdits`, which auto-accepts EDITS and routes every Bash call
- * to the approval seam anyway — so an unattended run parked on the first
- * command it wanted to run, which is the deadlock above reached by the value
- * chosen to prevent it. The daemon states the whole measurement at its own
- * `AUTOPILOT_APPROVAL`, which is the one that ENFORCES this; the copy here is
- * what the request carries, and the two are twins deliberately.
+ * `acceptEdits` cannot serve: it auto-accepts EDITS and routes every Bash call
+ * to the approval seam anyway, so an unattended run parks on the first command
+ * it wants to run — the deadlock above, reached by the value chosen to prevent
+ * it.
+ *
+ * TWIN PARSER: `apps/daemon/src/v1/tasks/utils/run-target.ts`
+ * `AUTOPILOT_APPROVAL`, which states the whole measurement and is the one that
+ * ENFORCES this — it overrides whatever the request carried. The copy here is
+ * only what the request carries. This process imports no daemon source (that
+ * would pull the Nest graph into the main bundle), so the value is spelled
+ * once on each side; change one and change the other.
  */
 const AUTOPILOT_APPROVAL = 'auto';
 

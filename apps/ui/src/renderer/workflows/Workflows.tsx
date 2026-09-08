@@ -841,8 +841,12 @@ export function Workflows({
   // asks it two questions (can this CLI take a config directory, and which
   // approval modes does it honour), and `useCapabilities` holds its state per
   // CALL, so a second hook here would mount a second fetcher and a second retry
-  // loop against one endpoint.
-  const capabilities = useCapabilities(apis?.capabilities ?? null);
+  // loop against one endpoint. Its `loading` is taken too and handed to
+  // `configDirCapabilityFrom` below, which must not derive one of its own: only
+  // the hook knows a read SETTLED, so a derived flag cannot clear on failure.
+  const { capabilities, loading: capabilitiesLoading } = useCapabilities(
+    apis?.capabilities ?? null,
+  );
 
   // Whether the selected node's CLI can take a config directory at all, asked
   // of the daemon rather than decided here — the inspector used to allowlist
@@ -850,7 +854,7 @@ export function Workflows({
   // incompatible answers across the app.
   const configDirCapability = configDirCapabilityFrom(
     capabilities,
-    apis?.capabilities != null,
+    capabilitiesLoading,
   );
 
   /**

@@ -259,7 +259,8 @@ export interface TaskStatusMove {
  * them is how they would be prevented from checking whether the thing that
  * broke is fixed before re-arming.
  */
-export type TaskRunStarter = 'user' | 'autopilot';
+export const TaskRunStarterSchema = z.enum(['user', 'autopilot']);
+export type TaskRunStarter = z.infer<typeof TaskRunStarterSchema>;
 
 export interface StartTaskRun {
   cwd: string;
@@ -307,17 +308,44 @@ export type ResolvedRunTarget =
       configDir: string | null;
     };
 
-/** Why a card cannot be started as it stands. */
-export type RunTargetProblem = 'no-target';
+/** The AGENT arm of {@link ResolvedRunTarget}, which alone carries CLI fields. */
+export type ResolvedAgentTarget = Extract<ResolvedRunTarget, { kind: 'agent' }>;
 
 /**
- * A task write the board needs to hear about, over the WS `task_changed`
- * broadcast — see {@link TaskEventBus}.
+ * Why a card cannot be started as it stands.
  *
- * Deliberately thin: `status` (rather than the whole {@link TaskWire}) is what
- * a board draws a card by, and the renderer already holds the rest from its
- * own fetch — a wider payload would be a second, driftable copy of the row.
+ * `no-target` is the card that names neither an agent nor a workflow;
+ * `workflow-unattended` is the card that names a workflow the AUTOPILOT may not
+ * run, which is a different sentence to the user and a different fix.
  */
+export type RunTargetProblemReason = 'no-target' | 'workflow-unattended';
+
+/**
+ * An OBJECT rather than the bare reason string, so the arm is discriminated the
+ * same way {@link ResolvedRunTarget}'s two are.
+ *
+ * `isRunTargetProblem` used to ask `typeof resolution === 'string'`, which is a
+ * fact about the JS type rather than about the domain: it was correct only
+ * while every resolved arm happened to be an object, and a future arm that was
+ * itself a string would have been silently read as a refusal with no compiler
+ * error anywhere. `kind` makes the question the domain's own.
+ */
+export type RunTargetProblem = {
+  kind: 'problem';
+  reason: RunTargetProblemReason;
+};
+
+/**
+ * What {@link resolveRunTarget} answers: the resolved target, or the problem
+ * standing in its way.
+ *
+ * The refusal is a VALUE rather than a null because both callers have to say
+ * WHICH problem the card has — a bare null can only ever be reported as the
+ * commonest one, which is what would make a card naming a workflow read to its
+ * user as a card naming nothing.
+ */
+export type RunTargetResolution = ResolvedRunTarget | RunTargetProblem;
+
 /**
  * Where a picture pasted into a description was written, and what to call it.
  *
@@ -335,6 +363,13 @@ export const TaskAttachmentSchema = z
 export type TaskAttachmentWire = z.infer<typeof TaskAttachmentSchema>;
 
 /**
+ * A task write the board needs to hear about, over the WS `task_changed`
+ * broadcast — see {@link TaskEventBus}.
+ *
+ * Deliberately thin: `status` (rather than the whole {@link TaskWire}) is what
+ * a board draws a card by, and the renderer already holds the rest from its
+ * own fetch — a wider payload would be a second, driftable copy of the row.
+ *
  * TWIN PARSER: mirrored by the renderer's `parseTaskChanged`
  * (`apps/ui/src/renderer/daemon-client.ts`). Change one and change the other.
  */

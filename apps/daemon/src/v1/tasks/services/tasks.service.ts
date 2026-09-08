@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import type { ChatApprovalMode } from '../../agents/chat.types';
@@ -11,14 +11,14 @@ import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
   type TaskChangeReason,
-  TaskFileSchema,
-  type TaskFileWire,
   type TaskPriority,
   type TaskSource,
   type TaskStatus,
   type TaskStatusMove,
   type TaskWire,
 } from '../tasks.types';
+import { parseTaskFiles } from '../utils/task-files';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 
 /** How many tasks one project's board may hold — a guard, not a design limit. */
@@ -33,11 +33,14 @@ const MAX_TASKS_PER_PROJECT = 1000;
  */
 @Injectable()
 export class TasksService {
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly events: TaskEventBus,
+    private readonly attachments: TaskAttachmentService,
   ) {}
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
@@ -83,49 +86,58 @@ export class TasksService {
       );
     }
     const status = input.status ?? 'backlog';
-    // The card's number, from the PROJECT's own counter — never from
-    // `max(number)`, which would reuse the number of a deleted card and let
-    // two commits name different work by one identifier. Taken before the
-    // insert so the two land in the same flush.
-    const project = await this.requireProject(input.projectId, em);
-    project.taskCounter += 1;
-    const number = project.taskCounter;
-    const created = await this.taskDao.create(
-      {
-        projectId: input.projectId,
-        title: input.title,
-        number,
-        description: input.description ?? null,
-        status,
-        labels: JSON.stringify(input.labels ?? []),
-        priority: input.priority ?? 'none',
-        dueDate: input.dueDate ?? null,
-        folder:
-          input.folder === undefined ? null : resolveTaskFolder(input.folder),
-        agentKind: input.agentKind ?? null,
-        model: input.model ?? null,
-        effort: input.effort ?? null,
-        approval: input.approval ?? null,
-        // Checked to exist for `Project.configDir`'s reason: a card pointing at
-        // a profile that is not there starts a brand-new signed-out one, since
-        // the CLI creates whatever directory it is handed.
-        configDir:
-          input.configDir === undefined
-            ? null
-            : resolveTaskConfigDir(input.configDir),
-        workflowSlug: input.workflowSlug ?? null,
-        source: input.source ?? 'geniro',
-        sourceRef: input.sourceRef ?? null,
-        // Appended to the end of its column, never inserted: a new card is the
-        // user's newest thought and moving it is one drag away.
-        position: await this.taskDao.nextPositionIn(
-          input.projectId,
+    // ONE transaction around the counter and the insert, because both are
+    // read-modify-writes over a value that must not repeat. The bump is
+    // separated from the row it numbers by an await (`nextPositionIn`), and
+    // each request runs on its own fork, so without this two creates read the
+    // same counter and write the same absolute value — two cards holding one
+    // user-visible number, which is exactly what taking the number from the
+    // counter rather than from `max(number)` exists to prevent. `position` is
+    // inside for the same reason: it is `max + 1` over the same column.
+    const created = await em.transactional(async (tx) => {
+      // The card's number, from the PROJECT's own counter — never from
+      // `max(number)`, which would reuse the number of a deleted card and let
+      // two commits name different work by one identifier.
+      const project = await this.requireProject(input.projectId, tx);
+      project.taskCounter += 1;
+      const number = project.taskCounter;
+      return this.taskDao.create(
+        {
+          projectId: input.projectId,
+          title: input.title,
+          number,
+          description: input.description ?? null,
           status,
-          em,
-        ),
-      },
-      em,
-    );
+          labels: JSON.stringify(input.labels ?? []),
+          priority: input.priority ?? 'none',
+          dueDate: input.dueDate ?? null,
+          folder:
+            input.folder === undefined ? null : resolveTaskFolder(input.folder),
+          agentKind: input.agentKind ?? null,
+          model: input.model ?? null,
+          effort: input.effort ?? null,
+          approval: input.approval ?? null,
+          // Checked to exist for `Project.configDir`'s reason: a card pointing
+          // at a profile that is not there starts a brand-new signed-out one,
+          // since the CLI creates whatever directory it is handed.
+          configDir:
+            input.configDir === undefined
+              ? null
+              : resolveTaskConfigDir(input.configDir),
+          workflowSlug: input.workflowSlug ?? null,
+          source: input.source ?? 'geniro',
+          sourceRef: input.sourceRef ?? null,
+          // Appended to the end of its column, never inserted: a new card is
+          // the user's newest thought and moving it is one drag away.
+          position: await this.taskDao.nextPositionIn(
+            input.projectId,
+            status,
+            tx,
+          ),
+        },
+        tx,
+      );
+    });
     this.events.publishTaskChanged({
       taskId: created.id,
       projectId: created.projectId,
@@ -322,6 +334,20 @@ export class TasksService {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
     await this.taskDao.deleteById(taskId, em);
+    // The pasted images go with the card. Nothing else can reach them once the
+    // row is gone — there is no surface in the app that lists a deleted card's
+    // files — so a screenshot of a console or a private repository would sit on
+    // disk for good. After the row, and not inside a transaction with it: the
+    // delete is what the caller asked for, and a filesystem error must not
+    // report a card that IS deleted as still standing, nor swallow the
+    // broadcast the board redraws from.
+    try {
+      await this.attachments.removeTask(taskId);
+    } catch (error) {
+      this.logger.warn(
+        `could not drop attachments for task ${taskId}: ${String(error)}`,
+      );
+    }
     // Captured off the row BEFORE the delete rather than re-read after: a
     // soft-deleted task is invisible to `getById` (the `softDelete` filter),
     // so there is nothing left here to read `status`/`projectId` off of.
@@ -374,7 +400,7 @@ function toWire(task: Task): TaskWire {
     title: task.title,
     number: task.number,
     description: task.description,
-    attachments: parseAttachments(task.attachments),
+    attachments: parseTaskFiles(task.attachments),
     status: task.status,
     labels: parseLabels(task.labels),
     source: task.source,
@@ -429,34 +455,10 @@ function resolveTaskConfigDir(configDir: string): string {
 }
 
 /**
- * Labels are stored as a JSON array in a text column, like `Item.payload`.
- * A row whose text is unreadable renders as no labels rather than failing the
- * whole board: the column is a display detail, and one corrupt row must not
- * make the project unopenable.
+ * The card's labels, tolerating a column written by an older build or by a
+ * hand that edited the database — a corrupt row renders as NO labels rather
+ * than failing the whole board.
  */
-/**
- * A card's attached files, tolerating a column written by an older build or by
- * a hand that edited the database.
- *
- * Defensive for `parseLabels`' reason and one more: this list is READ into an
- * agent's prompt, so a malformed row must degrade to "no attachments" rather
- * than to a path-shaped fragment the agent then tries to open.
- */
-function parseAttachments(raw: string): TaskFileWire[] {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.flatMap((row) => {
-      const result = TaskFileSchema.safeParse(row);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
-  }
-}
-
 function parseLabels(raw: string): string[] {
   try {
     const parsed: unknown = JSON.parse(raw);

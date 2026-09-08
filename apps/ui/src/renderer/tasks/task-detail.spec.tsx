@@ -360,11 +360,21 @@ describe('priority and due date', () => {
   });
 
   /** Mount with a follow-up handler, which neither helper above offers. */
-  function withFollowUp(over: Partial<TaskDto> = {}): {
+  function withFollowUp(
+    over: Partial<TaskDto> = {},
+    // Supplied by the refusal case, which needs a send that reports a REFUSAL:
+    // whether the box empties is decided by the start's outcome.
+    handler?: (text: string) => boolean | void | Promise<boolean | void>,
+  ): {
     el: HTMLDivElement;
-    onFollowUp: ReturnType<typeof vi.fn<(text: string) => void>>;
+    onFollowUp: ReturnType<
+      typeof vi.fn<(text: string) => boolean | void | Promise<boolean | void>>
+    >;
   } {
-    const onFollowUp = vi.fn<(text: string) => void>();
+    const onFollowUp =
+      vi.fn<(text: string) => boolean | void | Promise<boolean | void>>(
+        handler,
+      );
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -398,7 +408,7 @@ describe('priority and due date', () => {
     expect(el.querySelector('#task-follow-up')).toBeNull();
   });
 
-  it('sends what was typed, trimmed, and empties the box', () => {
+  it('sends what was typed, trimmed, and empties the box once the run is confirmed', async () => {
     const { el, onFollowUp } = withFollowUp();
     const box = el.querySelector('#task-follow-up') as HTMLTextAreaElement;
     const setValue = Object.getOwnPropertyDescriptor(
@@ -410,7 +420,7 @@ describe('priority and due date', () => {
       box.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    act(() => {
+    await act(async () => {
       buttonNamed(el, 'Send').click();
     });
 
@@ -418,6 +428,36 @@ describe('priority and due date', () => {
     expect(
       (el.querySelector('#task-follow-up') as HTMLTextAreaElement).value,
     ).toBe('');
+  });
+
+  it('KEEPS what was typed when the run is refused', async () => {
+    // The box has no queue and nothing to recover from — a refused start that
+    // also emptied it would lose the user's words outright, which the
+    // composer's own send path does not do.
+    //
+    // FALSE is what a refusal actually looks like: `useBoard.runTask` resolves
+    // false when the worktree could not be made or the daemon declined, and
+    // surfaces the reason through the board's own error strip. A rejecting
+    // handler would be a shape no call site can produce.
+    const { el, onFollowUp } = withFollowUp({}, () => Promise.resolve(false));
+    const box = el.querySelector('#task-follow-up') as HTMLTextAreaElement;
+    const setValue = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    act(() => {
+      setValue?.call(box, 'Now do the other half.');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    await act(async () => {
+      buttonNamed(el, 'Send').click();
+    });
+
+    expect(onFollowUp).toHaveBeenCalledWith('Now do the other half.');
+    expect(
+      (el.querySelector('#task-follow-up') as HTMLTextAreaElement).value,
+    ).toBe('Now do the other half.');
   });
 
   it('withholds the box while an agent is working the card', () => {
@@ -582,7 +622,7 @@ describe('status', () => {
       expect(agentTrigger(el).textContent).toContain('Choose an agent');
     });
 
-    it('offers a way back to the project agent, clearing BOTH fields', () => {
+    it('offers a way back to the project agent, clearing every CLI-bound field', () => {
       const onSave = saveSpy();
       const el = detailWith({
         onSave,
@@ -594,11 +634,18 @@ describe('status', () => {
         buttonNamed(el, 'Use project agent').click();
       });
 
-      // Both, always: a reset that cleared only the agent would leave a card
-      // that had once named a workflow still running it.
+      // Every one of them, always. A reset that cleared only the agent would
+      // leave a card that had once named a workflow still running it — and one
+      // that kept the model, effort, approval mode or config directory would
+      // hand the project's own agent settings that belong to the CLI being
+      // left behind.
       expect(onSave).toHaveBeenCalledWith({
         agentKind: null,
         workflowSlug: null,
+        model: null,
+        effort: null,
+        approval: null,
+        configDir: null,
       });
     });
   });

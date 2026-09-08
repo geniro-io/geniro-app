@@ -1,45 +1,43 @@
 import type { ChatApprovalMode } from '../../agents/chat.types';
 import type { AgentKind } from '../../runs/runs.types';
-import type { ResolvedRunTarget, TaskRunStarter } from '../tasks.types';
+import type {
+  RunTargetProblem,
+  RunTargetProblemReason,
+  RunTargetResolution,
+  TaskRunStarter,
+} from '../tasks.types';
 
 /**
  * The approval mode an autopilot run is forced to.
  *
- * A mode that can ASK is refused rather than discouraged, and the reason is the
- * conductor's own (`apps/ui/src/main/autopilot-conductor.ts`): no approval
- * request expires — `approval-registry.ts` holds a plain Map with no timer —
- * and a turn's silence deadline is SUSPENDED while it waits on a verdict, so an
- * unattended turn does not time out, it waits forever, holding its slot against
- * the project's cap and its worktree on disk.
+ * A mode that can ASK deadlocks an unattended run: no approval request expires
+ * — `approval-registry.ts` holds a plain Map with no timer — and a turn's
+ * silence deadline is SUSPENDED while it waits on a verdict, so the turn does
+ * not time out, it waits forever, holding its slot against the project's cap
+ * and its worktree on disk. `auto` is the only mode that runs unattended: the
+ * daemon auto-approves plain permission requests at its own seam while still
+ * reserving the human card for a genuine question (`ClaudeAdapter.buildArgs`).
  *
- * **It was `acceptEdits`, which is exactly such a mode, and the board proved
- * it.** That value was chosen as the cautious one — auto-accept the file edits,
- * keep a human in front of everything else — and it does not survive contact
- * with a coding agent: `acceptEdits` maps to claude's own `--permission-mode`,
- * which auto-accepts EDITS and still routes every Bash call to the permission
- * prompt tool, i.e. to geniro's approval seam, i.e. to a card nobody is sitting
- * in front of. REPORTED with both of a board's unattended runs parked on
- * `Agent asks to run a tool · Bash` eleven minutes in — "он почему-то должен
- * быть опрувнутый же" — which is the deadlock this constant exists to prevent,
- * reached by the mode that was meant to prevent it. `auto` is the only value
- * that actually runs unattended: the DAEMON becomes the bypass, auto-approving
- * plain permission requests at its own seam while still reserving the human
- * card for a genuine question (see `ClaudeAdapter.buildArgs`).
+ * What arming AUTHORISES is the agent approving its own shell commands. The
+ * worktree bounds where the run writes, not what it can do — a command inside
+ * one can still read `~/.ssh`, pipe a download into a shell, or delete outside
+ * the checkout. The real bounds are that arming is per project and opt-in, the
+ * cap limits how many such runs exist at once, and the breaker stops the board
+ * after three consecutive failures.
  *
- * What that costs is real and worth stating: an autopilot run approves its own
- * commands. It is bounded by the machinery already around it — the run works in
- * its own git worktree on its own branch (`worktree-service.ts`), the cap
- * limits how many exist at once, and the breaker stops the board after three
- * consecutive failures — and it is opt-in per project, since arming the
- * autopilot is the user asking for work to happen while they are elsewhere.
- * A board that wants a human in the loop is a board that does not arm it.
+ * Forced HERE rather than trusted to arrive in the request: the resolution
+ * below is most-specific-first, so a project pinning `approval: 'ask'` would
+ * otherwise outrank the conductor's value and hang every unattended run on
+ * that board.
  *
- * It is forced HERE rather than trusted to arrive in the request, which is
- * where it used to live alone. A project or a card may pin an approval mode of
- * its own, and the resolution below is most-specific-first — so a project set
- * to `ask` would outrank the conductor's value and hang every unattended run on
- * that board. The client still sends it; this is what makes the guarantee
- * independent of the client keeping its promise.
+ * TWIN PARSER: `apps/ui/src/main/autopilot-conductor.ts` `AUTOPILOT_APPROVAL`.
+ * The conductor runs in the Electron main process, which imports no daemon
+ * source (that would pull the Nest graph into the main bundle), so the value
+ * is spelled once on each side. THIS copy is the one that ENFORCES it — the
+ * override below discards whatever the request carried — and the conductor's
+ * is what the request carries. Change one and change the other, or the value
+ * a run is started with stops matching the value the log and the arming copy
+ * describe.
  */
 export const AUTOPILOT_APPROVAL: ChatApprovalMode = 'auto';
 
@@ -54,6 +52,40 @@ export const AUTOPILOT_APPROVAL: ChatApprovalMode = 'auto';
  */
 export const NO_RUN_TARGET_REASON =
   'no agent or workflow — set one on this task, or a default for the project';
+
+/**
+ * The sentence for each way a card can be unstartable.
+ *
+ * One record rather than a branch per caller, for {@link NO_RUN_TARGET_REASON}'s
+ * own reason: the start route's exception and the queue's blocked list are the
+ * same fact reaching the user by two roads.
+ */
+export const RUN_TARGET_PROBLEM_REASON: Record<RunTargetProblemReason, string> =
+  {
+    'no-target': NO_RUN_TARGET_REASON,
+    'workflow-unattended':
+      'a workflow cannot run unattended — its nodes each carry their own approval mode, and one that asks would park forever; point this task at an agent, or start it yourself',
+  };
+
+/**
+ * The error code the START route refuses with, per problem.
+ *
+ * Beside the sentence rather than in the service, so adding a problem is one
+ * edit: the conductor logs the CODE (`autopilot-conductor.ts`'s `detailOf`),
+ * and a single code for every refusal is what made an unattended loop's log
+ * unable to say which card was wrong or why.
+ */
+export const RUN_TARGET_PROBLEM_CODE: Record<RunTargetProblemReason, string> = {
+  'no-target': 'TASK_RUN_NO_AGENT',
+  'workflow-unattended': 'TASK_RUN_WORKFLOW_UNATTENDED',
+};
+
+/** Narrows {@link resolveRunTarget}'s answer to the refusal arm. */
+export function isRunTargetProblem(
+  resolution: RunTargetResolution,
+): resolution is RunTargetProblem {
+  return resolution.kind === 'problem';
+}
 
 /**
  * One rung of the resolution: a request, a card, or a project.
@@ -88,25 +120,33 @@ export interface RunTargetLevel {
  * claude — which is exactly what per-field inheritance did before, silently,
  * because a model is an opaque string to everything between here and the CLI.
  *
- * Returns null when no level names anything: that is the card the board cannot
- * start, and both callers — the start route and the autopilot queue — turn it
- * into their own kind of refusal rather than guessing an agent.
+ * A refusal is RETURNED and NAMES which refusal it is: both callers — the start
+ * route and the autopilot queue — turn it into their own kind of message rather
+ * than guessing an agent, and a card that names a workflow it may not run needs
+ * a different sentence from one that names nothing at all.
  */
 export function resolveRunTarget(
   levels: readonly RunTargetLevel[],
   startedBy: TaskRunStarter = 'user',
-): ResolvedRunTarget | null {
+): RunTargetResolution {
   const deciding = levels.find(
     (level) =>
       nonEmpty(level.workflowSlug) !== null ||
       nonEmpty(level.agentKind) !== null,
   );
   if (deciding === undefined) {
-    return null;
+    return { kind: 'problem', reason: 'no-target' };
   }
 
   const workflowSlug = nonEmpty(deciding.workflowSlug);
   if (workflowSlug !== null) {
+    // The agent arm below can force ONE approval mode for an unattended run; a
+    // workflow has no such field to force, since `approval` is per NODE in the
+    // YAML and a node that asks is a legitimate thing to author. So the
+    // combination is refused here rather than started and left to park.
+    if (startedBy === 'autopilot') {
+      return { kind: 'problem', reason: 'workflow-unattended' };
+    }
     // The CLI-only fields are deliberately dropped rather than carried: a
     // workflow's nodes each name their own agent, model and approval in the
     // YAML, so there is nothing here for a run-level answer to apply to.

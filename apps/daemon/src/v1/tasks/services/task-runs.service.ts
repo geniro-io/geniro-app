@@ -18,13 +18,18 @@ import { isTerminalRunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
+  type ResolvedAgentTarget,
   type ResolvedRunTarget,
   type StartTaskRun,
-  TaskFileSchema,
-  type TaskFileWire,
   type TaskWire,
 } from '../tasks.types';
-import { NO_RUN_TARGET_REASON, resolveRunTarget } from '../utils/run-target';
+import {
+  isRunTargetProblem,
+  resolveRunTarget,
+  RUN_TARGET_PROBLEM_CODE,
+  RUN_TARGET_PROBLEM_REASON,
+} from '../utils/run-target';
+import { parseTaskFiles } from '../utils/task-files';
 import {
   composeTaskPrompt,
   TASK_REPORT_INSTRUCTIONS,
@@ -153,10 +158,10 @@ export class TaskRunsService {
     // Most specific first: this press, then the card, then the project. The
     // first rung naming a target decides whether an agent or a workflow runs.
     const target = resolveRunTarget([input, task, project], input.startedBy);
-    if (target === null) {
+    if (isRunTargetProblem(target)) {
       throw new BadRequestException(
-        'TASK_RUN_NO_AGENT',
-        `${NO_RUN_TARGET_REASON} (${project.id})`,
+        RUN_TARGET_PROBLEM_CODE[target.reason],
+        `${RUN_TARGET_PROBLEM_REASON[target.reason]} (${project.id})`,
       );
     }
     await this.assertNotAlreadyRunning(task, em);
@@ -183,9 +188,14 @@ export class TaskRunsService {
     // Before the create arms rather than inside them, because both are the
     // same decision: the run this card already holds is the run it should be
     // worked in, whichever engine made it.
-    const resumed = await this.resume(task, input, em);
-    if (resumed !== null) {
-      return resumed;
+    // A workflow target never continues a chat thread — the two engines share
+    // no channel — and the reverse is ruled out inside `resumableRun`. Between
+    // them a press only ever resumes a run of the engine it resolved to.
+    if (target.kind === 'agent') {
+      const resumed = await this.resume(task, input, target, em);
+      if (resumed !== null) {
+        return resumed;
+      }
     }
 
     // Held so `abandon` can take the run down with the rest. Without it a
@@ -278,15 +288,23 @@ export class TaskRunsService {
    * Continue the card's existing thread, or answer null when there is none to
    * continue and a new one has to be made.
    *
-   * FOUR states disqualify a run, and each one is a real card rather than a
-   * defensive branch: the card has never been run; its run was DELETED by the
-   * user (the conversation is gone, so there is nothing to continue); its run
-   * is a WORKFLOW run, which has no chat channel to send on — `sendMessage` is
-   * guarded by `assertChatRun` and would throw; or its run is ARCHIVED, which
-   * the daemon holds inert on purpose (`RUN_ARCHIVED`). In every one of them
-   * the answer is the same and it is not an error: make a new thread.
+   * The thread is continued only when it is the thread this press RESOLVES to.
+   * Continuity is worth having because the conversation is the card's history,
+   * but it is worth having only for the target the card now names: a card
+   * re-pointed at another agent, or at a workflow, would otherwise go on
+   * running the old one for good, with the panel showing the new one and no
+   * way out short of deleting the run.
    *
-   * A run still WORKING is not among them — `assertNotAlreadyRunning` has
+   * The resolved settings are applied to the thread before the turn starts, for
+   * the same reason — a model or an approval mode changed on the card is a
+   * change to how the next turn runs, not to how the next NEW thread runs. This
+   * is also what makes the autopilot's forced approval hold on this path:
+   * `chat.service.ts` reads the mode off the RUN row and falls back to `ask`,
+   * so a resumed unattended turn would otherwise park on a permission card
+   * forever, holding its slot and its worktree while the failure breaker sees
+   * nothing wrong.
+   *
+   * A run still WORKING is not a disqualifier — `assertNotAlreadyRunning` has
    * already refused the press by the time this is reached.
    *
    * On failure the card is put back where it came from, and the RUN is left
@@ -297,9 +315,10 @@ export class TaskRunsService {
   private async resume(
     task: Task,
     input: StartTaskRun,
+    target: ResolvedAgentTarget,
     em: EntityManager,
   ): Promise<TaskWire | null> {
-    const run = await this.resumableRun(task, em);
+    const run = await this.resumableRun(task, target, em);
     if (run === null) {
       return null;
     }
@@ -308,6 +327,33 @@ export class TaskRunsService {
       // create path's own reasoning: `recordRun` also writes the worktree and
       // branch this press prepared, and the settle path reads them.
       const wire = await this.recordRun(task.id, run.id, input);
+      // ONLY the fields that actually resolved, because `updateSettings`
+      // branches on a key's PRESENCE and not on its value. A null carried
+      // through is not "leave it alone" but an instruction: `configDir: null`
+      // reaches `moveToConfigDir`, which refuses outright for a CLI that reads
+      // no config directory at all — so every re-press on a cursor-agent card
+      // would 400 — and `model: null` is a CLEAR that takes the run's context
+      // window and model parameters with it. An unset rung omits the key,
+      // which is what the create arm's `?? undefined` already does.
+      const resolved = {
+        ...(target.approval === null ? {} : { approval: target.approval }),
+        // Omitted when it already IS the run's model, not only when it is
+        // unset. `updateSettings` reads a PRESENT `model` as a CHANGE and
+        // clears the run's context window and model parameters with it, so a
+        // re-press on an unchanged card would silently drop a `1m` window or
+        // an `optimize_for` the user picked inside that thread — the very loss
+        // the null-vs-absent split above exists to prevent, reached by sending
+        // a value rather than a null. `moveToConfigDir` takes the same stance
+        // one field over: a picker can re-choose what is already chosen.
+        ...(target.model === null || target.model === run.model
+          ? {}
+          : { model: target.model }),
+        ...(target.effort === null ? {} : { effort: target.effort }),
+        ...(target.configDir === null ? {} : { configDir: target.configDir }),
+      };
+      if (Object.keys(resolved).length > 0) {
+        await this.chats.updateSettings(run.id, resolved);
+      }
       await this.chats.sendMessage(run.id, this.continuation(task, input));
       return wire;
     } catch (error) {
@@ -319,9 +365,22 @@ export class TaskRunsService {
     }
   }
 
-  /** The card's own run, when it is one this daemon can send a message to. */
+  /**
+   * The card's own run, when it is one this press can actually continue.
+   *
+   * FIVE states disqualify a run, and each one is a real card rather than a
+   * defensive branch: the card has never been run; its run was DELETED by the
+   * user (the conversation is gone, so there is nothing to continue); its run
+   * is a WORKFLOW run, which has no chat channel to send on — `sendMessage` is
+   * guarded by `assertChatRun` and would throw `NOT_A_CHAT_RUN`; its run is
+   * ARCHIVED, which the daemon holds inert on purpose (`RUN_ARCHIVED`); or the
+   * card has since been re-pointed at a DIFFERENT agent, so continuing would
+   * send the new target's brief to the old CLI. In every one of them the answer
+   * is the same and it is not an error: make a new thread.
+   */
   private async resumableRun(
     task: Task,
+    target: ResolvedAgentTarget,
     em: EntityManager,
   ): Promise<Run | null> {
     if (task.runId === null) {
@@ -332,7 +391,8 @@ export class TaskRunsService {
       !run ||
       run.workflowId !== null ||
       run.archivedAt !== null ||
-      !isTerminalRunStatus(run.status)
+      !isTerminalRunStatus(run.status) ||
+      run.agentKind !== target.agentKind
     ) {
       return null;
     }
@@ -349,7 +409,11 @@ export class TaskRunsService {
    * chat after somebody's folder.
    */
   private brief(task: Task, input: StartTaskRun): string {
-    return composeTaskPrompt(task, attachedFiles(task), input.prompt);
+    return composeTaskPrompt(
+      task,
+      parseTaskFiles(task.attachments),
+      input.prompt,
+    );
   }
 
   /**
@@ -493,7 +557,7 @@ export class TaskRunsService {
     if ((input.startedBy ?? 'user') !== 'autopilot') {
       return;
     }
-    const queue = await this.queue.read(project.id);
+    const queue = await this.queue.readRaw(project.id);
     if (queue.breakerOpen) {
       throw new ConflictException(
         'AUTOPILOT_BREAKER_OPEN',
@@ -547,28 +611,6 @@ export class TaskRunsService {
       );
     }
     return project;
-  }
-}
-
-/**
- * The files bound to a card, read off its own column for the prompt.
- *
- * Tolerant like every other read of this column: a malformed row degrades to
- * "no attachments" rather than to a path-shaped fragment the agent then tries
- * to open.
- */
-function attachedFiles(task: Task): TaskFileWire[] {
-  try {
-    const parsed: unknown = JSON.parse(task.attachments);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    return parsed.flatMap((row) => {
-      const result = TaskFileSchema.safeParse(row);
-      return result.success ? [result.data] : [];
-    });
-  } catch {
-    return [];
   }
 }
 

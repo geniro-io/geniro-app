@@ -34,8 +34,17 @@ export interface ConfigDirCapabilityState {
  */
 export function configDirCapabilityFrom(
   capabilities: CapabilitiesDto | null,
-  /** Whether a daemon is connected at all — `loading` is meaningless without one. */
-  hasApi: boolean,
+  /**
+   * `useCapabilities`'s own `loading`, passed in rather than derived here.
+   *
+   * This used to be `hasApi` and the state was computed as
+   * `byAgent === null && hasApi` — which never cleared after a FAILED read,
+   * since that fails open to `capabilities: null`. `ConfigDirSelect`'s waiting
+   * state then spun for the life of the daemon handle, stating "still asking"
+   * about a probe that had already given up. The hook is the only thing that
+   * knows a read SETTLED, so it is the only thing that can answer this.
+   */
+  loading: boolean,
 ): ConfigDirCapabilityState {
   const byAgent = capabilities
     ? new Map(
@@ -47,6 +56,6 @@ export function configDirCapabilityFrom(
     // `get` on an absent agent yields undefined, which is exactly the
     // "no answer for this CLI" the caller must not read as a refusal.
     unavailableReasonFor: (agent) => byAgent?.get(agent),
-    loading: byAgent === null && hasApi,
+    loading,
   };
 }

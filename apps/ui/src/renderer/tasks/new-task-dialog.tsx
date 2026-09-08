@@ -6,6 +6,7 @@ import { ExpandableTextarea } from '../components/expandable-textarea';
 import { Button } from '../components/ui/button';
 import { Dialog } from '../components/ui/dialog';
 import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
 import { cn } from '../components/ui/utils';
 import {
   PropertyGroup,
@@ -180,9 +181,15 @@ export function NewTaskDialog({
         </PropertyGroup>
 
         <div className="flex flex-col gap-2 border-t border-border pt-3">
-          <h3 className="text-[10px] font-medium tracking-wider text-muted-foreground/70 uppercase">
+          {/* A `Label` rather than a heading, wearing the caption's styling:
+              `ExpandableTextarea` forwards the id to a real `Textarea`, so
+              `htmlFor` genuinely associates them and clicking the word focuses
+              the field. */}
+          <Label
+            htmlFor="new-task-description"
+            className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
             Description
-          </h3>
+          </Label>
           <ExpandableTextarea
             id="new-task-description"
             value={description}

@@ -281,8 +281,24 @@ export class TaskSettleService implements OnModuleInit {
     em: EntityManager,
   ): Promise<string | null> {
     const nodeIds = await this.terminalNodesOf(run.workflowId);
+    const found = await this.findReportAmong(run.id, nodeIds, em);
+    if (found !== null || nodeIds === undefined) {
+      return found;
+    }
+    // The workflow can be edited between this run finishing and its card
+    // settling, moving its terminal node ids — a stale set matches no row of
+    // this run just as an absent one would, so the filtered miss falls back
+    // to the unfiltered read rather than reporting no result at all.
+    return this.findReportAmong(run.id, undefined, em);
+  }
+
+  private async findReportAmong(
+    runId: string,
+    nodeIds: string[] | undefined,
+    em: EntityManager,
+  ): Promise<string | null> {
     const findings = await this.itemDao.latestOfKind(
-      run.id,
+      runId,
       'report_findings',
       undefined,
       em,
@@ -292,7 +308,7 @@ export class TaskSettleService implements OnModuleInit {
       return findings.id;
     }
     const message = await this.itemDao.latestOfKind(
-      run.id,
+      runId,
       'message',
       'assistant',
       em,

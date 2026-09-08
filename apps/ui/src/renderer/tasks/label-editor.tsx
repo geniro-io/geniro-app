@@ -143,7 +143,7 @@ export function LabelEditor({
           labels rather than as a set to choose from. */}
       {adding && shown.length > 0 ? (
         <div className="flex w-full flex-wrap items-center gap-1.5 pt-1">
-          <span className="text-[10px] tracking-wide text-muted-foreground/70 uppercase">
+          <span className="text-[10px] tracking-wide text-muted-foreground uppercase">
             existing
           </span>
           {shown.map((label) => (

@@ -100,6 +100,11 @@ export function useDescriptionPaste({
       event.preventDefault();
       setError(null);
       setUploading(true);
+      // Captured synchronously: `insertText` writes wherever the caret is, and
+      // the field this paste came from may not be the one focused once the
+      // upload lands — a title `Input` elsewhere on the card autosaves on blur,
+      // so a misdirected insertion is not just a wrong link, it is persisted.
+      const field = event.currentTarget;
       void readAsBase64(image)
         .then((data64) =>
           tasksApi.addTaskAttachment({
@@ -112,15 +117,17 @@ export function useDescriptionPaste({
           }),
         )
         .then((saved) => {
-          // The FIELD may have lost focus while the bytes were in flight, and
-          // `insertText` writes wherever the caret is — so a failed insertion
-          // is reported rather than dropped, since the file is already on disk
-          // and the user has no other way to reference it.
-          const written = document.execCommand(
-            'insertText',
-            false,
-            `![${saved.name || PASTED_NAME}](${saved.path})`,
-          );
+          // Only insert while the paste's own field is still focused; a failed
+          // or redirected insertion is reported rather than dropped or sent
+          // elsewhere, since the file is already on disk and the user has no
+          // other way to reference it.
+          const written =
+            document.activeElement === field &&
+            document.execCommand(
+              'insertText',
+              false,
+              `![${saved.name || PASTED_NAME}](${saved.path})`,
+            );
           if (!written) {
             setError(
               `The image was saved to ${saved.path}, but could not be written into the description — click into it and paste again.`,

@@ -1,9 +1,10 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { TaskDao } from '../../tasks/dao/task.dao';
+import { removeTaskAttachments } from '../../tasks/utils/task-attachments';
 import { ProjectDao } from '../dao/project.dao';
 import { Project } from '../entity/project.entity';
 import type { ProjectWire } from '../projects.types';
@@ -24,6 +25,8 @@ const MAX_PROJECTS = 200;
  */
 @Injectable()
 export class ProjectsService {
+  private readonly logger = new Logger(ProjectsService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly projectDao: ProjectDao,
@@ -72,7 +75,7 @@ export class ProjectsService {
         name: input.name,
         // Derived ONCE, here, and owned by the row from then on: a rename must
         // not renumber cards that have already been quoted somewhere.
-        taskKey: projectKey(input.name),
+        taskKey: await this.freeTaskKey(input.name, em),
         folder,
         groupId: input.groupId ?? null,
         agentKind: input.agentKind ?? null,
@@ -220,6 +223,7 @@ export class ProjectsService {
   ): Promise<{ deleted: boolean; tasksRemoved: number }> {
     const em = this.em.fork();
     await this.require(projectId, em);
+    const doomed = await this.taskDao.listForProject(projectId, em);
     const tasksRemoved = await this.taskDao.countInProject(projectId, em);
     // One transaction, because half of this is worse than none of it: the
     // tasks go first, so a failure between the two writes would leave a board
@@ -228,7 +232,69 @@ export class ProjectsService {
       await this.taskDao.deleteForProject(projectId, tx);
       await this.projectDao.deleteById(projectId, tx);
     });
+    // Each card's pasted images, on `TasksService.remove`'s own reasoning:
+    // after the rows, outside the transaction, and one failure stepped over
+    // rather than thrown — the board is already gone, so a permission error on
+    // one directory must not report a delete that happened as having failed.
+    for (const task of doomed) {
+      try {
+        await removeTaskAttachments(task.id);
+      } catch (error) {
+        this.logger.warn(
+          `could not drop attachments for task ${task.id}: ${String(error)}`,
+        );
+      }
+    }
     return { deleted: true, tasksRemoved };
+  }
+
+  /**
+   * The card key this project will use — the derived one, or the first free
+   * variant of it.
+   *
+   * Nothing keeps `taskKey` unique and no client can set or edit it: it is
+   * DERIVED, one initial per word, so two boards collide readily and every
+   * name with no Latin letters at all derives the same fallback. The chat
+   * sidebar draws `Run.taskIdentifier` in ONE global list, so a collision puts
+   * two different cards on screen both labelled `GW-12`, with nothing to tell
+   * them apart.
+   *
+   * A digit is APPENDED rather than the create refused — unlike the folder
+   * check below, which refuses. The difference is whose value it is: a folder
+   * is chosen by the user and a clash is theirs to resolve, while this string
+   * is one they never typed and cannot see, so blocking a create over it would
+   * be refusing them for something they did not do.
+   *
+   * Settled ONCE, here, and never re-derived per task: the invariant is that
+   * every PROJECT holds a distinct key, from which a run's label being
+   * unambiguous follows for free. Asked at task-create time it would be a
+   * different and weaker rule — the label is stamped onto the run row and
+   * outlives the card, so a key that was unique when a task was made says
+   * nothing about the key a later board is given.
+   */
+  private async freeTaskKey(name: string, em: EntityManager): Promise<string> {
+    const base = projectKey(name);
+    // Every key ever ISSUED, not every key currently held: see
+    // `ProjectDao.listIssuedTaskKeys` for why a deleted board's key may not be
+    // handed out again.
+    const taken = new Set(await this.projectDao.listIssuedTaskKeys(em));
+    if (!taken.has(base)) {
+      return base;
+    }
+    // Bounded by PIGEONHOLE rather than by the project cap, which no longer
+    // bounds `taken` now that it counts deleted boards too: among the
+    // `taken.size + 1` candidates this loop tries, at most `taken.size` can be
+    // taken, so one of them is always free and the fallback below is
+    // unreachable. Sizing this by `MAX_PROJECTS` instead would let a machine
+    // that had created and deleted enough boards exhaust the loop and fall back
+    // to a `base` it had just proved was taken.
+    for (let suffix = 2; suffix <= taken.size + 2; suffix += 1) {
+      const candidate = `${base}${suffix}`;
+      if (!taken.has(candidate)) {
+        return candidate;
+      }
+    }
+    return base;
   }
 
   /**

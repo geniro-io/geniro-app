@@ -16,6 +16,38 @@ const JUMP_MARK_MS = 2_500;
 const JUMP_MARGIN_PX = 24;
 
 /**
+ * How many frames a landing keeps re-aiming while the rows above it settle.
+ *
+ * ONE alignment is only correct if every row above the target has already
+ * reached its final height, and after `loadAround` fetches an older window that
+ * is not true: a transcript page is markdown, diffs, fenced code and tool
+ * groups, and their boxes grow over the frames after the commit. Everything
+ * that grows ABOVE the target pushes it down by exactly that much, and nothing
+ * corrects it — the tail-follow is deliberately off by then.
+ *
+ * REPORTED as "он скроллит меня в какое-то непонятное место, но не к этому
+ * сообщению", and measured in the running app on a 30k-row conversation: the
+ * jump marked the right row (seq 30444) and parked it **28,877px** below the
+ * top of the viewport, unmoved two seconds later.
+ *
+ * Bounded on both sides. It stops the moment the row is within
+ * {@link JUMP_SETTLE_TOLERANCE_PX}, so a landing that was right the first time
+ * costs one extra measurement; and it gives up after this many frames whatever
+ * happens, so a transcript that never stops growing cannot hold the scroller
+ * hostage. ~10 frames is about 160ms — inside the same gesture, which is what
+ * keeps this from fighting a reader who has started scrolling.
+ */
+const JUMP_SETTLE_FRAMES = 10;
+
+/**
+ * How close is close enough to stop re-aiming.
+ *
+ * A few pixels of drift is invisible and re-aiming for it would spend the whole
+ * frame budget on rounding.
+ */
+const JUMP_SETTLE_TOLERANCE_PX = 4;
+
+/**
  * The anchor a jump to `seq` should land on: the last one whose own start is
  * not past it.
  *
@@ -133,11 +165,37 @@ export function useTranscriptJump({
         return null;
       }
       followingRef.current = false;
-      scroller.scrollTop +=
+      /** How far the target still is from where it should be parked. */
+      const drift = (): number =>
         target.getBoundingClientRect().top -
         scroller.getBoundingClientRect().top -
         JUMP_MARGIN_PX;
+      scroller.scrollTop += drift();
       setAboveTail(!isScrolledToBottom(scroller));
+      // Then RE-AIM for a few frames, because one alignment is only correct if
+      // the rows above the target have finished growing — see
+      // {@link JUMP_SETTLE_FRAMES}. Each pass re-measures rather than replaying
+      // the first delta: what moved is the content, so the old number is
+      // exactly the wrong correction.
+      let frames = 0;
+      const settle = (): void => {
+        // The window can be replaced under us — a reopened chat, another jump —
+        // and a detached node reports a zero rect, which would scroll the
+        // reader to the top for no reason.
+        if (!target.isConnected || !scroller.isConnected) {
+          return;
+        }
+        const off = drift();
+        if (Math.abs(off) > JUMP_SETTLE_TOLERANCE_PX) {
+          scroller.scrollTop += off;
+          setAboveTail(!isScrolledToBottom(scroller));
+        }
+        frames += 1;
+        if (frames < JUMP_SETTLE_FRAMES) {
+          requestAnimationFrame(settle);
+        }
+      };
+      requestAnimationFrame(settle);
       return Number(target.dataset.transcriptSeq);
     },
     [endRef, followingRef, setAboveTail],

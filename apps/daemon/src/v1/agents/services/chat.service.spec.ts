@@ -381,11 +381,13 @@ class FakeItemDao {
     const row = rows[rows.length - 1];
     return row ? { seq: row.seq, payload: row.payload } : null;
   }
-  async subagentInfoRows(runId: string): Promise<Pick<Item, 'payload'>[]> {
+  async subagentInfoRows(
+    runId: string,
+  ): Promise<Pick<Item, 'payload' | 'nodeId'>[]> {
     return this.items
       .filter((i) => i.runId === runId && i.kind === 'subagent_info')
       .sort((a, b) => a.seq - b.seq)
-      .map((i) => ({ payload: i.payload }));
+      .map((i) => ({ payload: i.payload, nodeId: i.nodeId }));
   }
   async allSubagentInfoRows(): Promise<Pick<Item, 'runId' | 'payload'>[]> {
     return this.items
@@ -3999,6 +4001,39 @@ describe('ChatService', () => {
       .filter((i) => i.kind === 'unanswerable')
       .map((i) => JSON.parse(i.payload));
     expect(dead).toEqual([{ id: 'req-open', toolName: 'Bash' }]);
+  });
+
+  it('closes a stranded delegate UNDER the node that launched it', async () => {
+    // REPORTED as "он пишет, что один из app-агентов активен, хотя он же должен
+    // быть закончен", over a finished workflow run whose QA card read
+    // `11 active · 14 threads`. The repair was running and reaching nothing:
+    // measured on that run's own rows, 22 opens carried `node_id = 'qa'` and
+    // all 11 closes carried NULL, because this service is the chat path and a
+    // chat has no nodes. The renderer folds delegates per AGENT, so a close
+    // filed at run level closes none of them.
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+    });
+    await itemDao.create({
+      runId: run.id,
+      nodeId: 'qa',
+      seq: 0,
+      kind: 'subagent_info',
+      payload: JSON.stringify({ id: 'Task_92', backgroundOpen: true }),
+    });
+
+    await service.reconcileStrandedDelegates();
+
+    const closes = (await itemDao.getByRun(run.id)).filter(
+      (i) =>
+        i.kind === 'subagent_info' &&
+        JSON.parse(i.payload).backgroundOutcome != null,
+    );
+    expect(closes).toHaveLength(1);
+    // The whole of the fix: the close has to land where the opens are.
+    expect(closes[0]!.nodeId).toBe('qa');
   });
 
   it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {

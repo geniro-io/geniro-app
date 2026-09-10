@@ -211,7 +211,35 @@ export class ChatTitleService implements OnModuleInit {
     this.bus.all().subscribe((event) => {
       // `nodeId` is the cheap half of the chat-run test and costs no query: the
       // chat path persists null, the graph executor persists a node's id.
+      //
+      // A WORKFLOW run is the reason this is no longer an unconditional return.
+      // Its conversation happens under its NODES, so the run's own stream holds
+      // almost nothing until the whole thing settles — measured on a real run:
+      // one user message, eleven `subagent_info` rows and one `turn_complete`
+      // out of 573 items. Naming therefore had exactly one trigger, the run
+      // ENDING, which on the work this app is for is an hour after anybody went
+      // looking for the row in the sidebar. That is the reported "for workflows
+      // title is not generating automatically": the derivation had run and its
+      // result is the raw opening line, which is all `titleFromText` can make of
+      // a pasted URL.
+      //
+      // The gate is the same one the chat path uses one branch down, and it is
+      // checked BEFORE the run is read so the cheapness this comment claims
+      // stays true: `earlyAskIsDue` is a map lookup, and only a node that has
+      // demonstrably started work gets past it. `name` re-reads the run and
+      // returns at once for anything that is not a workflow, so a chat whose
+      // item somehow carried a node id is unchanged.
       if (event.item.nodeId !== null) {
+        if (agentHasStarted(event.item) && this.earlyAskIsDue(event.runId)) {
+          this.lastEarlyAskAt.set(event.runId, this.now());
+          void this.name(event.runId).catch((err) => {
+            this.logger.warn(
+              `failed to name run ${event.runId}: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+        }
         return;
       }
       // The user's OWN message names the chat at once, without waiting for the
@@ -350,7 +378,8 @@ export class ChatTitleService implements OnModuleInit {
       if (!run) {
         return;
       }
-      // A WORKFLOW run is named from its seed prompt and never asks a CLI.
+      // A WORKFLOW run is named from its seed prompt, then UPGRADED by asking
+      // one of its own nodes' CLIs.
       //
       // It used to be skipped outright, on the reading that the workflow's own
       // name is already a true label. That holds for ONE run and fails for two:
@@ -362,41 +391,72 @@ export class ChatTitleService implements OnModuleInit {
       // is the pairing the ask asked for — the title says what this run is
       // doing, the chip says what it is.
       //
-      // DERIVED only, and that is not a compromise. The upgrade replaces a
-      // derived title with the name an AGENT gave the conversation, which needs
-      // one CLI to ask; a workflow is N conversations and `run.agentKind` is
-      // null for exactly that reason. The seed prompt is also the better source
-      // here than any node's transcript would be — the run IS that one task,
-      // handed to a fleet, and the prompt is the user's own statement of it.
+      // It was then DERIVED-only, on the reading that the upgrade "needs one
+      // CLI to ask; a workflow is N conversations and `run.agentKind` is null
+      // for exactly that reason". The premise is true and the conclusion does
+      // not follow: every node STAMPS the CLI that actually ran it
+      // (`NodeState.agentKind`), so the run can name one after all — the node
+      // that started FIRST, which is the one handed the user's own task. That
+      // is the reported "for workflows title is not generating automatically",
+      // against a row reading `review it https://github.com/ma…`, which is the
+      // whole of what `titleFromText` can make of an opening that is a pasted
+      // URL. The derivation was working; it had simply nothing to work with.
+      //
+      // The NATIVE read is deliberately skipped here, and that is the one place
+      // this path is not the chat path. A CLI's own session title names the
+      // conversation IT holds, and for a workflow that is one NODE's
+      // conversation — the QA agent's name for its own thread, over a run the
+      // manager is coordinating. Only the ask is given the run's own seed
+      // prompt, so only the ask can answer about the run.
       if (run.workflowId !== null) {
         // `title === null` is "unnamed" here exactly as it is for a chat — the
         // executor stamps nothing — so anything already written is either this
-        // derivation or the user's own rename, and neither is improved on by
-        // re-deriving.
-        if (run.title !== null) {
+        // derivation or the user's own rename.
+        if (run.title === null) {
+          const seed = await this.itemDao.firstUserMessageText(run.id, em);
+          const derived =
+            seed === null ? null : titleFromText(seed, CHAT_TITLE_MAX_CHARS);
+          if (derived === null || derived === '') {
+            return;
+          }
+          if (!(await this.runDao.retitle(runId, derived, run.title, em))) {
+            return;
+          }
+          this.bus.publishRunStatus({ runId, status: null, title: derived });
           return;
         }
-        const seed = await this.itemDao.firstUserMessageText(run.id, em);
-        const derived =
-          seed === null ? null : titleFromText(seed, CHAT_TITLE_MAX_CHARS);
-        if (derived === null || derived === '') {
+        // The message path names an unnamed run and stops there, exactly as it
+        // does for a chat one branch down: reaching the upgrade would spend the
+        // run's few attempts on every message the user ever sends, to ask a
+        // question only a turn can have changed the answer to.
+        if (unnamedOnly) {
           return;
         }
-        if (!(await this.runDao.retitle(runId, derived, run.title, em))) {
+        const nodeAgent = await this.nodeStateDao.firstAgentKind(run.id, em);
+        // No node has taken a turn yet, so there is no CLI to ask and nothing
+        // for one to read — the derived title stands until a node starts.
+        if (nodeAgent === null) {
           return;
         }
-        this.bus.publishRunStatus({ runId, status: null, title: derived });
+        const upgraded = await this.upgrade(run, nodeAgent, em, mayAsk, false);
+        if (upgraded === null) {
+          return;
+        }
+        if (!(await this.runDao.retitle(runId, upgraded, run.title, em))) {
+          return;
+        }
+        this.bus.publishRunStatus({ runId, status: null, title: upgraded });
         return;
       }
       if (run.agentKind === null) {
         return;
       }
-      // Narrowed above; restated so the two paths need not re-check it.
-      const named = run as Run & { agentKind: AgentKind };
+      // Narrowed above; bound to a local so the two paths need not re-check it.
+      const agentKind = run.agentKind;
       const title =
         run.title === null
-          ? await this.resolve(named, em)
-          : await this.upgrade(named, em, mayAsk);
+          ? await this.resolve(run, agentKind, em)
+          : await this.upgrade(run, agentKind, em, mayAsk);
       if (title === null) {
         return;
       }
@@ -443,9 +503,19 @@ export class ChatTitleService implements OnModuleInit {
    * "it did not work" — keeps its full read budget.
    */
   private async upgrade(
-    run: Run & { agentKind: AgentKind },
+    run: Run,
+    agentKind: AgentKind,
     em: EntityManager,
     mayAsk: boolean,
+    /**
+     * Whether the CLI's own session title may be read first.
+     *
+     * True for a chat, whose one session IS the conversation. False for a
+     * workflow run, where the session belongs to one NODE and its title
+     * describes that node's thread rather than the run — see the workflow
+     * branch in {@link name}.
+     */
+    readNative = true,
   ): Promise<string | null> {
     const tried = this.upgradesTried.get(run.id) ?? 0;
     if (tried >= CHAT_TITLE_UPGRADE_TURNS) {
@@ -463,8 +533,8 @@ export class ChatTitleService implements OnModuleInit {
       return null;
     }
     const better =
-      (await this.readNativeTitle(run, em)) ??
-      (mayAsk ? await this.askForTitle(run, em, opening) : null);
+      (readNative ? await this.readNativeTitle(run, agentKind, em) : null) ??
+      (mayAsk ? await this.askForTitle(run, agentKind, em, opening) : null);
     if (better === null) {
       return null;
     }
@@ -489,7 +559,8 @@ export class ChatTitleService implements OnModuleInit {
    * so a CLI that could not be asked costs a better name and nothing else.
    */
   private async askForTitle(
-    run: Run & { agentKind: AgentKind },
+    run: Run,
+    agentKind: AgentKind,
     em: EntityManager,
     opening: string,
   ): Promise<string | null> {
@@ -513,7 +584,7 @@ export class ChatTitleService implements OnModuleInit {
       // nothing later than the opening, and repeating it would spend prompt on
       // the same two messages under a second heading.
       const latest = asked === 0 ? null : await this.latestExchange(run.id, em);
-      const title = await this.adapters.for(run.agentKind).generateTitle({
+      const title = await this.adapters.for(agentKind).generateTitle({
         opening,
         reply: await this.itemDao.firstAssistantMessageText(run.id, em),
         latest,
@@ -527,7 +598,7 @@ export class ChatTitleService implements OnModuleInit {
         // this service had never looked at. That silence is why the defect
         // survived two fixes.
         this.logger.debug(
-          `run ${run.id}: ${run.agentKind} produced no title on ask ${asked + 1}`,
+          `run ${run.id}: ${agentKind} produced no title on ask ${asked + 1}`,
         );
       }
       return title;
@@ -575,10 +646,11 @@ export class ChatTitleService implements OnModuleInit {
 
   /** The CLI's own title, else one derived from the opening message. */
   private async resolve(
-    run: Run & { agentKind: AgentKind },
+    run: Run,
+    agentKind: AgentKind,
     em: EntityManager,
   ): Promise<string | null> {
-    const native = await this.readNativeTitle(run, em);
+    const native = await this.readNativeTitle(run, agentKind, em);
     const text =
       native ?? (await this.itemDao.firstUserMessageText(run.id, em));
     if (text === null) {
@@ -597,7 +669,8 @@ export class ChatTitleService implements OnModuleInit {
    * apart.
    */
   private async readNativeTitle(
-    run: Run & { agentKind: AgentKind },
+    run: Run,
+    agentKind: AgentKind,
     em: EntityManager,
   ): Promise<string | null> {
     try {
@@ -611,7 +684,7 @@ export class ChatTitleService implements OnModuleInit {
       // first turn of a brand-new chat is exactly that case.
       return sessionId === null
         ? null
-        : await this.adapters.for(run.agentKind).readSessionTitle(sessionId);
+        : await this.adapters.for(agentKind).readSessionTitle(sessionId);
     } catch (err) {
       this.logger.warn(
         `session title lookup for run ${run.id} failed: ${

@@ -1014,6 +1014,22 @@ export class GraphExecutorService {
       try {
         // On-demand callees that were never called settle 'skipped' so their
         // chips don't read as pending forever.
+        //
+        // The node state ALONE, deliberately — no transcript row. It used to
+        // write one as well, which the agents panel then said again from this
+        // very column, so a run whose manager routed everything to one
+        // specialist closed with `− Engineer skipped — never called` and
+        // `− Researcher skipped — never called` in the conversation. REPORTED
+        // as "он написал, что never called engineer или researcher, и нам не
+        // нужно этого писать": a node that was never called has, by
+        // construction, nothing to say — those two rows were the whole of its
+        // transcript presence — so the row reported an absence of events as
+        // though it were one.
+        //
+        // The distinction is which SURFACE answers which question. The panel
+        // lists every node in the graph and what became of it, so "why is
+        // Engineer not here" is answered there, permanently, off `node_state`.
+        // The transcript is what HAPPENED, and nothing happened.
         for (const node of nodes) {
           if (
             !onDemand.has(node.id) ||
@@ -1027,11 +1043,6 @@ export class GraphExecutorService {
             { status: 'skipped', endedAt: Date.now() },
             em,
           );
-          await persistItem(node.id, 'status', null, {
-            nodeId: node.id,
-            status: 'skipped',
-            reason: 'never called',
-          });
         }
         // A user cancel rolls up cancelled; any other non-completed node (a
         // failure, or a CLI killed externally without cancel()) is a failure —

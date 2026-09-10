@@ -275,6 +275,25 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain(
       '− Epilogue skipped — an upstream node did not complete',
     );
+
+    // But a `never called` skip is an ABSENCE, and absences are not events.
+    // REPORTED as "он написал, что never called engineer или researcher, и нам
+    // не нужно этого писать": a workflow whose manager routed everything to one
+    // specialist closed with two of these in the conversation, restating what
+    // the agents panel says from `node_state` for every node in the graph. The
+    // daemon no longer writes them; this is what makes an EXISTING transcript
+    // read right, since no daemon change reaches rows already on disk.
+    render(
+      <TranscriptItem
+        item={item(
+          'status',
+          { status: 'skipped', reason: 'never called' },
+          'epilogue',
+        )}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toBe('');
   });
 
   it('a trigger node\'s status row is hidden entirely ("start → completed" noise)', () => {

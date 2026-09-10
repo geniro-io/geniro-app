@@ -21,6 +21,7 @@ import type {
   ChatExportDto,
   ChatMetricsDto,
   ChatSearchResultDto,
+  ChatShellsDto,
   ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -34,6 +35,7 @@ import type {
   SendMessageDto,
   SetRunGroupDto,
   SetRunPinnedDto,
+  ShellKillDto,
   ShellOutputDto,
   SweepArchivedDto,
   SweptArchivedDto,
@@ -60,6 +62,11 @@ export interface ChatsApiExportChatRequest {
     runId: string;
 }
 
+export interface ChatsApiKillChatShellRequest {
+    runId: string;
+    callId: string;
+}
+
 export interface ChatsApiListChatsRequest {
     scope?: ListChatsScopeEnum;
 }
@@ -77,6 +84,10 @@ export interface ChatsApiReadChatAttachmentRequest {
 }
 
 export interface ChatsApiReadChatMetricsRequest {
+    runId: string;
+}
+
+export interface ChatsApiReadChatShellsRequest {
     runId: string;
 }
 
@@ -417,6 +428,62 @@ export class ChatsApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async killChatShellRaw(requestParameters: ChatsApiKillChatShellRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ShellKillDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling killChatShell().'
+            );
+        }
+
+        if (requestParameters['callId'] == null) {
+            throw new runtime.RequiredError(
+                'callId',
+                'Required parameter "callId" was null or undefined when calling killChatShell().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        if (requestParameters['callId'] != null) {
+            queryParameters['callId'] = requestParameters['callId'];
+        }
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/shells/kill`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async killChatShell(requestParameters: ChatsApiKillChatShellRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ShellKillDto> {
+        const response = await this.killChatShellRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async listChatsRaw(requestParameters: ChatsApiListChatsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<RunDto>>> {
         const queryParameters: any = {};
 
@@ -607,6 +674,51 @@ export class ChatsApi extends runtime.BaseAPI {
      */
     async readChatMetrics(requestParameters: ChatsApiReadChatMetricsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatMetricsDto> {
         const response = await this.readChatMetricsRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async readChatShellsRaw(requestParameters: ChatsApiReadChatShellsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ChatShellsDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling readChatShells().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/chats/{runId}/shells`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async readChatShells(requestParameters: ChatsApiReadChatShellsRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ChatShellsDto> {
+        const response = await this.readChatShellsRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

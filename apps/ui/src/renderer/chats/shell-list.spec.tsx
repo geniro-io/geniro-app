@@ -30,15 +30,21 @@ const shell = (over: Partial<ShellRun> = {}): ShellRun =>
 function render(
   shells: ShellRun[],
   agentNameOf?: ReadonlyMap<string, string>,
+  onKill?: (shell: ShellRun) => void,
 ): HTMLElement {
   container = document.createElement('div');
   document.body.append(container);
   root = createRoot(container);
   act(() => {
-    root.render(<ShellRows shells={shells} agentNameOf={agentNameOf} />);
+    root.render(
+      <ShellRows shells={shells} agentNameOf={agentNameOf} onKill={onKill} />,
+    );
   });
   return container;
 }
+
+const killButton = (el: HTMLElement): HTMLButtonElement | null =>
+  el.querySelector<HTMLButtonElement>('[data-slot="shell-kill"]');
 
 afterEach(() => {
   act(() => root.unmount());
@@ -125,5 +131,50 @@ describe('ShellRows', () => {
     const el = render([shell({ startedAt: 'not-a-date' })]);
     expect(el.textContent).toContain('sleep 400');
     expect(el.textContent).not.toMatch(/\d+s/);
+  });
+
+  it('offers NO stop control to a caller that handed it none', () => {
+    // The rule every list on this surface follows: it never invents a surface
+    // it was not given. A button that looked like it stopped a command and did
+    // nothing is worse here than in most places, because the reader would go
+    // looking for the process by hand having been told it was dealt with.
+    expect(killButton(render([shell()]))).toBeNull();
+  });
+
+  it('takes TWO presses to stop a command', () => {
+    // Killing a `pnpm dev` is destructive and there is no undo, and these rows
+    // are hover-height inside a popover — exactly where a stray click lands. So
+    // it goes through the app's one `ConfirmButton`: the first press ARMS (the
+    // control paints itself destructive) and only the second fires.
+    const onKill = vi.fn();
+    const el = render([shell()], undefined, onKill);
+    const button = killButton(el)!;
+    const resting = button.className;
+
+    act(() => button.click());
+
+    expect(onKill).not.toHaveBeenCalled();
+    // The arming has to be VISIBLE, or the second press is a surprise. jsdom
+    // computes no CSS, so the emitted class IS the mechanism here.
+    expect(button.className).not.toBe(resting);
+
+    act(() => button.click());
+
+    expect(onKill).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }));
+  });
+
+  it('names the command it stops, since the row above it truncates', () => {
+    // The command is the flex column and is routinely a pipeline, so the row's
+    // own text is not a reliable answer to "which one am I about to stop" —
+    // which is the question worth answering on the press that cannot be undone.
+    const el = render(
+      [shell({ command: 'pnpm dev --filter @geniro/ui' })],
+      undefined,
+      vi.fn(),
+    );
+
+    expect(killButton(el)!.getAttribute('title')).toContain(
+      'pnpm dev --filter @geniro/ui',
+    );
   });
 });

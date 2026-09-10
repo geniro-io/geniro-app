@@ -317,6 +317,8 @@ export function BlockToolFooter({
   count,
   tokens = null,
   costUsd = null,
+  contextTokens = null,
+  contextWindowTokens = null,
   note,
 }: {
   count: number;
@@ -324,9 +326,37 @@ export function BlockToolFooter({
   tokens?: number | null;
   /** What it cost; null when the CLI reported none. */
   costUsd?: number | null;
+  /**
+   * How full this agent's own context window is — the FALLBACK figure, drawn
+   * only when {@link tokens} is absent.
+   *
+   * REPORTED as "its not showing amount of tokens for cursor agent", against a
+   * call card whose footer read `11 tools` and nothing else. Measured across
+   * the whole ledger: of 3,359 claude turns every one carries input and output
+   * tokens, and of 82 cursor turns NOT ONE does — nor a cost, nor a duration.
+   * So there is no token count to show, and the row was not hiding one.
+   *
+   * What cursor does report per turn is this: the window reading the daemon
+   * reads out of that CLI's own session store. It is a DIFFERENT QUANTITY —
+   * how much the conversation currently occupies, not what this turn spent —
+   * which is why it is labelled `ctx` rather than `tokens` and never shares
+   * their slot. It fills the gap only where the real figure is missing: a
+   * claude row already answers "what did this cost" exactly, and a second
+   * large number beside that answer would invite the two to be read as one.
+   */
+  contextTokens?: number | null;
+  /** The window that reading is scaled against; null when unknown. */
+  contextWindowTokens?: number | null;
   note?: React.ReactNode;
 }): React.JSX.Element | null {
-  if (count === 0 && tokens === null && costUsd === null && !note) {
+  const showContext = tokens === null && contextTokens !== null;
+  if (
+    count === 0 &&
+    tokens === null &&
+    costUsd === null &&
+    !showContext &&
+    !note
+  ) {
     return null;
   }
   return (
@@ -343,6 +373,18 @@ export function BlockToolFooter({
           {formatTokens(tokens)} tokens
         </span>
       )}
+      {showContext && contextTokens !== null ? (
+        <span
+          data-slot="block-footer-context"
+          title={
+            contextWindowTokens === null
+              ? 'How full this agent’s context window is. This CLI reports no per-turn token usage, so this is the only token figure it gives.'
+              : `Context window ${formatTokens(contextTokens)} of ${formatTokens(contextWindowTokens)}. This CLI reports no per-turn token usage, so this is the only token figure it gives.`
+          }
+          className="tabular-nums">
+          {formatTokens(contextTokens)} ctx
+        </span>
+      ) : null}
       {costUsd === null ? null : (
         <span data-slot="block-footer-cost" className="tabular-nums">
           {formatExactUsd(costUsd)}
@@ -370,14 +412,42 @@ export function BlockTitle({
 export function BlockPendingLine({
   children,
   pulse = true,
+  clamp = 'none',
 }: {
   children: React.ReactNode;
   pulse?: boolean;
+  /**
+   * How much of the line to show when it runs long.
+   *
+   * REPORTED as "когда последнее сообщение агента, которого мы вызываем в
+   * workflow, превышает три строки, мы должны обрезать до третьей строки", over
+   * a call card carrying twenty-five lines of grey italic text. It is one
+   * sentence — `QA is running <tool>` — and the tool NAME is what runs long:
+   * an ACP agent's tool title is routinely the whole shell command, `cd … && gh
+   * pr list … | python3 -c "…"`, so a status line rendered a program.
+   *
+   * Two clamps rather than one, because the two places this line appears want
+   * different answers and each already had one written down. The OPEN card
+   * gets `three`, which is the ask and matches `InlineClampText`, the clamp the
+   * callee's own result already uses. The SHUT band gets `one`, which is that
+   * band's own documented rule — it is a state readout, and its other arm
+   * (the callee's last words) has always been `truncate`; the pending arm was
+   * simply the one that never got it, so a long tool name grew the shut card
+   * exactly as it grew the open one.
+   *
+   * Never paired with a `display` utility: `line-clamp-*` works by setting
+   * `display: -webkit-box`, and a `block`/`flex` beside it silently cancels the
+   * clamp — the trap `renderer-components.md` records from a measured bug.
+   */
+  clamp?: 'none' | 'one' | 'three';
 }): React.JSX.Element {
   return (
     <span
+      data-slot="block-pending"
       className={cn(
         'text-[11px] text-muted-foreground italic',
+        clamp === 'three' && 'line-clamp-3',
+        clamp === 'one' && 'block min-w-0 flex-1 truncate',
         pulse && 'animate-pulse',
       )}>
       {children}

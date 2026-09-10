@@ -523,6 +523,70 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * Every row that OPENS or CLOSES a detached command, over the whole run.
+   *
+   * The renderer folds its running-shells list from the loaded transcript
+   * window, which is the newest `HISTORY_PAGE` items — so a command detached
+   * earlier than that has no row to fold and simply vanishes from the list,
+   * while the run goes on counting it and the badge goes on saying `working`.
+   * Measured on a real thread: 31,404 items, a window of 1,000, one command
+   * still open out of 1,314 opened.
+   *
+   * Sparse by construction — two kinds out of thirty — so reading them for the
+   * whole conversation costs a fraction of the transcript it is drawn from, and
+   * the `(run_id, seq)` index serves it directly.
+   */
+  async shellLifecycleRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<Item, 'seq' | 'kind' | 'payload' | 'nodeId' | 'createdAt'>[]
+  > {
+    return this.getRepo(txEm).find(
+      { runId, $or: [{ kind: 'shell_open' }, { kind: 'shell_info' }] },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['seq', 'kind', 'payload', 'nodeId', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * The tool calls behind a set of ids — how an open command gets its WORDS.
+   *
+   * A `shell_open` row names the call and the CLI's own work id and nothing
+   * else, so the command itself has to be read from the call it decorates.
+   * Addressed by id rather than scanned, because the caller already knows the
+   * handful it needs: the commands still running.
+   */
+  async toolCallsByIds(
+    runId: string,
+    ids: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'payload' | 'nodeId' | 'createdAt'>[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.getRepo(txEm).find(
+      {
+        runId,
+        kind: 'tool_call',
+        // Matched on the payload TEXT, because the call's id lives inside the
+        // JSON rather than in a column of its own. One clause per open command
+        // — a handful, never a scan of the run's tool calls, which on the
+        // thread this was measured against number in the thousands.
+        $or: ids.map((id) => ({ payload: { $like: `%"id":"${id}"%` } })),
+      },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['payload', 'nodeId', 'createdAt'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * The payloads {@link timelineSpine} deliberately leaves out — the two kinds
    * the timeline actually reads: a user message, for its opening words, and a
    * finished turn, for its usage figures.
@@ -669,12 +733,16 @@ export class ItemDao extends BaseDao<Item> {
   async subagentInfoRows(
     runId: string,
     txEm?: EntityManager,
-  ): Promise<Pick<Item, 'payload'>[]> {
+  ): Promise<Pick<Item, 'payload' | 'nodeId'>[]> {
     return this.getRepo(txEm).find(
       { runId, kind: 'subagent_info' },
       {
         orderBy: { seq: 'asc' },
-        fields: ['payload'],
+        // `nodeId` rides along because a delegate belongs to the NODE that
+        // launched it, and the close written for a stranded one has to be filed
+        // under that same node or it reaches nothing — see
+        // `ChatService.closeStrandedDelegates`.
+        fields: ['payload', 'nodeId'],
         disableIdentityMap: true,
       },
     );

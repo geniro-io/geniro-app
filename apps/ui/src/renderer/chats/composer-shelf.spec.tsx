@@ -70,6 +70,48 @@ describe('RunningShellChips', () => {
     expect(el.querySelector('[data-slot="running-shells"]')).toBeNull();
   });
 
+  it('still draws the chip for a command the loaded window cannot show', () => {
+    // REPORTED as "я вижу, что в этом трейде у меня показывается статус
+    // `working`, но нет ни одного терминала, ни одного subagentа". Both halves
+    // were right and they disagreed: the badge reads `RunDto.shellsOpen`, which
+    // covers the WHOLE run, while these rows are folded from the loaded
+    // transcript window. Measured on that thread — 31,404 items, a window of
+    // 1,000, one command still open out of 1,314 opened — so the row that
+    // opened it was simply not loaded, and the shelf had nothing to draw.
+    //
+    // The run's count wins, and the panel says why rather than the chip
+    // vanishing: a status with no explanation reads as the app contradicting
+    // itself.
+    const el = mount(
+      <RunningShellChips
+        shells={[]}
+        reportedOpen={1}
+        onOpen={() => undefined}
+      />,
+    );
+
+    const chip = el.querySelector('[data-slot="running-shells"]')!;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain('1');
+  });
+
+  it('never lets the run count REDUCE what the fold found', () => {
+    // The fold can only ever be short of the run's count — it cannot invent a
+    // command — so the larger of the two is the honest figure. A stale lower
+    // count from the row must not hide rows that are on screen.
+    const el = mount(
+      <RunningShellChips
+        shells={[shell(), shell({ id: 'c2', command: 'pnpm dev' })]}
+        reportedOpen={1}
+        onOpen={() => undefined}
+      />,
+    );
+
+    expect(
+      el.querySelector('[data-slot="running-shells"]')!.textContent,
+    ).toContain('2');
+  });
+
   it('counts the running commands and holds them behind the chip', async () => {
     const { el } = render([
       shell(),
@@ -177,6 +219,19 @@ describe('RunningSubagentChips', () => {
     // the zero state is the row being one chip shorter.
     const el = mount(<RunningSubagentChips running={0} threads={[]} />);
     expect(el.querySelector('[data-slot="running-subagents"]')).toBeNull();
+  });
+
+  it('still draws the chip for a delegate the loaded window cannot show', () => {
+    // The other half of the same report, and the same divergence: the badge
+    // reads `RunDto.subagentsOut`, which covers the whole run, while `running`
+    // is folded from the loaded window.
+    const el = mount(
+      <RunningSubagentChips running={0} reportedOut={2} threads={[]} />,
+    );
+
+    const chip = el.querySelector('[data-slot="running-subagents"]')!;
+    expect(chip).not.toBeNull();
+    expect(chip.textContent).toContain('2');
   });
 
   it('counts the WORKING delegates and holds every one of them behind the chip', async () => {

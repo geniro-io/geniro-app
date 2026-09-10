@@ -1414,6 +1414,66 @@ export const ChatTimelineWireSchema = z.object({
 });
 export type ChatTimelineWire = z.infer<typeof ChatTimelineWireSchema>;
 
+/** One command a run still has running. */
+export const OpenShellSchema = z
+  .object({
+    id: z
+      .string()
+      .describe(
+        'the tool call that detached it — the id a kill is addressed to',
+      ),
+    command: z.string(),
+    nodeId: z
+      .string()
+      .nullable()
+      .describe('which workflow node started it; null for a 1:1 chat'),
+    startedAt: z.number(),
+  })
+  .meta({ id: 'OpenShell' });
+export type OpenShell = z.infer<typeof OpenShellSchema>;
+
+/**
+ * Every command the run still has running, over the WHOLE conversation.
+ *
+ * The running-shells list is folded in the renderer from the loaded transcript
+ * window — the newest `HISTORY_PAGE` items — so a command detached before that
+ * has no row to fold and drops off the list, while the run row goes on counting
+ * it and the badge goes on reading `working`. REPORTED as "я вижу, что в этом
+ * трейде у меня показывается статус `working`, но нет ни одного терминала", and
+ * measured on that thread: 31,404 items, a window of 1,000, one command still
+ * open out of 1,314 opened.
+ *
+ * Folded HERE for the reason the timeline is: the client cannot fold what it
+ * has not loaded, and a list that quietly describes the newest page is worse
+ * than no list, because nothing on screen says which it is. The rows it reads
+ * are sparse — two kinds out of thirty — so covering the whole conversation
+ * costs a fraction of the transcript it is drawn from.
+ *
+ * No `.meta({ id })` on this root, for `ChatTimelineWireSchema`'s reason.
+ */
+export const ChatShellsWireSchema = z.object({
+  shells: z.array(OpenShellSchema),
+});
+export type ChatShellsWire = z.infer<typeof ChatShellsWireSchema>;
+
+/**
+ * What became of a kill the user asked for.
+ *
+ * `killed: false` is an OUTCOME rather than a failure, which is why there is no
+ * error arm: the list a user pressed from is a snapshot, so a command that
+ * finished between the render and the press is the ordinary race. Either way
+ * the row leaves the list, and `reason` is the sentence saying which happened —
+ * non-null exactly when nothing was signalled, so a caller never has to
+ * compose one.
+ *
+ * No `.meta({ id })` on this root, for `ChatTimelineWireSchema`'s reason.
+ */
+export const ShellKillWireSchema = z.object({
+  killed: z.boolean(),
+  reason: z.string().nullable(),
+});
+export type ShellKillWire = z.infer<typeof ShellKillWireSchema>;
+
 /**
  * The version of the export DOCUMENT's own shape, stamped on every file.
  *

@@ -28,6 +28,25 @@ import { asRecord, asString } from './json-util';
  * — the announcement carrying a delegate's label or its duration is not a
  * lifecycle claim, and reading it as one would close a delegate that is out.
  */
+/**
+ * Which delegate a `subagent_info` payload is about, or null when it names
+ * none.
+ *
+ * The same field {@link openDelegateIds} keys its fold on, read once here so
+ * the two cannot come to disagree about what identifies a delegate: a caller
+ * pairing an id with something ELSE about the row — the node that launched it,
+ * which is what `ChatService.closeStrandedDelegates` needs — must select rows
+ * by exactly the rule the fold selected them by, or it pairs the wrong two.
+ */
+export function delegateIdOf(payload: unknown): string | null {
+  const record = asRecord(payload);
+  if (record === null) {
+    return null;
+  }
+  const id = asString(record.id);
+  return id === null || id === '' ? null : id;
+}
+
 export function openDelegateIds(payloads: readonly unknown[]): string[] {
   // Insertion-ordered, so the closes are written in the order the delegates
   // were launched — a re-`set` keeps a key's original position, which is what

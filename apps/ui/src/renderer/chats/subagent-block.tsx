@@ -1,4 +1,4 @@
-import { Bot, ListChecks, Maximize2 } from 'lucide-react';
+import { Bot, Maximize2 } from 'lucide-react';
 import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
@@ -15,7 +15,7 @@ import {
 } from './block-shell';
 import { formatElapsed, RunSettledContext, WorkingRow } from './live-row';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
-import { TaskCount } from './task-list';
+import { SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -112,21 +112,6 @@ function SubagentFacts({
       className="m-0 text-[11px] text-muted-foreground">
       {facts.join(' · ')}
     </p>
-  );
-}
-
-/**
- * The present facts, with a middot between each pair and nowhere else.
- *
- * Takes nulls so a caller can list every possible fact in reading order and let
- * this decide which survive — the alternative being a separator condition that
- * names its neighbours, which is what the header had and what it could not
- * carry two more facts of.
- */
-function joinFacts(facts: readonly React.ReactNode[]): React.ReactNode[] {
-  const present = facts.filter((fact) => fact !== null && fact !== false);
-  return present.flatMap((fact, index) =>
-    index === 0 ? [fact] : [<span key={`sep-${index}`}>·</span>, fact],
   );
 }
 
@@ -459,41 +444,20 @@ export const SubagentBlock = memo(function SubagentBlock({
                 its own tail (the task progress, which the card's
                 `overflow-hidden` was clipping anyway) instead of taking the
                 name with it. */}
-            <span className="flex min-w-0 max-w-[55%] shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
-              {joinFacts([
-                block.kind && block.label ? (
-                  <span key="kind">{block.kind}</span>
-                ) : null,
-                /* WHICH MODEL it ran, asked for by name against a column of a
-                   dozen verifiers that named their agent type and nothing
-                   else. On the header rather than only inside the block for
-                   the reason the figures are: it is closed by default, and a
-                   fact behind a click is one nobody reads while scanning. */
-                block.model ? <span key="model">{block.model}</span> : null,
-                toolCount > 0 ? (
-                  <span key="tools">
-                    {toolCount} tool{toolCount === 1 ? '' : 's'}
-                  </span>
-                ) : null,
-                /* What it spent, and how long it took — the reported ask. On
-                   the header and not only inside for the same reason the task
-                   progress is: the block is CLOSED by default, so a figure that
-                   needs a click is a figure nobody reads while scanning a
-                   column of twenty delegates. */
-                ...subagentSpendParts(block).map((part) => (
-                  <span key={part}>{part}</span>
-                )),
-                /* On the header rather than only inside, because the block is
-                   CLOSED by default: "how far is this delegate through its own
-                   plan" is the one thing worth knowing without opening it. */
-                tasks !== null ? (
-                  <span key="tasks" className="flex items-center gap-1">
-                    <ListChecks aria-hidden="true" className="size-3" />
-                    <TaskCount done={tasks.done} total={tasks.total} />
-                  </span>
-                ) : null,
-              ])}
-            </span>
+            {/* WHAT KIND of delegate, and nothing else.
+                The run used to carry six facts — kind, model, tools, cost,
+                tokens, duration, task progress — and REPORTED as breaking the
+                header, because on a card this narrow they do not fit one line
+                and the only thing that could give way was the delegate's own
+                name. Every measured figure has moved to `SubagentMetaChips` in
+                `headerAction`, which is outside this shrinkable run entirely;
+                the model went with them, as asked. What stays is the one fact
+                that IDENTIFIES this delegate rather than measuring it. */}
+            {block.kind && block.label ? (
+              <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
+                {block.kind}
+              </span>
+            ) : null}
           </>
         }
         // A real <button>, and it sits BESIDE the disclosure rather than
@@ -501,18 +465,30 @@ export const SubagentBlock = memo(function SubagentBlock({
         // whatever role it carries, and a control there also swallows presses
         // meant for the toggle.
         headerAction={
-          openDetail ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-6 shrink-0 text-muted-foreground"
-              aria-label={`Open ${title} in a panel`}
-              title="Open this sub-agent's conversation"
-              onClick={() => openDetail(block)}>
-              <Maximize2 className="size-3 shrink-0" />
-            </Button>
-          ) : null
+          <span className="flex items-center gap-1.5">
+            {/* The figures, as one small block with the long form behind a
+                hover. HERE rather than in the header run because that run is
+                the disclosure's own <button>, and a popover trigger inside one
+                is invalid HTML — the same rule this slot exists for. */}
+            <SubagentMetaChips
+              block={block}
+              title={title}
+              toolCount={toolCount}
+              tasks={tasks}
+            />
+            {openDetail ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6 shrink-0 text-muted-foreground"
+                aria-label={`Open ${title} in a panel`}
+                title="Open this sub-agent's conversation"
+                onClick={() => openDetail(block)}>
+                <Maximize2 className="size-3 shrink-0" />
+              </Button>
+            ) : null}
+          </span>
         }>
         <SubagentThread
           block={block}

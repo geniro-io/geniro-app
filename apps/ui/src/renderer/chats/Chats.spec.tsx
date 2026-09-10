@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
   searchChat: vi.fn(),
+  readChatShells: vi.fn(),
   readChatTimeline: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
@@ -674,6 +675,7 @@ beforeEach(() => {
   api.sweepArchivedChats.mockReset().mockResolvedValue({ deleted: 0 });
   // The timeline rail's own read. An empty rail is the resting answer for every
   // test here; the rail itself is pinned in `conversation-timeline.spec.tsx`.
+  api.readChatShells.mockReset().mockResolvedValue({ shells: [] });
   api.readChatTimeline.mockReset().mockResolvedValue({ markers: [] });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {
@@ -1078,13 +1080,19 @@ describe('Chats — searching one conversation', () => {
         '[data-slot="timeline-marker"]',
       ),
     );
+    // Newest first — the rail's own order, pinned in
+    // `conversation-timeline.spec.tsx`; restated here only so the click below
+    // is addressing the row this spec means.
     expect(markers.map((b) => b.textContent)).toEqual([
-      'the first ask',
       'the second ask',
+      'the first ask',
     ]);
 
     await act(async () => {
-      markers[0]!.click();
+      // The OLDER message, addressed by its words: this spec is about the
+      // wiring reaching `jumpToSeq` with the right seq, so it must not depend
+      // on which row that message occupies.
+      markers.find((b) => b.textContent === 'the first ask')!.click();
     });
 
     // The same wash a search hit lands on — the jump is one mechanism, so this

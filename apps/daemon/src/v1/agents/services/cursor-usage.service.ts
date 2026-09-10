@@ -302,16 +302,50 @@ export class CursorUsageService implements OnModuleInit {
     em: EntityManager,
   ): Promise<Map<string, CursorConversationTarget>> {
     const byConversation = new Map<string, CursorConversationTarget>();
+    // Runs whose OWN agent is cursor — a 1:1 chat — PLUS runs merely HOLDING a
+    // cursor node, which is every workflow that routes work to one.
+    //
+    // Selecting on `Run.agentKind` alone was the whole of a reported wrong
+    // figure. A workflow run's own `agentKind` is null, because its agents are
+    // per node, so a `dev-team` run whose QA node worked an hour on cursor with
+    // 160 tool calls was never even considered here — geniro reported $2.05 of
+    // cursor spend for a morning its own account had spent orders of magnitude
+    // more on, and the user checked it against Cursor's dashboard and found it
+    // wrong. Nothing downstream needed changing: the walk below already reads
+    // `node_state` per run and joins on the session id, which IS the
+    // conversation id for a workflow node exactly as it is for a chat's.
+    const runIds = new Set(
+      await this.nodeStates.runIdsForAgent(AgentKind.CursorAgent, em),
+    );
     const runs = await this.runDao.getAll(
       { agentKind: AgentKind.CursorAgent },
       undefined,
       em,
     );
     for (const row of runs) {
+      runIds.delete(row.id);
+    }
+    const withCursorNodes =
+      runIds.size === 0
+        ? []
+        : await this.runDao.getAll({ id: { $in: [...runIds] } }, undefined, em);
+    for (const row of [...runs, ...withCursorNodes]) {
       // A chat's single agent writes one `node_state`; taking whichever node
       // carries a session id keeps this free of the sentinel's spelling, which
       // belongs to the executor rather than to a usage read.
+      //
+      // A WORKFLOW run writes one per node, and only the cursor ones hold a
+      // Cursor conversation id — a claude node's session id belongs to a
+      // different CLI's store entirely, so it must not be offered as a
+      // conversation to price. The filter below is what keeps the two apart now
+      // that this loop sees both kinds of run.
       for (const state of await this.nodeStates.listByRun(row.id, em)) {
+        if (
+          row.agentKind !== AgentKind.CursorAgent &&
+          state.agentKind !== AgentKind.CursorAgent
+        ) {
+          continue;
+        }
         const sessionId = state.agentSessionId;
         if (sessionId !== null && sessionId !== '') {
           byConversation.set(sessionId, {

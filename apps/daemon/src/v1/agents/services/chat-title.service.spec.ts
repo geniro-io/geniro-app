@@ -48,6 +48,12 @@ function build(opts: {
   /** What the CLI answers when ASKED to name the chat; null = it cannot. */
   generatedTitle?: string | null;
   agentSessionId?: string | null;
+  /**
+   * The CLI stamped by the node that started FIRST — which is the only way a
+   * WORKFLOW run can name a CLI at all, its own `agentKind` being null.
+   * `null` models a run no node has taken a turn on yet.
+   */
+  firstNodeAgentKind?: AgentKind | null;
 }) {
   const items = new Subject<RunItemEvent>();
   const deleted = new Subject<string>();
@@ -125,6 +131,14 @@ function build(opts: {
         : { agentSessionId: opts.agentSessionId },
     ),
   );
+  // The stamp the first node left behind — a workflow run's only route to a CLI.
+  const firstAgentKind = vi.fn(() =>
+    Promise.resolve(
+      opts.firstNodeAgentKind === undefined
+        ? AgentKind.Claude
+        : opts.firstNodeAgentKind,
+    ),
+  );
 
   const service = new ChatTitleService(
     { fork: () => ({}) } as unknown as EntityManager,
@@ -155,7 +169,7 @@ function build(opts: {
       lastAssistantMessageText: () =>
         Promise.resolve('Yes — I rewrote them and the suite is green.'),
     } as unknown as ItemDao,
-    { getByRunNode } as unknown as NodeStateDao,
+    { getByRunNode, firstAgentKind } as unknown as NodeStateDao,
     { for: adapterFor } as unknown as AgentAdapterRegistry,
     () => clock,
   );
@@ -217,6 +231,18 @@ function build(opts: {
     await drain();
   };
 
+  /**
+   * A graph NODE reaching for a tool.
+   *
+   * The earliest moment a workflow run can be named by anything: its own
+   * run-level stream carries one user message and then nothing until the whole
+   * run settles, so every naming opportunity in between belongs to a node.
+   */
+  const nodeToolCall = async (): Promise<void> => {
+    items.next({ runId: 'run-a', item: item('node-1', 'tool_call') });
+    await drain();
+  };
+
   /** Two settles in a row, the second after the first has fully drained. */
   const settleTwice = async (): Promise<void> => {
     await settle();
@@ -252,6 +278,8 @@ function build(opts: {
     assistantMessage,
     toolCall,
     toolResult,
+    nodeToolCall,
+    firstAgentKind,
     waitOutCooldown,
     settleTwice,
     settleConcurrently,
@@ -586,7 +614,7 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('names a workflow run from its SEED PROMPT, without asking any CLI', async () => {
+  it('gives a workflow run its FIRST title from the seed prompt alone', async () => {
     // It used to be skipped entirely, on the reading that the workflow's own
     // name is already a true label — which holds for ONE run and fails for two:
     // every run of one workflow then carried the identical row, so a sidebar
@@ -607,11 +635,114 @@ describe('ChatTitleService', () => {
       null,
       expect.anything(),
     );
-    // DERIVED only, and never asked: the upgrade replaces a derived title with
-    // the name an AGENT gave the conversation, which needs ONE CLI to ask —
-    // and a workflow is N conversations, which is why its `agentKind` is null.
+    // The FIRST naming is derived and costs nothing — no CLI is asked to name a
+    // run that has no title yet, exactly as on the chat path. The upgrade is a
+    // separate moment with its own test below; this one pins that an unnamed
+    // workflow run does not pay a model call to get its opening line.
     expect(generateTitle).not.toHaveBeenCalled();
     expect(readSessionTitle).not.toHaveBeenCalled();
+  });
+
+  it('upgrades a workflow run by asking the CLI of the node that ran FIRST', async () => {
+    // The report: "for workflows title is not generating automatically", over a
+    // row reading `review it https://github.com/ma…`. The derivation had run —
+    // that IS what `titleFromText` makes of an opening that is a pasted URL —
+    // and nothing ever improved on it, because the upgrade was skipped on the
+    // reading that a workflow has no CLI to ask. It has: every node stamps the
+    // CLI that ran it, and the node that started first is the one handed the
+    // user's own task.
+    // The stored title has to be exactly what the deriver would write today —
+    // that is the ownership check, and it is what makes a user's rename
+    // permanent — so the fixture uses an opening short enough to survive
+    // `CHAT_TITLE_MAX_CHARS` uncut. The reported one was the same shape,
+    // truncated: `review it https://github.com/manifestlaw-labs/Mani…`.
+    const { settle, retitle, generateTitle, adapterFor } = build({
+      run: {
+        workflowId: 'wf-1',
+        agentKind: null,
+        title: 'review PR 5376',
+      },
+      firstUserMessageText: 'review PR 5376',
+      generatedTitle: 'Review ManifestOS PR 5376',
+      firstNodeAgentKind: AgentKind.Claude,
+    });
+
+    await settle();
+
+    expect(generateTitle).toHaveBeenCalled();
+    expect(adapterFor).toHaveBeenCalledWith(AgentKind.Claude);
+    expect(retitle).toHaveBeenCalledWith(
+      expect.anything(),
+      'Review ManifestOS PR 5376',
+      'review PR 5376',
+      expect.anything(),
+    );
+  });
+
+  it('never reads a NODE’s own session title to name the whole run', async () => {
+    // A CLI's session title names the conversation IT holds, which for a
+    // workflow is one node's thread — the QA agent's name for its own work,
+    // over a run the manager is coordinating. Only the ask is handed the run's
+    // own seed prompt, so only the ask can answer about the run.
+    const { settle, readSessionTitle, retitle } = build({
+      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      firstUserMessageText: 'do the thing',
+      nativeTitle: 'QA — flaky spec triage',
+      generatedTitle: 'Ship the thing',
+      firstNodeAgentKind: AgentKind.CursorAgent,
+    });
+
+    await settle();
+
+    expect(readSessionTitle).not.toHaveBeenCalled();
+    expect(retitle).toHaveBeenCalledWith(
+      expect.anything(),
+      'Ship the thing',
+      'do the thing',
+      expect.anything(),
+    );
+  });
+
+  it('names a workflow run while it is STILL RUNNING, on a node’s first tool call', async () => {
+    // The whole point of the fix. A workflow's run-level stream holds one user
+    // message and then nothing until the run settles — measured on a real run,
+    // 3 run-level rows out of 573 — so naming had exactly one trigger, the run
+    // ENDING, which on this app's work is an hour after anybody went looking
+    // for the row in the sidebar.
+    const { nodeToolCall, retitle, generateTitle } = build({
+      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      firstUserMessageText: 'do the thing',
+      generatedTitle: 'Ship the thing',
+      firstNodeAgentKind: AgentKind.Claude,
+    });
+
+    await nodeToolCall();
+
+    expect(generateTitle).toHaveBeenCalled();
+    expect(retitle).toHaveBeenCalledWith(
+      expect.anything(),
+      'Ship the thing',
+      'do the thing',
+      expect.anything(),
+    );
+  });
+
+  it('leaves a workflow run alone until one of its nodes has actually run', async () => {
+    // No node has started, so there is no stamp to read and no CLI to ask. The
+    // derived title stands rather than a model call being spent on a run that
+    // has produced nothing to name it after.
+    const { settle, retitle, generateTitle, firstAgentKind } = build({
+      run: { workflowId: 'wf-1', agentKind: null, title: 'do the thing' },
+      firstUserMessageText: 'do the thing',
+      generatedTitle: 'Ship the thing',
+      firstNodeAgentKind: null,
+    });
+
+    await settle();
+
+    expect(firstAgentKind).toHaveBeenCalled();
+    expect(generateTitle).not.toHaveBeenCalled();
+    expect(retitle).not.toHaveBeenCalled();
   });
 
   it('leaves an already-named workflow run alone, so a rename survives', async () => {
@@ -628,7 +759,11 @@ describe('ChatTitleService', () => {
     expect(retitle).not.toHaveBeenCalled();
   });
 
-  it('ignores a graph node’s turn without reading the run at all', async () => {
+  it('ignores a graph node’s turn ENDING without reading the run at all', async () => {
+    // A node's own terminal is not the RUN's terminal — the run gets one of its
+    // own — so it names nothing. Narrower than it used to be: a node's tool call
+    // now DOES reach the naming, which is the only way a workflow run can be
+    // named while it is still running (see the workflow tests above).
     const { settle, retitle, readSessionTitle } = build({
       nativeTitle: 'Should Not Be Used',
     });

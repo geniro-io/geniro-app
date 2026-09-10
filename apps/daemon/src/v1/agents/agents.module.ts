@@ -33,6 +33,7 @@ import { ChatService } from './services/chat.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
+import { ChatShellsService } from './services/chat-shells.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
@@ -91,6 +92,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     SkillsController,
   ],
   providers: [
+    ChatShellsService,
     ChatService,
     ChatSearchService,
     ChatTimelineService,

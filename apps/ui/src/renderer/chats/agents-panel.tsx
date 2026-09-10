@@ -738,6 +738,7 @@ export function AgentsPanel({
   workByAgent,
   openTurns,
   onOpenShell,
+  onKillShell,
   mcpByScope,
   mcpLoading = false,
   onRefreshMcp,
@@ -960,6 +961,8 @@ export function AgentsPanel({
    * it was not given.
    */
   onOpenShell?: (shell: ShellRun) => void;
+  /** Stop one — see `ShellRows`. */
+  onKillShell?: (shell: ShellRun) => void | Promise<void>;
   /*
    * There was a `subagentUnavailableReason` here — a panel-level paragraph
    * saying why a CLI lists no delegates. It has been removed: on cursor it was
@@ -1573,7 +1576,11 @@ export function AgentsPanel({
                           needs the word `Tasks` over it to be placed; a shell
                           row leads with the terminal glyph and places
                           itself. */}
-                      <ShellRows shells={shells} onOpen={onOpenShell} />
+                      <ShellRows
+                        shells={shells}
+                        onOpen={onOpenShell}
+                        onKill={onKillShell}
+                      />
                     </div>
                   ) : null}
                   {tasks.length > 0 ? (

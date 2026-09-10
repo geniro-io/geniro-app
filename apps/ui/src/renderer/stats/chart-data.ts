@@ -91,6 +91,23 @@ export function sumMeasured(
 }
 
 /** One row of a ranked breakdown — a bar plus everything its label needs. */
+/**
+ * Input + output, or null when NEITHER was measured.
+ *
+ * Null is not zero here: cursor-agent reports no token figures at all, and a
+ * `0` beside its row would claim a measurement nobody took — the same rule the
+ * daemon's own totals follow.
+ */
+function sumTokens(
+  input: number | null | undefined,
+  output: number | null | undefined,
+): number | null {
+  if (input == null && output == null) {
+    return null;
+  }
+  return (input ?? 0) + (output ?? 0);
+}
+
 export interface RankedRow {
   /** The group's own key, or `__none__` for the unattributed group. */
   id: string;
@@ -105,6 +122,15 @@ export interface RankedRow {
   display: string;
   turns: number;
   costUsd: number | null;
+  /**
+   * Input + output for this group, or null when nothing measured either.
+   *
+   * The two figures every CLI that reports any reports both, and the two that
+   * cannot overlap — `thinkingTokens` is left out because some providers count
+   * reasoning inside the output figure, so adding it would double some groups
+   * and not others. Same rule the conversation timeline's segments follow.
+   */
+  tokens: number | null;
 }
 
 /**
@@ -120,7 +146,11 @@ export interface RankedRow {
 export function toRankedRows(
   groups: readonly UsageGroup[],
   labelOf: (key: string | null) => string,
-  formatValue: (row: { costUsd: number | null; turns: number }) => string,
+  formatValue: (row: {
+    costUsd: number | null;
+    turns: number;
+    tokens: number | null;
+  }) => string,
   costed: boolean,
 ): RankedRow[] {
   const rows = groups.map((group) => ({
@@ -130,6 +160,7 @@ export function toRankedRows(
     value: costed ? (group.totals.costUsd ?? 0) : group.totals.turns,
     turns: group.totals.turns,
     costUsd: group.totals.costUsd,
+    tokens: sumTokens(group.totals.inputTokens, group.totals.outputTokens),
   }));
   // The largest row, not the SUM: these are bars, and a bar reads against the
   // longest one beside it. Sizing by share-of-total would leave every bar short

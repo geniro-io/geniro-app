@@ -277,10 +277,34 @@ export function ThreadPullRequestChips({
  */
 export function RunningShellChips({
   shells,
+  reportedOpen = 0,
   agentNameOf,
   onOpen,
+  onKill,
 }: {
   shells: readonly ShellRun[];
+  /**
+   * How many commands the RUN says are still open (`RunDto.shellsOpen`).
+   *
+   * The list beside it is folded from the LOADED transcript window, and those
+   * two are not the same question. A conversation opens on its newest
+   * `HISTORY_PAGE` items, so a command detached earlier has no row here to be
+   * folded — while the daemon counts it for the whole run, which is what makes
+   * the badge read `⌛ working`.
+   *
+   * REPORTED as "я вижу, что в этом трейде у меня показывается статус
+   * `working`, но нет ни одного терминала, ни одного subagentа", and measured
+   * on that thread: 31,404 items, a window of 1,000, one shell open against
+   * 1,314 opened and 1,313 closed. The badge was right and the shelf had
+   * nothing to say, which reads as the app contradicting itself.
+   *
+   * So the COUNT comes from the run and the ROWS from the fold, and where the
+   * fold is short the chip says so rather than vanishing. This is the same
+   * divergence the `Monitor` fix in `shell-activity.ts` addressed from the
+   * other end — that one taught the fold a name it did not know; no name would
+   * have helped here, because the row is not loaded at all.
+   */
+  reportedOpen?: number;
   /**
    * Which agent started each command — see {@link ShellRows}. This is the ONE
    * list in the app that mixes several agents' shells, so it is the one place
@@ -288,14 +312,20 @@ export function RunningShellChips({
    */
   agentNameOf?: ReadonlyMap<string, string>;
   onOpen: (shell: ShellRun) => void;
+  /** Stop one — see {@link ShellRows}. */
+  onKill?: (shell: ShellRun) => void | Promise<void>;
 }): React.JSX.Element | null {
-  if (shells.length === 0) {
+  // The run's own count WINS where it is higher: the fold can only under-report
+  // (a row it never loaded), never over-report.
+  const count = Math.max(shells.length, reportedOpen);
+  if (count === 0) {
     return null;
   }
+  const unlisted = count - shells.length;
   return (
     <HoverPopover
       slot="running-shells"
-      label={`${shells.length} shell${shells.length === 1 ? '' : 's'} running`}
+      label={`${count} shell${count === 1 ? '' : 's'} running`}
       panelLabel="Shells"
       side="top"
       align="start"
@@ -308,12 +338,24 @@ export function RunningShellChips({
         <>
           <Spinner className="size-3.5" />
           <span className="font-medium">Terminals</span>
-          <span className="text-muted-foreground tabular-nums">
-            {shells.length}
-          </span>
+          <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
-      <ShellRows shells={shells} agentNameOf={agentNameOf} onOpen={onOpen} />
+      {unlisted > 0 ? (
+        <p
+          data-slot="shells-unlisted"
+          className="m-0 px-1 pb-1.5 text-[11px] text-muted-foreground">
+          {shells.length === 0
+            ? `${unlisted} command${unlisted === 1 ? '' : 's'} still running, started earlier in this conversation than the part loaded here.`
+            : `${unlisted} more started earlier in this conversation than the part loaded here.`}
+        </p>
+      ) : null}
+      <ShellRows
+        shells={shells}
+        agentNameOf={agentNameOf}
+        onOpen={onOpen}
+        onKill={onKill}
+      />
     </HoverPopover>
   );
 }
@@ -352,6 +394,7 @@ export function RunningShellChips({
  */
 export function RunningSubagentChips({
   running,
+  reportedOut = 0,
   threads,
   onOpen,
 }: {
@@ -365,17 +408,30 @@ export function RunningSubagentChips({
    * here would be a second answer to a question the app already answers once.
    */
   running: number;
+  /**
+   * How many delegates the RUN says are still out (`RunDto.subagentsOut`).
+   *
+   * {@link running} is folded from the loaded transcript window; this is
+   * carried on the run row and covers the whole conversation. They differ for
+   * the reason `RunningShellChips.reportedOpen` states in full — a delegate
+   * launched earlier than the loaded page has no thread here to be counted,
+   * while the badge reads the row and says `⌛ working`. Same report, same
+   * contradiction, other half of the shelf.
+   */
+  reportedOut?: number;
   /** Every delegate the thread has launched, for the list behind the count. */
   threads: readonly AgentThread[];
   onOpen?: (subagentId: string) => void;
 }): React.JSX.Element | null {
-  if (running === 0) {
+  // The fold can only ever be SHORT of the run's own count, never over it.
+  const count = Math.max(running, reportedOut);
+  if (count === 0) {
     return null;
   }
   return (
     <HoverPopover
       slot="running-subagents"
-      label={`${running} sub-${running === 1 ? 'agent' : 'agents'} working`}
+      label={`${count} sub-${count === 1 ? 'agent' : 'agents'} working`}
       panelLabel="Sub-agents"
       side="top"
       align="start"
@@ -397,7 +453,7 @@ export function RunningSubagentChips({
               alone. */}
           <Spinner className="size-3.5" />
           <span className="font-medium">Sub-agents</span>
-          <span className="text-muted-foreground tabular-nums">{running}</span>
+          <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
       <SubagentRows threads={threads} onOpen={onOpen} />

@@ -273,8 +273,12 @@ export const CallBlock = memo(function CallBlock({
             <>
               {pending ? (
                 // The same sentence the OPEN card shows in this state, so the
-                // fold changes what is on screen and not what is true.
-                <BlockPendingLine>{pendingLine}</BlockPendingLine>
+                // fold changes what is on screen and not what is true. ONE
+                // line here, which is this band's own rule — its other arm has
+                // always truncated, and this arm grew the shut card for the
+                // same reason it grew the open one: an ACP tool name is
+                // routinely a whole shell command.
+                <BlockPendingLine clamp="one">{pendingLine}</BlockPendingLine>
               ) : (
                 /* The words give way — the figures and the chip beside them are a
                  fixed handful of characters, while a callee's last message is a
@@ -393,7 +397,11 @@ export const CallBlock = memo(function CallBlock({
           <BlockResult label={`Result from ${callee}`} text={block.result} />
         ) : null}
         {status === 'running' && !liveTail ? (
-          <BlockPendingLine>{pendingLine}</BlockPendingLine>
+          // THREE lines — the reported ask. The full command is still in the
+          // callee's own tool rows directly above; what this line is for is
+          // "what is it on right now", which three lines answer and
+          // twenty-five bury.
+          <BlockPendingLine clamp="three">{pendingLine}</BlockPendingLine>
         ) : null}
         <BlockToolFooter
           count={toolCount}
@@ -402,6 +410,11 @@ export const CallBlock = memo(function CallBlock({
           // rather than being a total somebody has to go and look up.
           tokens={usage.tokens}
           costUsd={usage.costUsd}
+          // The fallback figure for a CLI that reports no per-turn tokens —
+          // cursor being the shipped one. Same reading the shut band draws as
+          // a ring; the open card had no figure at all.
+          contextTokens={context.contextTokens}
+          contextWindowTokens={context.contextWindowTokens}
           note={failed ? <span>finished with an error</span> : undefined}
         />
       </BlockShell>

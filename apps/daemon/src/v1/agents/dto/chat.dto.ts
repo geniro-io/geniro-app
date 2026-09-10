@@ -9,6 +9,7 @@ import {
   ChatListScopeSchema,
   ChatMetricsWireSchema,
   ChatSearchResultSchema,
+  ChatShellsWireSchema,
   ChatTimelineWireSchema,
   ChatTotalsResponseSchema,
   CustomInstructionsSchema,
@@ -16,6 +17,7 @@ import {
   LocalImageWireSchema,
   MAX_ATTACHMENTS_PER_MESSAGE,
   RunWireSchema,
+  ShellKillWireSchema,
   ShellOutputWireSchema,
 } from '../chat.types';
 
@@ -367,6 +369,20 @@ export class ShellOutputQueryDto extends createZodDto(
  */
 export class ShellOutputDto extends createZodDto(ShellOutputWireSchema) {}
 
+/** Which command to stop — the same handle its terminal is opened by. */
+export class ShellKillQueryDto extends createZodDto(
+  z.object({
+    callId: z
+      .string()
+      .describe(
+        'the id of the tool call that started the command, as the CLI spelled it',
+      ),
+  }),
+) {}
+
+/** What became of a kill — see `ShellKillWireSchema`. */
+export class ShellKillDto extends createZodDto(ShellKillWireSchema) {}
+
 /**
  * Acknowledgement of a cancel request. Shared with the workflow routes — the
  * cancel surface is identical for chat and graph runs.
@@ -487,6 +503,9 @@ export class ChatMetricsDto extends createZodDto(ChatMetricsWireSchema) {}
 
 /** The thread's spend alone — see `ChatTotalsResponseSchema` for why wrapped. */
 export class ChatTotalsDto extends createZodDto(ChatTotalsResponseSchema) {}
+
+/** Every command the run still has running — see `ChatShellsWireSchema`. */
+export class ChatShellsDto extends createZodDto(ChatShellsWireSchema) {}
 
 /** The conversation as a rail of user messages — see `ChatTimelineWireSchema`. */
 export class ChatTimelineDto extends createZodDto(ChatTimelineWireSchema) {}

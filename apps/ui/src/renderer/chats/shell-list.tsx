@@ -1,5 +1,6 @@
-import { SquareTerminal } from 'lucide-react';
+import { CircleStop, SquareTerminal } from 'lucide-react';
 
+import { ConfirmButton } from '../components/confirm-button';
 import { cn } from '../components/ui/utils';
 import { formatElapsed, useSecondsTick } from './live-row';
 import type { ShellRun } from './shell-activity';
@@ -59,6 +60,7 @@ function ShellRow({
   shell,
   agentName = null,
   onOpen,
+  onKill,
 }: {
   shell: ShellRun;
   /**
@@ -72,6 +74,7 @@ function ShellRow({
    */
   agentName?: string | null;
   onOpen?: (shell: ShellRun) => void;
+  onKill?: (shell: ShellRun) => void | Promise<void>;
 }): React.JSX.Element {
   useSecondsTick();
   const started = Date.parse(shell.startedAt);
@@ -183,6 +186,39 @@ function ShellRow({
           {elapsed}
         </span>
       )}
+      {/* LAST on the row, past the clock, and that placement is the point: it
+          is the only thing here that CHANGES the machine, so it sits outside
+          the three readings rather than among them.
+
+          TWO PRESSES, through the app's one `ConfirmButton` — killing a
+          `pnpm dev` is destructive and there is no undo, and these rows are
+          hover-height in a popover, which is exactly where a stray click
+          lands. The colour carries the arming (`ConfirmButton` paints itself
+          destructive) and the glyph does not change with it: two icons a
+          click apart on a 20px control read as two different controls, where
+          one turning red reads as the same control asking again.
+
+          `size-5` OVERRIDES the `icon` size's `size-9` through `cn`'s merge —
+          36px beside an 11px monospace row would be the tallest thing in the
+          list, and the row's own height is what keeps a dozen commands
+          readable at a glance. */}
+      {onKill === undefined ? null : (
+        <ConfirmButton
+          data-slot="shell-kill"
+          size="icon"
+          variant="ghost"
+          className="size-5 shrink-0 text-muted-foreground hover:text-destructive"
+          // ONE title for both states, since the control has one job and the
+          // press count is part of describing it. The command is named because
+          // the row above truncates, and this is the press that cannot be
+          // taken back.
+          title={`Stop this command — press twice to confirm (${shell.command})`}
+          aria-label={`Stop ${shell.command}`}
+          confirmLabel={<CircleStop className="size-3.5" />}
+          onConfirm={() => onKill(shell)}>
+          <CircleStop className="size-3.5" />
+        </ConfirmButton>
+      )}
     </li>
   );
 }
@@ -209,6 +245,7 @@ export function ShellRows({
   className,
   agentNameOf,
   onOpen,
+  onKill,
 }: {
   shells: readonly ShellRun[];
   className?: string;
@@ -224,6 +261,14 @@ export function ShellRows({
    * sub-agent rows follow.
    */
   onOpen?: (shell: ShellRun) => void;
+  /**
+   * Stop one command — ASKED FOR as "i wanna have an ability to kill
+   * terminals". Absent leaves the rows as readings, on the same rule `onOpen`
+   * follows: this list never invents a control it was not handed, and a run
+   * with no daemon behind it (a story, a spec) has nothing that could act on
+   * one.
+   */
+  onKill?: (shell: ShellRun) => void | Promise<void>;
 }): React.JSX.Element {
   if (shells.length === 0) {
     return (
@@ -246,6 +291,7 @@ export function ShellRows({
             shell={shell}
             agentName={agentNameOf?.get(shell.id) ?? null}
             onOpen={onOpen}
+            onKill={onKill}
           />
         ))}
       </ul>

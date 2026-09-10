@@ -17,11 +17,13 @@ import type {
   ChatExportWire,
   ChatMetricsWire,
   ChatSearchResult,
+  ChatShellsWire,
   ChatTimelineWire,
   ChatTotalsResponse,
   ItemWire,
   LocalImageWire,
   RunWire,
+  ShellKillWire,
   ShellOutputWire,
 } from '../chat.types';
 import {
@@ -31,6 +33,7 @@ import {
   ChatExportDto,
   ChatMetricsDto,
   ChatSearchResultDto,
+  ChatShellsDto,
   ChatTimelineDto,
   ChatTotalsDto,
   CreateChatDto,
@@ -45,6 +48,8 @@ import {
   RunDto,
   SearchChatQueryDto,
   SendMessageDto,
+  ShellKillDto,
+  ShellKillQueryDto,
   ShellOutputDto,
   ShellOutputQueryDto,
   SweepArchivedDto,
@@ -57,6 +62,7 @@ import { ChatService } from '../services/chat.service';
 import { ChatExportService } from '../services/chat-export.service';
 import { ChatMetricsService } from '../services/chat-metrics.service';
 import { ChatSearchService } from '../services/chat-search.service';
+import { ChatShellsService } from '../services/chat-shells.service';
 import { ChatTimelineService } from '../services/chat-timeline.service';
 import { LocalImageService } from '../services/local-image.service';
 import { ShellOutputService } from '../services/shell-output.service';
@@ -80,6 +86,7 @@ export class ChatController {
     private readonly metrics: ChatMetricsService,
     private readonly search: ChatSearchService,
     private readonly shellOutput: ShellOutputService,
+    private readonly shells: ChatShellsService,
     private readonly timeline: ChatTimelineService,
   ) {}
 
@@ -244,6 +251,45 @@ export class ChatController {
    * window and report a shorter, cheaper conversation than the one that
    * happened — with nothing on screen saying which.
    */
+  /**
+   * Every command this run still has RUNNING, over the whole conversation.
+   *
+   * The renderer folds the same list from the loaded window, which cannot see a
+   * command detached before it — while the run row counts one for the whole
+   * conversation, so the badge said `working` over an empty shelf. Same reason
+   * `:runId/timeline` is a route: the client cannot fold what it never loaded.
+   */
+  @Get(':runId/shells')
+  @ApiOperation({ operationId: 'readChatShells' })
+  @ZodResponse({ status: 200, type: ChatShellsDto })
+  readShells(@Param('runId') runId: string): Promise<ChatShellsWire> {
+    return this.shells.read(runId);
+  }
+
+  /**
+   * Stop one of those commands — ASKED FOR as "i wanna have an ability to kill
+   * terminals". Until now only the AGENT could end one, so a `pnpm dev` left up
+   * by a finished thread ran until the user found it in Activity Monitor.
+   *
+   * A QUERY parameter for the call id and not a path segment, matching
+   * `:runId/shell-output` — the id is the CLI's own token and nothing here
+   * should have to reason about which characters it may contain.
+   *
+   * A command that is no longer running is an ORDINARY 200 rather than a 404:
+   * the list a user pressed from is a snapshot, so a command that ended between
+   * the render and the press is a race, not a mistake. Only an unknown run is a
+   * 4xx.
+   */
+  @Post(':runId/shells/kill')
+  @ApiOperation({ operationId: 'killChatShell' })
+  @ZodResponse({ status: 200, type: ShellKillDto })
+  killShell(
+    @Param('runId') runId: string,
+    @Query() query: ShellKillQueryDto,
+  ): Promise<ShellKillWire> {
+    return this.shells.kill(runId, query.callId);
+  }
+
   @Get(':runId/timeline')
   @ApiOperation({ operationId: 'readChatTimeline' })
   @ZodResponse({ status: 200, type: ChatTimelineDto })

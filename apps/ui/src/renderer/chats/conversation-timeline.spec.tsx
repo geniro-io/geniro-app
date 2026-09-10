@@ -125,15 +125,18 @@ describe('ConversationTimeline', () => {
     expect(panel()).toBe(null);
   });
 
-  it('draws one node per user message, in the transcript order', () => {
-    // Oldest at the top, like the conversation itself — so the timeline maps
-    // onto what is on screen rather than asking the reader to invert it.
+  it('draws one node per user message, NEWEST first', () => {
+    // It was oldest-first, matching the conversation. REPORTED as "нам нужно
+    // изменить timeline, чтобы он изначально начинался сверху… Сейчас, чтобы
+    // увидеть последнее сообщение пользователя, мне нужно каждый раз листать до
+    // самого низа": the panel is capped at 60vh, so the message a reader most
+    // often wants — the one they just sent — was the furthest from the top.
     render([marker(1, 'first ask'), marker(4, 'second ask')]);
     open();
 
     expect(markerButtons().map((b) => b.textContent)).toEqual([
-      'first ask',
       'second ask',
+      'first ask',
     ]);
   });
 
@@ -145,7 +148,12 @@ describe('ConversationTimeline', () => {
     open();
 
     act(() => {
-      markerButtons()[1]!.click();
+      // Addressed by its WORDS, not its row: this pins that the SEQ is what
+      // travels, and an index-addressed click would only be re-testing the
+      // render order that the spec above already owns.
+      markerButtons()
+        .find((b) => b.textContent === 'second')!
+        .click();
     });
 
     expect(onJump).toHaveBeenCalledWith(42);
@@ -170,9 +178,13 @@ describe('ConversationTimeline', () => {
     render([marker(1, '   '), marker(2, 'has words')]);
     open();
 
+    // Rendered newest-first, but the ordinal counts the CONVERSATION: the
+    // wordless message is still `Message 1` although it is drawn second. A
+    // number taken from the row index would relabel every earlier message each
+    // time a new one arrived.
     expect(markerButtons().map((b) => b.textContent)).toEqual([
-      'Message 1',
       'has words',
+      'Message 1',
     ]);
   });
 

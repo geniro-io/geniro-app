@@ -143,6 +143,61 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * The runs carrying spend that was POLLED rather than reported by a turn,
+   * whose last activity falls in a period.
+   *
+   * cursor-agent prices nothing on its own wire, so the only figure that exists
+   * for it is the account poll, which accumulates onto this column. The Stats
+   * page reads the usage LEDGER, where those turns sit with a null cost — so
+   * without this read a user's cursor spend was absent from every figure on
+   * that page.
+   *
+   * Dated by `updatedAt`, which is the run's last activity. That is an
+   * APPROXIMATION and the deliberate one: the column is a running total for the
+   * whole conversation, so it has no per-day resolution of its own, and a run
+   * worked across three days has its whole price placed on the last of them.
+   * The source COULD do better — Cursor's own response carries a timestamp per
+   * chargeable event and this app folds them to one sum per conversation before
+   * storing — so if a per-day split is ever wanted, the fix is to keep those
+   * events rather than to date this column more cleverly.
+   */
+  async withPolledSpendInRange(
+    from: Date,
+    to: Date,
+    txEm?: EntityManager,
+  ): Promise<
+    Pick<
+      Run,
+      | 'id'
+      | 'agentKind'
+      | 'model'
+      | 'cwd'
+      | 'workflowId'
+      | 'cursorCostCents'
+      | 'updatedAt'
+    >[]
+  > {
+    return this.getRepo(txEm).find(
+      {
+        cursorCostCents: { $ne: null, $gt: 0 },
+        updatedAt: { $gte: from, $lt: to },
+      },
+      {
+        fields: [
+          'id',
+          'agentKind',
+          'model',
+          'cwd',
+          'workflowId',
+          'cursorCostCents',
+          'updatedAt',
+        ],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * Clear a run's title, but only while it still reads exactly as `expected`.
    *
    * Its own method rather than a nullable `title` on {@link retitle}: that one

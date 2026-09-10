@@ -250,6 +250,57 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * The CLI that ran this run's FIRST node, or null when no node has taken a
+   * turn yet.
+   *
+   * A workflow run's own `agentKind` is null — it is N conversations, not one —
+   * which is why nothing could ask a CLI to name one. Each node stamps the CLI
+   * that actually ran it ({@link NodeState.agentKind}), so the run can name one
+   * after all, and the FIRST node to start is the right one to ask: a DAG's
+   * entry node is the one handed the user's own task, so its CLI is the one
+   * that has read the thing the title is supposed to describe.
+   *
+   * Ordered by `startedAt` and never by node id, which would be alphabetical
+   * order dressed up as execution order. Rows that never started are excluded
+   * rather than sorted last: SQLite sorts nulls FIRST on `ASC`, so a pending
+   * node would otherwise outrank every node that actually ran.
+   */
+  async firstAgentKind(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<AgentKind | null> {
+    const row = await this.getRepo(txEm).findOne(
+      { runId, agentKind: { $ne: null }, startedAt: { $ne: null } },
+      { orderBy: { startedAt: 'ASC' }, disableIdentityMap: true },
+    );
+    return row?.agentKind ?? null;
+  }
+
+  /**
+   * The runs holding at least one node that ran on `agentKind`.
+   *
+   * A WORKFLOW run has no agent of its own — `Run.agentKind` is null, because
+   * its agents are per node — so a reader that selects runs by that column sees
+   * none of them. That is how a cursor node inside a workflow came to be
+   * invisible to the usage poll: it holds a real Cursor conversation, spends
+   * real money, and its run row says nothing about which CLI ran it.
+   *
+   * Measured on a real profile: a `dev-team` run whose QA node worked an hour
+   * on cursor with 160 tool calls was priced at nothing, while the account's
+   * own dashboard showed that morning's spend in full.
+   */
+  async runIdsForAgent(
+    agentKind: AgentKind,
+    txEm?: EntityManager,
+  ): Promise<string[]> {
+    const rows = await this.getRepo(txEm).find(
+      { agentKind },
+      { fields: ['runId'], disableIdentityMap: true },
+    );
+    return [...new Set(rows.map((row) => row.runId))];
+  }
+
+  /**
    * Forget the CLI session this node was resuming, so the next turn starts a
    * fresh one.
    *

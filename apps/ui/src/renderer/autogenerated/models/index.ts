@@ -1338,6 +1338,19 @@ export interface ChatSearchResultDto {
 /**
  * 
  * @export
+ * @interface ChatShellsDto
+ */
+export interface ChatShellsDto {
+    /**
+     * 
+     * @type {Array<OpenShell>}
+     * @memberof ChatShellsDto
+     */
+    shells: Array<OpenShell>;
+}
+/**
+ * 
+ * @export
  * @interface ChatTimelineDto
  */
 export interface ChatTimelineDto {
@@ -2792,6 +2805,37 @@ export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 /**
  * 
  * @export
+ * @interface OpenShell
+ */
+export interface OpenShell {
+    /**
+     * the tool call that detached it — the id a kill is addressed to
+     * @type {string}
+     * @memberof OpenShell
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenShell
+     */
+    command: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenShell
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof OpenShell
+     */
+    startedAt: number;
+}
+/**
+ * 
+ * @export
  * @interface PlanLimits
  */
 export interface PlanLimits {
@@ -3771,6 +3815,25 @@ export interface SetRunPinnedDto {
      * @memberof SetRunPinnedDto
      */
     pinned: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface ShellKillDto
+ */
+export interface ShellKillDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ShellKillDto
+     */
+    killed: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShellKillDto
+     */
+    reason: string | null;
 }
 /**
  * 

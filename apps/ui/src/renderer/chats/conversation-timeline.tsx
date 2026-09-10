@@ -184,16 +184,37 @@ export const ConversationTimeline = memo(function ConversationTimeline({
               {partialReason}
             </p>
           )}
+          {/* NEWEST FIRST.
+              REPORTED as "нам нужно изменить timeline, чтобы он изначально
+              начинался сверху… Сейчас, чтобы увидеть последнее сообщение
+              пользователя, мне нужно каждый раз листать до самого низа" — the
+              list was chronological, so the message a reader is most likely
+              looking for, the one they just sent, was the one furthest from the
+              top of a panel capped at 60vh.
+
+              The daemon still sends seq order and still keeps the NEWEST
+              markers when it caps, so the reversal is presentation only: it
+              cannot turn a truncated head into a truncated tail, and the
+              partial-reason line above still sits at the end the conversation
+              continues from.
+
+              The ORDINAL is taken before the reversal, so `Message 3` is the
+              third message of the conversation rather than the third row of the
+              panel — a number that counted rows would relabel every earlier
+              message each time a new one arrived. */}
           <ol>
-            {markers.map((marker, index) => (
-              <TimelineNode
-                key={marker.seq}
-                marker={marker}
-                label={marker.preview.trim() || fallbackLabel(index)}
-                last={index === markers.length - 1}
-                onJump={jump}
-              />
-            ))}
+            {markers
+              .map((marker, index) => ({ marker, ordinal: index + 1 }))
+              .reverse()
+              .map(({ marker, ordinal }, row, rows) => (
+                <TimelineNode
+                  key={marker.seq}
+                  marker={marker}
+                  label={marker.preview.trim() || fallbackLabel(ordinal - 1)}
+                  last={row === rows.length - 1}
+                  onJump={jump}
+                />
+              ))}
           </ol>
         </div>
       </Popover>

@@ -244,6 +244,7 @@ import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
 import { pullRequestsIn, usePullRequests } from './use-pull-requests';
+import { useRunShells } from './use-run-shells';
 import {
   threadPullRequestsOf,
   useThreadPullRequests,
@@ -336,6 +337,18 @@ const START_COLUMN_PAD = '1.5rem';
  * matters, a real teardown per row.
  */
 const ARCHIVE_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * How many frames the older-page load keeps holding the reader's place.
+ *
+ * A prepended page does not arrive at its final height in one commit — a
+ * transcript is markdown, diffs, fenced blocks and tool groups, and their boxes
+ * settle over the frames after React commits them. The compensation therefore
+ * re-measures instead of firing once; see the call site for the measurement
+ * that made this necessary. Bounded so a transcript that never stops growing
+ * cannot hold the scroller for longer than a gesture.
+ */
+const OLDER_PAGE_HOLD_FRAMES = 10;
 
 /** Client-side only — this id never reaches the daemon. */
 const randomId = (): string => crypto.randomUUID();
@@ -2135,11 +2148,43 @@ export function Chats({
         // viewport, which pushes everything they were reading down by exactly
         // the height that arrived — so the scroll offset is moved by the same
         // amount, and nothing appears to move at all.
+        //
+        // Over SEVERAL FRAMES, and that is the whole of a reported defect. The
+        // promise resolves when the state is set, not when React has committed
+        // the rows and the browser has laid them out — so a single correction
+        // here reads a `scrollHeight` that has barely moved, applies almost
+        // nothing, and the page then grows underneath the reader with nothing
+        // left to compensate. Measured in the running app on a 30k-row thread:
+        // the transcript grew 42,865px → 74,092px across one older page while
+        // `scrollTop` stayed put, which puts the reader 31,227px away from what
+        // they were reading. REPORTED as "он обрезает беседу почему-то" — the
+        // conversation had not been cut, they had been moved off it.
+        //
+        // `applied` is what makes re-running safe: each pass compensates only
+        // the growth it has not already paid for, so a page that arrives in
+        // three chunks is held three times rather than over-corrected once.
         const before = scroller.scrollHeight;
         void loadOlderRef.current().then((grew) => {
-          if (grew) {
-            scroller.scrollTop += scroller.scrollHeight - before;
+          if (!grew) {
+            return;
           }
+          let frames = 0;
+          let applied = 0;
+          const hold = (): void => {
+            if (!scroller.isConnected) {
+              return;
+            }
+            const owed = scroller.scrollHeight - before - applied;
+            if (owed > 0) {
+              scroller.scrollTop += owed;
+              applied += owed;
+            }
+            frames += 1;
+            if (frames < OLDER_PAGE_HOLD_FRAMES) {
+              requestAnimationFrame(hold);
+            }
+          };
+          requestAnimationFrame(hold);
         });
       }
     };
@@ -5072,6 +5117,65 @@ export function Chats({
     latestUserSeq,
   );
   /**
+   * Every command the run still has RUNNING, read from the daemon.
+   *
+   * The fold in `shell-activity.ts` can only see the loaded window, so a
+   * command detached earlier drops off the list while the run goes on counting
+   * it — the reported `working` badge over an empty shelf. ASKED FOR as "we
+   * simply need to show current shells and everything else for entire
+   * conversation, not last 1000".
+   */
+  const { shells: runShells, refresh: refreshRunShells } = useRunShells(
+    chatApi,
+    activeRunId,
+    activeRun?.shellsOpen ?? 0,
+  );
+
+  /**
+   * Stop one of this thread's running commands — ASKED FOR as "i wanna have an
+   * ability to kill terminals".
+   *
+   * Bound to the OPEN run here rather than taking one, like the panel's export
+   * control beside it: every list that draws this button is per-thread, so a
+   * shell id is only ever addressed within the conversation on screen — which
+   * is also the daemon's own scoping, since a call id names nothing there
+   * unless that run opened it.
+   *
+   * `killed: false` is an ORDINARY answer rather than a failure — the list is a
+   * snapshot, so a command that ended by itself between the render and the
+   * press is the common race — but it is still worth SAYING, because the user
+   * pressed a button and the process they were looking at was not the thing
+   * that stopped. The daemon writes the sentence; nothing here composes one.
+   *
+   * It re-reads either way. A kill on a live run moves `Run.shellsOpen`, which
+   * the hook already watches, but the case this exists for is the other one: a
+   * command left over from a conversation whose CLI is long gone, where that
+   * count is already zero and nothing would ever fetch again.
+   */
+  const handleKillShell = useCallback(
+    async (shell: ShellRun): Promise<void> => {
+      if (activeRunId === null) {
+        return;
+      }
+      setError(null);
+      try {
+        const answer = await chatApi.killChatShell({
+          runId: activeRunId,
+          callId: shell.id,
+        });
+        if (!answer.killed && answer.reason !== null) {
+          setError(`${shell.command}: ${answer.reason}`);
+        }
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        refreshRunShells();
+      }
+    },
+    [activeRunId, chatApi, refreshRunShells, setError],
+  );
+
+  /**
    * The timeline as the agents panel takes it — its markers plus the jump.
    *
    * Memoized rather than built inline at the call site: the panel draws this
@@ -5824,6 +5928,45 @@ export function Chats({
       shellAgents,
     };
   }, [agents, shellsByAgent, tasksByAgent]);
+  /**
+   * The shelf's command list: what the LOADED transcript knows, plus whatever
+   * the daemon says is still running that it could not see.
+   *
+   * The local fold WINS wherever both hold a command, and that ordering is the
+   * whole of the merge: it carries state the daemon's read has no notion of —
+   * the detached handle a kill is addressed to, the exit code a probe brought
+   * back, the agent that started it. The daemon's rows are the tail this client
+   * never loaded, so they can only ADD.
+   */
+  const shelfShells = useMemo(() => {
+    if (runShells.length === 0) {
+      return sidePanelLive.shells;
+    }
+    const known = new Set(sidePanelLive.shells.map((shell) => shell.id));
+    const extra: ShellRun[] = [];
+    for (const shell of runShells) {
+      if (known.has(shell.id)) {
+        continue;
+      }
+      extra.push({
+        id: shell.id,
+        command: shell.command,
+        description: null,
+        // Detached by construction: a command still open in a run whose
+        // transcript has moved past it is one the daemon bracketed, which is
+        // what `shell_open` records.
+        background: true,
+        handle: null,
+        status: 'running',
+        exitCode: null,
+        startedAt: new Date(shell.startedAt).toISOString(),
+        agentId: shell.nodeId,
+      });
+    }
+    // Oldest first, like the transcript they came from: the daemon's rows are
+    // by definition older than anything the loaded window holds.
+    return [...extra, ...sidePanelLive.shells];
+  }, [runShells, sidePanelLive.shells]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -7790,6 +7933,11 @@ export function Chats({
                           />
                           <RunningSubagentChips
                             running={sidePanelLive.subagents}
+                            // The RUN's own count — see the prop's note. The
+                            // fold above it can only be short of this, never
+                            // over, because a delegate launched before the
+                            // loaded page has no thread here to count.
+                            reportedOut={activeRun?.subagentsOut ?? 0}
                             threads={sidePanelLive.subagentThreads}
                             // The same detail panel the agents panel's own
                             // delegate rows open — the shelf is the readier
@@ -7800,7 +7948,12 @@ export function Chats({
                           {/* LAST on the row: a command an agent runs comes
                               and goes many times within a single turn. */}
                           <RunningShellChips
-                            shells={sidePanelLive.shells}
+                            shells={shelfShells}
+                            // The RUN's own count, which is what the badge
+                            // reads — the rows beside it are folded from the
+                            // loaded window and can only be short of it. See
+                            // the prop's own note for the reported case.
+                            reportedOpen={activeRun?.shellsOpen ?? 0}
                             // Only a WORKFLOW's rows are labelled. A 1:1 chat
                             // has one agent, so the name would be the same word
                             // down every row — and the popover is 22rem, where
@@ -7811,6 +7964,7 @@ export function Chats({
                                 : undefined
                             }
                             onOpen={setOpenShell}
+                            onKill={handleKillShell}
                           />
                         </ComposerShelf>
                       </RunSettledContext.Provider>
@@ -8253,6 +8407,7 @@ export function Chats({
                       // flight that belongs to it.
                       openTurns={openTurnsShown}
                       onOpenShell={setOpenShell}
+                      onKillShell={handleKillShell}
                       // Withheld for a run with no working directory, so the
                       // panel cannot draw a control over a folder that is not
                       // there — the panel itself never sees the path.

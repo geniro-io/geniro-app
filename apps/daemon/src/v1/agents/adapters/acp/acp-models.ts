@@ -122,8 +122,9 @@ export function readAcpConfigOptions(
  *
  * TWO carriers, because ACP replaced one with the other and the binaries did
  * not follow at once. `configOptions[]` (category `model`) is the ACP 1.0 form
- * and is preferred; `models.availableModels` is the pre-1.0 form, removed from
- * the schema at v1.16.0 on 2026-06-24 but still emitted by real agents —
+ * and is preferred; `models.availableModels` is the pre-1.0 form, absent from
+ * the pinned stable schema and, on a 2026-09-11 reading of the vendor's
+ * releases, from every stable one — but still emitted by real agents —
  * cursor-agent 2026.08.04-aaa8809 sends BOTH, with identical contents. So the
  * choice is made from what a reply ACTUALLY carries, never from a version
  * number: an agent is asked what it offers and believed.

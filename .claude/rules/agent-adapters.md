@@ -180,8 +180,9 @@ Adapter-agnostic contract types and constants live in
 `adapters/utils/` (`skill-scan.utils.ts`) and stays free of any one CLI's paths
 or names.
 
-A helper that exists only for SPECS — a fixture, a process double, a builder —
-is not a `utils/` helper and never sits beside the code it doubles: it lives in
+A helper that exists only for SPECS — a fixture, a process double, a builder,
+or a vendored asset a spec reads — is not a `utils/` helper and never sits
+beside the code it doubles: it lives in
 a `__tests__/` directory at the level its specs share —
 `adapters/__tests__/fake-group-child.ts` (the base's specs and both adapters'),
 and `v1/agents/__tests__/fake-child.ts` one level UP, because the specs sharing

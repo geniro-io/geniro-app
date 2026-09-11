@@ -45,6 +45,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@mikro-orm/seeder": "^7.1.14",
     "@swc-node/register": "^1.11.1",
     "@swc/cli": "^0.8.1",

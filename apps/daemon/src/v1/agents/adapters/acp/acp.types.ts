@@ -138,12 +138,17 @@ export interface AcpSetModeParams {
 /**
  * `session/set_model` params — the PRE-1.0 way to put a session on a model.
  *
- * Removed from the published schema when ACP 1.0 / schema v1.16.0 landed
- * (2026-06-24); `session/set_config_option` replaced it. Kept because removal
- * from the SPEC is not removal from the BINARIES: probed on cursor-agent
- * 2026.08.04-aaa8809, the installed agent still answers it with `{}`. Which of
- * the two goes out is decided by what the session reply advertises, never by a
- * version guess — see {@link AcpSetConfigOptionParams}.
+ * The pinned stable release declares nothing for it — checkable here, and
+ * asserted by `acp-conformance.spec.ts`. Beyond that one release: fetching the
+ * schema assets on 2026-09-11 found the method only in `schema.unstable.json`,
+ * gone at v0.13.5 (2026-06-01, PR #1325 "(unstable) Remove unstable session
+ * model API"), with v1.16.0 (2026-06-24) stabilizing the REPLACEMENT
+ * `session/set_config_option` instead. Only the first sentence can be re-checked
+ * from this repository; the rest is a dated reading of the vendor's releases.
+ * Kept because absence from the SPEC is not absence from the BINARIES: probed on
+ * cursor-agent 2026.08.04-aaa8809, the installed agent still answers it with
+ * `{}`. Which of the two goes out is decided by what the session reply
+ * advertises, never by a version guess — see {@link AcpSetConfigOptionParams}.
  */
 export interface AcpSetModelParams {
   sessionId: string;

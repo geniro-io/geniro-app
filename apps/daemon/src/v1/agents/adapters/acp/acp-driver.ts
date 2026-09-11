@@ -1614,8 +1614,8 @@ export class AcpTurnDriver {
       return;
     }
     this.requestedModelId = wanted;
-    // ACP 1.0 replaced `session/set_model` with the general
-    // `session/set_config_option`. Which one this agent gets is decided by
+    // ACP 1.0 stabilized `session/set_config_option`, the general form that
+    // replaces `session/set_model`. Which one this agent gets is decided by
     // whether IT enumerated a model config option, not by its version string —
     // an agent that listed its models there implements the method that sets
     // them. Both replies route to the same `set_model` pending kind: the

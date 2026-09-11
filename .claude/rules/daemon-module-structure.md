@@ -42,6 +42,17 @@ because the specs sharing the synchronous child double span `adapters/` AND
 declare it in that spec (`claude.adapter.spec.ts`'s `KillableChild`, the one
 behavioural variant of the shared double).
 
+A vendored DATA file a spec reads lives here too, whatever its spec count —
+`adapters/acp/__tests__/acp-schema.v1.21.0.json`, the pinned ACP schema release
+its conformance spec validates against. The escape hatch above is not open to
+it (a 246KB third-party document cannot be declared inline), and the reason is
+the FIRST paragraph's, not the next one's: it has no production caller, so
+`utils/` would claim a production role it does not have. The `dist/` argument
+below does not apply to it and must not be borrowed — swc compiles `.ts` only
+and copies nothing, so a `.json` never reaches `dist/` from anywhere in `src`,
+and `tsconfig.build.json`'s exclude is equally inert for a file the spec
+`readFileSync`s rather than imports.
+
 **The directory is the exclusion mechanism, which is the whole point.** Test-only
 code must not reach `dist/`, and the daemon has two independent build configs
 that must agree on what to skip (`package.json`'s swc `--ignore` globs and

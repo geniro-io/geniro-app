@@ -77,6 +77,7 @@ class FakeSession implements AgentSession {
       cancel: () => this.endTurn(),
       respondApproval: () => true,
       sendUserMessage: () => true,
+      attributableDelegate: (): string | null => null,
       setApprovalMode: () => true,
     };
   }

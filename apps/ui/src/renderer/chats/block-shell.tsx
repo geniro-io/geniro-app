@@ -474,12 +474,20 @@ export function BlockPendingLine({
  * (one card's status chip moving, the other's not) is invisible until someone
  * puts them side by side.
  *
- * **`collapsible` is what separates the two callers, and it is not styling.**
- * A call block is the point of the row it sits on and always renders open; a
- * sub-agent block is an aside the reader opens deliberately, so it starts
- * closed. One prop, not two: no caller wants collapsible-and-already-open, and
- * a separate `defaultOpen` only created a combination nothing produced except
- * the test written for it.
+ * **`collapsible` is what separates a fold from a plain card, and it is not
+ * styling.** A block the reader opens deliberately is an aside; one that cannot
+ * be folded is the point of the row it sits on. Every live caller is
+ * collapsible today, so `collapsible: false` is the shape rather than a case
+ * anything currently takes.
+ *
+ * `defaultOpen` is the one exception to starting shut, and it earned itself: a
+ * delegate's block
+ * can hold a RENDER CARD — a findings report, a chart — and that row is the
+ * only copy of what it says, the tool result being a receipt. Shut, the card is
+ * work the reader has to go looking for, which is worse than the unattributed
+ * row filing it under the delegate replaced. So a block that holds one opens.
+ * It is DERIVED rather than seeded, because cards stream in after the block is
+ * already on screen.
  *
  * `headerAction` renders BESIDE the disclosure button, never inside it.
  * Interactive content nested in a `<button>` is invalid HTML whatever role it
@@ -491,6 +499,7 @@ export function BlockShell({
   header,
   status,
   collapsible = false,
+  defaultOpen = false,
   toggleLabel,
   headerAction,
   summary,
@@ -524,7 +533,10 @@ export function BlockShell({
   children: React.ReactNode;
 } & (
   | {
-      /** Render the header as a disclosure over the body, closed to start. */
+      /**
+       * Render the header as a disclosure over the body, closed to start
+       * unless {@link defaultOpen} says otherwise.
+       */
       collapsible: true;
       /**
        * Accessible name for the disclosure button. Required by the TYPE, not
@@ -533,10 +545,22 @@ export function BlockShell({
        * `<span>` and an icon.
        */
       toggleLabel: string;
+      /**
+       * Open even though it can be folded — for a block holding something the
+       * reader must not have to go looking for. Re-read on every render, not
+       * seeded at mount, so a row arriving later still opens the block; the
+       * user's own press outranks it from then on.
+       */
+      defaultOpen?: boolean;
     }
-  | { collapsible?: false; toggleLabel?: never }
+  | { collapsible?: false; toggleLabel?: never; defaultOpen?: never }
 )): React.JSX.Element {
-  const [open, setOpen] = useState(!collapsible);
+  // DERIVED, with the user's own press layered over it — never seeded into
+  // `useState`, which reads its argument only at mount. A card arrives after
+  // the block is on screen, so a seeded block would stay shut on exactly the
+  // delegate whose report it exists to reveal. Same shape as `ToolRow`.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? (!collapsible || defaultOpen);
   const headerInner = (
     <>
       {collapsible ? (
@@ -601,7 +625,7 @@ export function BlockShell({
               type="button"
               aria-expanded={open}
               aria-label={toggleLabel}
-              onClick={() => setOpen((v) => !v)}
+              onClick={() => setOverride(!open)}
               className={headerClass}>
               {headerInner}
             </button>

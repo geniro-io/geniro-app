@@ -904,6 +904,147 @@ async function reportAndLetTheGracePass(
   }
 }
 
+describe('which delegate a render card can be credited to', () => {
+  // Each case below is one the inference gets wrong without its own condition.
+  // The contract and the reasons are on
+  // {@link AgentTurnHandle.attributableDelegate}.
+
+  it('names the delegate once the agent has stopped talking', async () => {
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+    expect(handle).not.toBeNull();
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(handle!.attributableDelegate()).toBe('toolu_launch');
+
+    await reportAndLetTheGracePass(child, 'task-1');
+    await handle?.done;
+  });
+
+  it('names nobody while the main thread is still talking', async () => {
+    // The window the whole guard exists for: the agent goes on working — and
+    // calling these very tools — while a delegate is out, which `spawn-cli`
+    // says itself on the release path ("the main thread is talking again with
+    // N unit(s) still out"). Attributing here credits the agent's OWN card to
+    // the delegate it has just launched.
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    await Promise.resolve();
+
+    expect(handle!.attributableDelegate()).toBeNull();
+
+    line(child, { done: true });
+    await Promise.resolve();
+    await reportAndLetTheGracePass(child, 'task-1');
+    await handle?.done;
+  });
+
+  it('names nobody while two delegates are out', async () => {
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+
+    line(child, {
+      work: 'a',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_a',
+    });
+    line(child, {
+      work: 'b',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_b',
+    });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(handle!.attributableDelegate()).toBeNull();
+
+    line(child, { work: 'a', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'b');
+    await handle?.done;
+  });
+
+  it('names nobody when the one delegate out has no launching call', async () => {
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+
+    line(child, { work: 'nameless', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(handle!.attributableDelegate()).toBeNull();
+
+    await reportAndLetTheGracePass(child, 'nameless');
+    await handle?.done;
+  });
+
+  it('names nobody when a SECOND delegate is out unidentified', async () => {
+    // Why the COUNT is taken over the live set rather than over the ids that
+    // resolved. A delegate the CLI announced with no `tool_use_id` never
+    // reaches the delegate map, so counting what resolved answers 1 while two
+    // are out — and credits whichever one happened to carry a call.
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+
+    line(child, {
+      work: 'named',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_named',
+    });
+    line(child, { work: 'nameless', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    await Promise.resolve();
+
+    expect(handle!.attributableDelegate()).toBeNull();
+
+    line(child, { work: 'named', phase: 'settled' });
+    await reportAndLetTheGracePass(child, 'nameless');
+    await handle?.done;
+  });
+
+  it('names nobody once the delegate has reported', async () => {
+    // Why the lookup goes THROUGH the live set: the delegate map deliberately
+    // outlives a delegate's end so a late cost report can still be booked, so
+    // reading it alone goes on naming a delegate that has finished.
+    vi.useFakeTimers();
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: () => {} });
+
+    line(child, {
+      work: 'task-1',
+      phase: 'started',
+      unit: 'agent',
+      call: 'toolu_launch',
+    });
+    line(child, { done: true });
+    await Promise.resolve();
+    expect(handle!.attributableDelegate()).toBe('toolu_launch');
+
+    line(child, { work: 'task-1', phase: 'settled' });
+    expect(handle!.attributableDelegate()).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
+    await handle?.done;
+  });
+});
+
 describe('a turn whose background work outlives its result', () => {
   it('holds for a DELEGATE and not for a backgrounded command', async () => {
     // The hold buys a turn for the agent's OWN continuation to land in, which

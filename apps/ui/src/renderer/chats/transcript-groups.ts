@@ -503,12 +503,11 @@ export interface FindingsEntry {
   /**
    * The thread that produced it: a delegate's report is its own.
    *
-   * Read the same way `task-list` reads it, and null in practice today — the
-   * daemon stamps no originating thread on a `report_findings` row, because the
-   * tool reaches it through one MCP endpoint per NODE with no thread on the
-   * call. It is carried rather than dropped so the fold and the ownership
-   * dispatch are already correct the day a producer stamps one; until then a
-   * delegate's report renders on the main thread.
+   * Read the same way `task-list` reads it, and stamped by the daemon's own
+   * `ChatService.attributeCard` — but only when exactly one delegate is
+   * mid-work, since the tool reaches it through one MCP endpoint per NODE with
+   * no thread on the call. So the daemon infers the thread from live turn state
+   * or says nothing, and a card left null renders on the main thread.
    */
   parentToolUseId: string | null;
   report: FindingsReport;
@@ -527,8 +526,8 @@ export interface ChartEntry {
   createdAt: string;
   seq: number;
   nodeId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
-   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   chart: ChartSpec;
 }
@@ -546,8 +545,8 @@ export interface MetricsEntry {
   createdAt: string;
   seq: number;
   nodeId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
-   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   metrics: MetricsSpec;
 }
@@ -565,8 +564,8 @@ export interface ComparisonEntry {
   createdAt: string;
   seq: number;
   nodeId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
-   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   comparison: ComparisonSpec;
 }
@@ -584,8 +583,8 @@ export interface GalleryEntry {
   createdAt: string;
   seq: number;
   nodeId: string | null;
-  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and null today
-   * for the same reason: one MCP endpoint per NODE, no thread on the call. */
+  /** Read exactly as {@link FindingsEntry.parentToolUseId} is, and stamped at
+   * the same seam under the same one-delegate condition. */
   parentToolUseId: string | null;
   gallery: GallerySpec;
 }
@@ -715,17 +714,17 @@ export type TranscriptEntry =
  * A CARD entry: a folded row that stands on its own — not a raw item, not a
  * block enclosing other rows.
  *
- * The four share one shape (`id`/`createdAt`/`seq`/`nodeId`/`parentToolUseId`)
- * and, more to the point, share how six separate readers below have to treat
- * them: who owns it, which thread it belongs to, its `seq` for ordering nested
- * work, its `createdAt` for "has anything spoken since", and the fact that it
- * holds no tool invocations to count.
+ * They share one shape (`id`/`createdAt`/`seq`/`nodeId`/`parentToolUseId`) and,
+ * more to the point, share how the readers below have to treat them: who owns
+ * it, which thread it belongs to, its `seq` for ordering nested work, its
+ * `createdAt` for "has anything spoken since", and the fact that it holds no
+ * tool invocations to count.
  *
- * Extracted at the fourth one. Each of those six readers spelled the same
- * three-arm `entry.type === …` chain, so a new card kind was six edits, every
- * one of them silent when missed — a card left out of the `lastRowAt` fold does
- * not fail, it just stops a spinner from noticing that work has happened. One
- * predicate made the fifth card a single line.
+ * Extracted once there were several. Each of those readers spelled the same
+ * `entry.type === …` chain by hand, so a new card kind was an edit per reader,
+ * every one of them silent when missed — a card left out of the `lastRowAt`
+ * fold does not fail, it just stops a spinner from noticing that work has
+ * happened. One predicate made the next card a single line.
  *
  * The union and the predicate must list the SAME kinds, and the COMPILER is
  * what enforces it: adding `comparison` to the predicate alone — which is how

@@ -1,25 +1,19 @@
 import { memo, useContext } from 'react';
 
 import { CallBlock } from './call-block';
-import { ChartCard } from './chart-block';
-import { ComparisonCard } from './comparison-block';
-import { FindingsCard } from './findings-block';
-import { GalleryCard } from './gallery-block';
-import { MetricsCard } from './metrics-block';
+import { EntryCard } from './entry-card';
 import { formatClockTime } from './relative-time';
 import { SenderRow } from './sender-row';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
-import { TaskListCard } from './task-list';
 import { ToolGroup } from './tool-group';
-import type { TranscriptEntry } from './transcript-groups';
+import { isCardEntry, type TranscriptEntry } from './transcript-groups';
 import {
   payloadString,
   TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
 import { TurnBlock } from './turn-block';
-import { WorkflowCard } from './workflow-block';
 
 /** Item kinds that read as a MESSAGE from someone (avatar + name + time). */
 const SENDER_KINDS = new Set([
@@ -135,39 +129,8 @@ export const TranscriptEntryView = memo(function TranscriptEntryView({
       />
     );
   }
-  if (entry.type === 'findings') {
-    // No sender frame, for the task list's reason below: the card is a report
-    // the agent handed the app to draw, and the turn block around it already
-    // names who was working.
-    return <FindingsCard report={entry.report} />;
-  }
-  if (entry.type === 'chart') {
-    // No sender frame, for the findings card's reason directly above.
-    return <ChartCard chart={entry.chart} />;
-  }
-  if (entry.type === 'metrics') {
-    // Same again — the figures are a card the agent handed over, not words.
-    return <MetricsCard metrics={entry.metrics} />;
-  }
-  if (entry.type === 'comparison') {
-    // …and the table, for the same reason.
-    return <ComparisonCard comparison={entry.comparison} />;
-  }
-  if (entry.type === 'gallery') {
-    // …and the pictures. The agent handed over where they are, not words about
-    // them, so the turn block around it already names who produced them.
-    return <GalleryCard gallery={entry.gallery} />;
-  }
-  if (entry.type === 'task-list') {
-    // No sender frame: the list is the AGENT's own bookkeeping about the work,
-    // not something it said, and the surrounding turn block already names who
-    // is working.
-    return <TaskListCard entry={entry} />;
-  }
-  if (entry.type === 'workflow') {
-    // Same rule as the sub-agent block: the card names the workflow itself, so
-    // a sender frame around it would attribute the fleet to the main agent.
-    return <WorkflowCard entry={entry} />;
+  if (isCardEntry(entry)) {
+    return <EntryCard entry={entry} />;
   }
 
   const item = entry.item;

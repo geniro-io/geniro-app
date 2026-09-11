@@ -41,6 +41,7 @@ function makeBlock({
   stopped = false,
   failed = false,
   model,
+  card = false,
 }: {
   /** The launching Task tool returned. */
   withResult?: boolean;
@@ -50,6 +51,11 @@ function makeBlock({
   failed?: boolean;
   /** The model its CLI says it resolved to, declared as the daemon declares it. */
   model?: string;
+  /**
+   * The delegate drew a findings card, carrying the `parentToolUseId` the
+   * daemon's own `attributeCard` stamps onto a render-family row.
+   */
+  card?: boolean;
 } = {}): SubagentBlockEntry {
   const items: ChatItem[] = [
     item('tool_call', {
@@ -87,6 +93,19 @@ function makeBlock({
       result: 'two hits',
       parentToolUseId: 'task-1',
     }),
+    ...(card
+      ? [
+          item('report_findings', {
+            parentToolUseId: 'task-1',
+            findings: [
+              {
+                file: 'src/parse.ts',
+                summary: 'An off-by-one in the loop bound',
+              },
+            ],
+          }),
+        ]
+      : []),
   ];
   if (stopped) {
     // The turn ends with the delegate's tool never having returned.
@@ -147,6 +166,59 @@ function badge(): Element | null {
 }
 
 describe('SubagentBlock', () => {
+  /** The block's own disclosure — `aria-expanded` on its header button. */
+  const expanded = (): string | null | undefined =>
+    container
+      .querySelector('button[aria-expanded]')
+      ?.getAttribute('aria-expanded');
+
+  it('OPENS a delegate that drew a findings card, with no press', () => {
+    // Two things at once, and both are the point. The card is the ONLY copy of
+    // what it says — the result the agent got back from that tool is a receipt
+    // — so a shut fold turns a report into work the reader has to go looking
+    // for, which is a worse answer than the unattributed row that filing it
+    // under the delegate replaced. And reaching this block at all is the
+    // end-to-end pin on the daemon's stamp: `parentToolUseId` on a card row is
+    // the whole of what files it here rather than in the main flow.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ card: true })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+
+    expect(expanded()).toBe('true');
+    expect(container.textContent).toContain('src/parse.ts');
+  });
+
+  it('lets the reader shut it, and then SAYS what it is holding', () => {
+    // `defaultOpen` is a DEFAULT, not a lock — the press outranks it from then
+    // on. That is what makes the closed header's line load-bearing rather than
+    // decorative: a reader who opened a running delegate and folded it away
+    // before it reported is exactly the one who would otherwise be left with a
+    // silent header over the only copy of its findings.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ card: true })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(expanded()).toBe('false');
+    expect(container.textContent).toContain('reported 1 finding');
+  });
+
   it('renders the delegate as a block that is COLLAPSED by default', () => {
     act(() =>
       root.render(

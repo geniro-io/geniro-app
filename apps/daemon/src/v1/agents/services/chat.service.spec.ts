@@ -474,6 +474,7 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    attributableDelegate: ReturnType<typeof vi.fn>;
     setApprovalMode: ReturnType<typeof vi.fn>;
   }[];
   /** Every session the service opened, and whether each was closed. */
@@ -515,6 +516,7 @@ function fakeAdapter(kind: AgentKind): {
     respondApproval: ReturnType<typeof vi.fn>;
     cancel: ReturnType<typeof vi.fn>;
     sendUserMessage: ReturnType<typeof vi.fn>;
+    attributableDelegate: ReturnType<typeof vi.fn>;
     setApprovalMode: ReturnType<typeof vi.fn>;
   }[] = [];
   const start = vi.fn(
@@ -537,6 +539,9 @@ function fakeAdapter(kind: AgentKind): {
         // stream-json stdin (probe-verified). A spec about the CLI that cannot
         // overrides it to false.
         sendUserMessage: vi.fn(() => true),
+        // Nothing delegated unless a spec says so: the main thread doing its
+        // own work is the ordinary turn, and attribution is the exception.
+        attributableDelegate: vi.fn((): string | null => null),
         // A chat turn always spawns question-capable, so it always holds the
         // permission dialogue and can always be re-moded — true is the
         // realistic default. A spec about a turn that CANNOT overrides it.
@@ -1539,6 +1544,120 @@ describe('ChatService', () => {
       // a union of reasons rather than one flag: claude's own model can ask, so
       // geniro's question tool is never registered beside its own.
       expect(userQuestions.canAsk(run.id, SINGLE_AGENT_NODE)).toBe(false);
+      await settle(claude);
+    });
+
+    // ONE case per stamped kind. The five sinks each call `attributeCard` for
+    // themselves, so reverting any one of them to the bare payload has to go
+    // red — five separate call sites, five separate cause paths.
+    const CARD_SINKS: {
+      kind: string;
+      draw: (h: ReturnType<typeof setup>, runId: string) => Promise<unknown>;
+    }[] = [
+      {
+        kind: 'report_findings',
+        draw: (h, runId) =>
+          h.findingsReports.report(runId, SINGLE_AGENT_NODE, {
+            findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }],
+          }),
+      },
+      {
+        kind: 'show_chart',
+        draw: (h, runId) =>
+          h.charts.draw(runId, SINGLE_AGENT_NODE, {
+            title: 'Test suite duration',
+            kind: 'line',
+            labels: ['a1b2'],
+            series: [{ name: 'unit', values: [12.1] }],
+          }),
+      },
+      {
+        kind: 'show_metrics',
+        draw: (h, runId) =>
+          h.metrics.draw(runId, SINGLE_AGENT_NODE, {
+            title: 'After the caching change',
+            metrics: [{ label: 'Coverage', value: '82%' }],
+          }),
+      },
+      {
+        kind: 'show_comparison',
+        draw: (h, runId) =>
+          h.comparisons.draw(runId, SINGLE_AGENT_NODE, {
+            title: 'Local store for the daemon',
+            options: [{ name: 'SQLite' }, { name: 'Postgres' }],
+            criteria: [
+              {
+                label: 'Setup cost',
+                cells: [{ value: 'none' }, { value: 'a server' }],
+              },
+            ],
+          }),
+      },
+      {
+        kind: 'show_gallery',
+        draw: (h, runId) =>
+          h.galleries.draw(runId, SINGLE_AGENT_NODE, {
+            title: 'Before and after',
+            images: [{ path: 'a.png' }],
+          }),
+      },
+    ];
+
+    it.each(CARD_SINKS)(
+      'attributes a $kind card to the delegate the turn names',
+      async ({ kind, draw }) => {
+        // These rows are written by the host-tool sink rather than by
+        // `mapEventToItem`, which is where every other row gets its
+        // `parentToolUseId` — so without the stamp the card arrives looking
+        // like the main thread's own work.
+        const harness = setup();
+        const { service, claude } = harness;
+        const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+        await service.sendMessage(run.id, 'hello');
+        claude.handles[0]!.attributableDelegate.mockReturnValue(
+          'toolu_delegate_1',
+        );
+
+        await draw(harness, run.id);
+        await drain();
+
+        const card = (await service.getHistory(run.id)).find(
+          (item) => item.kind === kind,
+        );
+        expect(
+          (card?.payload as { parentToolUseId?: string } | undefined)
+            ?.parentToolUseId,
+        ).toBe('toolu_delegate_1');
+        await settle(claude);
+      },
+    );
+
+    it('attributes nothing when the turn can name no delegate', async () => {
+      // Whether a delegate can be named is the TURN's judgment — the handle
+      // answers null while the main thread is still talking, while two
+      // delegates are out, and when the one that is out has no launching call
+      // (`spawn-cli.session.spec.ts` pins those three). What THIS pins is that
+      // the service obeys the null rather than reaching past it for a best
+      // guess of its own.
+      const harness = setup();
+      const { service, claude, findingsReports } = harness;
+      const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+      await service.sendMessage(run.id, 'hello');
+      claude.handles[0]!.attributableDelegate.mockReturnValue(null);
+
+      await findingsReports.report(run.id, SINGLE_AGENT_NODE, {
+        findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }],
+      });
+      await drain();
+
+      const card = (await service.getHistory(run.id)).find(
+        (item) => item.kind === 'report_findings',
+      );
+      expect(card).toBeDefined();
+      expect(
+        (card?.payload as { parentToolUseId?: string } | undefined)
+          ?.parentToolUseId,
+      ).toBeUndefined();
       await settle(claude);
     });
 
@@ -2820,6 +2939,7 @@ describe('ChatService', () => {
         cancel: cancelled,
         respondApproval: () => false,
         sendUserMessage: () => false,
+        attributableDelegate: (): string | null => null,
         setApprovalMode: () => false,
       });
 
@@ -3744,6 +3864,7 @@ describe('ChatService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      attributableDelegate: (): string | null => null,
       setApprovalMode: () => false,
     });
 

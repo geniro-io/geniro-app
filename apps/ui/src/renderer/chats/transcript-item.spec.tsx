@@ -951,3 +951,36 @@ describe('errorRecovery — which cure an error row offers', () => {
     expect(errorRecovery(null, null, null)).toBeUndefined();
   });
 });
+
+describe('an ungrouped tool row', () => {
+  // The orphan path — a `tool_call` whose pair never formed lands here, and
+  // this file's own comment says it must not read worse than a grouped row.
+  // It wears the SAME `toolRowAccent`, wired at a second site, so it needs its
+  // own pin or the two sites can silently diverge.
+  const renderCall = (name: string): void => {
+    act(() =>
+      root.render(
+        <TranscriptItem
+          item={item('tool_call', { id: 't1', name, input: {} })}
+          nodes={NODES}
+        />,
+      ),
+    );
+  };
+
+  it('stripes it by what the call DID', () => {
+    renderCall('Bash');
+
+    expect(container.querySelector('[data-role="tool"]')?.className).toContain(
+      'border-l-primary/40',
+    );
+  });
+
+  it('withholds the stripe where the consequence is unknown', () => {
+    renderCall('mcp__fs__write');
+
+    expect(
+      container.querySelector('[data-role="tool"]')?.className,
+    ).not.toContain('border-l-2');
+  });
+});

@@ -109,6 +109,11 @@ function headerOperations(): (string | null)[] {
   ].map((icon) => icon.getAttribute('data-operation'));
 }
 
+/** The expanded tool ROWS' own buttons — the header is an `aria-expanded` one too. */
+function rowButtons(): Element[] {
+  return [...container.querySelectorAll('[data-slot="tool-row"]')];
+}
+
 function click(el: Element | null): void {
   act(() => {
     el?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -131,6 +136,45 @@ describe('ToolGroup', () => {
       }),
       toolItem('tool_result', { id: 't2', name: null, result: 'contents' }),
     ]);
+
+  it('stripes each tool row by what the call DID', () => {
+    // Pinned HERE because this is the row a reader actually sees: every tool
+    // call that forms a pair is drawn by it, so a stripe reaching only the
+    // ungrouped orphan path would reach almost nothing.
+    render(bashGroup());
+    click(container.querySelector('button[aria-expanded]'));
+
+    const rows = rowButtons();
+    expect(rows).toHaveLength(2);
+    // Bash CHANGED something on the machine; Read only looked at it.
+    expect(rows[0]?.className).toContain('border-l-primary/40');
+    expect(rows[1]?.className).toContain('border-l-border');
+  });
+
+  it('withholds a stripe where the consequence is unknown, beside one where it is not', () => {
+    // The two rows are asserted in ONE render on purpose. Alone, the absence
+    // holds just as well when the stripe is unwired from the row entirely — so
+    // it could not tell the guard from the wiring. The striped neighbour is
+    // what makes the pair say "this row got one and that row did not".
+    render(
+      makeGroup([
+        toolItem('tool_call', {
+          id: 't1',
+          name: 'Bash',
+          input: { command: 'ls' },
+        }),
+        toolItem('tool_result', { id: 't1', name: null, result: 'ok' }),
+        toolItem('tool_call', { id: 't2', name: 'mystery_tool', input: {} }),
+        toolItem('tool_result', { id: 't2', name: null, result: 'ok' }),
+      ]),
+    );
+    click(container.querySelector('button[aria-expanded]'));
+
+    const rows = rowButtons();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.className).toContain('border-l-primary/40');
+    expect(rows[1]?.className).not.toContain('border-l-2');
+  });
 
   it('is COLLAPSED by default: the summary line shows, the tool rows and payloads do not', () => {
     render(bashGroup());

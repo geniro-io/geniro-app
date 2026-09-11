@@ -29,6 +29,7 @@ import {
 } from './system-payload';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
+import { toolRowAccent } from './tool-icon';
 import {
   toolInputBody,
   toolLocationsBody,
@@ -258,7 +259,10 @@ export const TranscriptItem = memo(function TranscriptItem({
           (item.payload as { input?: unknown } | null)?.input,
         ) ?? toolLocationsBody(item.payload);
       return (
-        <MessageBubble variant="tool" role={tag(`🔧 ${name}`)}>
+        <MessageBubble
+          variant="tool"
+          role={tag(`🔧 ${name}`)}
+          className={toolRowAccent(item.payload) ?? undefined}>
           {body === null ? null : <ToolBodyView body={body} />}
         </MessageBubble>
       );

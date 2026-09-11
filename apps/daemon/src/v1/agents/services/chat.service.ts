@@ -3849,7 +3849,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'report_findings',
             null,
-            report,
+            this.attributeCard(runId, report),
           );
         } catch (err) {
           // The row IS the card, so a row that was never written is a report
@@ -3884,7 +3884,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_chart',
             null,
-            chart,
+            this.attributeCard(runId, chart),
           );
         } catch (err) {
           // Logged here and kept here, for the reason spelled out above: a
@@ -3924,7 +3924,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_metrics',
             null,
-            metrics,
+            this.attributeCard(runId, metrics),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -3954,7 +3954,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_comparison',
             null,
-            comparison,
+            this.attributeCard(runId, comparison),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -3995,7 +3995,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_gallery',
             null,
-            gallery,
+            this.attributeCard(runId, gallery),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -5393,6 +5393,36 @@ export class ChatService implements OnModuleInit {
       // a payload key with no reader is indistinguishable from one whose reader
       // was lost. Bringing the explanation back means bringing both back.
     });
+  }
+
+  /**
+   * Stamp a render-family card with the delegate that drew it, whenever the
+   * turn can say which one that is.
+   *
+   * These rows are written by the host-tool sinks rather than by
+   * `mapEventToItem`, which is where every OTHER row gets its
+   * `parentToolUseId` — so without this they arrive attributed to the main
+   * thread.
+   *
+   * WHETHER a delegate can be named is the turn's judgment and not this
+   * service's: {@link AgentTurnHandle.attributableDelegate} owns the conditions
+   * and answers null the moment any of them fails.
+   *
+   * TWIN PARSER: the renderer reads this key back in
+   * `apps/ui/src/renderer/chats/subagent-payload.ts` (`subagentIdOf`), which
+   * files the card under that thread. The payload crosses the wire as
+   * `z.unknown()`, so nothing generated spans the seam and a rename on either
+   * side compiles clean.
+   */
+  private attributeCard<T extends object>(
+    runId: string,
+    payload: T,
+  ): T & { parentToolUseId?: string } {
+    const delegate =
+      this.registry.runningHandle(runId)?.attributableDelegate() ?? null;
+    return delegate === null
+      ? payload
+      : { ...payload, parentToolUseId: delegate };
   }
 
   private async persist(

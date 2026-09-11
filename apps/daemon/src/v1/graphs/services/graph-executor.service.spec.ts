@@ -1739,6 +1739,7 @@ describe('GraphExecutorService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      attributableDelegate: (): string | null => null,
       setApprovalMode: () => false,
     });
 

@@ -7,7 +7,7 @@ import { type BlockStatus } from './block-shell';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
 import { ToolBodyView } from './tool-body-view';
-import { ToolCallIcon, ToolOperationIcon } from './tool-icon';
+import { ToolCallIcon, ToolOperationIcon, toolRowAccent } from './tool-icon';
 import {
   formatToolName,
   shortenPath,
@@ -108,12 +108,22 @@ function ToolRow({
       <button
         type="button"
         aria-expanded={open}
+        // The group HEADER is an `aria-expanded` button too, so a spec asking
+        // about ROWS needs a mark of its own — the same reason the header's
+        // operation strip carries one.
+        data-slot="tool-row"
         onClick={() => setOverride(!open)}
         className={cn(
           'flex w-full items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-colors',
           status === 'error'
             ? 'border-destructive/30 bg-destructive/5 hover:bg-destructive/10'
-            : 'border-border/50 bg-muted/40 hover:bg-muted/70',
+            : // The operation stripe is withheld from an ERROR row on purpose:
+              // that row already carries a tone, and two edge colours on one
+              // box would name two different things at once.
+              cn(
+                'border-border/50 bg-muted/40 hover:bg-muted/70',
+                toolRowAccent(payload),
+              ),
         )}>
         <ChevronRight
           aria-hidden="true"

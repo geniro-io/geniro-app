@@ -748,9 +748,13 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   const delegateWork = new Map<string, string>();
   /**
-   * The SHELLS among {@link openWork}, as work-id → launching tool call — the
+   * The SHELLS a turn has launched, as work-id → launching tool call — the
    * twin of {@link delegateWork}, kept for the same reason and read by
    * {@link announceShellWork}.
+   *
+   * Kept BESIDE {@link openWork} rather than among it: only `unit === 'agent'`
+   * enters that set. Which is what makes its SIZE readable as a delegate count,
+   * and {@link AgentTurnHandle.attributableDelegate} depends on exactly that.
    *
    * Separate rather than one map with a kind, because the two are consulted to
    * answer opposite questions: this one says "that settle belongs to a command
@@ -2509,6 +2513,19 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
 
     return {
       done,
+      // The conditions and their reasons belong to the contract
+      // ({@link AgentTurnHandle.attributableDelegate}); what is local is the
+      // evidence for the first one, which this file states itself on the
+      // release path: "the main thread is talking again with N unit(s) still
+      // out". A held turn is the window in which it is NOT talking.
+      attributableDelegate: () => {
+        if (turn.deferredTerminal === null || openWork.size !== 1) {
+          return null;
+        }
+        const [workId] = openWork;
+        // Looked up THROUGH the live set, never off {@link delegateWork}.
+        return (workId === undefined ? null : delegateWork.get(workId)) ?? null;
+      },
       respondApproval: (id, allow, updatedInput) => {
         const delivered = turnWrite(() =>
           turnOptions.buildApprovalResponse?.(id, allow, updatedInput),
@@ -2722,6 +2739,7 @@ function deadSession(message: string): CliSession {
         cancel: () => {},
         respondApproval: () => false,
         sendUserMessage: () => false,
+        attributableDelegate: () => null,
         setApprovalMode: () => false,
       };
     },

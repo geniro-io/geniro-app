@@ -622,6 +622,33 @@ export class GraphExecutorService {
     );
   }
 
+  /**
+   * Tell every window what this run is parked on NOW — the workflow twin of
+   * `ChatService.announceAwaiting`, read from the same registry.
+   *
+   * The runs listing answers `awaiting` per run, but a listing is a SNAPSHOT:
+   * a window keeps whatever it last read until an announce moves it. The chat
+   * path announces at every transition; this path announced at none, so a
+   * listing taken while a node's question was open left the row reading
+   * `needs more info` for good after the question was answered. The open
+   * thread derives its badge from the transcript (card answered → `running`),
+   * the sidebar and the notification rules read the row — so every switch
+   * AWAY from the thread flipped it back to waiting and posted "Waiting for
+   * your answer" again. REPORTED as a notification that came back each time
+   * another thread was opened, over a run the daemon itself reported as
+   * `awaiting: null`.
+   *
+   * `status: null`: the badge's status belongs to whatever settles the run,
+   * and an announce that never read the row must not assert one.
+   */
+  private announceAwaiting(runId: string): void {
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      awaiting: this.approvals.awaitingFor(runId),
+    });
+  }
+
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
   async getNodeStates(runId: string): Promise<NodeStateWire[]> {
     const em = this.em.fork();
@@ -954,6 +981,12 @@ export class GraphExecutorService {
      */
     const sweepApprovals = (nodeId: string): (() => Promise<void>) => {
       const swept = this.approvals.sweepNode(runId, nodeId);
+      // Every settle path sweeps through here, so this one announce is what
+      // takes the badge down for all four — a swept card is no longer
+      // something the run waits on.
+      if (swept.length > 0) {
+        this.announceAwaiting(runId);
+      }
       return async () => {
         for (const approval of swept) {
           await persistItem(nodeId, 'unanswerable', null, {
@@ -1749,9 +1782,14 @@ export class GraphExecutorService {
                     });
                   });
                 }
+                // The registry dropped this entry before calling here, so the
+                // reading is already the post-verdict one — whatever the
+                // delivery outcome, the card is gone.
+                this.announceAwaiting(runId);
                 return delivered;
               },
             });
+            this.announceAwaiting(runId);
           }
         });
       };

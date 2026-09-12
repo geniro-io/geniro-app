@@ -116,6 +116,7 @@ class FakeRunDao {
       model: null,
       // The column's own default — see the twin fixture in chat.service.spec.
       modelParameters: null,
+      archivedAt: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),
       ...data,
@@ -349,6 +350,8 @@ interface FakeTurn {
   emit: (event: AgentEvent) => void;
   finish: () => void;
   respondApproval: ReturnType<typeof vi.fn>;
+  /** The mid-turn channel a follow-up message rides into a running turn. */
+  sendUserMessage: ReturnType<typeof vi.fn>;
   cancelled: boolean;
   /**
    * The sink the executor gave this turn's SESSION for events arriving after
@@ -491,17 +494,24 @@ class FakeAdapter {
   start(
     input: AgentTurnInput,
     onEvent: (event: AgentEvent) => void,
-  ): { done: Promise<void>; cancel: () => void; respondApproval: unknown } {
+  ): {
+    done: Promise<void>;
+    cancel: () => void;
+    respondApproval: unknown;
+    sendUserMessage: unknown;
+  } {
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
       resolveDone = resolve;
     });
     const respondApproval = vi.fn(() => true);
+    const sendUserMessage = vi.fn(() => true);
     const turn: FakeTurn = {
       input,
       emit: onEvent,
       finish: resolveDone,
       respondApproval,
+      sendUserMessage,
       cancelled: false,
       // Replaced by `startSession` the moment it hands this turn back; the
       // no-op stands only for the window before that.
@@ -519,6 +529,7 @@ class FakeAdapter {
         resolveDone();
       },
       respondApproval,
+      sendUserMessage,
     };
   }
 }
@@ -685,8 +696,16 @@ function setup(
   const deletedRuns: string[] = [];
   bus.allDeleted().subscribe((runId) => deletedRuns.push(runId));
   const removedAttachmentRuns: string[] = [];
+  let savedAttachments = 0;
   const attachments = {
     removeRun: (runId: string) => removedAttachmentRuns.push(runId),
+    // A follow-up's pictures — the id is minted here like the real store's, so
+    // a test can follow it from the payload row to the path the CLI is handed.
+    save: (_runId: string, mediaType: string) => ({
+      id: `pic-${savedAttachments++}.png`,
+      mediaType,
+    }),
+    pathOf: (runId: string, id: string) => join(dir, 'attachments', runId, id),
   } as unknown as AttachmentStoreService;
   // The REAL teardown over the same fakes — `deleteRun` is a thin caller of
   // it, so a stub here would leave the delete tests pinning the stub.
@@ -798,6 +817,7 @@ function setup(
       port: runtimePort,
     },
     partials,
+    attachments,
   );
   return {
     deltas,
@@ -2061,6 +2081,235 @@ describe('GraphExecutorService', () => {
   });
 });
 
+/** Two independent roots — each gets its own trigger once `triggered` runs. */
+const TWO_ROOTS: Workflow = {
+  name: 'two roots',
+  nodes: [
+    {
+      id: 'a',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+      role: 'role-a',
+    },
+    {
+      id: 'b',
+      kind: 'agent',
+      agent: 'claude',
+      approval: 'auto',
+      role: 'role-b',
+    },
+  ],
+  edges: [],
+};
+
+/** The turns one node was given, told apart by the role each carries. */
+function turnsOf(adapter: FakeAdapter, role: string): FakeTurn[] {
+  return adapter.starts.filter((turn) => turn.input.systemPrompt === role);
+}
+
+/** The user-message rows a run holds, as their texts. */
+function userTexts(itemDao: FakeItemDao, runId: string): string[] {
+  return itemDao.items
+    .filter(
+      (item) =>
+        item.runId === runId && item.kind === 'message' && item.role === 'user',
+    )
+    .map((item) => (JSON.parse(item.payload) as { text: string }).text);
+}
+
+describe('GraphExecutorService — follow-up messages', () => {
+  it('walks a SETTLED run again from its trigger, each node resuming its own session', async () => {
+    const { service, claude, itemDao, runDao, storeGet } = setup();
+    const workflow = triggered(LINEAR);
+    storeGet.mockResolvedValue({ slug: 'linear', workflow });
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow,
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    claude.starts[0]!.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    claude.starts[1]!.emit({ type: 'session', sessionId: 'sess-b' });
+    completeTurn(claude.starts[1]!, 'B1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    const item = await service.sendMessage(run.id, 'again, shorter');
+    await drain();
+
+    expect(item).toMatchObject({ kind: 'message', role: 'user' });
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    expect(claude.starts[2]!.input.prompt).toBe('again, shorter');
+    expect(claude.starts[2]!.input.resumeSessionId).toBe('sess-a');
+    completeTurn(claude.starts[2]!, 'A2');
+    await drain();
+    expect(claude.starts[3]!.input.resumeSessionId).toBe('sess-b');
+    expect(claude.starts[3]!.input.prompt).toContain('A2');
+    completeTurn(claude.starts[3]!, 'B2');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // Written once, by the route — the pass does not seed it a second time.
+    expect(userTexts(itemDao, run.id)).toEqual(['first', 'again, shorter']);
+    // One seq per row across both passes: the second starts past the first.
+    const seqs = itemDao.items
+      .filter((row) => row.runId === run.id)
+      .map((row) => row.seq);
+    expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it('hands a follow-up to a LIVE run: a working agent’s turn takes it, an idle one gets another turn', async () => {
+    const { service, claude, itemDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const a = turnsOf(claude, 'role-a')[0]!;
+    const b = turnsOf(claude, 'role-b')[0]!;
+    a.emit({ type: 'session', sessionId: 'sess-a' });
+    completeTurn(a, 'A1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+
+    expect(b.sendUserMessage).toHaveBeenCalledWith({
+      text: 'one more thing',
+      images: [],
+    });
+    const again = turnsOf(claude, 'role-a');
+    expect(again).toHaveLength(2);
+    expect(again[1]!.input.prompt).toBe('one more thing');
+    // Its process was replaced here, so the conversation is resumed by id.
+    expect(again[1]!.input.resumeSessionId).toBe('sess-a');
+    expect(userTexts(itemDao, run.id)).toEqual(['go', 'one more thing']);
+
+    // The follow-up turn holds the run open until it, too, has settled.
+    completeTurn(b, 'B1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    completeTurn(again[1]!, 'A2');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('refuses a follow-up a working agent cannot take mid-turn, and writes nothing', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    turnsOf(claude, 'role-b')[0]!.sendUserMessage.mockReturnValue(false);
+
+    await expect(service.sendMessage(run.id, 'wait')).rejects.toThrow(
+      'is finishing a turn',
+    );
+    await drain();
+
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+    // Nor was the idle agent handed a message the other never received.
+    expect(turnsOf(claude, 'role-a')).toHaveLength(1);
+  });
+
+  it('rolls a live run up as FAILED when the follow-up turn it opened fails', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+    await service.sendMessage(run.id, 'try again');
+    await drain();
+
+    const followUp = turnsOf(claude, 'role-a')[1]!;
+    followUp.emit({ type: 'error', message: 'boom' });
+    followUp.finish();
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B1');
+    await drain();
+
+    expect(runDao.runs.get(run.id)?.status).toBe('failed');
+  });
+
+  it('carries a follow-up’s pictures to the agent and into the message row', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[0]!, 'A1');
+    await drain();
+
+    await service.sendMessage(run.id, 'see this', [
+      { mediaType: 'image/png', data: 'aGk=' },
+    ]);
+    await drain();
+
+    expect(turnsOf(claude, 'role-a')[1]!.input.images).toEqual([
+      {
+        path: join(dir, 'attachments', run.id, 'pic-0.png'),
+        mediaType: 'image/png',
+      },
+    ]);
+    const row = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' && String(item.payload).includes('see this'),
+    )!;
+    expect(JSON.parse(row.payload)).toEqual({
+      text: 'see this',
+      images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+    });
+  });
+
+  it('refuses a follow-up to an archived run', async () => {
+    const { service, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'x',
+    });
+    runDao.runs.get(run.id)!.archivedAt = new Date();
+
+    await expect(service.sendMessage(run.id, 'hi')).rejects.toThrow(
+      'this run is archived',
+    );
+  });
+
+  it('refuses a follow-up with neither words nor a picture', async () => {
+    const { service } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'x',
+    });
+
+    await expect(service.sendMessage(run.id, '   ')).rejects.toThrow(
+      'a message needs words or a picture',
+    );
+  });
+});
+
 describe('GraphExecutorService — agent calls', () => {
   const CALL_WF: Workflow = {
     name: 'calls',
@@ -2385,6 +2634,52 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
     expect(runDao.runs.get(run.id)?.status).toBe('completed');
     expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
+  });
+
+  it('wakes a caller whose turn ended when its async call lands — the work is not dropped', async () => {
+    // REPORTED as "workflow stopped to work in the middle without any error":
+    // a Manager said "I'll report back" and ended its turn with an async call
+    // still out; the callee finished, nothing collected the result, and the
+    // run closed as completed. The caller now gets a turn to collect it.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const started = await callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(started.status).toBe('ok');
+    await drain();
+    completeTurn(claude.starts[0]!, 'I will report back');
+    await drain();
+    // The caller has ended; its callee still works, so the run does too.
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    completeTurn(claude.starts[1]!, 'the work, done');
+    await drain();
+
+    const woken = claude.starts
+      .slice(2)
+      .filter((turn) => turn.input.systemPrompt === 'You orchestrate.');
+    expect(woken).toHaveLength(1);
+    const told = JSON.stringify(woken[0]!.input);
+    expect(told).toContain('await_agent');
+    expect(told).toContain('call-1');
+    // The run waits for that turn rather than closing under it.
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    const collected = await callBroker.awaitAgent(run.id, 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected.status).toBe('ok');
+    completeTurn(woken[0]!, 'reported back');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
   });
 
   it('run cancel fans to in-flight callee sub-turns', async () => {
@@ -3048,7 +3343,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
   });
 
-  it('drains a parked question when its caller settles: the callee is cancelled and the call fails as QUESTION_ORPHANED', async () => {
+  it('wakes a caller that settles with a parked question ONCE — only ending again unanswered cancels the callee as QUESTION_ORPHANED', async () => {
     const { service, claude, callBroker, itemDao, runDao } = setup();
     const run = await service.startRun({
       slug: 'qa-orphan',
@@ -3074,8 +3369,17 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
     expect((await sync).status).toBe('question');
 
-    // The caller ends without answering — nobody is left to answer_agent.
+    // The caller ends without answering. It used to have its callee killed
+    // under it here — the reported "workflow stopped in the middle without
+    // any error" — and is now WOKEN with the question instead.
     completeTurn(caller, 'done without answering');
+    await drain();
+    expect(callee.cancelled).toBe(false);
+    const woken = claude.starts[2]!;
+    expect(JSON.stringify(woken.input)).toContain('answer_agent');
+
+    // The woken turn ends the same way: only NOW is nobody left to answer.
+    completeTurn(woken, 'still not answering');
     await drain();
     expect(callee.cancelled).toBe(true);
     expect(

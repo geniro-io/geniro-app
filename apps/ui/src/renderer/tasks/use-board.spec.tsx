@@ -36,6 +36,7 @@ interface Stub {
   listTasks: ReturnType<typeof vi.fn>;
   reconcileTasks: ReturnType<typeof vi.fn>;
   moveTaskStatus: ReturnType<typeof vi.fn>;
+  deleteTask: ReturnType<typeof vi.fn>;
   attachTaskFile: ReturnType<typeof vi.fn>;
   detachTaskFile: ReturnType<typeof vi.fn>;
 }
@@ -43,10 +44,13 @@ interface Stub {
 function stubApis(
   over: {
     moveTaskStatus?: ReturnType<typeof vi.fn>;
+    deleteTask?: ReturnType<typeof vi.fn>;
     attachTaskFile?: ReturnType<typeof vi.fn>;
     detachTaskFile?: ReturnType<typeof vi.fn>;
   } = {},
 ): Stub {
+  const deleteTask =
+    over.deleteTask ?? vi.fn().mockResolvedValue({ deleted: true });
   const listTasks = vi.fn().mockResolvedValue([task()]);
   // The board LOADS through reconcile: one call that also settles any run
   // which finished while no window was open.
@@ -76,6 +80,7 @@ function stubApis(
       listTasks,
       moveTaskStatus,
       reconcileTasks,
+      deleteTask,
       attachTaskFile,
       detachTaskFile,
     },
@@ -85,6 +90,7 @@ function stubApis(
     listTasks,
     reconcileTasks,
     moveTaskStatus,
+    deleteTask,
     attachTaskFile,
     detachTaskFile,
   };
@@ -164,6 +170,45 @@ describe('useBoard', () => {
 
     expect(board.current.tasks[0]?.status).toBe('todo');
     expect(board.current.error).toContain('not todo');
+  });
+
+  it('deletes a card, takes it off the board, and collects its worktree', async () => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis, deleteTask } = stubApis();
+    const board = await mount(apis);
+
+    let deleted = false;
+    await act(async () => {
+      deleted = await board.current.deleteTask('t1');
+    });
+
+    expect(deleted).toBe(true);
+    expect(deleteTask).toHaveBeenCalledWith({ taskId: 't1' });
+    expect(board.current.tasks).toEqual([]);
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps the card, and says why, when the delete is refused', async () => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis } = stubApis({
+      deleteTask: vi.fn().mockRejectedValue(new Error('no task with id t1')),
+    });
+    const board = await mount(apis);
+
+    let deleted = true;
+    await act(async () => {
+      deleted = await board.current.deleteTask('t1');
+    });
+
+    expect(deleted).toBe(false);
+    expect(board.current.tasks).toHaveLength(1);
+    expect(board.current.error).toContain('no task with id t1');
+    // Nothing is collected for a card that is still on the board.
+    expect(prune).not.toHaveBeenCalled();
   });
 
   it('reloads when a task changes on the board being shown', async () => {
@@ -281,7 +326,7 @@ describe('useBoard', () => {
     });
   });
 
-  describe('collecting a settled run’s worktree', () => {
+  describe('collecting a finished card’s worktree', () => {
     let emit: ((event: unknown) => void) | null;
     type SettleWorktree = (taskId: string) => Promise<TaskWorktreeSettleResult>;
     let settle: ReturnType<typeof vi.fn<SettleWorktree>>;
@@ -306,15 +351,15 @@ describe('useBoard', () => {
       window.geniro.settleTaskWorktree = settle;
     });
 
-    it('collects it when the DAEMON says the run settled', async () => {
+    it('collects it when the DAEMON says the card’s work is finished', async () => {
       await mountWithClient();
 
       await act(async () => {
         emit?.({
           taskId: 't9',
           projectId: 'p1',
-          status: 'in_review',
-          reason: 'run-settled',
+          status: 'done',
+          reason: 'work-finished',
         });
       });
 
@@ -331,12 +376,31 @@ describe('useBoard', () => {
         emit?.({
           taskId: 't9',
           projectId: 'OTHER',
+          status: 'done',
+          reason: 'work-finished',
+        });
+      });
+
+      expect(settle).toHaveBeenCalledWith('t9');
+    });
+
+    it('does NOT collect it when the card’s run merely settled', async () => {
+      // The reported defect: the worktree went the moment the run settled,
+      // taking the cwd of a conversation the user was about to continue. The
+      // event is shaped as an older daemon still sends it — a window adopting
+      // a daemon from the previous build must not act on that label either.
+      await mountWithClient();
+
+      await act(async () => {
+        emit?.({
+          taskId: 't9',
+          projectId: 'p1',
           status: 'in_review',
           reason: 'run-settled',
         });
       });
 
-      expect(settle).toHaveBeenCalledWith('t9');
+      expect(settle).not.toHaveBeenCalled();
     });
 
     it('does NOT collect it when the card merely moved', async () => {

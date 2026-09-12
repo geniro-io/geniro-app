@@ -35,6 +35,7 @@ const task = (over: Partial<TaskDto> = {}): TaskDto =>
 function detail(
   over: Partial<TaskDto> & {
     onRun?: () => void;
+    onDelete?: () => void;
     onOpenThread?: (runId: string) => void;
     task?: TaskDto;
     report?: ItemDto | null;
@@ -44,6 +45,7 @@ function detail(
 ): HTMLDivElement {
   const {
     onRun,
+    onDelete,
     onOpenThread,
     task: given,
     report,
@@ -61,6 +63,7 @@ function detail(
         onClose={vi.fn()}
         onSave={vi.fn()}
         onRun={onRun}
+        onDelete={onDelete}
         onOpenThread={onOpenThread}
         projectName={projectName ?? null}
         projectTaskKey={projectTaskKey ?? null}
@@ -112,6 +115,14 @@ const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
     (node.textContent ?? '').includes(text),
   ) as HTMLButtonElement;
 
+/** The trash icon — ICON-ONLY, so it has no text and is found by its name. */
+const DELETE_ICON = 'button[aria-label="Delete task"]';
+const deleteIcon = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector(DELETE_ICON) as HTMLButtonElement;
+/** The confirmation that icon opens, or null while it is shut. */
+const deletePopup = (el: HTMLElement): HTMLElement | null =>
+  el.querySelector('[role="dialog"][aria-label="Delete this task?"]');
+
 describe('TaskDetail', () => {
   // "No folder" is not a state a card can be in — an unset one runs in the
   // project's — so the row SHOWS the inherited path rather than sitting empty.
@@ -145,6 +156,24 @@ describe('TaskDetail', () => {
     expect(onSave).toHaveBeenCalledWith({ folder: null });
   });
 
+  it('lets a long folder path SHRINK, so the panel never scrolls sideways', () => {
+    // REPORTED as "sometimes i may have horizontal scroll for task card": the
+    // path's button inherited `buttonVariants`' `shrink-0`, so a long path
+    // refused to give up width and pushed the whole panel wider than itself.
+    // jsdom lays nothing out, so the pin is the two classes that ARE the fix:
+    // the button may shrink, and its text truncates in a box of its own
+    // (`text-overflow` does not apply to text directly inside a flex box).
+    const long =
+      '/Users/someone/Library/Application Support/Geniro/worktrees/a-very-long-task-worktree';
+    const el = detailWith({ projectFolder: long, task: { folder: null } });
+
+    const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
+    const classes = folder.className.split(/\s+/);
+    expect(classes).toContain('shrink');
+    expect(classes).not.toContain('shrink-0');
+    expect(folder.querySelector('span.truncate')?.textContent).toBe(long);
+  });
+
   it('runs the task when there is a handler for it', () => {
     const onRun = vi.fn();
     const el = detail({ onRun });
@@ -175,6 +204,58 @@ describe('TaskDetail', () => {
 
     expect(buttonNamed(el, 'Running').disabled).toBe(true);
     expect(el.textContent).toContain('An agent is working this task');
+  });
+
+  it('deletes the card only once its popup confirms', async () => {
+    // A card cannot be brought back, so the trash icon only ASKS — the popup
+    // it opens is where the delete actually happens.
+    const onDelete = vi.fn();
+    const el = detail({ onDelete });
+
+    act(() => {
+      deleteIcon(el).click();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+    const popup = deletePopup(el);
+    expect(popup).not.toBeNull();
+
+    await act(async () => {
+      buttonNamed(popup as HTMLElement, 'Delete').click();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the popup on Cancel without deleting anything', () => {
+    const onDelete = vi.fn();
+    const el = detail({ onDelete });
+
+    act(() => {
+      deleteIcon(el).click();
+    });
+    act(() => {
+      buttonNamed(deletePopup(el) as HTMLElement, 'Cancel').click();
+    });
+
+    expect(deletePopup(el)).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a card an agent is working, and says why beside it', () => {
+    // The card's worktree is collected with it — the directory the agent is
+    // writing in — so the icon is disabled, with the reason as visible text:
+    // a disabled button receives no hover, so a tooltip could never be read.
+    const el = detail({
+      onRun: vi.fn(),
+      onDelete: vi.fn(),
+      task: aTask({ status: TaskStatus.InProgress, runId: 'run-1' }),
+    });
+
+    expect(deleteIcon(el).disabled).toBe(true);
+    expect(el.textContent).toContain('can be deleted once it has stopped');
+  });
+
+  it('offers no delete where nothing can delete', () => {
+    expect(detail().querySelector(DELETE_ICON)).toBeNull();
   });
 
   it('names the branch the agent is working on', () => {

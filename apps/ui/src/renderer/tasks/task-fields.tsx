@@ -632,7 +632,14 @@ export function TaskRunConfigRows({
             data-slot="task-folder"
             variant="ghost"
             size="sm"
-            className="min-w-0 justify-start truncate font-mono text-xs font-normal text-muted-foreground"
+            // `shrink` OVERRIDES `buttonVariants`' own `shrink-0`. A button
+            // refuses to shrink by default, so a long path held its full width
+            // and pushed the panel wider than itself — which then scrolled
+            // sideways, REPORTED as "sometimes i may have horizontal scroll for
+            // task card". The text truncates in a span of its own because
+            // `text-overflow` does not apply to text sitting directly inside a
+            // flex container, which is what a button is.
+            className="min-w-0 shrink justify-start font-mono text-xs font-normal text-muted-foreground"
             title={
               value.folder === null
                 ? `${project.folder ?? ''}\nThe project's folder — this task names none of its own. Click to choose one.`
@@ -645,7 +652,7 @@ export function TaskRunConfigRows({
                 }
               });
             }}>
-            {value.folder ?? project.folder}
+            <span className="truncate">{value.folder ?? project.folder}</span>
           </Button>
           {value.folder === null ? (
             <InheritedTag />

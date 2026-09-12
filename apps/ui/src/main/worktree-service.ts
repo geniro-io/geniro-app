@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -46,6 +47,12 @@ export interface WorktreeRecord {
 export interface PreparedWorktree {
   path: string;
   branch: string;
+  /**
+   * True when this was the task's own worktree, already standing, handed back
+   * as it was — see `prepareWorktree`, and why a refused start must then leave
+   * it alone.
+   */
+  reused: boolean;
 }
 
 /**
@@ -238,23 +245,65 @@ async function branchExists(folder: string, branch: string): Promise<boolean> {
 }
 
 /**
- * Make the worktree and branch a task's agent will work in.
+ * Whether git lists `path` as a worktree of `folder` with `branch` checked out
+ * — this task's OWN worktree, as opposed to something else sitting in its slot.
+ *
+ * False on any failure, which sends the caller down the path that refuses a
+ * directory it cannot account for rather than the one that continues in it.
+ */
+async function holdsBranch(
+  folder: string,
+  path: string,
+  branch: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      [...SAFE_CONFIG, 'worktree', 'list', '--porcelain'],
+      { cwd: folder, timeout: GIT_TIMEOUT_MS, maxBuffer: 1024 * 1024 },
+    );
+    // One block per worktree, separated by a blank line — so the path and the
+    // branch have to be read off the SAME block, or a stray branch line from a
+    // neighbour would vouch for this path.
+    return stdout.split(/\n\s*\n/).some((block) => {
+      const lines = block.split('\n').map((line) => line.trim());
+      return (
+        lines.includes(`worktree ${path}`) &&
+        lines.includes(`branch refs/heads/${branch}`)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Make the worktree and branch a task's agent will work in — or hand back the
+ * one this task already has.
  *
  * Every argument travels as an argv ENTRY rather than inside a shell string,
  * so a folder or branch name cannot become an argument of its own.
  *
- * Two states a second press routinely finds, and neither may destroy work:
+ * Three states a press routinely finds, and none may destroy work:
  *
- * A LEFTOVER WORKTREE from an earlier run of this same task — the path is per
- * task, so every run of one card wants the same directory. It is cleared only
- * when it holds nothing; one with uncommitted changes refuses the press and
- * says where it is. That is the rule `reapOrphanedWorktrees` already states,
- * and it has to hold here too: a checkout an agent is working in right now
- * looks exactly like a leftover from this side of the boundary, since the
- * claim that knows otherwise lives in the daemon and is consulted after.
+ * THIS TASK'S OWN WORKTREE, still standing — the ordinary state since a
+ * worktree lives until its card's work is finished (`settleWorktreeForTask`):
+ * a card Stop sent back to To do, one whose run failed, one pressed again from
+ * review. It is CONTINUED as it stands, uncommitted work included, because that
+ * work is this task's and the run being started is its next step — refusing it
+ * would turn every re-run of a card whose agent had not committed into "commit
+ * or clear them" first. `reused` says so, and a caller whose start is then
+ * refused must NOT give it back: another run of this same task may be the
+ * reason for the refusal, and be working in it.
  *
- * A LEFTOVER BRANCH with no worktree — the ordinary state after any failed
- * start or any boot reap, because removing a worktree deliberately keeps its
+ * ANYTHING ELSE in that slot — a directory git does not call this task's, or
+ * one somebody made by hand. An EMPTY one is cleared, there being nothing in it
+ * to lose. Otherwise it is cleared only when git says it holds nothing; one
+ * with uncommitted changes, or one git cannot answer for, refuses the press
+ * and says where it is.
+ *
+ * A LEFTOVER BRANCH with no worktree — the ordinary state once a card's work
+ * has been collected, because removing a worktree deliberately keeps its
  * branch. `-b` refuses to create a branch that exists, so the branch is
  * re-used rather than re-created when it is already there.
  */
@@ -265,25 +314,43 @@ export async function prepareWorktree(input: {
   const branch = taskBranchName(input.taskId);
   const path = join(worktreesRoot(), input.taskId);
   mkdirSync(worktreesRoot(), { recursive: true });
+  const existing = readRegistry().find((row) => row.path === path);
 
   if (existsSync(path)) {
-    const dirty = await isDirty(path);
-    if (dirty !== false) {
-      throw new Error(
-        dirty === true
-          ? `this task's worktree at ${path} has uncommitted changes — commit or clear them before running it again`
-          : `a directory already exists at ${path} and git cannot say what is in it — clear it before running this task again`,
-      );
-    }
-    await removeWorktree(
-      readRegistry().find((row) => row.path === path) ?? {
+    if (await holdsBranch(input.folder, path, branch)) {
+      remember({
         taskId: input.taskId,
         path,
         branch,
         folder: input.folder,
-        createdAt: '',
-      },
-    );
+        createdAt:
+          existing !== undefined && existing.createdAt !== ''
+            ? existing.createdAt
+            : new Date().toISOString(),
+      });
+      return { path, branch, reused: true };
+    }
+    if (readdirSync(path).length === 0) {
+      rmSync(path, { recursive: true, force: true });
+    } else {
+      const dirty = await isDirty(path);
+      if (dirty !== false) {
+        throw new Error(
+          dirty === true
+            ? `this task's worktree at ${path} has uncommitted changes — commit or clear them before running it again`
+            : `a directory already exists at ${path} and git cannot say what is in it — clear it before running this task again`,
+        );
+      }
+      await removeWorktree(
+        existing ?? {
+          taskId: input.taskId,
+          path,
+          branch,
+          folder: input.folder,
+          createdAt: '',
+        },
+      );
+    }
   }
 
   await git(
@@ -300,7 +367,7 @@ export async function prepareWorktree(input: {
     folder: input.folder,
     createdAt: new Date().toISOString(),
   });
-  return { path, branch };
+  return { path, branch, reused: false };
 }
 
 /**
@@ -333,31 +400,40 @@ async function inspect(
 }
 
 /**
- * Clear worktrees a previous launch left behind.
+ * Collect the worktrees whose card's work is FINISHED, and nothing else.
  *
- * Runs at boot, before any task can start, so every entry it sees belongs to a
- * session that has already ended — nothing live can be using one.
+ * A worktree lives until its card is Done (see `settleWorktreeForTask`), so
+ * most of what the registry holds at any moment is LIVE — a card in review
+ * whose conversation the user will carry on. This used to remove every clean
+ * entry at launch, on the reading that anything still registered was a
+ * leftover; that reading ended with collect-on-settle, and kept, it would take
+ * the cwd out from under every reviewed conversation at the next restart.
  *
- * It mirrors `stranded-child-reaper.service.ts` on the point that matters:
- * it never acts on a recorded entry alone. Each is CONFIRMED against git
- * first, and an entry that cannot be confirmed is left exactly where it is.
- * A worktree holding UNCOMMITTED work is left too, which is the same trade the
- * child reaper makes in the other currency — a surviving stray costs disk,
- * and a mistaken removal costs the user their agent's unsaved work.
+ * Which cards are finished is the DAEMON's answer (`isFinished`), because both
+ * facts it takes — the card's column, and whether its run is still working —
+ * are rows this process cannot read. It catches what the board's own
+ * collection misses: a run that settled under a Done card while no window was
+ * open, and a deleted card whose worktree the prune kept because it held work.
+ * An answer that could not be had collects NOTHING — a stray costs disk, a
+ * guess costs the user their agent's work.
  *
- * A path the registry does not name is never touched, whatever is sitting in
- * the worktrees directory.
+ * It still never acts on a recorded entry alone, mirroring
+ * `stranded-child-reaper.service.ts`: each is CONFIRMED against git first, and
+ * one that cannot be confirmed is left exactly where it is. The removal itself
+ * is `settleWorktreeForTask`'s, so unsaved work is committed onto the task's
+ * branch first and a worktree whose commit is refused stays. A path the
+ * registry does not name is never touched.
  */
-export async function reapOrphanedWorktrees(): Promise<{
-  removed: string[];
-  kept: string[];
-}> {
+export async function reapFinishedWorktrees(
+  isFinished: (taskIds: string[]) => Promise<ReadonlySet<string> | null>,
+): Promise<{ removed: string[]; kept: string[] }> {
   const removed: string[] = [];
   const kept: string[] = [];
+  const standing: WorktreeRecord[] = [];
   for (const record of readRegistry()) {
     if (!existsSync(record.path)) {
-      // Gone from disk already — drop the row so it is not re-examined every
-      // launch. Nothing is deleted here.
+      // Gone from disk already — drop the row so it is not re-examined on
+      // every pass. Nothing is deleted here.
       forget(record.path);
       removed.push(record.path);
       continue;
@@ -368,17 +444,29 @@ export async function reapOrphanedWorktrees(): Promise<{
       kept.push(record.path);
       continue;
     }
-    const state = await inspect(record);
-    // Unconfirmable (no git, the project folder moved), holding unsaved work,
-    // or a path git no longer calls a worktree of that repository — all three
-    // are left exactly as they are, row included, so a later launch that CAN
-    // confirm still gets its chance.
-    if (state === null || state.dirty || !state.registered) {
+    standing.push(record);
+  }
+  if (standing.length === 0) {
+    return { removed, kept };
+  }
+  const finished = await isFinished(
+    standing.map((record) => record.taskId),
+  ).catch(() => null);
+  for (const record of standing) {
+    if (finished === null || !finished.has(record.taskId)) {
       kept.push(record.path);
       continue;
     }
-    await removeWorktree(record);
-    removed.push(record.path);
+    const state = await inspect(record);
+    // Unconfirmable (no git, the project folder moved), or a path git no
+    // longer calls a worktree of that repository — left exactly as they are,
+    // row included, so a later pass that CAN confirm still gets its chance.
+    if (state === null || !state.registered) {
+      kept.push(record.path);
+      continue;
+    }
+    const outcome = await settleWorktreeForTask(record.taskId);
+    (outcome.removed ? removed : kept).push(record.path);
   }
   return { removed, kept };
 }
@@ -402,10 +490,10 @@ export async function pruneWorktreeForTask(taskId: string): Promise<boolean> {
     forget(record.path);
     return false;
   }
-  // Keeps a worktree holding unsaved work, on `reapOrphanedWorktrees`'s rule
-  // and for its reason: this is the FAILED-START path, where the only copy of
-  // anything in there would be the user's own. `settleWorktreeForTask` is the
-  // one that commits first and therefore may clear a dirty tree.
+  // Keeps a worktree holding unsaved work: this is the FAILED-START and the
+  // card-delete path, where nothing has said the work is finished and the only
+  // copy of anything in there may be the agent's. `settleWorktreeForTask` is
+  // the one that commits first and therefore may clear a dirty tree.
   if (existsSync(record.path) && (await isDirty(record.path)) !== false) {
     return false;
   }
@@ -453,18 +541,25 @@ async function commitUnfinishedWork(
 }
 
 /**
- * Collect the worktree of a run that has SETTLED, keeping what is in it.
+ * Collect the worktree of a card whose work is FINISHED, keeping what git can.
+ *
+ * Finished means the card is Done and no run is working in it — the daemon's
+ * `isWorkFinished`, reached through the board's `work-finished` event and
+ * through `reapFinishedWorktrees`. This used to run the moment a run SETTLED,
+ * which was the wrong moment: a task's run is a chat the user continues after
+ * review, and the CLI opens a turn of its own when a background command it
+ * started reports back — so the directory went out from under a live
+ * conversation (its next turn failed in 0ms, every message after it on `cwd
+ * does not exist`), and took with it what no commit holds.
  *
  * The worktree is per task and the branch is per task, so an agent that
  * finished without committing has left the only copy of its work in a
- * directory nothing else collects — which is why `pruneWorktreeForTask` and
- * the boot reaper both refuse a dirty one, and why, before this, the routine
- * end state of a run was a checkout that stayed on disk for good.
- *
- * Committing first is what makes the removal safe rather than merely bounded:
- * the branch is the whole point of the run and it is never removed with the
- * worktree, so once the work is on it there is nothing left in the directory
- * that the user could not get back.
+ * directory nothing else collects — which is why `pruneWorktreeForTask`
+ * refuses a dirty one, and why this commits before it removes. The branch is
+ * never removed with the worktree, so once the work is on it every TRACKED
+ * change can be got back. What `.gitignore` excludes cannot — an agent's
+ * screenshots, its build output — and that is why the collection waits for
+ * the user to call the card Done rather than for the agent to stop talking.
  *
  * A commit that could not be made is NOT a reason to remove anyway — the
  * worktree is kept and the caller is told which of the two happened.

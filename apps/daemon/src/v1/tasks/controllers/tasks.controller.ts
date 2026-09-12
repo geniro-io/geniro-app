@@ -26,7 +26,12 @@ import {
   TaskImageQueryDto,
   UpdateTaskDto,
 } from '../dto/task.dto';
-import { ReconcileTasksDto, StartTaskRunDto } from '../dto/task-run.dto';
+import {
+  FindFinishedTasksDto,
+  FinishedTasksDto,
+  ReconcileTasksDto,
+  StartTaskRunDto,
+} from '../dto/task-run.dto';
 import { TaskAttachmentService } from '../services/task-attachment.service';
 import { TaskFilesService } from '../services/task-files.service';
 import { TaskRunsService } from '../services/task-runs.service';
@@ -82,6 +87,19 @@ export class TasksController {
   @ZodResponse({ status: 200, type: [TaskDto] })
   reconcile(@Body() dto: ReconcileTasksDto): Promise<TaskWire[]> {
     return this.settle.reconcileProject(dto.projectId);
+  }
+
+  /**
+   * Which of these tasks' work is finished — asked by the Electron main
+   * process's worktree reaper, which knows which worktrees exist and nothing
+   * about what became of their cards. Declared before the `:taskId` routes,
+   * beside `reconcile`.
+   */
+  @Post('finished')
+  @ApiOperation({ operationId: 'findFinishedTasks' })
+  @ZodResponse({ status: 200, type: FinishedTasksDto })
+  finished(@Body() dto: FindFinishedTasksDto): Promise<{ taskIds: string[] }> {
+    return this.tasks.finishedAmong(dto.taskIds);
   }
 
   @Get(':taskId')

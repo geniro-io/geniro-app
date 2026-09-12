@@ -188,6 +188,7 @@ import {
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
+import type { AgentSubagentGroup } from './subagent-list';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
 import type { AgentTaskGroup } from './task-list';
@@ -3138,10 +3139,16 @@ export function Chats({
         ),
       );
       try {
-        const userItem = await chatApi.sendChatMessage({
-          runId,
-          sendMessageDto: { text, ...(images?.length ? { images } : {}) },
-        });
+        const sendMessageDto = { text, ...(images?.length ? { images } : {}) };
+        // A workflow run's message goes to the agents its trigger feeds, which
+        // only the executor knows — the chat route refuses a workflow run.
+        const userItem =
+          runsRef.current.find((run) => run.id === runId)?.workflowId != null
+            ? await workflowApi.sendWorkflowRunMessage({
+                runId,
+                sendMessageDto,
+              })
+            : await chatApi.sendChatMessage({ runId, sendMessageDto });
         addItem(userItem, true);
       } catch (err) {
         if (before !== null) {
@@ -3156,7 +3163,7 @@ export function Chats({
         throw err;
       }
     },
-    [chatApi, addItem],
+    [chatApi, workflowApi, addItem],
   );
 
   /**
@@ -3492,9 +3499,6 @@ export function Chats({
     // frame later, and the tail-follow effect takes it from there.
     followingRef.current = true;
     setAboveTail(false);
-    // Queueing is a chat-run concept — the workflow composer is disabled.
-    const queueable =
-      runsRef.current.find((r) => r.id === runId)?.workflowId == null;
     // A HELD turn is not a working agent. Its CLI printed its turn-end line
     // some time ago and the process is alive only so the delegates it launched
     // have somewhere to report; it is sitting on an idle stdin. Holding a
@@ -3519,10 +3523,7 @@ export function Chats({
     // ones, which is the reported "первым будет доставлено то, которое я написал
     // последним, но должно быть фифа".
     const queued = (queuesRef.current[runId]?.length ?? 0) > 0;
-    if (working || (queueable && queued)) {
-      if (!queueable) {
-        return;
-      }
+    if (working || queued) {
       setInput('');
       enqueueMessage(runId, { text, images });
       attachments.clear();
@@ -3543,7 +3544,7 @@ export function Chats({
       // so a retry needs no re-paste, exactly as it keeps the text.
       attachments.clear();
     } catch (err) {
-      if (queueable && isRunBusyError(err)) {
+      if (isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
         // this was in flight). Queue it — the composer shows it pending and
         // the drain sends it the moment the turn ends. Not an error: this is
@@ -5856,16 +5857,28 @@ export function Chats({
     // counter holds the list behind it now, and re-deriving that list wherever
     // it is drawn would be a second reading of the same threads.
     const subagentThreads: AgentThread[] = [];
+    // Kept per agent BESIDE that flat run, off the same walk: a workflow's
+    // popover draws one block per agent, exactly as its task chip does.
+    const subagentGroups: AgentSubagentGroup[] = [];
     let subagents = 0;
     for (const agent of agents) {
+      const own: AgentThread[] = [];
       for (const thread of agent.threads) {
         if (thread.kind !== 'subagent') {
           continue;
         }
-        subagentThreads.push(thread);
+        own.push(thread);
         if (thread.status === 'running') {
           subagents += 1;
         }
+      }
+      subagentThreads.push(...own);
+      if (own.length > 0) {
+        subagentGroups.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          threads: own,
+        });
       }
     }
     let done = 0;
@@ -5921,6 +5934,7 @@ export function Chats({
     return {
       subagents,
       subagentThreads,
+      subagentGroups,
       tasks: { done, total },
       taskRows,
       taskGroups,
@@ -7939,6 +7953,14 @@ export function Chats({
                             // loaded page has no thread here to count.
                             reportedOut={activeRun?.subagentsOut ?? 0}
                             threads={sidePanelLive.subagentThreads}
+                            // Split into a block per agent in a WORKFLOW only
+                            // — the task chip's gate, for the task chip's
+                            // reason.
+                            groups={
+                              activeRun?.workflowId
+                                ? sidePanelLive.subagentGroups
+                                : undefined
+                            }
                             // The same detail panel the agents panel's own
                             // delegate rows open — the shelf is the readier
                             // way to a delegate now, and a list that only
@@ -8013,9 +8035,7 @@ export function Chats({
                             value={input}
                             rows={2}
                             aria-label="Message the agent"
-                            disabled={
-                              activeRun?.workflowId != null || activeRunArchived
-                            }
+                            disabled={activeRunArchived}
                             className={cn(
                               COMPOSER_TEXTAREA_GROWTH,
                               'min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
@@ -8023,10 +8043,12 @@ export function Chats({
                             placeholder={
                               activeRunArchived
                                 ? 'This chat is archived — unarchive it to continue.'
-                                : activeRun?.workflowId
-                                  ? 'Workflow runs take one task — press + to start another.'
-                                  : streaming && !activeRunHeld
-                                    ? 'Agent is working — your message will queue…'
+                                : streaming && !activeRunHeld
+                                  ? activeRun?.workflowId
+                                    ? 'The workflow is working — your message will queue…'
+                                    : 'Agent is working — your message will queue…'
+                                  : activeRun?.workflowId
+                                    ? 'Message the workflow — it goes to the same trigger…'
                                     : 'Message the agent…'
                             }
                             onChange={(event) => setInput(event.target.value)}
@@ -8072,8 +8094,7 @@ export function Chats({
                           to disagree. */}
                                 {streaming ? (
                                   <>
-                                    {hasContent &&
-                                    activeRun?.workflowId == null ? (
+                                    {hasContent ? (
                                       <Button
                                         type="button"
                                         size="icon"
@@ -8138,10 +8159,7 @@ export function Chats({
                                     className="size-8 rounded-full"
                                     aria-label="Send"
                                     title="Send"
-                                    disabled={
-                                      !hasContent ||
-                                      activeRun?.workflowId != null
-                                    }
+                                    disabled={!hasContent}
                                     onClick={() => void sendFollowUp()}>
                                     <ArrowUp className="size-4 shrink-0" />
                                   </Button>
@@ -8700,6 +8718,7 @@ export function Chats({
                     changes={chatChanges.changes}
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
+                    movedOffStart={chatChanges.movedOffStart}
                     error={chatChanges.error}
                     loading={chatChanges.loading}
                     onRefresh={readChangesNow}

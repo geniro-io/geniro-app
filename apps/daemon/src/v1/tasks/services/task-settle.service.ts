@@ -147,6 +147,14 @@ export class TaskSettleService implements OnModuleInit {
     if (!task || task.runId !== runId) {
       return;
     }
+    // A card the user called Done while its agent was still working becomes
+    // FINISHED now — the run settling is the second of `isWorkFinished`'s two
+    // conditions, and the first was met at the drag, which could not release
+    // the worktree then. The card itself stays where the user put it.
+    if (task.status === 'done') {
+      this.tasks.announceWorkFinished(task);
+      return;
+    }
     // Settle a card ONCE. The run is an ordinary chat, so a follow-up message
     // after review settles it again — and without this, a card the user had
     // moved to `done` would be dragged back to `in_review` by a conversation
@@ -161,14 +169,10 @@ export class TaskSettleService implements OnModuleInit {
       await this.tasks.update(task.id, { reportItemId });
     }
     await this.recordOutcome(task.projectId, status, em);
-    // The reason rides the broadcast because the CLIENT cannot derive it: a
-    // card's column is written optimistically the moment it is dragged, so
-    // "settled" is a claim only this service is in a position to make.
-    await this.tasks.moveStatus(
-      task.id,
-      { from: task.status, to },
-      'run-settled',
-    );
+    // No reason rides this move. A card in review is NOT finished: the user
+    // reads the work in its worktree and routinely continues the conversation,
+    // so the directory has to outlive the settle — see `isWorkFinished`.
+    await this.tasks.moveStatus(task.id, { from: task.status, to });
   }
 
   /**

@@ -104,6 +104,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       projectDao,
       taskEvents,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      runDao,
     );
     bus = new AgentEventBus();
     // The library is asked only for a WORKFLOW run's terminal nodes; a chat
@@ -635,20 +636,20 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(2);
   });
 
-  it('names the SETTLE as the reason the card moved', async () => {
+  it('moves the card to review WITHOUT marking its work finished', async () => {
     const task = await working();
 
     await settleRun('run-1', 'completed');
 
-    // The client cannot derive this: a card's column is written optimistically
-    // the moment it is dragged, so only the daemon can say an agent stopped —
-    // and the renderer collects the worktree off exactly this field.
-    expect(
-      changes.filter((event) => event.taskId === task.id).at(-1),
-    ).toMatchObject({ status: 'in_review', reason: 'run-settled' });
+    // The reported defect: the worktree went the moment the run settled, and
+    // with it the cwd of a conversation the user was about to continue. A card
+    // in review is not finished — its run is a chat, and it runs in there.
+    const last = changes.filter((event) => event.taskId === task.id).at(-1);
+    expect(last).toMatchObject({ status: 'in_review' });
+    expect(last?.reason).toBeUndefined();
   });
 
-  it('gives NO reason for a move the user made themselves', async () => {
+  it('gives NO reason for a move to Done while the agent is still working', async () => {
     const task = await working();
 
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
@@ -656,6 +657,36 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     // A drag reaches the same broadcast. Were it to carry the reason, the
     // renderer would remove the worktree of an agent still working in it.
     expect(changes.at(-1)?.reason).toBeUndefined();
+  });
+
+  it('marks the work finished once the run settles under a card already in Done', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    await settleRun('run-1', 'completed');
+
+    // Both conditions hold now — Done, and nothing working in it — so the
+    // worktree may go. The card stays where the user put it rather than being
+    // dragged back to review by its own run.
+    expect(changes.at(-1)).toMatchObject({
+      taskId: task.id,
+      status: 'done',
+      reason: 'work-finished',
+    });
+    expect((await taskDao.getById(task.id))?.status).toBe('done');
+  });
+
+  it('marks the work finished when a settled card is moved to Done', async () => {
+    const task = await working();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
+
+    expect(changes.at(-1)).toMatchObject({
+      taskId: task.id,
+      status: 'done',
+      reason: 'work-finished',
+    });
   });
 
   it('releases a card whose run was deleted, and lets it be run again', async () => {

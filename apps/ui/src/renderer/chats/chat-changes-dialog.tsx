@@ -204,6 +204,7 @@ export function ChatChangesDialog({
   changes,
   truncated,
   unavailableReason: reason,
+  movedOffStart = false,
   error,
   loading,
   onRefresh,
@@ -225,6 +226,11 @@ export function ChatChangesDialog({
   changes: GitChange[];
   truncated: boolean;
   unavailableReason: string | null;
+  /**
+   * The checkout moved off `startSha`, so the list is what is uncommitted NOW —
+   * said in the header, since "against <sha>" would then be untrue.
+   */
+  movedOffStart?: boolean;
   error: string | null;
   loading: boolean;
   /** Asked for on open — the "I am looking at it now" read. */
@@ -256,7 +262,9 @@ export function ChatChangesDialog({
         <p className="shrink-0 text-sm text-muted-foreground">
           {startSha === null
             ? 'This chat was not stamped with a commit, so there is nothing to compare against.'
-            : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
+            : movedOffStart
+              ? `This checkout has moved off ${startSha.slice(0, 12)}, the commit this chat started at, onto another branch — so this lists what is uncommitted on it now, including files that were created and never added. Read-only: undo anything here in your own git.`
+              : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
         </p>
 
         {error ? <ErrorText className="shrink-0">{error}</ErrorText> : null}

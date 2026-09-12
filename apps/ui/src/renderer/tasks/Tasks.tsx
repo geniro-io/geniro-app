@@ -548,6 +548,11 @@ export function Tasks({
           onDetachFile={(attachmentId) => {
             void board.detachFile(openTask.id, attachmentId);
           }}
+          onDelete={async () => {
+            if (await board.deleteTask(openTask.id)) {
+              setOpenTaskId(null);
+            }
+          }}
         />
       ) : null}
 

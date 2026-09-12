@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
@@ -38,8 +39,15 @@ export default defineConfig({
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
   // strip the prefix so the swc CJS transform's require() shim accepts the path.
+  //
+  // `fileURLToPath`, never `new URL(id).pathname`: the pathname is still
+  // PERCENT-ENCODED, so a daemon under any path with a space in it asked
+  // `require` for `…/Application%20Support/…` and failed to load its first
+  // entity. Every Geniro task worktree lives under `Application Support`, which
+  // is how it surfaced — `pnpm generate:api` could not boot its throwaway daemon
+  // there — and a packaged app installed at such a path would fail the same way.
   dynamicImportProvider: async (id: string) => {
-    const path = id.startsWith('file://') ? new URL(id).pathname : id;
+    const path = id.startsWith('file://') ? fileURLToPath(id) : id;
     return import(path);
   },
 });

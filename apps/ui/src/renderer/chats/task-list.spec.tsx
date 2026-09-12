@@ -49,6 +49,7 @@ function card(overrides: Partial<TaskListEntry> = {}): TaskListEntry {
     seq: 5,
     nodeId: null,
     parentToolUseId: null,
+    callId: null,
     tasks: rows,
     latest: true,
     ...overrides,

@@ -33,6 +33,7 @@ const shell = (over: Partial<ShellRun> = {}): ShellRun => ({
   exitCode: null,
   startedAt: new Date(Date.now() - 5_000).toISOString(),
   agentId: null,
+  callId: null,
   ...over,
 });
 

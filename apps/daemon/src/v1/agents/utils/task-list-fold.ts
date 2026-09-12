@@ -142,22 +142,47 @@ function writtenByDelegate(payload: unknown): boolean {
 }
 
 /**
- * Fold every announcement a run has written into one list per AGENT.
+ * The call thread one announcement was made in, or null for the node's own
+ * conversation.
+ *
+ * Read off the PAYLOAD because that is where the executor puts it: a callee
+ * sub-turn tags every item it streams with its `callId`
+ * (`GraphExecutorService`), which is also what the renderer nests a call's rows
+ * under. There is no column for it — the row's `nodeId` names the callee alone.
+ */
+function readCallId(payload: unknown): string | null {
+  if (typeof payload !== 'object' || payload === null) {
+    return null;
+  }
+  return readString((payload as { callId?: unknown }).callId);
+}
+
+/**
+ * Fold every announcement a run has written into one list per CONVERSATION —
+ * per agent, and within an agent per call thread.
  *
  * Keyed by `nodeId` (null for a 1:1 chat's one agent) for the reason the
- * renderer's `taskListsByAgent` is: a delegate's list is its own, and both CLIs
- * number tasks from 1, so folding two agents' rows together would have task `1`
- * mean two different things. Which is also why a DELEGATE's announcements are
- * skipped rather than folded: a delegate carries its launcher's `nodeId`, so
- * keying by node alone would merge its list into the one this row answers for —
- * the list the panel shows as the agent's own and the transcript's cards take
- * their titles from.
+ * renderer's `taskListsByThread` is: a delegate's list is its own, and both
+ * CLIs number tasks from 1, so folding two agents' rows together would have
+ * task `1` mean two different things.
+ *
+ * And by `callId` inside that, for the SAME reason one level down: a node that
+ * is called several times runs one conversation per call, each keeping its own
+ * checklist from task `1`. Keyed by node alone, two instances of one Engineer
+ * were folded into a single list — the second call's `1 in_progress` patched
+ * over the first call's `1 completed`, and the panel showed one plan that
+ * belonged to neither.
+ *
+ * A DELEGATE's announcements are skipped rather than folded, for the same
+ * reason again: a delegate's rows carry its launcher's `nodeId` (and its call's
+ * `callId`), so keying by those alone would merge its list into the one this
+ * group answers for — the list the panel shows as the agent's own and the
+ * transcript's cards take their titles from.
  */
 export function foldTaskLists(
   rows: readonly { nodeId: string | null; payload: unknown }[],
 ): RunTaskGroup[] {
-  const perAgent = new Map<string | null, RunTaskRow[]>();
-  const order: (string | null)[] = [];
+  const perThread = new Map<string, RunTaskGroup>();
   for (const row of rows) {
     if (writtenByDelegate(row.payload)) {
       continue;
@@ -166,16 +191,21 @@ export function foldTaskLists(
     if (announcement === null) {
       continue;
     }
-    if (!perAgent.has(row.nodeId)) {
-      perAgent.set(row.nodeId, []);
-      order.push(row.nodeId);
-    }
-    perAgent.set(
-      row.nodeId,
-      applyAnnouncement(perAgent.get(row.nodeId)!, announcement),
-    );
+    const callId = readCallId(row.payload);
+    // A JSON pair rather than a joined string: a node id is any non-empty
+    // string, so no separator character is safe to join on.
+    const key = JSON.stringify([row.nodeId, callId]);
+    const group = perThread.get(key) ?? {
+      nodeId: row.nodeId,
+      callId,
+      tasks: [],
+    };
+    group.tasks = applyAnnouncement(group.tasks, announcement);
+    // Map insertion order is first-announcement order, which is the order the
+    // groups are returned in — re-setting an existing key does not move it.
+    perThread.set(key, group);
   }
-  return order.map((nodeId) => ({ nodeId, tasks: perAgent.get(nodeId)! }));
+  return [...perThread.values()];
 }
 
 /**
@@ -198,7 +228,11 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
       if (typeof entry !== 'object' || entry === null) {
         return [];
       }
-      const group = entry as { nodeId?: unknown; tasks?: unknown };
+      const group = entry as {
+        nodeId?: unknown;
+        callId?: unknown;
+        tasks?: unknown;
+      };
       if (!Array.isArray(group.tasks)) {
         return [];
       }
@@ -211,6 +245,10 @@ export function readRunTaskList(stored: string | null): RunTaskGroup[] {
         : [
             {
               nodeId: typeof group.nodeId === 'string' ? group.nodeId : null,
+              // A row written before the fold was keyed per call carries no
+              // `callId`, and reads as the node's own conversation — which is
+              // what that one merged list was filed as.
+              callId: readString(group.callId),
               tasks: announcement.tasks,
             },
           ];

@@ -11,11 +11,13 @@ import {
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodResponse } from 'nestjs-zod';
 
-import type { RunWire } from '../../agents/chat.types';
+import type { ItemWire, RunWire } from '../../agents/chat.types';
 import {
   CancelledDto,
+  ItemDto,
   ListChatsQueryDto,
   RunDto,
+  SendMessageDto,
 } from '../../agents/dto/chat.dto';
 import {
   CreateWorkflowDto,
@@ -80,6 +82,21 @@ export class WorkflowsController {
   @ZodResponse({ status: 200, type: CancelledDto })
   cancelRun(@Param('runId') runId: string): Promise<{ cancelled: boolean }> {
     return this.executor.cancel(runId);
+  }
+
+  /**
+   * A follow-up message for a workflow run — it goes to the agents the run's
+   * trigger feeds, as though the trigger had fired again with this text.
+   * Answers with the persisted message row, like the chat route's twin.
+   */
+  @Post('runs/:runId/messages')
+  @ApiOperation({ operationId: 'sendWorkflowRunMessage' })
+  @ZodResponse({ status: 201, type: ItemDto })
+  sendMessage(
+    @Param('runId') runId: string,
+    @Body() dto: SendMessageDto,
+  ): Promise<ItemWire> {
+    return this.executor.sendMessage(runId, dto.text, dto.images);
   }
 
   /**

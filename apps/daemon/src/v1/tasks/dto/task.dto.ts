@@ -13,6 +13,7 @@ import {
   TASK_SOURCE_REF_MAX,
   TASK_TITLE_MAX,
   TaskAttachmentSchema,
+  TaskAwaitingMergeSchema,
   TaskPrioritySchema,
   TaskSourceSchema,
   TaskStatusSchema,
@@ -147,10 +148,33 @@ export const moveTaskStatusSchema = z.object({
 });
 export class MoveTaskStatusDto extends createZodDto(moveTaskStatusSchema) {}
 
+/**
+ * Which of a card's pull requests has been merged.
+ *
+ * The URL and nothing else, because the URL is the whole address — and it is
+ * checked against what this card's run actually captured before anything
+ * moves, so a caller cannot end a card by naming a pull request belonging to
+ * somebody else's work. See `TaskMergeService.settleMerged`.
+ */
+export const reportPullRequestMergedSchema = z.object({
+  url: z
+    .string()
+    .min(1)
+    .describe('The pull request, exactly as the awaiting-merge list gave it'),
+});
+export class ReportPullRequestMergedDto extends createZodDto(
+  reportPullRequestMergedSchema,
+) {}
+
 // ── Responses ───────────────────────────────────────────────────────────────
 
 /** One task. */
 export class TaskDto extends createZodDto(TaskWireSchema) {}
+
+/** One card in review, with the pull requests that could end it. */
+export class TaskAwaitingMergeDto extends createZodDto(
+  TaskAwaitingMergeSchema,
+) {}
 
 /** Acknowledgement of a task delete. */
 export class TaskDeletedDto extends createZodDto(

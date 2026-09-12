@@ -194,7 +194,36 @@ export interface AgentThread {
    */
   contextTokens?: number | null;
   contextWindowTokens?: number | null;
+  /**
+   * For a SUB-AGENT: the call thread of its agent it was launched in — which
+   * INSTANCE of the agent it belongs to — or null for the node's own
+   * conversation. Absent on the other two kinds, which ARE instances.
+   *
+   * A node called several times holds one conversation per call at once, and
+   * each launches its own delegates; without this they were listed as one pool
+   * under the node, with nothing saying which conversation had sent which.
+   */
+  callId?: string | null;
+  /**
+   * For a CALL thread: where it has got to — what it last SAID, else the
+   * newest tool it ran — or null when it has done neither yet. The same two
+   * readings its call block's summary band draws in the transcript.
+   */
+  latest?: string | null;
+  /**
+   * For a CALL thread: what that conversation alone has spent — input + output
+   * tokens, and cost — summed over its own settled turns. Null means
+   * UNMEASURED, never zero, on the rule every figure in the panel follows.
+   */
+  spentTokens?: number | null;
+  spentUsd?: number | null;
 }
+
+/**
+ * The id of an agent's OWN conversation among its threads — every other
+ * conversation it holds is a call thread, keyed by its call id.
+ */
+export const MAIN_THREAD_ID = 'main';
 
 /**
  * The display threads an agent's activity implies: its main conversation
@@ -219,7 +248,7 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
   }
   const runningCalls = calls.filter((t) => t.status === 'running').length;
   const main: AgentThread = {
-    id: 'main',
+    id: MAIN_THREAD_ID,
     kind: 'main',
     label: 'Main conversation',
     // The node's live turns beyond its live calls ARE the main turn; once
@@ -275,6 +304,7 @@ export function subagentThreadsByAgent(
               ? 'cancelled'
               : 'running',
       sessionId: null,
+      callId: block.callId,
     });
     byAgent.set(key, threads);
   }

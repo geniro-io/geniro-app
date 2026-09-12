@@ -103,12 +103,19 @@ const workflowApi = vi.hoisted(() => ({
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
+  sendWorkflowRunMessage: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
 const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
+/**
+ * Read only to put a TASK's worktree back when its chat outlived it — the
+ * card's folder, else its project's (`task-worktree.ts`).
+ */
+const tasksApi = vi.hoisted(() => ({ readTask: vi.fn() }));
+const projectsApi = vi.hoisted(() => ({ readProject: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -123,6 +130,8 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     capabilities: capabilitiesApi,
     handoff: handoffApi,
     cliAuth: cliAuthApi,
+    tasks: tasksApi,
+    projects: projectsApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -1411,6 +1420,62 @@ describe('Chats transcript auto-scroll', () => {
       emitItem(msg(11, 'assistant', 'the answer'));
     });
     expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('puts a TASK’s collected worktree back and sends the message after all', async () => {
+    // REPORTED: a task's chat went on after its worktree was collected, and
+    // every message into it was refused `cwd does not exist` with no way
+    // forward. The branch holds the work, so the same path is cut again from
+    // it — from the card's folder — and the refused message is sent once more.
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockResolvedValueOnce(msg(10, 'user', 'and this?'));
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    const prepareTaskWorktree = vi.fn().mockResolvedValue({
+      ok: true,
+      path: '/userData/worktrees/t1',
+      branch: 'geniro/task-t1',
+      reused: false,
+      error: null,
+    });
+    window.geniro.prepareTaskWorktree = prepareTaskWorktree;
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(prepareTaskWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/repo',
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('cwd does not exist');
   });
 
   it('jumps to the newest message when a chat with history is OPENED', async () => {
@@ -7496,7 +7561,7 @@ describe('Chats run composer chips', () => {
     expect(modelTrigger(container).title).toContain('next message');
   });
 
-  it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {
+  it('a workflow run shows workflow + folder + trigger chips, and its send goes to the workflow', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -7566,10 +7631,34 @@ describe('Chats run composer chips', () => {
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // Workflow runs take one task — the round send stays disabled.
-    expect(composerButton(container, 'Send')?.disabled).toBe(true);
-    // No model chip either: each agent node names its own model in the YAML.
+    // No model chip: each agent node names its own model in the YAML.
     expect(modelTrigger(container)).toBeUndefined();
+
+    // A follow-up is a message like any other — REPORTED as "i should be able
+    // to add message for workflow" against a composer that was disabled here.
+    // It goes to the WORKFLOW route, which hands it to the trigger's agents;
+    // the chat route refuses a workflow run outright.
+    expect(composerButton(container, 'Send')?.disabled).toBe(true);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'and the tests too'),
+    );
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and the tests too');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(composerButton(container, 'Send')?.disabled).toBe(false);
+    await act(async () => {
+      composerButton(container, 'Send')!.click();
+    });
+
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
+      runId: 'w1',
+      sendMessageDto: { text: 'and the tests too' },
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 });
 

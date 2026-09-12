@@ -56,6 +56,7 @@ function broker(): CallBroker {
     persistItem: () => {},
     isCancelled: () => false,
     isNodeLive: () => true,
+    wakeNode: () => false,
   };
   const instance = new CallBroker();
   instance.registerRun('run-1', capability);
@@ -713,6 +714,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       isNodeLive: () => true,
+      wakeNode: () => false,
     };
     instance.registerRun('run-1', capability);
     const target = service(instance);

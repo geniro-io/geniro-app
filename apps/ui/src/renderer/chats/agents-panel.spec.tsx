@@ -301,8 +301,10 @@ describe('AgentsPanel', () => {
     // count, and drawn with them rather than on the status line, where they
     // were a tally about rows nobody had asked to see.
     // ONE of its two calls is running — `activeTurns` (3 here) is the node's
-    // own live turns and is deliberately not what this caption counts.
-    expect(worker.textContent).toContain('1 active · 2 threads');
+    // own live turns and is deliberately not what this caption counts. Each
+    // call is an INSTANCE of the agent, drawn as its own block, so that is the
+    // noun the caption counts in.
+    expect(worker.textContent).toContain('1 active · 2 instances');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
     // they are legible without opening anything.
@@ -534,10 +536,15 @@ describe('AgentsPanel', () => {
               'worker',
               [
                 {
-                  id: '1',
-                  title: 'Write the haikus',
-                  status: 'in_progress' as const,
-                  activeForm: null,
+                  threadId: 'main',
+                  tasks: [
+                    {
+                      id: '1',
+                      title: 'Write the haikus',
+                      status: 'in_progress' as const,
+                      activeForm: null,
+                    },
+                  ],
                 },
               ],
             ],
@@ -2188,7 +2195,9 @@ describe('AgentsPanel task lists', () => {
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={agents}
-        tasksByAgent={new Map([['orchestrator', tasks]])}
+        tasksByAgent={
+          new Map([['orchestrator', [{ threadId: 'main', tasks }]]])
+        }
         onOpenThread={vi.fn()}
       />,
     );
@@ -2220,7 +2229,9 @@ describe('AgentsPanel task lists', () => {
       <AgentsPanel
         terminalReasons={TERMINALS}
         agents={[idle]}
-        tasksByAgent={new Map([['orchestrator', tasks]])}
+        tasksByAgent={
+          new Map([['orchestrator', [{ threadId: 'main', tasks }]]])
+        }
         onOpenThread={vi.fn()}
       />,
     );
@@ -2243,6 +2254,7 @@ describe('running shells', () => {
     exitCode: null,
     startedAt: new Date(Date.now() - 12_000).toISOString(),
     agentId: 'orchestrator',
+    callId: null,
   });
 
   it("lists the commands an agent has running, with each one's clock", () => {
@@ -2310,6 +2322,231 @@ describe('running shells', () => {
     expect(
       el.querySelector('[data-slot="agent-shell-list"]')?.textContent,
     ).toContain('pnpm build');
+  });
+});
+
+describe('AgentsPanel — the instances of a called agent', () => {
+  // The reported card, rebuilt: a Manager has briefed its Engineer three times,
+  // and every instance's delegates, commands and plan were pooled under the one
+  // card with nothing saying which conversation any row belonged to.
+  const call = (
+    id: string,
+    label: string,
+    status: AgentThread['status'],
+    over: Partial<AgentThread> = {},
+  ): AgentThread => ({
+    id,
+    kind: 'call',
+    label: `${id} · ${label}`,
+    status,
+    sessionId: null,
+    ...over,
+  });
+  const delegate = (
+    id: string,
+    label: string,
+    callId: string | null,
+    status: AgentThread['status'] = 'running',
+  ): AgentThread => ({
+    id,
+    kind: 'subagent',
+    label,
+    status,
+    sessionId: null,
+    callId,
+  });
+  const engineer: AgentDisplay = {
+    ...agents[1]!,
+    id: 'engineer',
+    name: 'Engineer',
+    threads: [
+      call('call-0', 'Explore the repo', 'completed', {
+        sessionId: 'sess-0',
+      }),
+      call('call-1', 'Build the parser', 'running', {
+        latest: 'running Bash',
+        spentTokens: 12_400,
+        spentUsd: 0.42,
+      }),
+      call('call-2', 'Fix the QA findings', 'running'),
+      delegate('mapper', 'Mapped the tabs', 'call-0', 'completed'),
+      delegate('explore', 'Exploring the codebase', 'call-1'),
+      delegate('review', 'Reviewing the diff', 'call-2'),
+    ],
+  };
+  const shell = (id: string, command: string, callId: string | null) => ({
+    id,
+    command,
+    description: null,
+    background: false,
+    handle: null,
+    status: 'running' as const,
+    exitCode: null,
+    startedAt: new Date(Date.now() - 3_000).toISOString(),
+    agentId: 'engineer',
+    callId,
+  });
+  const task = (id: string, title: string) => ({
+    id,
+    title,
+    status: 'pending' as const,
+    activeForm: null,
+  });
+
+  const panel = (agent: AgentDisplay = engineer): HTMLDivElement =>
+    render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agent]}
+        shellsByAgent={
+          new Map([
+            [
+              agent.id,
+              [
+                shell('s1', 'pnpm test', 'call-2'),
+                shell('s2', 'pnpm build', 'call-1'),
+              ],
+            ],
+          ])
+        }
+        tasksByAgent={
+          new Map([
+            [
+              agent.id,
+              [
+                { threadId: 'call-1', tasks: [task('1', 'Write the lexer')] },
+                {
+                  threadId: 'call-2',
+                  tasks: [task('1', 'Fix finding 3'), task('2', 'Re-run QA')],
+                },
+              ],
+            ],
+          ])
+        }
+        onOpenThread={vi.fn()}
+        onOpenSubagent={vi.fn()}
+      />,
+    );
+  const block = (el: HTMLElement, id: string): Element | null =>
+    el.querySelector(`[data-slot="agent-instance"][data-instance-id="${id}"]`);
+
+  it('draws each call as its own block, holding only its OWN delegates, commands and plan', () => {
+    const el = panel();
+    const first = block(el, 'call-1')!;
+    const second = block(el, 'call-2')!;
+
+    expect(first.textContent).toContain('Exploring the codebase');
+    expect(first.textContent).toContain('pnpm build');
+    expect(first.textContent).toContain('Write the lexer');
+    expect(first.textContent).not.toContain('Reviewing the diff');
+    expect(first.textContent).not.toContain('pnpm test');
+    expect(first.textContent).not.toContain('Fix finding 3');
+
+    expect(second.textContent).toContain('Reviewing the diff');
+    expect(second.textContent).toContain('pnpm test');
+    expect(second.textContent).toContain('Fix finding 3');
+    expect(second.textContent).not.toContain('Exploring the codebase');
+    expect(second.textContent).not.toContain('pnpm build');
+    expect(second.textContent).not.toContain('Write the lexer');
+
+    // Counted off the blocks: two of the three are still working.
+    expect(el.querySelector(CARD_SELECTOR)!.textContent).toContain(
+      '2 active · 3 instances',
+    );
+  });
+
+  it('says where each instance has got to, and what that instance alone has spent', () => {
+    const el = panel();
+    const latest = block(el, 'call-1')!.querySelector(
+      '[data-slot="agent-instance-latest"]',
+    )!;
+    expect(latest.textContent).toContain('running Bash');
+    expect(latest.textContent).toContain('12.4k tokens');
+    expect(latest.textContent).toContain('$0.42');
+    // An instance nothing has measured draws no line, rather than `0 tokens`.
+    expect(
+      block(el, 'call-2')!.querySelector('[data-slot="agent-instance-latest"]'),
+    ).toBeNull();
+  });
+
+  it('folds a finished instance to its heading — terminal kept — and opens it on a press', () => {
+    const el = panel();
+    const done = block(el, 'call-0')!;
+    expect(done.textContent).toContain('call-0 · Explore the repo');
+    // Shut: its delegate is history, and not drawn until asked for.
+    expect(done.querySelector('[data-slot="agent-instance-body"]')).toBeNull();
+    // The heading stays live, because a SETTLED call is exactly the one whose
+    // conversation can be opened.
+    expect(
+      done.querySelector(
+        'button[aria-label="Open terminal for Engineer — call-0"]',
+      ),
+    ).not.toBeNull();
+
+    click(done.querySelector('button[aria-expanded]'));
+    expect(block(el, 'call-0')!.textContent).toContain('1 finished sub-agent');
+    // …and the live instances were left exactly as they were.
+    expect(
+      block(el, 'call-1')!.querySelector('[data-slot="agent-instance-body"]'),
+    ).not.toBeNull();
+  });
+
+  it('draws the node’s OWN conversation as a block only when something happened in it', () => {
+    const own: AgentThread = {
+      id: 'main',
+      kind: 'main',
+      label: 'Main conversation',
+      status: 'running',
+      sessionId: null,
+    };
+    const withOwnWork = panel({
+      ...engineer,
+      threads: [
+        own,
+        ...engineer.threads,
+        delegate('own', 'Own delegate', null),
+      ],
+    });
+    const main = block(withOwnWork, 'main')!;
+    expect(main.textContent).toContain('Own delegate');
+    // Its terminal is the CARD's, in the header — never a second copy here.
+    expect(
+      main.querySelector('button[aria-label^="Open terminal"]'),
+    ).toBeNull();
+    expect(
+      withOwnWork.querySelector(
+        'button[aria-label="Open terminal for Engineer"]',
+      ),
+    ).not.toBeNull();
+
+    act(() => {
+      root?.unmount();
+    });
+    container?.remove();
+    const withoutOwnWork = panel({
+      ...engineer,
+      threads: [own, ...engineer.threads],
+    });
+    expect(block(withoutOwnWork, 'main')).toBeNull();
+  });
+
+  it('keeps the FLAT shape for an agent that has never been called', () => {
+    // A block around the one conversation the card already names would be pure
+    // nesting — the 1:1 chat's whole shape.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[agents[0]!]}
+        shellsByAgent={
+          new Map([['orchestrator', [shell('s1', 'pnpm dev', null)]]])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    expect(el.querySelector('[data-slot="agent-instance"]')).toBeNull();
+    expect(
+      el.querySelector('[data-slot="agent-shell-list"]')?.textContent,
+    ).toContain('pnpm dev');
   });
 });
 

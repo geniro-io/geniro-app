@@ -6,7 +6,7 @@ import {
   foldTaskList,
   readTaskAnnouncement,
   type TaskAnnouncement,
-  taskListsByAgent,
+  taskListsByThread,
   taskProgress,
 } from './task-payload';
 
@@ -207,7 +207,7 @@ describe('taskProgress', () => {
   });
 });
 
-describe('taskListsByAgent', () => {
+describe('taskListsByThread', () => {
   it('keeps a DELEGATE’s list OUT of the agent’s own', () => {
     // Both CLIs number tasks from 1, so merging them would make task `1` mean
     // two different things and report a delegate's progress as the agent's. The
@@ -215,7 +215,7 @@ describe('taskListsByAgent', () => {
     // its own count on its header.
     const delegated = (payload: Record<string, unknown>): ChatItem =>
       taskItem({ ...payload, parentToolUseId: 'toolu_parent' });
-    const lists = taskListsByAgent(
+    const lists = taskListsByThread(
       [
         taskItem(snapshot([row('1', 'main task', 'in_progress')])),
         delegated({
@@ -226,9 +226,19 @@ describe('taskListsByAgent', () => {
       ],
       subagentIdOf,
     );
-    expect([...lists.keys()]).toEqual([null]);
-    expect(lists.get(null)).toEqual([
-      { id: '1', title: 'main task', status: 'in_progress', activeForm: null },
+    expect(lists).toEqual([
+      {
+        nodeId: null,
+        callId: null,
+        tasks: [
+          {
+            id: '1',
+            title: 'main task',
+            status: 'in_progress',
+            activeForm: null,
+          },
+        ],
+      },
     ]);
   });
 
@@ -237,16 +247,50 @@ describe('taskListsByAgent', () => {
       ...taskItem(snapshot([row('1', title, 'pending')])),
       nodeId,
     });
-    const lists = taskListsByAgent(
+    const lists = taskListsByThread(
       [onNode('writer', 'draft it'), onNode('reviewer', 'review it')],
       subagentIdOf,
     );
-    expect(lists.get('writer')?.[0]?.title).toBe('draft it');
-    expect(lists.get('reviewer')?.[0]?.title).toBe('review it');
+    expect(lists.find((l) => l.nodeId === 'writer')?.tasks[0]?.title).toBe(
+      'draft it',
+    );
+    expect(lists.find((l) => l.nodeId === 'reviewer')?.tasks[0]?.title).toBe(
+      'review it',
+    );
+  });
+
+  it('keeps each CALL of one node apart — every instance numbers from 1', () => {
+    // Two instances of one Engineer. Folded by node alone, the second call's
+    // `1 pending` replaced the first call's `1 completed`, and the panel drew
+    // one plan that belonged to neither conversation.
+    const inCall = (callId: string | null, payload: unknown): ChatItem => ({
+      ...taskItem(
+        callId === null
+          ? payload
+          : { ...(payload as Record<string, unknown>), callId },
+      ),
+      nodeId: 'engineer',
+    });
+    const lists = taskListsByThread(
+      [
+        inCall('call-1', snapshot([row('1', 'first brief', 'in_progress')])),
+        inCall('call-2', snapshot([row('1', 'second brief', 'pending')])),
+        inCall('call-1', patch([row('1', null, 'completed')])),
+        inCall(null, snapshot([row('1', 'own turn', 'pending')])),
+      ],
+      subagentIdOf,
+    );
+    expect(
+      lists.map((l) => [l.callId, l.tasks[0]?.title, l.tasks[0]?.status]),
+    ).toEqual([
+      ['call-1', 'first brief', 'completed'],
+      ['call-2', 'second brief', 'pending'],
+      [null, 'own turn', 'pending'],
+    ]);
   });
 
   it('ignores every other item kind', () => {
     const other: ChatItem = { ...taskItem({}), kind: 'message' };
-    expect(taskListsByAgent([other], subagentIdOf).size).toBe(0);
+    expect(taskListsByThread([other], subagentIdOf)).toHaveLength(0);
   });
 });

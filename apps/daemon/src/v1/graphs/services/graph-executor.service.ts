@@ -1,6 +1,6 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ConflictException } from '@packages/common';
+import { BadRequestException, ConflictException } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
 import { mintToken } from '../../../auth/mint-token';
@@ -10,15 +10,18 @@ import type {
   AgentTurnHandle,
   AgentTurnInput,
   ApprovalResolution,
+  TurnImage,
 } from '../../agents/adapters/adapter.types';
 import type { AgentAdapter } from '../../agents/adapters/agent-adapter';
 import { ClaudeProbeService } from '../../agents/adapters/claude/claude-probe.service';
 import {
+  type AttachmentWire,
   type ChatListScope,
   type ClaudeModesCapability,
   type ItemWire,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
   type RunWire,
+  type SendMessageImage,
 } from '../../agents/chat.types';
 import { CallContextDao } from '../../agents/dao/call-context.dao';
 import { ItemDao } from '../../agents/dao/item.dao';
@@ -28,6 +31,7 @@ import { AgentAdapterRegistry } from '../../agents/services/agent-adapter.regist
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
+import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import {
   partialOwnerKey,
@@ -52,7 +56,10 @@ import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { assertWorkflowRun } from '../../agents/utils/run-kind';
+import {
+  assertWorkflowRun,
+  type WorkflowRun,
+} from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
@@ -215,6 +222,38 @@ interface RunContext {
   customInstructions: string | null;
   /** The run's snapshotted Max Mode choice; every cursor node carries it. */
   cursorMaxMode: boolean | null;
+  /**
+   * Each node's CLI session from an earlier pass of this run, so a follow-up
+   * carries every agent's conversation on instead of starting it over. Empty
+   * on a run's first pass.
+   */
+  resumeSessions: ReadonlyMap<string, string>;
+  /** The seq this pass writes first — past everything an earlier pass wrote. */
+  firstSeq: number;
+  /**
+   * The seed row is already written: a follow-up persists its message before
+   * the walk starts, because the route answers with that row.
+   */
+  seedPersisted: boolean;
+  /** Pictures that came with the seed — for the agents a trigger feeds. */
+  seedImages: TurnImage[];
+}
+
+/** How a follow-up reaches a workflow run that is still being walked. */
+interface LiveRunControl {
+  /**
+   * Hand the message to the agents the trigger feeds. Null once the run has
+   * finished, which leaves the caller to walk it again from the trigger.
+   */
+  deliver(text: string, images: SendMessageImage[]): Promise<ItemWire | null>;
+}
+
+/** A user message row's payload — pictures only when there are any. */
+function messagePayload(
+  text: string,
+  stored: readonly AttachmentWire[],
+): { text: string; images?: AttachmentWire[] } {
+  return { text, ...(stored.length > 0 ? { images: [...stored] } : {}) };
 }
 
 interface DroppedNodeSetting {
@@ -358,6 +397,12 @@ export class GraphExecutorService {
    */
   private readonly deleting = new Set<string>();
 
+  /**
+   * The runs being walked right now, each with the one way a follow-up can
+   * reach its agents while they are live — see {@link sendMessage}.
+   */
+  private readonly liveRuns = new Map<string, LiveRunControl>();
+
   constructor(
     private readonly em: EntityManager,
     private readonly runDao: RunDao,
@@ -380,6 +425,7 @@ export class GraphExecutorService {
     private readonly groups: RunGroupsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly partials: PartialStreamService,
+    private readonly attachments: AttachmentStoreService,
   ) {}
 
   /**
@@ -542,6 +588,10 @@ export class GraphExecutorService {
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
         cursorMaxMode: run.cursorMaxMode,
+        resumeSessions: new Map(),
+        firstSeq: 0,
+        seedPersisted: false,
+        seedImages: [],
       },
       dropped,
     );
@@ -555,6 +605,194 @@ export class GraphExecutorService {
     // cancels converge on one registry key) + the 404 the chat siblings return.
     assertWorkflowRun(await this.runDao.getById(runId, em), runId);
     return { cancelled: this.registry.cancel(runId) };
+  }
+
+  /**
+   * A follow-up message for a workflow run — handed to the agents its trigger
+   * feeds, as though the trigger had fired again with this text.
+   *
+   * REPORTED as "i should be able to add message for workflow. In this case it
+   * will just go to same trigger": the composer of a workflow run was disabled
+   * outright, so a run could only be followed up by starting another that
+   * remembered nothing of this one.
+   *
+   * Two shapes, decided by whether the run is still being walked. A LIVE run
+   * holds those agents' processes, so the message joins the conversation each
+   * one is in (`deliverFollowUp`, inside `driveResolved`). A SETTLED run is
+   * walked again from its trigger with this message as the seed, every node
+   * resuming its own earlier session — the same graph and the same
+   * conversations, one more pass.
+   */
+  async sendMessage(
+    runId: string,
+    text: string,
+    images: SendMessageImage[] = [],
+  ): Promise<ItemWire> {
+    if (text.trim() === '' && images.length === 0) {
+      throw new BadRequestException(
+        'MESSAGE_EMPTY',
+        'a message needs words or a picture',
+      );
+    }
+    const em = this.em.fork();
+    const run = assertWorkflowRun(await this.runDao.getById(runId, em), runId);
+    if (run.archivedAt !== null) {
+      throw new ConflictException(
+        'RUN_ARCHIVED',
+        'this run is archived — unarchive it to send a message',
+      );
+    }
+    const live = this.liveRuns.get(runId);
+    if (live) {
+      const item = await live.deliver(text, images);
+      if (item !== null) {
+        return item;
+      }
+    }
+    return this.walkAgain(em, run, text, images);
+  }
+
+  /**
+   * Walk a SETTLED run again from its trigger, with `text` as the seed.
+   *
+   * The claim is what a second follow-up, a delete or a cancel is refused
+   * against, exactly as for a new run. A run whose last pass is still tearing
+   * down holds it for a moment longer, which is a RUN_BUSY the renderer queues
+   * on rather than an error.
+   */
+  private async walkAgain(
+    em: EntityManager,
+    run: WorkflowRun,
+    text: string,
+    images: SendMessageImage[],
+  ): Promise<ItemWire> {
+    if (!this.registry.tryClaim(run.id)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'this run is still finishing — your message goes out once it has',
+      );
+    }
+    let pass: Awaited<ReturnType<GraphExecutorService['prepareNextPass']>>;
+    try {
+      pass = await this.prepareNextPass(em, run, text, images);
+    } catch (err) {
+      this.registry.release(run.id);
+      throw err;
+    }
+    if (!this.registry.canStart(run.id)) {
+      this.registry.release(run.id);
+      await this.setRunStatus(em, run.id, 'failed');
+      throw new ConflictException(
+        'RUN_STOPPING',
+        'daemon shutdown started before the workflow could continue',
+      );
+    }
+    this.drive(em, run.id, pass.workflow, pass.context, pass.dropped);
+    return pass.item;
+  }
+
+  /**
+   * Everything a further pass needs before its walk starts.
+   *
+   * The workflow is read from the library as it is NOW, the way a new run of
+   * it would be — an edit made since the last pass is what the next one is
+   * expected to run. Each node's recorded CLI session is collected so it can
+   * resume, and the message row is written here rather than by the walk,
+   * because the route answers with it.
+   */
+  private async prepareNextPass(
+    em: EntityManager,
+    run: WorkflowRun,
+    text: string,
+    images: SendMessageImage[],
+  ): Promise<{
+    workflow: Workflow;
+    dropped: DroppedNodeSetting[];
+    context: RunContext;
+    item: ItemWire;
+  }> {
+    if (!run.cwd) {
+      throw new BadRequestException(
+        'RUN_NOT_CONFIGURED',
+        'run is missing a working directory',
+      );
+    }
+    const { workflow: stored } = await this.store.get(run.workflowId);
+    validateWorkflowGraph(stored.nodes, stored.edges);
+    validateRunnableGraph(stored.nodes, stored.edges);
+    computeRunOrder(stored.nodes, stored.edges);
+    const cwd = resolveValidCwd(run.cwd);
+    const { workflow, dropped } = withResolvedNodeSettings(stored, (kind) =>
+      this.adapterFor(kind),
+    );
+    const resumeSessions = new Map<string, string>();
+    for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
+      if (state.agentSessionId) {
+        resumeSessions.set(state.nodeId, state.agentSessionId);
+      }
+    }
+    // Every node that runs starts the pass pending again, as it did the first —
+    // one added to the workflow since included, which has no row yet.
+    for (const node of workflow.nodes) {
+      if (!isNonExecutableNode(node)) {
+        await this.nodeStateDao.setStatus(
+          run.id,
+          node.id,
+          { status: 'pending' },
+          em,
+        );
+      }
+    }
+    const { stored: storedImages, turnImages } = this.storeImages(
+      run.id,
+      images,
+    );
+    const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
+    const item = await this.persist(
+      em,
+      run.id,
+      null,
+      seq,
+      'message',
+      'user',
+      messagePayload(text, storedImages),
+    );
+    await this.setRunStatus(em, run.id, 'running');
+    return {
+      workflow,
+      dropped,
+      item,
+      context: {
+        cwd,
+        seedPrompt: text,
+        customInstructions: run.customInstructions,
+        cursorMaxMode: run.cursorMaxMode,
+        resumeSessions,
+        firstSeq: seq + 1,
+        seedPersisted: true,
+        seedImages: turnImages,
+      },
+    };
+  }
+
+  /**
+   * Save a follow-up's pictures under the run, the way a chat's are saved: the
+   * rows go in the message payload, the paths go to the CLI.
+   */
+  private storeImages(
+    runId: string,
+    images: SendMessageImage[],
+  ): { stored: AttachmentWire[]; turnImages: TurnImage[] } {
+    const stored = images.map((image) =>
+      this.attachments.save(runId, image.mediaType, image.data),
+    );
+    return {
+      stored,
+      turnImages: stored.map((attachment) => ({
+        path: this.attachments.pathOf(runId, attachment.id),
+        mediaType: attachment.mediaType,
+      })),
+    };
   }
 
   /**
@@ -620,6 +858,33 @@ export class GraphExecutorService {
         this.approvals.awaitingFor(run.id),
       ),
     );
+  }
+
+  /**
+   * Tell every window what this run is parked on NOW — the workflow twin of
+   * `ChatService.announceAwaiting`, read from the same registry.
+   *
+   * The runs listing answers `awaiting` per run, but a listing is a SNAPSHOT:
+   * a window keeps whatever it last read until an announce moves it. The chat
+   * path announces at every transition; this path announced at none, so a
+   * listing taken while a node's question was open left the row reading
+   * `needs more info` for good after the question was answered. The open
+   * thread derives its badge from the transcript (card answered → `running`),
+   * the sidebar and the notification rules read the row — so every switch
+   * AWAY from the thread flipped it back to waiting and posted "Waiting for
+   * your answer" again. REPORTED as a notification that came back each time
+   * another thread was opened, over a run the daemon itself reported as
+   * `awaiting: null`.
+   *
+   * `status: null`: the badge's status belongs to whatever settles the run,
+   * and an announce that never read the row must not assert one.
+   */
+  private announceAwaiting(runId: string): void {
+    this.bus.publishRunStatus({
+      runId,
+      status: null,
+      awaiting: this.approvals.awaitingFor(runId),
+    });
   }
 
   /** Per-node execution states of one run (node chips + reconnect snapshot). */
@@ -888,6 +1153,35 @@ export class GraphExecutorService {
     // `runningHandles`, or the ProcessRegistry — they ride the aggregate
     // handle, and only `liveSubTurns` holds the run open for them.
     const subTurnHandles = new Map<string, AgentTurnHandle>();
+    // The agents a trigger feeds — where the seed goes, and where a follow-up
+    // goes while the run is live.
+    const triggerFed = new Set(
+      nodes
+        .filter(
+          (node) =>
+            node.kind === 'agent' &&
+            [...(producersOf.get(node.id) ?? [])].some(
+              (id) => nodesById.get(id)?.kind === 'trigger',
+            ),
+        )
+        .map((node) => node.id),
+    );
+    /**
+     * Follow-up turns on agents whose own turn has ended, keyed by node — see
+     * `continueNode`. Cancel fans to these as it does to callee sub-turns, and
+     * they hold the run open the same way.
+     */
+    const continuationHandles = new Map<string, AgentTurnHandle>();
+    /**
+     * The CLI session each node's own turns reported in THIS pass, so a
+     * follow-up can still resume the conversation after the registry has
+     * reaped the kept process. Callee turns resume per call, not from here.
+     */
+    const nodeSessionIds = new Map<string, string>();
+    /** A follow-up turn failed, so the run must not roll up as a success. */
+    let followUpFailed = false;
+    /** This pass's `liveRuns` entry — removed only by the pass that set it. */
+    let liveControl: LiveRunControl | null = null;
     /**
      * Every `AgentSessionRegistry` key this run opened, so the run can close
      * what it opened — nothing else will.
@@ -917,7 +1211,7 @@ export class GraphExecutorService {
       return false;
     };
     let cancelRequested = false;
-    let seq = 0;
+    let seq = run.firstSeq;
     let runFinished = false;
     let persistenceFailed = false;
 
@@ -954,6 +1248,12 @@ export class GraphExecutorService {
      */
     const sweepApprovals = (nodeId: string): (() => Promise<void>) => {
       const swept = this.approvals.sweepNode(runId, nodeId);
+      // Every settle path sweeps through here, so this one announce is what
+      // takes the badge down for all four — a swept card is no longer
+      // something the run waits on.
+      if (swept.length > 0) {
+        this.announceAwaiting(runId);
+      }
       return async () => {
         for (const approval of swept) {
           await persistItem(nodeId, 'unanswerable', null, {
@@ -985,15 +1285,18 @@ export class GraphExecutorService {
         for (const handle of subTurnHandles.values()) {
           handle.cancel();
         }
+        for (const handle of continuationHandles.values()) {
+          handle.cancel();
+        }
         // Nodes that never started settle as cancelled in the next pass.
         enqueue(() => schedule());
       },
       // Approvals route through the ApprovalRegistry per request, not the
       // aggregate — a run-level respond has no single target turn.
       respondApproval: () => false,
-      // Same reason, and it is why a workflow composer is disabled: a run
-      // fanning out over N nodes has no ONE conversation a follow-up belongs
-      // to, and picking a node for it would be an invention.
+      // Same reason: a run fanning out over N nodes has no ONE conversation a
+      // follow-up belongs to. A workflow's follow-up goes through
+      // `sendMessage`, which hands it to the agents the trigger feeds.
       sendUserMessage: () => false,
       attributableDelegate: () => null,
       setApprovalMode: () => false,
@@ -1053,7 +1356,7 @@ export class GraphExecutorService {
         );
         const status = cancelRequested
           ? 'cancelled'
-          : anyNotCompleted || persistenceFailed
+          : anyNotCompleted || persistenceFailed || followUpFailed
             ? 'failed'
             : 'completed';
         await this.setRunStatus(em, runId, status);
@@ -1081,6 +1384,12 @@ export class GraphExecutorService {
           );
         });
       } finally {
+        // First, so a follow-up arriving during the teardown below is walked
+        // again from the trigger instead of being handed to a process that is
+        // being closed.
+        if (liveControl !== null && this.liveRuns.get(runId) === liveControl) {
+          this.liveRuns.delete(runId);
+        }
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
         // The processes die with the run, and this is the ONLY thing that ends
@@ -1277,6 +1586,12 @@ export class GraphExecutorService {
       node: WorkflowAgentNode,
       prompt: string,
       callContext?: { callId: string; resumeSessionId?: string | null },
+      /**
+       * What a node's OWN turn carries beyond its prompt: the session to resume
+       * when no kept process holds the conversation, and the pictures a seed
+       * or a follow-up came with. A callee's resume rides `callContext`.
+       */
+      extras: { resumeSessionId?: string | null; images?: TurnImage[] } = {},
     ): {
       handle: AgentTurnHandle;
       finish: () => {
@@ -1329,6 +1644,7 @@ export class GraphExecutorService {
       const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
         prompt,
+        ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
         model: node.model ?? null,
         // Per NODE like the model, and already checked against this CLI's own
@@ -1341,7 +1657,8 @@ export class GraphExecutorService {
         // reports a size the model does not offer, against the live agent.
         contextWindow: node.contextWindow ?? null,
         modelParameters: node.modelParameters ?? null,
-        resumeSessionId: callContext?.resumeSessionId ?? null,
+        resumeSessionId:
+          callContext?.resumeSessionId ?? extras.resumeSessionId ?? null,
         systemPrompt: node.role ?? null,
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
@@ -1385,6 +1702,9 @@ export class GraphExecutorService {
           let isQuestion = false;
           if (event.type === 'session') {
             capturedSessionId = event.sessionId;
+            if (!callContext) {
+              nodeSessionIds.set(node.id, event.sessionId);
+            }
             await saveSessionId(event.sessionId);
             return;
           }
@@ -1749,9 +2069,14 @@ export class GraphExecutorService {
                     });
                   });
                 }
+                // The registry dropped this entry before calling here, so the
+                // reading is already the post-verdict one — whatever the
+                // delivery outcome, the card is gone.
+                this.announceAwaiting(runId);
                 return delivered;
               },
             });
+            this.announceAwaiting(runId);
           }
         });
       };
@@ -1898,7 +2223,12 @@ export class GraphExecutorService {
         sessionId: string | null;
       };
       try {
-        ({ handle, finish } = beginAgentTurn(node, prompt));
+        ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
+          // An earlier pass of this run left this node a conversation; a
+          // follow-up's pass carries it on rather than starting it over.
+          resumeSessionId: run.resumeSessions.get(node.id) ?? null,
+          images: triggerFed.has(node.id) ? run.seedImages : [],
+        }));
       } catch (err) {
         // Gated like the three sibling settle paths (:1193, and the two cancel
         // routes): a callable DAG node can hold live CALLEE turns alongside its
@@ -2164,6 +2494,10 @@ export class GraphExecutorService {
                   callId,
                 });
               } finally {
+                // BEFORE this turn stops holding the run open: a result owed
+                // to a caller that has ended wakes it, and that wake has to be
+                // counted before the run can decide it is finished.
+                this.callBroker.noteCalleeSettling(runId, callId);
                 resolve(result);
               }
             });
@@ -2175,6 +2509,186 @@ export class GraphExecutorService {
         liveSubTurns -= 1;
         enqueue(() => finishRunIfSettled());
       }
+    };
+
+    /**
+     * Another turn for an agent whose own turn has already ended, while the run
+     * is still live — how a follow-up reaches an agent the trigger feeds without
+     * walking the graph again.
+     *
+     * It rides the node's OWN session key, so the process that agent's turn
+     * kept takes it and the answer comes from inside the conversation it is
+     * already in; a process the registry has since reaped is spawned again on
+     * the session id this node reported. It is counted like a callee sub-turn —
+     * outside the walk's denominator, holding the run open while it lasts —
+     * because it is not a step of the walk: the node already has its outcome,
+     * and whatever runs downstream of it has consumed that.
+     */
+    const continueNode = (
+      node: WorkflowAgentNode,
+      prompt: string,
+      images: TurnImage[],
+    ): void => {
+      liveSubTurns += 1;
+      retainNodeTurn(node.id);
+      persistTurnStart(node);
+      let handle: AgentTurnHandle;
+      let finish: () => {
+        outcome: NodeOutcome;
+        finalText: string | null;
+        sessionId: string | null;
+      };
+      try {
+        ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
+          images,
+          resumeSessionId:
+            nodeSessionIds.get(node.id) ??
+            run.resumeSessions.get(node.id) ??
+            null,
+        }));
+      } catch (err) {
+        const lastTurn = releaseNodeTurn(node.id);
+        const recordSwept = lastTurn ? sweepApprovals(node.id) : null;
+        if (lastTurn) {
+          this.callBroker.drainCaller(runId, node.id);
+        }
+        followUpFailed = true;
+        enqueue(async () => {
+          await recordSwept?.();
+          await this.nodeStateDao
+            .setStatus(
+              runId,
+              node.id,
+              {
+                status: 'failed',
+                endedAt: Date.now(),
+                error: `turn start failed: ${err instanceof Error ? err.message : String(err)}`,
+              },
+              em,
+            )
+            .catch(() => {});
+          await persistItem(node.id, 'status', null, {
+            nodeId: node.id,
+            status: 'failed',
+          }).catch(() => {});
+          liveSubTurns -= 1;
+          await finishRunIfSettled();
+        });
+        return;
+      }
+      continuationHandles.set(node.id, handle);
+      void handle.done.then(() => {
+        enqueue(async () => {
+          if (releaseNodeTurn(node.id)) {
+            const recordSwept = sweepApprovals(node.id);
+            this.callBroker.drainCaller(runId, node.id);
+            await recordSwept();
+          }
+          continuationHandles.delete(node.id);
+          const { outcome } = finish();
+          if (outcome === 'failed') {
+            followUpFailed = true;
+          }
+          try {
+            await this.nodeStateDao.setStatus(
+              runId,
+              node.id,
+              {
+                status: outcome,
+                endedAt: Date.now(),
+                error: outcome === 'failed' ? 'node turn failed' : null,
+              },
+              em,
+            );
+            await persistItem(node.id, 'status', null, {
+              nodeId: node.id,
+              status: outcome,
+            });
+          } catch (err) {
+            persistenceFailed = true;
+            this.logger.error(
+              `workflow run ${runId} node ${node.id} follow-up bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          } finally {
+            liveSubTurns -= 1;
+            await finishRunIfSettled();
+          }
+        });
+      });
+    };
+
+    /**
+     * A follow-up for this LIVE run: the agents the trigger feeds get it, as
+     * though the trigger had fired again — `GraphExecutorService.sendMessage`
+     * holds the settled half.
+     *
+     * An agent mid-turn is told through its CLI's own mid-turn channel, the one
+     * a chat's follow-up rides; an idle one is given another turn on its kept
+     * process. Null once the run has finished, which hands the message back to
+     * be walked from the trigger instead.
+     */
+    const deliverFollowUp = async (
+      text: string,
+      images: SendMessageImage[],
+    ): Promise<ItemWire | null> => {
+      if (runFinished) {
+        return null;
+      }
+      // RUN_BUSY, which the renderer queues on and drains when a turn ends.
+      const busy = (why: string): ConflictException =>
+        new ConflictException(
+          'RUN_BUSY',
+          `${why} — your message goes out once it has`,
+        );
+      if (cancelRequested) {
+        throw busy('this run is stopping');
+      }
+      const roots = nodes.filter(
+        (node): node is WorkflowAgentNode =>
+          node.kind === 'agent' && triggerFed.has(node.id),
+      );
+      // A root the node cap has held back has no conversation to carry on yet,
+      // and its own turn is about to start from the seed.
+      if (
+        roots.some(
+          (root) => !settled.has(root.id) && !runningHandles.has(root.id),
+        )
+      ) {
+        throw busy('the workflow is still starting');
+      }
+      const { stored, turnImages } = this.storeImages(runId, images);
+      for (const root of roots) {
+        const running =
+          runningHandles.get(root.id) ?? continuationHandles.get(root.id);
+        // Told FIRST, recorded after: only a delivery the CLI confirmed may be
+        // written to the transcript — the reverse leaves a message on screen
+        // that no agent received.
+        if (running && !running.sendUserMessage({ text, images: turnImages })) {
+          throw busy(`${root.name ?? root.id} is finishing a turn`);
+        }
+      }
+      const item = await new Promise<ItemWire>((resolve, reject) => {
+        enqueue(async () => {
+          try {
+            resolve(
+              await persistItem(
+                null,
+                'message',
+                'user',
+                messagePayload(text, stored),
+              ),
+            );
+          } catch (err) {
+            reject(err instanceof Error ? err : new Error(String(err)));
+          }
+        });
+      });
+      for (const root of roots) {
+        if (!runningHandles.has(root.id) && !continuationHandles.has(root.id)) {
+          continueNode(root, text, turnImages);
+        }
+      }
+      return item;
     };
 
     /**
@@ -2275,6 +2789,37 @@ export class GraphExecutorService {
         },
         isCancelled: () => cancelRequested,
         isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+        wakeNode: (nodeId, prompt) => {
+          const node = nodesById.get(nodeId);
+          if (node?.kind !== 'agent' || cancelRequested || runFinished) {
+            return false;
+          }
+          // Counted as live from NOW rather than from when the turn begins:
+          // the turn starts on the write chain, and a finalizer queued ahead
+          // of it would otherwise see nothing live and close the run under
+          // the wake.
+          liveSubTurns += 1;
+          enqueue(async () => {
+            liveSubTurns -= 1;
+            if (cancelRequested || runFinished) {
+              // Cancelled meanwhile — every callee dies with the run, so there
+              // is nothing left for this turn to answer or collect.
+              await finishRunIfSettled();
+              return;
+            }
+            if (liveTurnsByNode.has(nodeId)) {
+              // A follow-up raced the wake and the node is working again:
+              // hand it the message inside that turn rather than opening a
+              // second one on the same conversation.
+              (
+                continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
+              )?.sendUserMessage({ text: prompt, images: [] });
+              return;
+            }
+            continueNode(node, prompt, []);
+          });
+          return true;
+        },
       });
       // Daemon-side self-check: a dead endpoint degrades SILENTLY child-side
       // (claude exits 0 with an unreachable server), so probe our own route
@@ -2322,10 +2867,15 @@ export class GraphExecutorService {
         });
       });
     }
-    // Seed message first, then the roots fan out.
-    enqueue(async () => {
-      await persistItem(null, 'message', 'user', { text: seedPrompt });
-    });
+    // Seed message first, then the roots fan out — unless this pass carries a
+    // follow-up, whose row the route has already written.
+    if (!run.seedPersisted) {
+      enqueue(async () => {
+        await persistItem(null, 'message', 'user', { text: seedPrompt });
+      });
+    }
+    liveControl = { deliver: deliverFollowUp };
+    this.liveRuns.set(runId, liveControl);
     // No per-machine gate can shut a caller out any more: every adapter hands
     // its own CLI the endpoint in-protocol, so having outgoing call edges is
     // the whole admission predicate. The M3 "probe verdict shut this caller

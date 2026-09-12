@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
-import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { AutopilotConductor } from './autopilot-conductor';
@@ -11,6 +11,7 @@ import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
+import { readFinishedTasks } from './finished-tasks';
 import { registerIpc } from './ipc';
 import {
   applyTheme,
@@ -18,6 +19,7 @@ import {
   watchSystemAppearance,
 } from './native-appearance';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
+import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
 import { createUpdateService } from './update-service';
@@ -30,7 +32,7 @@ import {
 import {
   prepareWorktree,
   pruneWorktreeForTask,
-  reapOrphanedWorktrees,
+  reapFinishedWorktrees,
 } from './worktree-service';
 
 /**
@@ -115,6 +117,26 @@ const autopilot = new AutopilotConductor({
   log: (message) => {
     void reportMainLog(supervisor.getHandle(), 'info', message, {
       source: 'autopilot',
+    });
+  },
+});
+
+/**
+ * The board's OTHER unattended timer, and the counterpart of the conductor
+ * above: that one starts the work, this one ends it.
+ *
+ * It belongs to main for the same reasons and one sharper — `gh` runs here.
+ * The daemon knows which pull requests a card's agent opened and cannot ask
+ * GitHub what became of them, because it holds no login and shells out to
+ * nothing; this process holds both. Like the conductor it needs no IPC channel:
+ * it reads its cards from the daemon and reports a merge back to it, so a
+ * window being open changes nothing about what it does.
+ */
+const mergeWatcher = new PullRequestMergeWatcher({
+  handle: () => supervisor.getHandle(),
+  log: (message) => {
+    void reportMainLog(supervisor.getHandle(), 'info', message, {
+      source: 'merge-watcher',
     });
   },
 });
@@ -376,6 +398,43 @@ function createWindow(): void {
 }
 
 /**
+ * Collect the worktrees whose card's work is finished, once a daemon is there
+ * to say which those are — see `reapFinishedWorktrees`.
+ *
+ * On every daemon start rather than once per launch: it acts only on a card
+ * the daemon calls finished, so a second pass costs a registry read and a git
+ * call per entry, and a window re-opened after a while is exactly when a run
+ * that settled under a Done card with nobody watching is waiting to be
+ * collected. One pass at a time, so two quick re-ensures cannot both try to
+ * commit and remove the same checkout.
+ */
+let reaping = false;
+function reapWorktrees(handle: DaemonHandle): void {
+  if (reaping) {
+    return;
+  }
+  reaping = true;
+  void reapFinishedWorktrees((taskIds) => readFinishedTasks(handle, taskIds))
+    .then(({ removed }) => {
+      if (removed.length > 0) {
+        void reportMainLog(
+          handle,
+          'info',
+          `worktree reaper cleared ${removed.length} finished or vanished task worktree(s)`,
+          { source: 'worktrees' },
+        );
+      }
+    })
+    .catch(() => {
+      // A reaper that cannot run costs disk and nothing else; a launch that
+      // fails because of one would cost the user their app.
+    })
+    .finally(() => {
+      reaping = false;
+    });
+}
+
+/**
  * Bring the daemon up and hand the renderer its address.
  *
  * The one entry point for both the launch and a later re-ensure, so the window
@@ -391,6 +450,7 @@ function ensureDaemon(): void {
       // The window is opened BEFORE this, so whatever it already reported about
       // its own load has been waiting for an address to send it to.
       void flushMainLogs(handle);
+      reapWorktrees(handle);
     })
     .catch((err: unknown) => {
       console.error('[ui] daemon failed to start:', err);
@@ -453,18 +513,12 @@ function main(): void {
     // running. Not gated on the auto-check setting: a user who switched checks
     // off still has whatever the last update left on their disk.
     void updates.sweepDebris();
-    // Worktrees a force-quit or a crash left behind, cleared before any task
-    // can start one. Detached rather than awaited: it shells out to git once
-    // per leftover, and the window must not wait behind that. It confirms
-    // every entry before touching it and leaves anything holding unsaved work
-    // exactly where it is — see `worktree-service.ts`.
-    void reapOrphanedWorktrees().catch(() => {
-      // A reaper that cannot run costs disk and nothing else; a launch that
-      // fails because of one would cost the user their app.
-    });
-    // AFTER the reaper: a tick that started a task while leftovers were still
-    // being cleared could have its own fresh worktree reaped out from under it.
+    // Worktrees are collected once a daemon is up to say which cards are
+    // finished — `reapWorktrees`, from `ensureDaemon`. The autopilot never
+    // starts a card whose work is finished, so the two cannot meet over one
+    // worktree and neither has to wait for the other.
     autopilot.start();
+    mergeWatcher.start();
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -492,6 +546,13 @@ function main(): void {
     });
   });
 
+  // Coming back to the window is when a pull request is most likely to have
+  // been merged somewhere else — the user was just in their browser. The sweep
+  // keeps its own five-minute floor, so a burst of focus changes costs one.
+  app.on('browser-window-focus', () => {
+    void mergeWatcher.sweepIfStale();
+  });
+
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       app.quit();
@@ -510,6 +571,7 @@ function main(): void {
     // Quitting is not an armed state — the daemon goes back to its ordinary
     // idle window rather than being held open by a process that is ending.
     autopilot.stop();
+    mergeWatcher.stop();
     keepAlive.dispose();
     event.preventDefault();
     void supervisor.stop().finally(() => {

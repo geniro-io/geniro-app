@@ -94,6 +94,7 @@ describe('readGitInfo', () => {
       branches: [],
       dirty: false,
       worktrees: [],
+      worktreeOf: null,
     });
   });
 
@@ -107,6 +108,7 @@ describe('readGitInfo', () => {
       branches: ['feat/chips', 'main'],
       dirty: false,
       worktrees: [],
+      worktreeOf: null,
     });
   });
 
@@ -181,6 +183,25 @@ describe('readGitInfo', () => {
     expect(info.worktrees).toEqual([
       { branch: 'feat/elsewhere', path: realpathSync(other) },
     ]);
+  });
+
+  it('names the checkout a LINKED worktree was cut from, and nothing for the checkout itself', async () => {
+    // A task's agent works in a worktree named by the task's id, so the
+    // folder's own name says nothing about the repository — REPORTED as a chat
+    // header reading `794addc7-273d-4924-8…`, which looked like the wrong
+    // directory. This is what lets the header name the repository instead.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+    mkdirSync(join(other, 'apps'), { recursive: true });
+
+    expect((await readGitInfo(other)).worktreeOf).toBe(realpathSync(dir));
+    // From a subdirectory too: the comparison is against the worktree ROOT.
+    expect((await readGitInfo(join(other, 'apps'))).worktreeOf).toBe(
+      realpathSync(dir),
+    );
+    expect((await readGitInfo(dir)).worktreeOf).toBeNull();
   });
 });
 

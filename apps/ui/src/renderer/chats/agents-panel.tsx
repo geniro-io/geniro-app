@@ -34,6 +34,13 @@ import {
   formatTokens,
   formatUsd,
 } from './agent-activity';
+import {
+  type AgentInstance,
+  agentInstances,
+  hasInstanceContent,
+  type InstanceTaskList,
+  isInstanceLive,
+} from './agent-instances';
 import type { RunArtifact } from './artifact-payload';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
@@ -308,6 +315,9 @@ function SearchChatButton({
  * noticing.
  */
 function ThreadRow({
+  as = 'li',
+  leading = null,
+  hideTerminal = false,
   agent,
   thread,
   terminal,
@@ -315,6 +325,20 @@ function ThreadRow({
   onOpenSubagent,
   onResolveHandoff,
 }: {
+  /**
+   * `div` when the row is the HEADING of an instance block rather than an item
+   * of a list — the same row, so an instance cannot come to lose the terminal
+   * control or the context ring a list row carries.
+   */
+  as?: 'li' | 'div';
+  /** Drawn before the status glyph — an instance block's own disclosure. */
+  leading?: React.ReactNode;
+  /**
+   * Withhold the terminal control. The node's OWN conversation carries it in
+   * the card header already, and a second copy of it on the same card would be
+   * two buttons for one handoff.
+   */
+  hideTerminal?: boolean;
   agent: AgentDisplay;
   thread: AgentThread;
   /**
@@ -342,6 +366,7 @@ function ThreadRow({
   // absent — the row still carries the explanation, where before it carried
   // nothing.
   const canOpen =
+    !hideTerminal &&
     terminal !== null &&
     thread.kind !== 'subagent' &&
     (thread.kind === 'main' || thread.sessionId !== null);
@@ -349,8 +374,9 @@ function ThreadRow({
   // a panel. Absent the callback the row is inert rather than falsely clickable.
   const openSubagent =
     thread.kind === 'subagent' && onOpenSubagent ? onOpenSubagent : null;
-  return (
-    <li className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs">
+  const cells = (
+    <>
+      {leading}
       <RunStatusIcon status={thread.status} />
       {openSubagent ? (
         <button
@@ -396,6 +422,350 @@ function ThreadRow({
           onOpen={onOpenThread}
           onResolve={onResolveHandoff}
         />
+      ) : null}
+    </>
+  );
+  const rowClass = 'flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs';
+  return as === 'div' ? (
+    <div className={rowClass}>{cells}</div>
+  ) : (
+    <li className={rowClass}>{cells}</li>
+  );
+}
+
+/**
+ * One conversation's delegates: the live ones as rows, the finished ones
+ * COUNTED behind a fold that is shut by default.
+ *
+ * Extracted because it is now drawn in two places — directly under an agent
+ * that holds one conversation, and inside each INSTANCE block of an agent that
+ * has been called — and two copies of this list is how one of them comes to
+ * lose the fold, which is the only thing standing between a fan-out of forty
+ * finished analysts and the one live thread the reader came to watch.
+ */
+function SubagentRows({
+  agent,
+  subagents,
+  terminal,
+  settledOpen,
+  onToggleSettled,
+  onOpenThread,
+  onOpenSubagent,
+  onResolveHandoff,
+}: {
+  agent: AgentDisplay;
+  subagents: readonly AgentThread[];
+  terminal: { reason: string | null } | null;
+  settledOpen: boolean;
+  onToggleSettled: () => void;
+  onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  onOpenSubagent?: (subagentId: string) => void;
+  onResolveHandoff?: (
+    agent: AgentDisplay,
+    thread: AgentThread,
+  ) => Promise<HandoffTargetDto>;
+}): React.JSX.Element {
+  const live = subagents.filter((thread) => thread.status === 'running');
+  const settled = subagents.filter((thread) => thread.status !== 'running');
+  return (
+    <ul className="m-0 flex list-none flex-col gap-0.5">
+      {live.map((thread) => (
+        <ThreadRow
+          key={thread.id}
+          agent={agent}
+          thread={thread}
+          terminal={terminal}
+          onOpenThread={onOpenThread}
+          onOpenSubagent={onOpenSubagent}
+          onResolveHandoff={onResolveHandoff}
+        />
+      ))}
+      {settled.length > 0 ? (
+        <li className="flex flex-col">
+          <button
+            type="button"
+            aria-expanded={settledOpen}
+            onClick={onToggleSettled}
+            // `font-normal` for the same reason the row label carries it:
+            // global.css's base `button` rule would otherwise weight this
+            // heavier than the threads it is counting.
+            className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                'size-3 shrink-0 transition-transform',
+                settledOpen && 'rotate-90',
+              )}
+            />
+            {/* Counted, not listed: the number is the only thing a reader
+                wants from work that is over, and it is what says the rows
+                above are the LIVE ones rather than all there ever were. */}
+            <span>
+              {settled.length} finished sub-agent
+              {settled.length === 1 ? '' : 's'}
+            </span>
+          </button>
+          {settledOpen ? (
+            <ul className="m-0 flex list-none flex-col gap-0.5 pl-4">
+              {settled.map((thread) => (
+                <ThreadRow
+                  key={thread.id}
+                  agent={agent}
+                  thread={thread}
+                  terminal={terminal}
+                  onOpenThread={onOpenThread}
+                  onOpenSubagent={onOpenSubagent}
+                  onResolveHandoff={onResolveHandoff}
+                />
+              ))}
+            </ul>
+          ) : null}
+        </li>
+      ) : null}
+    </ul>
+  );
+}
+
+/**
+ * One conversation's RUNNING commands — shared by the flat card and every
+ * instance block, for {@link SubagentRows}' reason.
+ *
+ * NO caption over these rows, unlike the task band. It read `1 shell running`,
+ * which on the commonest case — one command — was a whole line counting the
+ * single line under it, and was REPORTED as such ("not in one line"). A task
+ * row is prose and needs the word `Tasks` over it to be placed; a shell row
+ * leads with the terminal glyph and places itself.
+ */
+function ShellBand({
+  shells,
+  onOpenShell,
+  onKillShell,
+  className,
+}: {
+  shells: readonly ShellRun[];
+  onOpenShell?: (shell: ShellRun) => void;
+  onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  className?: string;
+}): React.JSX.Element {
+  return (
+    <div
+      data-slot="agent-shell-list"
+      className={cn('flex flex-col gap-1', className)}>
+      <ShellRows shells={shells} onOpen={onOpenShell} onKill={onKillShell} />
+    </div>
+  );
+}
+
+/**
+ * One conversation's own checklist, under a caption naming its progress —
+ * shared by the flat card and every instance block.
+ *
+ * BOUNDED (`TaskScrollRows`) here and nowhere else: this column holds every
+ * agent of the run one under another, so a thirteen-task list does not overflow
+ * anything — it makes its own card that tall and pushes the next agent a screen
+ * down ("also we need scroll for tasks list").
+ */
+function TaskBand({
+  tasks,
+  live,
+  className,
+}: {
+  tasks: readonly AgentTaskRow[];
+  /**
+   * Whether this CONVERSATION is still working through the list. A settled
+   * one's unfinished task is one nothing is advancing, and a spinner there
+   * claims work that stopped.
+   */
+  live: boolean;
+  className?: string;
+}): React.JSX.Element {
+  const progress = taskProgress(tasks);
+  return (
+    <div
+      data-slot="agent-task-list"
+      className={cn('flex flex-col gap-1', className)}>
+      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <TaskIcon />
+        <span>Tasks</span>
+        <TaskCount done={progress.done} total={progress.total} />
+        {progress.current !== null && live ? (
+          <span className="min-w-0 flex-1 truncate">
+            ·{' '}
+            {progress.current.activeForm ??
+              progress.current.title ??
+              `Task ${progress.current.id}`}
+          </span>
+        ) : null}
+      </p>
+      <TaskScrollRows tasks={tasks} live={live} className="pl-0.5" />
+    </div>
+  );
+}
+
+/** The fold-state key of one conversation of one agent. */
+function instanceKey(agentId: string, threadId: string): string {
+  return `${agentId} ${threadId}`;
+}
+
+/**
+ * Where one instance has got to and what it has spent — one muted line under
+ * its heading, indented to its label.
+ *
+ * The heading names what the instance was ASKED (the call's brief), which does
+ * not change while it works; this is what moves. Drawn only when something
+ * answers it, on the rule every figure in this panel follows.
+ */
+function InstanceSummary({
+  thread,
+}: {
+  thread: AgentThread;
+}): React.JSX.Element | null {
+  const tokens = measured(thread.spentTokens);
+  const usd = measured(thread.spentUsd);
+  const spend = [
+    tokens === null ? null : `${formatTokens(tokens)} tokens`,
+    usd === null ? null : formatUsd(usd),
+  ].filter((part): part is string => part !== null);
+  const latest = thread.latest ?? null;
+  if (latest === null && spend.length === 0) {
+    return null;
+  }
+  return (
+    <p
+      data-slot="agent-instance-latest"
+      className="m-0 flex items-baseline gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate" title={latest ?? undefined}>
+        {latest}
+      </span>
+      {spend.length > 0 ? (
+        <span className="shrink-0 tabular-nums">{spend.join(' · ')}</span>
+      ) : null}
+    </p>
+  );
+}
+
+/**
+ * ONE instance of an agent — one conversation it holds — as a block: its
+ * heading (status, the brief it was given, its own context ring and terminal),
+ * where it has got to, and then everything that happened INSIDE it: its
+ * delegates, its running commands, its checklist.
+ *
+ * ASKED FOR as "показывать разные инстансы инженера … а уже потом внутри каждого
+ * инстанса показывать его события, терминалы и всё с ним связанное": a Manager
+ * that briefs its Engineer three times has three Engineers at work, and the
+ * card used to pool their sub-agents, commands and plans into one list each,
+ * with nothing saying which conversation any row belonged to.
+ *
+ * Open while the instance is still producing anything, shut once it is over —
+ * a finished call's plan and delegates are history, and a card of eleven
+ * calls buried its two live ones under the other nine. The heading stays
+ * either way, with its terminal control, because a settled call is exactly the
+ * one whose conversation can be opened. The reader's own press outranks that
+ * default, and is kept by the panel rather than here.
+ */
+function InstanceBlock({
+  agent,
+  instance,
+  terminal,
+  open,
+  onToggle,
+  settledOpen,
+  onToggleSettled,
+  onOpenThread,
+  onOpenSubagent,
+  onResolveHandoff,
+  onOpenShell,
+  onKillShell,
+}: {
+  agent: AgentDisplay;
+  instance: AgentInstance;
+  terminal: { reason: string | null } | null;
+  open: boolean;
+  onToggle: () => void;
+  settledOpen: boolean;
+  onToggleSettled: () => void;
+  onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  onOpenSubagent?: (subagentId: string) => void;
+  onResolveHandoff?: (
+    agent: AgentDisplay,
+    thread: AgentThread,
+  ) => Promise<HandoffTargetDto>;
+  onOpenShell?: (shell: ShellRun) => void;
+  onKillShell?: (shell: ShellRun) => void | Promise<void>;
+}): React.JSX.Element {
+  const { thread } = instance;
+  const content = hasInstanceContent(instance);
+  return (
+    <li
+      data-slot="agent-instance"
+      data-instance-id={thread.id}
+      className="flex flex-col rounded-md border border-border bg-muted/40">
+      <ThreadRow
+        as="div"
+        leading={
+          content ? (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-label={`${open ? 'Hide' : 'Show'} what ${thread.label} holds`}
+              title={open ? 'Hide its details' : 'Show its details'}
+              onClick={onToggle}
+              className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
+              <ChevronRight
+                aria-hidden="true"
+                className={cn(
+                  'size-3 transition-transform',
+                  open && 'rotate-90',
+                )}
+              />
+            </button>
+          ) : (
+            // Holds the disclosure's width, so every heading's glyph and label
+            // start at the same x whether or not it has anything to open.
+            <span aria-hidden="true" className="size-4 shrink-0" />
+          )
+        }
+        // The node's own conversation carries its terminal in the card header.
+        hideTerminal={thread.kind === 'main'}
+        agent={agent}
+        thread={thread}
+        terminal={terminal}
+        onOpenThread={onOpenThread}
+        onResolveHandoff={onResolveHandoff}
+      />
+      <InstanceSummary thread={thread} />
+      {open && content ? (
+        <div
+          data-slot="agent-instance-body"
+          className="flex flex-col gap-1.5 border-t border-border px-1.5 py-1.5">
+          {instance.subagents.length > 0 ? (
+            <SubagentRows
+              agent={agent}
+              subagents={instance.subagents}
+              terminal={terminal}
+              settledOpen={settledOpen}
+              onToggleSettled={onToggleSettled}
+              onOpenThread={onOpenThread}
+              onOpenSubagent={onOpenSubagent}
+              onResolveHandoff={onResolveHandoff}
+            />
+          ) : null}
+          {instance.shells.length > 0 ? (
+            <ShellBand
+              shells={instance.shells}
+              onOpenShell={onOpenShell}
+              onKillShell={onKillShell}
+              className="px-1"
+            />
+          ) : null}
+          {instance.tasks.length > 0 ? (
+            <TaskBand
+              tasks={instance.tasks}
+              live={thread.status === 'running'}
+              className="px-1"
+            />
+          ) : null}
+        </div>
       ) : null}
     </li>
   );
@@ -842,8 +1212,12 @@ export function AgentsPanel({
    * the delegate rows below it: per-agent state a reader opens this panel to
    * read. An agent with no list gets no section, and a DELEGATE's list is not
    * here — it belongs to its own block, whose header carries its count.
+   *
+   * A LIST per agent, one entry per CONVERSATION it keeps a checklist in: a
+   * node called several times runs one conversation per call, each numbering
+   * its tasks from 1, and each list is drawn inside its own instance block.
    */
-  tasksByAgent?: ReadonlyMap<string, readonly AgentTaskRow[]>;
+  tasksByAgent?: ReadonlyMap<string, readonly InstanceTaskList[]>;
   /**
    * The shells each agent has RUNNING right now, keyed by `AgentDisplay.id` —
    * the commands its CLI has started and not yet seen come back.
@@ -1002,6 +1376,16 @@ export function AgentsPanel({
       }
       return next;
     });
+  };
+  // The reader's own press on an instance block, keyed per (agent, instance).
+  // An override rather than the whole state: absent a press a block follows
+  // its instance — open while it works, shut once it is over — so a call that
+  // finishes folds itself away without anybody having to.
+  const [instanceOpen, setInstanceOpen] = useState<
+    ReadonlyMap<string, boolean>
+  >(new Map());
+  const toggleInstance = (key: string, wasOpen: boolean): void => {
+    setInstanceOpen((prev) => new Map(prev).set(key, !wasOpen));
   };
   if (collapsed) {
     // The rail is CONTROLS now, not a label. It used to carry the word `Agents`
@@ -1188,47 +1572,54 @@ export function AgentsPanel({
                 agent.threads.find((thread) => thread.kind === 'main') ?? null;
               const mainTerminal =
                 mainThread !== null && terminal !== null ? mainThread : null;
-              // Delegates split by whether they are still WORKING. Only the live
-              // ones belong in the list: a run that spawns twenty read-only
-              // analysts leaves twenty rows behind it, and the one thread the
-              // reader opened the panel to watch was somewhere in the middle of
-              // them.
-              const subagents = agent.threads.filter(
-                (thread) => thread.kind === 'subagent',
+              // Everything this agent is doing, split by the CONVERSATION it
+              // belongs to (`agent-instances.ts`). A node that has been CALLED
+              // holds one conversation per call, and each is drawn below as its
+              // own block, with its delegates, commands and checklist inside it —
+              // they used to be pooled under the card, "всё в перемешку". An agent
+              // holding only its own conversation keeps the flat shape it always
+              // had: a block around the one conversation the card already names
+              // would be pure nesting.
+              const instances = agentInstances(
+                agent,
+                shellsByAgent?.get(agent.id) ?? [],
+                tasksByAgent?.get(agent.id) ?? [],
               );
+              const split = instances.some(
+                (instance) => instance.thread.kind === 'call',
+              );
+              // The FLAT shape's content: the one conversation there is.
+              const own = split ? undefined : instances[0];
+              // Delegates split by whether they are still WORKING. Only the live
+              // ones are rows: a run that spawns twenty read-only analysts leaves
+              // twenty rows behind it, and the one thread the reader opened the
+              // panel to watch was somewhere in the middle of them.
+              const subagents = own?.subagents ?? [];
               const liveSubagents = subagents.filter(
                 (thread) => thread.status === 'running',
               );
-              const settledSubagents = subagents.filter(
-                (thread) => thread.status !== 'running',
-              );
-              // What the list HOLDS: the calls this agent made, and the delegates
-              // it is running. Not its own conversation (above), which is why an
-              // agent with neither gets no list and no control to open one — the
-              // 1:1 chat's whole shape, where a disclosure over an empty box is
-              // pure nesting.
-              const listedThreads = [
-                ...agent.threads.filter((thread) => thread.kind === 'call'),
-                ...liveSubagents,
-              ];
-              const hasList =
-                listedThreads.length > 0 || settledSubagents.length > 0;
-              // The caption's two figures, counted off the ROWS it captions —
-              // see the caption itself for why they are no longer the agent's.
-              const listedTotal =
-                listedThreads.length + settledSubagents.length;
-              const listedActive = listedThreads.filter(
-                (thread) => thread.status === 'running',
-              ).length;
-              const shells = shellsByAgent?.get(agent.id) ?? [];
-              const tasks = tasksByAgent?.get(agent.id) ?? [];
-              const taskState = taskProgress(tasks);
+              const hasList = subagents.length > 0;
+              const shells = own?.shells ?? [];
+              const tasks = own?.tasks ?? [];
               // Whether the list is still being WORKED, which is what decides
               // whether its in-progress row spins. The agent's own status answers
               // it: a settled agent's unfinished task is one nothing is advancing,
               // and a spinner there claims work that stopped.
               const tasksLive = agent.status === 'running';
               const settledOpen = showSettled.has(agent.id);
+              // The SPLIT shape's blocks: every call, and the node's own
+              // conversation only when something happened in it — its heading
+              // and terminal are the card's, so an empty block for it would be a
+              // heading repeated as a list item.
+              const shownInstances = split
+                ? instances.filter(
+                    (instance) =>
+                      instance.thread.kind === 'call' ||
+                      hasInstanceContent(instance),
+                  )
+                : [];
+              const activeInstances =
+                shownInstances.filter(isInstanceLive).length;
               return (
                 <li
                   key={agent.id}
@@ -1410,66 +1801,19 @@ export function AgentsPanel({
                         `threads`. A caption that disagrees with its own list is
                         read as a bug in the counting, which is what it is. */}
                       <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                        {listedActive} active · {listedTotal}{' '}
-                        {listedTotal === 1 ? 'thread' : 'threads'}
+                        {liveSubagents.length} active · {subagents.length}{' '}
+                        {subagents.length === 1 ? 'thread' : 'threads'}
                       </p>
-                      <ul className="m-0 flex list-none flex-col gap-0.5">
-                        {listedThreads.map((thread) => (
-                          <ThreadRow
-                            key={thread.id}
-                            agent={agent}
-                            thread={thread}
-                            terminal={terminal}
-                            onOpenThread={onOpenThread}
-                            onOpenSubagent={onOpenSubagent}
-                            onResolveHandoff={onResolveHandoff}
-                          />
-                        ))}
-                        {settledSubagents.length > 0 ? (
-                          <li className="flex flex-col">
-                            <button
-                              type="button"
-                              aria-expanded={settledOpen}
-                              onClick={() => toggleSettled(agent.id)}
-                              // `font-normal` for the same reason the row label
-                              // carries it: global.css's base `button` rule would
-                              // otherwise weight this heavier than the threads it
-                              // is counting.
-                              className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-xs font-normal text-muted-foreground transition-colors hover:text-foreground">
-                              <ChevronRight
-                                aria-hidden="true"
-                                className={cn(
-                                  'size-3 shrink-0 transition-transform',
-                                  settledOpen && 'rotate-90',
-                                )}
-                              />
-                              {/* Counted, not listed: the number is the only thing
-                                a reader wants from work that is over, and it is
-                                what says the rows above are the LIVE ones rather
-                                than all there ever were. */}
-                              <span>
-                                {settledSubagents.length} finished sub-agent
-                                {settledSubagents.length === 1 ? '' : 's'}
-                              </span>
-                            </button>
-                            {settledOpen ? (
-                              <ul className="m-0 flex list-none flex-col gap-0.5 pl-4">
-                                {settledSubagents.map((thread) => (
-                                  <ThreadRow
-                                    key={thread.id}
-                                    agent={agent}
-                                    thread={thread}
-                                    terminal={terminal}
-                                    onOpenThread={onOpenThread}
-                                    onOpenSubagent={onOpenSubagent}
-                                    onResolveHandoff={onResolveHandoff}
-                                  />
-                                ))}
-                              </ul>
-                            ) : null}
-                          </li>
-                        ) : null}
-                      </ul>
+                      <SubagentRows
+                        agent={agent}
+                        subagents={subagents}
+                        terminal={terminal}
+                        settledOpen={settledOpen}
+                        onToggleSettled={() => toggleSettled(agent.id)}
+                        onOpenThread={onOpenThread}
+                        onOpenSubagent={onOpenSubagent}
+                        onResolveHandoff={onResolveHandoff}
+                      />
                     </div>
                   ) : null}
                   {shells.length > 0 ? (
@@ -1478,58 +1822,59 @@ export function AgentsPanel({
                        measured in seconds and is the thing a reader glances at
                        the panel to check, while a task list moves once a
                        minute and a delegate list once a turn. */
-                    <div
-                      data-slot="agent-shell-list"
-                      className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
-                      {/* NO caption over these rows, unlike the task band
-                          below. It read `1 shell running`, which on the
-                          commonest case — one command — was a whole line
-                          counting the single line under it, and was REPORTED
-                          as such ("not in one line"). A task row is prose and
-                          needs the word `Tasks` over it to be placed; a shell
-                          row leads with the terminal glyph and places
-                          itself. */}
-                      <ShellRows
-                        shells={shells}
-                        onOpen={onOpenShell}
-                        onKill={onKillShell}
-                      />
-                    </div>
+                    <ShellBand
+                      shells={shells}
+                      onOpenShell={onOpenShell}
+                      onKillShell={onKillShell}
+                      className="border-t border-border px-2.5 py-1.5"
+                    />
                   ) : null}
                   {tasks.length > 0 ? (
                     /* BELOW the delegates, which is the reported order:
                      "IT should be first, and then todo". Both are open — the
                      panel is read, not operated — and neither is behind a
                      control any more. */
+                    <TaskBand
+                      tasks={tasks}
+                      live={tasksLive}
+                      className="border-t border-border px-2.5 py-1.5"
+                    />
+                  ) : null}
+                  {shownInstances.length > 0 ? (
                     <div
-                      data-slot="agent-task-list"
-                      className="flex flex-col gap-1 border-t border-border px-2.5 py-1.5">
-                      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <TaskIcon />
-                        <span>Tasks</span>
-                        <TaskCount
-                          done={taskState.done}
-                          total={taskState.total}
-                        />
-                        {taskState.current !== null && tasksLive ? (
-                          <span className="min-w-0 flex-1 truncate">
-                            ·{' '}
-                            {taskState.current.activeForm ??
-                              taskState.current.title ??
-                              `Task ${taskState.current.id}`}
-                          </span>
-                        ) : null}
+                      data-slot="agent-instances"
+                      className="flex flex-col border-t border-border px-2 py-1.5">
+                      {/* Counted off the BLOCKS below it, on the rule the flat
+                          caption follows: a caption that disagrees with its own
+                          list is read as a bug in the counting. */}
+                      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
+                        {activeInstances} active · {shownInstances.length}{' '}
+                        {shownInstances.length === 1 ? 'instance' : 'instances'}
                       </p>
-                      {/* BOUNDED here and nowhere else: this column holds
-                        every agent of the run one under another, so a
-                        thirteen-task list does not overflow anything — it makes
-                        its own card that tall and pushes the next agent a
-                        screen down ("also we need scroll for tasks list"). */}
-                      <TaskScrollRows
-                        tasks={tasks}
-                        live={tasksLive}
-                        className="pl-0.5"
-                      />
+                      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                        {shownInstances.map((instance) => {
+                          const key = instanceKey(agent.id, instance.thread.id);
+                          const open =
+                            instanceOpen.get(key) ?? isInstanceLive(instance);
+                          return (
+                            <InstanceBlock
+                              key={instance.thread.id}
+                              agent={agent}
+                              instance={instance}
+                              terminal={terminal}
+                              open={open}
+                              onToggle={() => toggleInstance(key, open)}
+                              settledOpen={showSettled.has(key)}
+                              onToggleSettled={() => toggleSettled(key)}
+                              onOpenThread={onOpenThread}
+                              onOpenSubagent={onOpenSubagent}
+                              onResolveHandoff={onResolveHandoff}
+                              onOpenShell={onOpenShell}
+                              onKillShell={onKillShell}
+                            />
+                          );
+                        })}
+                      </ul>
                     </div>
                   ) : null}
                 </li>

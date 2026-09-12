@@ -12,7 +12,19 @@ import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import type { TaskStatus, TaskWire } from '../tasks.types';
+import { reportImagePaths } from '../utils/report-images';
+import { TaskAttachmentService } from './task-attachment.service';
+import { TaskFilesService } from './task-files.service';
 import { TasksService } from './tasks.service';
+
+/** A row's stored payload, or null for text that does not parse. */
+function parsePayload(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Where a card lands when the run working it settles.
@@ -57,10 +69,22 @@ export class TaskSettleService implements OnModuleInit {
     private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
     private readonly workflows: WorkflowStoreService,
+    private readonly attachments: TaskAttachmentService,
+    private readonly files: TaskFilesService,
   ) {}
 
   onModuleInit(): void {
     this.bus.allStatuses().subscribe((event) => {
+      if (event.status === 'running') {
+        void this.reviveFailedCard(event.runId).catch((error: unknown) => {
+          this.logger.warn(
+            `could not put the task for run ${event.runId} back to work: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+        return;
+      }
       // An announce carries a null status to say only what the run is DOING;
       // it asserts nothing about settling.
       if (event.status == null || !isTerminalRunStatus(event.status)) {
@@ -88,6 +112,39 @@ export class TaskSettleService implements OnModuleInit {
         );
       });
     });
+  }
+
+  /**
+   * Put a FAILED card back to work when the run it failed on works again.
+   *
+   * A card's run is an ordinary chat, so a turn that errored is routinely
+   * followed by the user carrying the conversation on IN THE CHAT — which goes
+   * straight to `ChatService` and never through `TaskRunsService`, the path
+   * that moves a card when the panel's Follow up is pressed. Without this the
+   * card sat in `failed` for good under a conversation that went on to finish
+   * cleanly, because `settle` only ever moves a card still `in_progress`.
+   * REPORTED on the card that asked for merged pull requests to end in `done`,
+   * which its own recovered run could then never reach.
+   *
+   * So the run announcing `running` again — a new turn, or the CLI carrying on
+   * by itself — makes the card `in_progress`, and the ordinary settle takes it
+   * from there. ONLY `failed` is lifted: a card in review is one whose
+   * conversation the user continues deliberately, and dragging it back to
+   * `in_progress` is exactly what `settle`'s own once-only rule refuses.
+   */
+  private async reviveFailedCard(runId: string): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run?.taskId) {
+      return;
+    }
+    const task = await this.taskDao.getById(run.taskId, em);
+    // A card that has since been started on a DIFFERENT run failed on that
+    // one, not on this.
+    if (!task || task.runId !== runId || task.status !== 'failed') {
+      return;
+    }
+    await this.tasks.moveStatus(task.id, { from: 'failed', to: 'in_progress' });
   }
 
   /**
@@ -147,6 +204,14 @@ export class TaskSettleService implements OnModuleInit {
     if (!task || task.runId !== runId) {
       return;
     }
+    // A card the user called Done while its agent was still working becomes
+    // FINISHED now — the run settling is the second of `isWorkFinished`'s two
+    // conditions, and the first was met at the drag, which could not release
+    // the worktree then. The card itself stays where the user put it.
+    if (task.status === 'done') {
+      this.tasks.announceWorkFinished(task);
+      return;
+    }
     // Settle a card ONCE. The run is an ordinary chat, so a follow-up message
     // after review settles it again — and without this, a card the user had
     // moved to `done` would be dragged back to `in_review` by a conversation
@@ -160,15 +225,13 @@ export class TaskSettleService implements OnModuleInit {
     if (reportItemId !== null) {
       await this.tasks.update(task.id, { reportItemId });
     }
+    // Before the card moves, so it lands in review already carrying them.
+    await this.attachReportImages(run, task.id, reportItemId, em);
     await this.recordOutcome(task.projectId, status, em);
-    // The reason rides the broadcast because the CLIENT cannot derive it: a
-    // card's column is written optimistically the moment it is dragged, so
-    // "settled" is a claim only this service is in a position to make.
-    await this.tasks.moveStatus(
-      task.id,
-      { from: task.status, to },
-      'run-settled',
-    );
+    // No reason rides this move. A card in review is NOT finished: the user
+    // reads the work in its worktree and routinely continues the conversation,
+    // so the directory has to outlive the settle — see `isWorkFinished`.
+    await this.tasks.moveStatus(task.id, { from: task.status, to });
   }
 
   /**
@@ -290,6 +353,61 @@ export class TaskSettleService implements OnModuleInit {
     // this run just as an absent one would, so the filtered miss falls back
     // to the unfiltered read rather than reporting no result at all.
     return this.findReportAmong(run.id, undefined, em);
+  }
+
+  /**
+   * Copy the screenshots the agent's report references onto the card's files.
+   *
+   * The report instructions ask for them as markdown images with absolute paths
+   * (`task-prompt.ts`'s `REPORT_SCREENSHOTS`), in the report OR the closing
+   * message — the report may be a `report_findings` card, whose text lives in
+   * its findings, while the pictures routinely ride the words after it. Both
+   * rows are read, and `reportImagePaths` keeps each image once.
+   *
+   * Every image stands alone: one the agent has since deleted, or one past the
+   * card's file cap, is logged and skipped. The settle is what moves the card,
+   * and a missing screenshot must not leave it standing in `in_progress`.
+   */
+  private async attachReportImages(
+    run: Pick<Run, 'id' | 'workflowId'>,
+    taskId: string,
+    reportItemId: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const nodeIds = await this.terminalNodesOf(run.workflowId);
+    const closing =
+      (await this.itemDao.latestOfKind(
+        run.id,
+        'message',
+        'assistant',
+        em,
+        nodeIds,
+      )) ??
+      (nodeIds === undefined
+        ? null
+        : await this.itemDao.latestOfKind(run.id, 'message', 'assistant', em));
+    const payloads: unknown[] = [];
+    for (const id of new Set([reportItemId, closing?.id ?? null])) {
+      if (id === null) {
+        continue;
+      }
+      const item = await this.itemDao.getById(id, em);
+      if (item) {
+        payloads.push(parsePayload(item.payload));
+      }
+    }
+    for (const source of reportImagePaths(payloads)) {
+      try {
+        const copy = await this.attachments.adopt(taskId, source);
+        await this.files.attach(taskId, copy);
+      } catch (error) {
+        this.logger.warn(
+          `could not attach ${source} to task ${taskId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   private async findReportAmong(

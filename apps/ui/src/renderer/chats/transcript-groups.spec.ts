@@ -3344,6 +3344,7 @@ describe('groupTranscript task lists', () => {
     const durable = [
       {
         nodeId: 'orch',
+        callId: null,
         tasks: [
           {
             id: '1',
@@ -3438,6 +3439,36 @@ describe('groupTranscript task lists', () => {
     it('hands the fold back untouched when the daemon holds no list', () => {
       const entries = windowed();
       expect(withDurableTaskLists(entries, [])).toBe(entries);
+    });
+
+    it('matches the CALL the card was announced in, not merely the node', () => {
+      // A node called twice keeps one list per call, each numbering from 1 —
+      // titled by node alone, the second call's card took the first call's
+      // task `1`.
+      const row = (title: string) => ({
+        id: '1',
+        title,
+        status: 'pending' as const,
+        activeForm: null,
+      });
+      const entries = groupTranscript([
+        item('task_list', {
+          mode: 'patch',
+          toolCallId: null,
+          callId: 'call-2',
+          tasks: [
+            { id: '1', title: null, status: 'pending', activeForm: null },
+          ],
+        }),
+      ]);
+      const [card] = cards(
+        withDurableTaskLists(entries, [
+          { nodeId: 'orch', callId: 'call-1', tasks: [row('First brief')] },
+          { nodeId: 'orch', callId: 'call-2', tasks: [row('Second brief')] },
+        ]),
+      );
+      expect(card?.callId).toBe('call-2');
+      expect(card?.tasks[0]?.title).toBe('Second brief');
     });
   });
 });

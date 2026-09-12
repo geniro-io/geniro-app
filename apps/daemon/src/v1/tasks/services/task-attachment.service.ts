@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { copyFile, mkdir, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, isAbsolute, join } from 'node:path';
 
 import { Injectable, Optional } from '@nestjs/common';
 import { BadRequestException } from '@packages/common';
@@ -14,6 +14,9 @@ import {
   removeTaskAttachments,
   taskAttachmentsRoot,
 } from '../utils/task-attachments';
+
+/** The image files {@link TaskAttachmentService.adopt} will copy onto a card. */
+const ADOPTABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp']);
 
 /** The extension each media type is written under — never the caller's. */
 const EXTENSIONS: Record<AttachmentMediaType, string> = {
@@ -93,6 +96,66 @@ export class TaskAttachmentService {
     const path = join(dir, file);
     await writeFile(path, bytes);
     return { path, name: markdownName(name) };
+  }
+
+  /**
+   * COPY one image an agent referenced in its report onto the card, and return
+   * the copy's path.
+   *
+   * A copy, where every other file on a card is a reference, and the reason is
+   * who put the file there. A user attaches the archive they are working ON,
+   * so a copy would go stale (`TaskFileSchema` argues that trade); an agent's
+   * screenshot is written into its own scratch directory, which is routinely
+   * under a temp root that is reaped — so a reference would be a dead link the
+   * next week, on exactly the card whose report pointed at it. The copy lives
+   * under this card's own directory, which a card delete already sweeps.
+   *
+   * Under a fresh uuid directory so the file keeps its OWN name — it is what the
+   * card's file list shows — without two screenshots both called `shot.png`
+   * colliding. The name is the source's basename, which carries no separator.
+   */
+  async adopt(taskId: string, source: string): Promise<string> {
+    if (!isAbsolute(source)) {
+      throw new BadRequestException(
+        'ATTACHMENT_PATH_INVALID',
+        `${source} is not an absolute path`,
+      );
+    }
+    const extension = extname(source).slice(1).toLowerCase();
+    if (!ADOPTABLE_EXTENSIONS.has(extension)) {
+      throw new BadRequestException(
+        'ATTACHMENT_NOT_AN_IMAGE',
+        `${source} is not an image`,
+      );
+    }
+    let found;
+    try {
+      found = await stat(source);
+    } catch {
+      throw new BadRequestException(
+        'ATTACHMENT_NOT_FOUND',
+        `no file at ${source}`,
+      );
+    }
+    if (!found.isFile()) {
+      throw new BadRequestException(
+        'ATTACHMENT_NOT_A_FILE',
+        `${source} is not a file`,
+      );
+    }
+    if (found.size > MAX_ATTACHMENT_BYTES) {
+      throw new BadRequestException(
+        'ATTACHMENT_TOO_LARGE',
+        `${source} exceeds the ${Math.floor(
+          MAX_ATTACHMENT_BYTES / 1024 / 1024,
+        )}MB limit`,
+      );
+    }
+    const dir = join(this.root, taskId, randomUUID());
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, basename(source));
+    await copyFile(source, path);
+    return path;
   }
 
   /**

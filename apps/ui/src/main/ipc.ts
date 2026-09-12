@@ -29,6 +29,7 @@ import {
   onboardingInputSchema,
   openTerminalAtSchema,
   openTerminalSchema,
+  pickFolderStartSchema,
   pullRequestRefsSchema,
   revealPathSchema,
   settingsPatchSchema,
@@ -82,9 +83,15 @@ export function registerIpc(
 
   ipcMain.handle(IPC.getDaemonHandle, () => supervisor.getHandle());
 
-  ipcMain.handle(IPC.pickProjectFolder, async () => {
+  ipcMain.handle(IPC.pickProjectFolder, async (_event, start: unknown) => {
+    const parsed = pickFolderStartSchema.safeParse(start);
+    const defaultPath = parsed.success ? parsed.data : undefined;
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
+      // A DIRECTORY here opens the dialog inside it, which is the point: the
+      // folder the field holds is the one a reader is deciding whether to
+      // replace, not the last place any dialog happened to be left.
+      ...(defaultPath === undefined ? {} : { defaultPath }),
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
@@ -218,7 +225,13 @@ export function registerIpc(
     const parsed = taskWorktreeSchema.parse(input);
     try {
       const made = await prepareWorktree(parsed);
-      return { ok: true, path: made.path, branch: made.branch, error: null };
+      return {
+        ok: true,
+        path: made.path,
+        branch: made.branch,
+        reused: made.reused,
+        error: null,
+      };
     } catch (error) {
       // Shaped rather than rethrown: an exception crossing IPC arrives as a
       // string with its structure gone, and the caller must be able to tell a
@@ -233,7 +246,13 @@ export function registerIpc(
             ? error.message
             : String(error)
           : stderr.split('\n')[0]!;
-      return { ok: false, path: null, branch: null, error: message };
+      return {
+        ok: false,
+        path: null,
+        branch: null,
+        reused: false,
+        error: message,
+      };
     }
   });
 

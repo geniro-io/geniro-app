@@ -839,6 +839,17 @@ export interface GitInfo {
    * reporting a dead end.
    */
   worktrees: BranchWorktree[];
+  /**
+   * The repository's MAIN checkout, when this folder is a linked worktree of it
+   * — null for the main checkout itself and for a plain folder.
+   *
+   * A task's agent works in a worktree geniro cuts under its own data directory
+   * and names by the task's id, so that folder's name says nothing about which
+   * repository it belongs to: REPORTED as a chat header reading
+   * `794addc7-273d-4924-8…`, which looked like the agent had been given the
+   * wrong directory. This is what lets the header name the repository.
+   */
+  worktreeOf: string | null;
 }
 
 /**
@@ -913,6 +924,13 @@ export interface GitChanges {
   /** More files changed than one read returns — the list is real but short. */
   truncated: boolean;
   unavailableReason: string | null;
+  /**
+   * The checkout no longer descends from the chat's starting commit — a branch
+   * switched, a pull request checked out — so `changes` is measured against
+   * HEAD (what is uncommitted now) rather than that commit, which would list
+   * every file the two branches disagree on.
+   */
+  movedOffStart: boolean;
 }
 
 /**
@@ -929,12 +947,19 @@ export interface TaskWorktreeResult {
   path: string | null;
   /** The branch it has checked out; null on failure. */
   branch: string | null;
+  /**
+   * Whether this was the task's OWN worktree, already standing and handed back
+   * as it was rather than made now. A caller whose start is then refused must
+   * leave a reused one alone: another run of this same task may be why the
+   * start was refused, and be working in it. False on failure.
+   */
+  reused: boolean;
   /** Why it failed, as git's own first line; null on success. */
   error: string | null;
 }
 
 /**
- * What became of a settled run's worktree.
+ * What became of a finished card's worktree.
  *
  * Two facts rather than one, because "kept" has two causes a caller may want
  * to tell apart: nothing could be committed (hooks refused it, or the machine
@@ -1166,8 +1191,15 @@ export interface GeniroApi {
    * daemon cannot reach.
    */
   onClearAgentCaches(listener: () => void): () => void;
-  /** Open the native folder picker; returns the chosen absolute path or null. */
-  pickProjectFolder(): Promise<string | null>;
+  /**
+   * Open the native folder picker; returns the chosen absolute path or null.
+   *
+   * `defaultPath` is where the dialog OPENS — pass the folder the field already
+   * holds. Without it macOS reopens wherever the last dialog was left, which
+   * put the task panel's picker in the PARENT of the project's folder, listing
+   * it among its siblings, and read as the task using the wrong directory.
+   */
+  pickProjectFolder(defaultPath?: string): Promise<string | null>;
   /** Open the native file picker for an agent binary; returns the path or null. */
   pickAgentBinary(): Promise<string | null>;
   /**

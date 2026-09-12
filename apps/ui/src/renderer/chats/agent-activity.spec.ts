@@ -478,6 +478,7 @@ describe('subagentThreadsByAgent', () => {
       id: 'task-1',
       createdAt: 'now',
       nodeId: null,
+      callId: null,
       kind: 'code-reviewer',
       label: 'Review the diff',
       prompt: null,

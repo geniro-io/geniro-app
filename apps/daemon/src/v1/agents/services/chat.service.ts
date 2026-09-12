@@ -2874,18 +2874,21 @@ export class ChatService implements OnModuleInit {
    * What the user pressed is Retry on an error row: the conversation is intact
    * and the work is not.
    *
-   * On a CLI that can reopen a conversation WITHOUT a prompt (an ACP
-   * `session/load` with the prompt branched away), this re-establishes the
-   * session and stops. The agent is asked nothing, so it answers nothing — the
-   * transcript row the turn writes is the only evidence the recovery happened.
+   * It RE-SENDS the message the interrupted turn was answering, on every CLI.
+   * That is a real second send and is written as one: the message is persisted
+   * again as the user's row, so the transcript shows what was asked twice
+   * rather than implying the agent replied to nothing. Until this path existed
+   * the button was drawn on every claude error row and could only ever refuse
+   * ("retry doesnt work") — and on cursor it only REOPENED the conversation,
+   * asking the agent nothing, so the chat sat idle under "Reopened this
+   * conversation … nothing was sent again" (REPORTED as "ретрай: когда я на
+   * него нажимаю, он не работает").
    *
-   * On a CLI that CANNOT — claude, whose prompt IS how a turn opens — the retry
-   * RE-SENDS the message the interrupted turn was answering. That is a real
-   * second send and is written as one: the message is persisted again as the
-   * user's row, so the transcript shows what was asked twice rather than
-   * implying the agent replied to nothing. Until this branch existed the button
-   * was drawn on every claude error row and could only ever refuse, which is
-   * what got reported.
+   * The reopen survives for the one case it is right for: a conversation with
+   * no message to send again, on a CLI that can reopen one WITHOUT a prompt (an
+   * ACP `session/load` with the prompt branched away). The agent is asked
+   * nothing there, and the transcript row the turn writes is the only evidence
+   * the recovery happened. A CLI that cannot is refused instead.
    *
    * A session id is required either way. Without one there is nothing to carry
    * on FROM: the resume-only turn would open a fresh session and settle at once
@@ -2940,23 +2943,30 @@ export class ChatService implements OnModuleInit {
         'this chat has no agent session to carry on from — send a message to start one',
       );
     }
-    // A per-CLI fact, not a branch on the agent's name. An adapter that cannot
-    // honour a resume-only turn would otherwise run this one as an ordinary
-    // turn and spend a real, billed request on the EMPTY prompt a retry
-    // composes, under a transcript row saying nothing was sent again.
-    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
-      .resumeOnlyUnavailableReason;
-    if (cannotReopen === null) {
+    // What a retry SENDS. Read BEFORE the close below, so a transcript this
+    // cannot answer for costs the user nothing: closing first would take the
+    // session down and then refuse, leaving the chat worse off than the failed
+    // turn did.
+    const resend = await this.messageToResend(runId, em);
+    if (resend !== null) {
       this.sessions.close(runId);
-      await this.sendMessage(runId, '', [], { resumeOnly: true });
+      await this.sendMessage(runId, resend.text, resend.images);
       return { retried: true };
     }
-    // The re-send path. Read BEFORE the close, so a transcript this cannot
-    // answer for costs the user nothing: closing first would take the session
-    // down and then refuse, leaving the chat worse off than the failed turn did.
-    const resend = await this.messageToResend(runId, em);
+    // Nothing to send again. A per-CLI fact decides the rest, not a branch on
+    // the agent's name: an adapter that cannot honour a resume-only turn would
+    // otherwise run this one as an ordinary turn and spend a real, billed
+    // request on the EMPTY prompt it composes.
+    const cannotReopen = this.adapterFor(run.agentKind).getConfig()
+      .resumeOnlyUnavailableReason;
+    if (cannotReopen !== null) {
+      throw new ConflictException(
+        'RUN_NOT_RESUMABLE',
+        'there is no message to send again — write your next one and the agent continues from where it left off',
+      );
+    }
     this.sessions.close(runId);
-    await this.sendMessage(runId, resend.text, resend.images);
+    await this.sendMessage(runId, '', [], { resumeOnly: true });
     return { retried: true };
   }
 
@@ -2972,20 +2982,20 @@ export class ChatService implements OnModuleInit {
    * An attachment whose file has since gone is DROPPED rather than failing the
    * retry: the words are most of the message, and refusing to carry on because
    * one image is missing helps nobody looking at a stuck thread.
+   *
+   * Null when the conversation holds no message to send again — the caller
+   * decides what a retry means then, since that is a per-CLI question.
    */
   private async messageToResend(
     runId: string,
     em: EntityManager,
-  ): Promise<{ text: string; images: SendMessageImage[] }> {
+  ): Promise<{ text: string; images: SendMessageImage[] } | null> {
     const row = await this.itemDao.latestUserMessage(runId, em);
     const payload = row === null ? null : asRecord(parsePayload(row.payload));
     const text = asString(payload?.['text']) ?? '';
     const stored = asArray(payload?.['images']);
     if (text.trim() === '' && stored.length === 0) {
-      throw new ConflictException(
-        'RUN_NOT_RESUMABLE',
-        'there is no message to send again — write your next one and the agent continues from where it left off',
-      );
+      return null;
     }
     const images: SendMessageImage[] = [];
     for (const entry of stored) {

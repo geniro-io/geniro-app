@@ -56,7 +56,10 @@ import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
-import { assertWorkflowRun, type WorkflowRun } from '../../agents/utils/run-kind';
+import {
+  assertWorkflowRun,
+  type WorkflowRun,
+} from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
@@ -2453,6 +2456,10 @@ export class GraphExecutorService {
                   callId,
                 });
               } finally {
+                // BEFORE this turn stops holding the run open: a result owed
+                // to a caller that has ended wakes it, and that wake has to be
+                // counted before the run can decide it is finished.
+                this.callBroker.noteCalleeSettling(runId, callId);
                 resolve(result);
               }
             });
@@ -2605,7 +2612,9 @@ export class GraphExecutorService {
       // A root the node cap has held back has no conversation to carry on yet,
       // and its own turn is about to start from the seed.
       if (
-        roots.some((root) => !settled.has(root.id) && !runningHandles.has(root.id))
+        roots.some(
+          (root) => !settled.has(root.id) && !runningHandles.has(root.id),
+        )
       ) {
         throw busy('the workflow is still starting');
       }
@@ -2742,6 +2751,37 @@ export class GraphExecutorService {
         },
         isCancelled: () => cancelRequested,
         isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+        wakeNode: (nodeId, prompt) => {
+          const node = nodesById.get(nodeId);
+          if (node?.kind !== 'agent' || cancelRequested || runFinished) {
+            return false;
+          }
+          // Counted as live from NOW rather than from when the turn begins:
+          // the turn starts on the write chain, and a finalizer queued ahead
+          // of it would otherwise see nothing live and close the run under
+          // the wake.
+          liveSubTurns += 1;
+          enqueue(async () => {
+            liveSubTurns -= 1;
+            if (cancelRequested || runFinished) {
+              // Cancelled meanwhile — every callee dies with the run, so there
+              // is nothing left for this turn to answer or collect.
+              await finishRunIfSettled();
+              return;
+            }
+            if (liveTurnsByNode.has(nodeId)) {
+              // A follow-up raced the wake and the node is working again:
+              // hand it the message inside that turn rather than opening a
+              // second one on the same conversation.
+              (
+                continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
+              )?.sendUserMessage({ text: prompt, images: [] });
+              return;
+            }
+            continueNode(node, prompt, []);
+          });
+          return true;
+        },
       });
       // Daemon-side self-check: a dead endpoint degrades SILENTLY child-side
       // (claude exits 0 with an unreachable server), so probe our own route

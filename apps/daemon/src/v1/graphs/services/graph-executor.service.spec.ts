@@ -2636,6 +2636,52 @@ describe('GraphExecutorService — agent calls', () => {
     expect(nodeDao.row(run.id, 'helper')?.status).toBe('completed');
   });
 
+  it('wakes a caller whose turn ended when its async call lands — the work is not dropped', async () => {
+    // REPORTED as "workflow stopped to work in the middle without any error":
+    // a Manager said "I'll report back" and ended its turn with an async call
+    // still out; the callee finished, nothing collected the result, and the
+    // run closed as completed. The caller now gets a turn to collect it.
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const started = await callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(started.status).toBe('ok');
+    await drain();
+    completeTurn(claude.starts[0]!, 'I will report back');
+    await drain();
+    // The caller has ended; its callee still works, so the run does too.
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+
+    completeTurn(claude.starts[1]!, 'the work, done');
+    await drain();
+
+    const woken = claude.starts
+      .slice(2)
+      .filter((turn) => turn.input.systemPrompt === 'You orchestrate.');
+    expect(woken).toHaveLength(1);
+    const told = JSON.stringify(woken[0]!.input);
+    expect(told).toContain('await_agent');
+    expect(told).toContain('call-1');
+    // The run waits for that turn rather than closing under it.
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    const collected = await callBroker.awaitAgent(run.id, 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected.status).toBe('ok');
+    completeTurn(woken[0]!, 'reported back');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
   it('run cancel fans to in-flight callee sub-turns', async () => {
     const { service, claude, callBroker, runDao } = setup();
     const run = await service.startRun({
@@ -3297,7 +3343,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
   });
 
-  it('drains a parked question when its caller settles: the callee is cancelled and the call fails as QUESTION_ORPHANED', async () => {
+  it('wakes a caller that settles with a parked question ONCE — only ending again unanswered cancels the callee as QUESTION_ORPHANED', async () => {
     const { service, claude, callBroker, itemDao, runDao } = setup();
     const run = await service.startRun({
       slug: 'qa-orphan',
@@ -3323,8 +3369,17 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
     expect((await sync).status).toBe('question');
 
-    // The caller ends without answering — nobody is left to answer_agent.
+    // The caller ends without answering. It used to have its callee killed
+    // under it here — the reported "workflow stopped in the middle without
+    // any error" — and is now WOKEN with the question instead.
     completeTurn(caller, 'done without answering');
+    await drain();
+    expect(callee.cancelled).toBe(false);
+    const woken = claude.starts[2]!;
+    expect(JSON.stringify(woken.input)).toContain('answer_agent');
+
+    // The woken turn ends the same way: only NOW is nobody left to answer.
+    completeTurn(woken, 'still not answering');
     await drain();
     expect(callee.cancelled).toBe(true);
     expect(

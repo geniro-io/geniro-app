@@ -14,6 +14,14 @@ import {
 import type { DaemonApis } from '../daemon-api';
 import { daemonErrorDetail } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import type { NewTaskAttachments } from './new-task-dialog';
+import {
+  referencesStagedImage,
+  resolveStagedImage,
+  stripStagedImages,
+} from './use-description-paste';
+
+const NOTHING_STAGED: NewTaskAttachments = { images: [], files: [] };
 
 /**
  * The board's columns, left to right.
@@ -54,7 +62,14 @@ export interface BoardApi {
   error: string | null;
   selectProject: (projectId: string) => void;
   createProject: (dto: CreateProjectDto) => Promise<ProjectDto | null>;
-  createTask: (dto: CreateTaskDto) => Promise<TaskDto | null>;
+  /**
+   * Create a card, then write what the New task dialog STAGED for it — the
+   * pictures pasted into its description and the files picked for it.
+   */
+  createTask: (
+    dto: CreateTaskDto,
+    staged?: NewTaskAttachments,
+  ) => Promise<TaskDto | null>;
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
   /** Bind files to a card by absolute path — the daemon copies nothing. */
   attachFiles: (taskId: string, paths: readonly string[]) => Promise<void>;
@@ -325,19 +340,107 @@ export function useBoard(
     [apis],
   );
 
+  /**
+   * Create a card, then write what the dialog staged for it.
+   *
+   * Neither a picture nor a file can ride the create: the daemon keys both by
+   * the card's id, which does not exist until this call returns. So the card
+   * is created first — WITHOUT the staged references, so a card whose uploads
+   * never happen holds no link to a file that does not exist — and each
+   * picture is then written and its reference repointed at the saved path, in
+   * the one description update that follows. A picture the user deleted from
+   * the text before pressing Add is never uploaded.
+   *
+   * After the create, a failure costs one picture or one file, never the card:
+   * it is reported, a picture's reference is taken out whole, and the rest
+   * carries on. Files stop at the first refusal, as `attachFiles` does, since
+   * the daemon's cap is the usual reason for one.
+   */
   const createTask = useCallback(
-    async (dto: CreateTaskDto): Promise<TaskDto | null> => {
+    async (
+      dto: CreateTaskDto,
+      staged: NewTaskAttachments = NOTHING_STAGED,
+    ): Promise<TaskDto | null> => {
       if (!apis) {
         return null;
       }
+      const { description: typed = '', ...fields } = dto;
+      const bare = stripStagedImages(typed).trim();
+      let task: TaskDto;
       try {
-        const task = await apis.tasks.createTask({ createTaskDto: dto });
-        setTasks((current) => [...current, task]);
-        return task;
+        task = await apis.tasks.createTask({
+          createTaskDto: {
+            ...fields,
+            ...(bare === '' ? {} : { description: bare }),
+          },
+        });
       } catch (err: unknown) {
         setError(describe(err));
         return null;
       }
+      const created = task;
+      setTasks((current) => [...current, created]);
+      // Pinned from the create: every call below answers with the whole card,
+      // and none of them may be aimed by whatever the previous one answered.
+      const taskId = created.id;
+
+      const failures: string[] = [];
+      let description = typed;
+      for (const image of staged.images) {
+        if (!referencesStagedImage(description, image.ref)) {
+          continue;
+        }
+        try {
+          const saved = await apis.tasks.addTaskAttachment({
+            taskId,
+            addTaskAttachmentDto: {
+              mediaType: image.mediaType,
+              data: await image.data,
+              ...(image.name === null ? {} : { name: image.name }),
+            },
+          });
+          description = resolveStagedImage(description, image.ref, saved.path);
+        } catch (err: unknown) {
+          description = resolveStagedImage(description, image.ref, null);
+          failures.push(describe(err));
+        }
+      }
+      // Whatever is still staged references a picture nothing holds.
+      description = stripStagedImages(description).trim();
+      if (description !== bare) {
+        try {
+          task = await apis.tasks.updateTask({
+            taskId,
+            updateTaskDto: { description },
+          });
+        } catch (err: unknown) {
+          failures.push(describe(err));
+        }
+      }
+      for (const path of staged.files) {
+        try {
+          task = await apis.tasks.attachTaskFile({
+            taskId,
+            attachTaskFileDto: { path },
+          });
+        } catch (err: unknown) {
+          failures.push(describe(err));
+          break;
+        }
+      }
+
+      const final = task;
+      if (final !== created) {
+        setTasks((current) =>
+          current.map((row) => (row.id === final.id ? final : row)),
+        );
+      }
+      if (failures.length > 0) {
+        setError(
+          `The task was created, but not everything staged for it could be attached: ${failures[0]}`,
+        );
+      }
+      return final;
     },
     [apis],
   );

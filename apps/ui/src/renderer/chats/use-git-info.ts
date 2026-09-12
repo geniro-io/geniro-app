@@ -9,6 +9,7 @@ const NOT_A_REPO: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 /** What the composer's strip should say about git, and how loudly. */

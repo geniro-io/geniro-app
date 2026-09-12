@@ -168,10 +168,43 @@ describe('TaskDetail', () => {
     const el = detailWith({ projectFolder: long, task: { folder: null } });
 
     const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
-    const classes = folder.className.split(/\s+/);
-    expect(classes).toContain('shrink');
-    expect(classes).not.toContain('shrink-0');
-    expect(folder.querySelector('span.truncate')?.textContent).toBe(long);
+    // Both boxes: the row's wrapper and the button inside it, since either one
+    // refusing to shrink holds the whole path's width.
+    for (const box of [folder, folder.querySelector('button')!]) {
+      const classes = box.className.split(/\s+/);
+      expect(classes).toContain('shrink');
+      expect(classes).not.toContain('shrink-0');
+    }
+    expect(folder.querySelector('span.truncate')).not.toBeNull();
+  });
+
+  it('shows the END of a long folder path, which is where the directory is named', () => {
+    // REPORTED against a row reading `/Users/sergeirazumovskij/De…`: CSS
+    // truncation kept the head, which every path on the machine shares, and
+    // cut the one part that says which repository the task works in.
+    const el = detailWith({
+      projectFolder: '/Users/someone/Desktop/Projects/Geniro/geniro-app',
+      task: { folder: null },
+    });
+
+    expect(
+      el.querySelector('[data-slot="task-folder"] button')?.textContent,
+    ).toBe('…/Projects/Geniro/geniro-app');
+  });
+
+  it('shows the WHOLE folder path in its hover panel', () => {
+    // REPORTED as "i wanna see full directory when i hover". Focus opens the
+    // same panel the pointer does, without the pointer's resting delay.
+    const long = '/Users/someone/Desktop/Projects/Geniro/geniro-app';
+    const el = detailWith({ projectFolder: long, task: { folder: null } });
+    const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
+    expect(folder.textContent).not.toContain(long);
+
+    act(() => {
+      folder.querySelector('button')!.focus();
+    });
+
+    expect(folder.textContent).toContain(long);
   });
 
   it('runs the task when there is a handler for it', () => {

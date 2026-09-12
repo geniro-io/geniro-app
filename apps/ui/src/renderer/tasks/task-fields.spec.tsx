@@ -333,3 +333,51 @@ describe('TaskBasicRows', () => {
     expect(onChange).toHaveBeenCalledWith({ dueDate: null });
   });
 });
+
+describe('the Folder row', () => {
+  const folder = '/Users/me/Desktop/Projects/Geniro/geniro-app';
+
+  it('opens the picker INSIDE the folder the row holds', async () => {
+    // With no default the dialog reopened wherever the last one was left —
+    // REPORTED as the task seeming to use the PARENT folder, because that is
+    // where the picker opened, listing the project's folder among its siblings.
+    const pickProjectFolder = vi.fn(async () => '/Users/me/elsewhere');
+    window.geniro = createPreloadStub({ pickProjectFolder });
+    const { onChange } = renderRunConfig({
+      context: { project: { ...noProject, folder } },
+    });
+
+    const trigger = el().querySelector<HTMLButtonElement>(
+      '[data-slot="task-folder"] button',
+    )!;
+    await act(async () => {
+      trigger.click();
+    });
+
+    expect(pickProjectFolder).toHaveBeenCalledWith(folder);
+    expect(onChange).toHaveBeenCalledWith({ folder: '/Users/me/elsewhere' });
+    // The press is the picker's, so the path panel is not left pinned open
+    // over the dialog it just opened.
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('opens the Profile picker inside the profile the card already names', async () => {
+    const pickProjectFolder = vi.fn(async () => null);
+    window.geniro = createPreloadStub({ pickProjectFolder });
+    renderRunConfig({
+      value: aTask({ agentKind: 'claude', configDir: '/Users/me/.claude-lab' }),
+      context: {
+        project: noProject,
+        agentsApi: agentsApi(),
+        capabilitiesApi: capabilitiesApi(),
+      },
+    });
+    await flush();
+
+    click(button('Config directory for this task'));
+    click(optionNamed('Choose config directory…'));
+    await flush();
+
+    expect(pickProjectFolder).toHaveBeenCalledWith('/Users/me/.claude-lab');
+  });
+});

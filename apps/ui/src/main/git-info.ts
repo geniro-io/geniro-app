@@ -52,6 +52,7 @@ const NOT_A_REPO: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 /**
@@ -74,7 +75,8 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
- * Which branches OTHER worktrees of this repo hold, and where.
+ * Which branches OTHER worktrees of this repo hold, and where — plus the MAIN
+ * checkout, which git always lists first.
  *
  * The porcelain form is parsed rather than the human one for the reason every
  * other git read here gives: `--porcelain` is a documented, locale-independent
@@ -90,16 +92,18 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 async function readWorktrees(
   dir: string,
   self: string | null,
-): Promise<BranchWorktree[]> {
+): Promise<{ held: BranchWorktree[]; main: string | null }> {
   const listing = await git(dir, ['worktree', 'list', '--porcelain']);
   if (listing === null) {
-    return [];
+    return { held: [], main: null };
   }
   const found: BranchWorktree[] = [];
+  let main: string | null = null;
   let path: string | null = null;
   for (const line of listing.split('\n')) {
     if (line.startsWith('worktree ')) {
       path = line.slice('worktree '.length).trim();
+      main ??= path;
       continue;
     }
     if (line.startsWith('branch ') && path !== null) {
@@ -112,7 +116,7 @@ async function readWorktrees(
       }
     }
   }
-  return found;
+  return { held: found, main };
 }
 
 /**
@@ -136,6 +140,7 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
     // as held somewhere else, and unswitchable-to for good.
     git(dir, ['rev-parse', '--show-toplevel']),
   ]);
+  const listed = await readWorktrees(dir, root);
   return {
     isRepo: true,
     branch: head === null || head === 'HEAD' ? null : head,
@@ -143,7 +148,14 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
     // `null` = the status call itself failed; treating that as clean would let
     // a checkout run without the guard ever having looked.
     dirty: status === null || status !== '',
-    worktrees: await readWorktrees(dir, root),
+    worktrees: listed.held,
+    // Compared against the ROOT for the reason `readWorktrees` is handed it: a
+    // run's folder is routinely a subdirectory, and the listing prints roots.
+    // The main checkout is nobody's worktree, so it names nothing.
+    worktreeOf:
+      listed.main !== null && root !== null && listed.main !== root
+        ? listed.main
+        : null,
   };
 }
 

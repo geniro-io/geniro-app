@@ -32,8 +32,8 @@ const api: GeniroApi = {
     ipcRenderer.on(IPC.onClearAgentCaches, handler);
     return () => ipcRenderer.removeListener(IPC.onClearAgentCaches, handler);
   },
-  pickProjectFolder: () =>
-    ipcRenderer.invoke(IPC.pickProjectFolder) as ReturnType<
+  pickProjectFolder: (defaultPath?: string) =>
+    ipcRenderer.invoke(IPC.pickProjectFolder, defaultPath) as ReturnType<
       GeniroApi['pickProjectFolder']
     >,
   pickAgentBinary: () =>

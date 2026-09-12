@@ -839,6 +839,17 @@ export interface GitInfo {
    * reporting a dead end.
    */
   worktrees: BranchWorktree[];
+  /**
+   * The repository's MAIN checkout, when this folder is a linked worktree of it
+   * — null for the main checkout itself and for a plain folder.
+   *
+   * A task's agent works in a worktree geniro cuts under its own data directory
+   * and names by the task's id, so that folder's name says nothing about which
+   * repository it belongs to: REPORTED as a chat header reading
+   * `794addc7-273d-4924-8…`, which looked like the agent had been given the
+   * wrong directory. This is what lets the header name the repository.
+   */
+  worktreeOf: string | null;
 }
 
 /**
@@ -1191,8 +1202,15 @@ export interface GeniroApi {
    * daemon cannot reach.
    */
   onClearAgentCaches(listener: () => void): () => void;
-  /** Open the native folder picker; returns the chosen absolute path or null. */
-  pickProjectFolder(): Promise<string | null>;
+  /**
+   * Open the native folder picker; returns the chosen absolute path or null.
+   *
+   * `defaultPath` is where the dialog OPENS — pass the folder the field already
+   * holds. Without it macOS reopens wherever the last dialog was left, which
+   * put the task panel's picker in the PARENT of the project's folder, listing
+   * it among its siblings, and read as the task using the wrong directory.
+   */
+  pickProjectFolder(defaultPath?: string): Promise<string | null>;
   /** Open the native file picker for an agent binary; returns the path or null. */
   pickAgentBinary(): Promise<string | null>;
   /**

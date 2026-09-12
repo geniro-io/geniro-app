@@ -29,6 +29,7 @@ import {
   onboardingInputSchema,
   openTerminalAtSchema,
   openTerminalSchema,
+  pickFolderStartSchema,
   pullRequestRefsSchema,
   revealPathSchema,
   settingsPatchSchema,
@@ -82,9 +83,15 @@ export function registerIpc(
 
   ipcMain.handle(IPC.getDaemonHandle, () => supervisor.getHandle());
 
-  ipcMain.handle(IPC.pickProjectFolder, async () => {
+  ipcMain.handle(IPC.pickProjectFolder, async (_event, start: unknown) => {
+    const parsed = pickFolderStartSchema.safeParse(start);
+    const defaultPath = parsed.success ? parsed.data : undefined;
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory', 'createDirectory'],
+      // A DIRECTORY here opens the dialog inside it, which is the point: the
+      // folder the field holds is the one a reader is deciding whether to
+      // replace, not the last place any dialog happened to be left.
+      ...(defaultPath === undefined ? {} : { defaultPath }),
     });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });

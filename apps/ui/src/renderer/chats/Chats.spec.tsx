@@ -110,6 +110,12 @@ const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
 const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
+/**
+ * Read only to put a TASK's worktree back when its chat outlived it — the
+ * card's folder, else its project's (`task-worktree.ts`).
+ */
+const tasksApi = vi.hoisted(() => ({ readTask: vi.fn() }));
+const projectsApi = vi.hoisted(() => ({ readProject: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -124,6 +130,8 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     capabilities: capabilitiesApi,
     handoff: handoffApi,
     cliAuth: cliAuthApi,
+    tasks: tasksApi,
+    projects: projectsApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -1418,6 +1426,62 @@ describe('Chats transcript auto-scroll', () => {
       emitItem(msg(11, 'assistant', 'the answer'));
     });
     expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('puts a TASK’s collected worktree back and sends the message after all', async () => {
+    // REPORTED: a task's chat went on after its worktree was collected, and
+    // every message into it was refused `cwd does not exist` with no way
+    // forward. The branch holds the work, so the same path is cut again from
+    // it — from the card's folder — and the refused message is sent once more.
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockResolvedValueOnce(msg(10, 'user', 'and this?'));
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    const prepareTaskWorktree = vi.fn().mockResolvedValue({
+      ok: true,
+      path: '/userData/worktrees/t1',
+      branch: 'geniro/task-t1',
+      reused: false,
+      error: null,
+    });
+    window.geniro.prepareTaskWorktree = prepareTaskWorktree;
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(prepareTaskWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/repo',
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('cwd does not exist');
   });
 
   it('jumps to the newest message when a chat with history is OPENED', async () => {

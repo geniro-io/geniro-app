@@ -1,20 +1,15 @@
-import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  parsePullRequests,
-  readPullRequests,
-  readPullRequestsByRef,
-} from './github-prs';
+import { parsePullRequests, readPullRequestsByRef } from './github-prs';
 import { CLAUDE_ONLY_KEYS, CURSOR_ONLY_KEYS } from './probe-env';
 
 /**
- * Driven against a REAL git repository and a REAL `gh` subprocess — a shim
- * script put on `$PATH` — rather than a mocked `execFile`, the doctrine
+ * Driven against a REAL `gh` subprocess — a shim script put on `$PATH` —
+ * rather than a mocked `execFile`, the doctrine
  * `git-info.spec.ts` states and for the same reason: what is under test is the
  * argv this code sends and what it does with the bytes that come back, and a
  * mock would only replay this file's own assumptions about both.
@@ -32,19 +27,6 @@ let binDir = '';
 let argsLog = '';
 let headJson = '';
 let originalPath = '';
-
-const run = (args: string[], cwd = dir): string =>
-  execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
-
-function initRepo(): void {
-  run(['init', '-b', 'main', '-q', dir], tmpdir());
-  run(['config', 'user.email', 'test@example.com']);
-  run(['config', 'user.name', 'Test']);
-  writeFileSync(join(dir, 'README.md'), 'hello\n');
-  run(['add', '.']);
-  run(['commit', '-q', '-m', 'init']);
-  run(['remote', 'add', 'origin', 'git@github.com:acme/widgets.git']);
-}
 
 /** One row shaped exactly as `gh pr list --json` emits it. */
 function ghRow(
@@ -69,8 +51,8 @@ function ghRow(
 /**
  * Put a fake `gh` in front of whatever this machine has.
  *
- * PREPENDED, never replacing `$PATH`: `git` has to keep resolving for the branch
- * read. Prepending is also what makes the shim win on a machine that HAS a real
+ * PREPENDED, never replacing `$PATH`: the shell the shim runs in has to keep
+ * resolving its own tools. Prepending is also what makes the shim win on a machine that HAS a real
  * `gh` — `resolveBinary` walks `$PATH` before the well-known install dirs, so a
  * Homebrew `gh` would otherwise answer instead.
  */
@@ -111,166 +93,6 @@ afterEach(() => {
   process.env.PATH = originalPath;
   rmSync(dir, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
-});
-
-describe('readPullRequests', () => {
-  it('asks ONE head-filtered query, and no repo-wide one', async () => {
-    // The scope of the whole feature, in the only place it can be enforced: a
-    // thread is one folder on one branch, so asking for the repo's open and
-    // closed lists would fetch other people's work for a panel that must not
-    // show it. `--state all` is the other half — a branch's own history, the
-    // merged pull request under the open one that replaced it.
-    initRepo();
-    installGhShim(recordingShim());
-
-    await readPullRequests(dir);
-
-    const calls = ghCalls();
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toContain('--state all --head main');
-    // Named individually as well: a future third query for `--state open` would
-    // pass the length check above only until someone raised it.
-    expect(calls.some((call) => call.includes('--state open'))).toBe(false);
-    expect(calls.some((call) => call.includes('--state closed'))).toBe(false);
-  });
-
-  it('answers the branch, the origin owner and the rows newest-first', async () => {
-    // The fixtures arrive OUT of order, so a pass-through of gh's own ordering
-    // fails here. It matters because `currentPullRequest` takes the first row
-    // when none on the branch is open — the newest is the one the thread is on.
-    initRepo();
-    writeFileSync(
-      headJson,
-      JSON.stringify([
-        ghRow(69, 'CLOSED', '2026-08-10T00:00:00Z'),
-        ghRow(71, 'OPEN', '2026-08-20T00:00:00Z'),
-        ghRow(70, 'MERGED', '2026-08-25T00:00:00Z'),
-      ]),
-    );
-    installGhShim(recordingShim());
-
-    const result = await readPullRequests(dir);
-
-    expect(result.branch).toBe('main');
-    expect(result.originOwner).toBe('acme');
-    expect(result.pullRequests.map((entry) => entry.number)).toEqual([
-      70, 71, 69,
-    ]);
-    expect(result.pullRequests.map((entry) => entry.state)).toEqual([
-      'merged',
-      'open',
-      'closed',
-    ]);
-  });
-
-  it('asks for exactly the fields the parser requires', async () => {
-    // The field list and `readPullRequestRow`'s required-field check are one
-    // contract: drop or rename a field here and EVERY row is dropped, so all
-    // three surfaces silently render nothing with no test moving.
-    initRepo();
-    installGhShim(recordingShim());
-
-    await readPullRequests(dir);
-
-    for (const call of ghCalls()) {
-      expect(call).toContain(
-        '--json number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,additions,deletions,changedFiles',
-      );
-      expect(call).toContain('--limit 50');
-    }
-  });
-
-  it('asks for the diff figures every surface now states', async () => {
-    // Named SEPARATELY from the field list above, which is a `toContain` on a
-    // prefix: appending to that list leaves it green, so dropping the three
-    // figures again would cost every chip and row its size with the assertion
-    // above still passing. These are the newest fields and the likeliest to be
-    // dropped by someone trimming the query's cost.
-    initRepo();
-    installGhShim(recordingShim());
-
-    await readPullRequests(dir);
-
-    for (const call of ghCalls()) {
-      expect(call).toContain('additions');
-      expect(call).toContain('deletions');
-      expect(call).toContain('changedFiles');
-    }
-  });
-
-  it('asks gh NOTHING on a detached HEAD', async () => {
-    // The branch IS the query's argument, so there is nothing to ask — and
-    // nothing any surface would draw from an answer, since a detached HEAD
-    // matches no pull request. Spawning anyway would be a round trip to GitHub
-    // per folder on every window focus for a result thrown away.
-    initRepo();
-    run(['checkout', '-q', '--detach']);
-    writeFileSync(
-      headJson,
-      JSON.stringify([ghRow(71, 'OPEN', '2026-08-20T00:00:00Z')]),
-    );
-    installGhShim(recordingShim());
-
-    const result = await readPullRequests(dir);
-
-    expect(result).toEqual({
-      branch: null,
-      originOwner: null,
-      pullRequests: [],
-    });
-    expect(ghCalls()).toEqual([]);
-  });
-
-  it('answers empty when gh cannot answer', async () => {
-    // One outcome for every failure by design — no `gh`, a logged-out `gh`, a
-    // folder that is not a GitHub checkout — so every surface draws nothing
-    // rather than an error strip.
-    initRepo();
-    installGhShim('exit 1');
-
-    expect(await readPullRequests(dir)).toEqual({
-      branch: null,
-      originOwner: null,
-      pullRequests: [],
-    });
-  });
-
-  it('answers empty rather than naming the branch with no list', async () => {
-    // The failure arm keeps BOTH halves back. Answering `{branch, []}` would
-    // read as "this branch has no pull request" — a confident wrong answer,
-    // where the truth is that gh could not be asked.
-    initRepo();
-    installGhShim('exit 1');
-
-    const result = await readPullRequests(dir);
-
-    expect(result.branch).toBeNull();
-    expect(result.originOwner).toBeNull();
-  });
-
-  it('hands gh NONE of the agent CLIs’ credentials', async () => {
-    // `gh pr list` is an authenticated network call, so by the rule
-    // `probe-env.ts` states for the two agent CLIs it is exactly the child that
-    // must not be carrying either one's token — and `gh` owns none of them.
-    // Looped over the exported lists rather than a hand-picked pair, so the pin
-    // grows with them.
-    initRepo();
-    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
-      vi.stubEnv(key, `secret-value-of-${key}`);
-    }
-    const envDump = join(binDir, 'env.dump');
-    installGhShim(`env > "${envDump}"`);
-
-    await readPullRequests(dir);
-
-    const childEnv = readFileSync(envDump, 'utf8');
-    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
-      expect(childEnv).not.toContain(`secret-value-of-${key}`);
-    }
-    // A control, so the assertion above cannot pass merely because the child
-    // received no environment at all.
-    expect(childEnv).toContain('PATH=');
-  });
 });
 
 describe('parsePullRequests', () => {
@@ -494,5 +316,28 @@ describe('readPullRequestsByRef', () => {
     expect(results).toEqual([
       { ref: ref('acme', 'platform', 7), pullRequest: null },
     ]);
+  });
+
+  it('hands gh NONE of the agent CLIs’ credentials', async () => {
+    // `gh pr list` / `gh pr view` are authenticated network calls, so by the
+    // rule `probe-env.ts` states for the two agent CLIs this is exactly the
+    // child that must not be carrying either one's token — and `gh` owns none
+    // of them. Looped over the exported lists rather than a hand-picked pair,
+    // so the pin grows with them.
+    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
+      vi.stubEnv(key, `secret-value-of-${key}`);
+    }
+    const envDump = join(binDir, 'env.dump');
+    installGhShim(`env > "${envDump}"`);
+
+    await readPullRequestsByRef([ref('acme', 'platform', 7)]);
+
+    const childEnv = readFileSync(envDump, 'utf8');
+    for (const key of [...CLAUDE_ONLY_KEYS, ...CURSOR_ONLY_KEYS]) {
+      expect(childEnv).not.toContain(`secret-value-of-${key}`);
+    }
+    // A control, so the assertion above cannot pass merely because the child
+    // received no environment at all.
+    expect(childEnv).toContain('PATH=');
   });
 });

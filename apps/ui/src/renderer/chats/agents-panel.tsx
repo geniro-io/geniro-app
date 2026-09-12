@@ -8,11 +8,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
-import type {
-  CliKind,
-  PullRequestInfo,
-  PullRequestRefResult,
-} from '../../shared/contracts';
+import type { CliKind, PullRequestRefResult } from '../../shared/contracts';
 import type {
   AgentMcpListingDto as AgentMcpListing,
   ChatTimelineMarker,
@@ -45,8 +41,7 @@ import {
   AGENTS_PANEL_COLLAPSED_FLAG,
   THREAD_PULL_REQUESTS_SETTLED_FLAG,
 } from './panel-flags';
-import { splitPullRequests } from './pull-request';
-import { PullRequestRow, ThreadPullRequestRow } from './pull-request-row';
+import { ThreadPullRequestRow } from './pull-request-row';
 import { RUN_STATUS_META, RunStatusIcon } from './run-status';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
@@ -534,22 +529,6 @@ function AgentSpend({
   );
 }
 
-function PullRequestList({
-  pullRequests,
-}: {
-  pullRequests: readonly PullRequestInfo[];
-}): React.JSX.Element {
-  return (
-    <ul className="m-0 flex list-none flex-col gap-1 p-0">
-      {pullRequests.map((pullRequest) => (
-        <li key={pullRequest.number}>
-          <PullRequestRow pullRequest={pullRequest} />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 /**
  * Whether this row is OVER — merged or closed-unmerged, the two states that
  * share one fold. Each row's own status word tells them apart, and a separate
@@ -581,10 +560,13 @@ function ThreadPullRequestList({
 
 /**
  * The pull requests THIS THREAD opened, whatever repository each landed in —
- * newest first, with the finished ones behind the same fold its neighbour uses.
+ * newest first, with the finished ones behind a fold.
  *
- * Folded for the reason the branch list is: a thread that ran for a week is
- * mostly merged pull requests, and thirty-one settled rows listed flat buried
+ * The ONLY pull requests the panel lists — what is merely open on the folder's
+ * branch is not this conversation's work, and a second list of it put the
+ * thread's own pull request on the panel twice.
+ *
+ * Folded because a thread that ran for a week is mostly merged pull requests, and thirty-one settled rows listed flat buried
  * the one still in review under work that is over. Reported exactly that way —
  * "они в большинстве случаев в Merged … должны быть Collapsed". What is still
  * open stays in the open, which is the whole point of the section.
@@ -642,62 +624,6 @@ function ThreadPullRequestsSection({
 }
 
 /**
- * The pull requests on the branch this run's folder has checked out — open ones
- * listed, finished ones behind a fold that is shut by default. THIS thread's
- * work, never the repo's: the caller scopes the list (`chats/pull-request.ts`).
- *
- * The fold is persisted rather than component state for the reason the panel's
- * own collapse is: `Chats.tsx` keys this panel by run id, so `useState` would
- * forget the choice on the next chat opened.
- */
-function PullRequestsSection({
-  pullRequests,
-}: {
-  pullRequests: readonly PullRequestInfo[];
-}): React.JSX.Element {
-  const { open, settled } = splitPullRequests(pullRequests);
-  const [settledOpen, setSettledOpen] = usePersistedFlag(
-    'chats.pullRequestsSettledOpen',
-    false,
-  );
-  return (
-    <PanelSection label="Pull requests">
-      {open.length === 0 ? (
-        // Named, because the list is this BRANCH's: under a bare "Nothing open"
-        // a reader would take it for the repo and conclude the panel is broken
-        // while their colleagues' pull requests are open.
-        <span className="text-xs text-muted-foreground">
-          Nothing open on this branch
-        </span>
-      ) : (
-        <PullRequestList pullRequests={open} />
-      )}
-      {settled.length > 0 ? (
-        <>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-expanded={settledOpen}
-            className="h-6 w-fit gap-1 px-1 text-xs text-muted-foreground"
-            onClick={() => setSettledOpen((wasOpen) => !wasOpen)}>
-            <ChevronRight
-              aria-hidden="true"
-              className={cn(
-                'size-3 shrink-0 transition-transform',
-                settledOpen && 'rotate-90',
-              )}
-            />
-            Merged &amp; closed · {settled.length}
-          </Button>
-          {settledOpen ? <PullRequestList pullRequests={settled} /> : null}
-        </>
-      ) : null}
-    </PanelSection>
-  );
-}
-
-/**
  * The dynamic workflows this run launched, newest first, each a press away from
  * its own card in the transcript.
  *
@@ -729,7 +655,6 @@ function WorkflowsSection({
 export function AgentsPanel({
   agents,
   artifacts = [],
-  pullRequests = [],
   threadPullRequests = [],
   workflows = [],
   onRevealWorkflow,
@@ -772,22 +697,10 @@ export function AgentsPanel({
    */
   artifacts?: readonly RunArtifact[];
   /**
-   * Every pull request on the repo this run's folder belongs to, newest first.
-   *
-   * Empty whenever `gh` cannot answer — no `gh`, a logged-out one, or a folder
-   * that is not a GitHub checkout — and the section then draws nothing at all,
-   * the same rule {@link artifacts} follows.
-   */
-  pullRequests?: readonly PullRequestInfo[];
-  /**
    * The pull requests THIS THREAD opened, newest first — captured from the
-   * agent's own output rather than derived from a checkout.
-   *
-   * A separate list from {@link pullRequests}, and the separation is the fix:
-   * one is what this conversation did, the other is what happens to be open on
-   * the branch its folder is sitting on, and presenting the second as the first
-   * is how a thread came to show a stranger's merged pull request while its own
-   * thirty-one were invisible.
+   * agent's own output rather than derived from a checkout, and the only pull
+   * requests the panel lists. Empty draws no section, the rule
+   * {@link artifacts} follows.
    */
   threadPullRequests?: readonly PullRequestRefResult[];
   /**
@@ -1652,9 +1565,6 @@ export function AgentsPanel({
         ) : null}
         {threadPullRequests.length > 0 ? (
           <ThreadPullRequestsSection results={threadPullRequests} />
-        ) : null}
-        {pullRequests.length > 0 ? (
-          <PullRequestsSection pullRequests={pullRequests} />
         ) : null}
       </div>
     </aside>

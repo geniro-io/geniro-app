@@ -133,7 +133,6 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
-import { threadPullRequests } from './pull-request';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -247,7 +246,6 @@ import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
-import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import { useRunShells } from './use-run-shells';
 import {
   threadPullRequestsOf,
@@ -273,7 +271,6 @@ import { rootAgentOf } from './workflow-root';
  * Module scope so its identity is stable — a fresh `[]` per render would be a
  * changed prop on every keystroke in the composer.
  */
-const EMPTY_PULL_REQUESTS: readonly PullRequestInfo[] = [];
 
 interface QueuedMessage {
   id: string;
@@ -4012,55 +4009,14 @@ export function Chats({
   }, [streaming, refreshChatChanges]);
 
   /**
-   * Every distinct folder the chat list names, so pull requests are read once
-   * per CHECKOUT rather than once per thread — threads share folders, and each
-   * read is a `gh` process talking to GitHub.
+   * What each thread OPENED, as GitHub currently has it — the only pull
+   * requests any chat surface draws.
    *
-   * Sorted, because the hook keys its work on the content of this list and the
-   * sidebar reorders itself as runs report activity: unsorted, that reordering
-   * alone would look like a new set of folders.
-   */
-  const pullRequestFolders = useMemo(
-    () =>
-      [
-        ...new Set(
-          runs
-            .map((run) => run.cwd)
-            .filter(
-              (cwd): cwd is string => typeof cwd === 'string' && cwd !== '',
-            ),
-        ),
-      ].sort(),
-    [runs],
-  );
-  const { byDir: pullRequestsByDir, refresh: refreshPullRequests } =
-    usePullRequests(pullRequestFolders);
-  /**
-   * Each folder's own pull requests — the ones on the branch it has checked
-   * out, which is the whole of what any surface here shows. Resolved once per
-   * read rather than once per row per render: the composer's text lives in this
-   * component, so the sidebar's row map re-runs on every keystroke.
-   */
-  const threadPullRequestsByDir = useMemo(
-    () =>
-      new Map(
-        pullRequestFolders.map((dir) => [
-          dir,
-          threadPullRequests(pullRequestsIn(pullRequestsByDir, dir)),
-        ]),
-      ),
-    [pullRequestFolders, pullRequestsByDir],
-  );
-  const activePullRequests =
-    activeRun?.cwd == null
-      ? EMPTY_PULL_REQUESTS
-      : (threadPullRequestsByDir.get(activeRun.cwd) ?? EMPTY_PULL_REQUESTS);
-  /**
-   * What each thread OPENED, as GitHub currently has it.
-   *
-   * The other source, and the primary one: these are addressed by URL off the
-   * run row the daemon captured them onto, so they survive a branch switch and
-   * span repositories — neither of which the branch query above can do.
+   * Addressed by URL off the run row the daemon captured them onto, so they
+   * survive a branch switch and span repositories. What is merely open on the
+   * branch a folder sits on is NOT listed: it is not this conversation's work,
+   * and listing it beside these put the thread's own pull request on the panel
+   * twice.
    */
   const { byKey: resolvedThreadPullRequests } = useThreadPullRequests(runs);
   const openedByActiveThread = useMemo(
@@ -4070,11 +4026,9 @@ export function Chats({
   /**
    * The ONE pull request each sidebar row names.
    *
-   * The thread's own newest outranks whatever is open on its folder's branch:
-   * a row is about the conversation, and the branch answer is routinely a
-   * stranger's work that merely shares a checkout. Only a RESOLVED one is
-   * offered — the row draws a title and a state, which an unresolved ref does
-   * not have — so a machine with no `gh` falls back exactly as before.
+   * The thread's own newest, and only a RESOLVED one — the row draws a title
+   * and a state, which an unresolved ref does not have — so a machine with no
+   * `gh` names none.
    */
   const rowPullRequestByRun = useMemo(() => {
     const byRun = new Map<string, PullRequestInfo>();
@@ -4087,19 +4041,6 @@ export function Chats({
     }
     return byRun;
   }, [runs, resolvedThreadPullRequests]);
-  /**
-   * A branch move changes which pull request is that folder's. Nothing else
-   * re-reads it — the hook's own refresh is on window focus, and an in-app
-   * switch never loses focus.
-   */
-  const refreshPullRequestsFor = useCallback(
-    (target: string | null): void => {
-      if (target !== null && target !== '') {
-        refreshPullRequests(target);
-      }
-    },
-    [refreshPullRequests],
-  );
 
   // Push the open thread's name up to the shell's title bar. An effect rather
   // than a render-time call because it writes to a parent's state, and it runs
@@ -4509,7 +4450,6 @@ export function Chats({
       // re-reading the PREVIOUS folder — `chooseFolder` above set React state
       // this callback cannot see.
       await git.refresh(applied.cwd);
-      refreshPullRequestsFor(applied.cwd);
     },
     [
       newChat,
@@ -4521,7 +4461,6 @@ export function Chats({
       changeEffort,
       changeContextWindow,
       git,
-      refreshPullRequestsFor,
       setError,
     ],
   );
@@ -7172,9 +7111,7 @@ export function Chats({
                                 info={git.info}
                                 switching={git.switching}
                                 onSwitch={(branch) => {
-                                  void git
-                                    .switchTo(branch)
-                                    .then(() => refreshPullRequestsFor(folder));
+                                  void git.switchTo(branch);
                                 }}
                               />
                               {!workflowSlug ? (
@@ -7415,11 +7352,7 @@ export function Chats({
                                     disabled={git.pulling}
                                     title="Stash your changes, fast-forward this branch, then put the changes back"
                                     onClick={() => {
-                                      void git
-                                        .pull()
-                                        .then(() =>
-                                          refreshPullRequestsFor(folder),
-                                        );
+                                      void git.pull();
                                     }}>
                                     {git.pulling ? 'Pulling…' : 'Pull latest'}
                                   </Button>
@@ -8424,7 +8357,6 @@ export function Chats({
                       onSearch={openChatSearch}
                       timeline={timelinePanel}
                       artifacts={artifacts}
-                      pullRequests={activePullRequests}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}

@@ -18,7 +18,7 @@ import {
   readGitStamp,
   switchBranch,
 } from './git-info';
-import { readPullRequests, readPullRequestsByRef } from './github-prs';
+import { readPullRequestsByRef } from './github-prs';
 import {
   branchNameSchema,
   chatExportSaveSchema,
@@ -187,10 +187,6 @@ export function registerIpc(
   );
   ipcMain.handle(IPC.getChangesSince, (_event, dir: unknown, sha: unknown) =>
     readChangesSince(gitDirSchema.parse(dir), commitShaSchema.parse(sha)),
-  );
-
-  ipcMain.handle(IPC.getPullRequests, (_event, dir: unknown) =>
-    readPullRequests(gitDirSchema.parse(dir)),
   );
 
   // Shape-validated for the reason `openInTerminal` below is: every field here

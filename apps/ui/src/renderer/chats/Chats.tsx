@@ -8718,6 +8718,7 @@ export function Chats({
                     changes={chatChanges.changes}
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
+                    movedOffStart={chatChanges.movedOffStart}
                     error={chatChanges.error}
                     loading={chatChanges.loading}
                     onRefresh={readChangesNow}

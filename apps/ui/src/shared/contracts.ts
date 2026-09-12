@@ -913,6 +913,13 @@ export interface GitChanges {
   /** More files changed than one read returns — the list is real but short. */
   truncated: boolean;
   unavailableReason: string | null;
+  /**
+   * The checkout no longer descends from the chat's starting commit — a branch
+   * switched, a pull request checked out — so `changes` is measured against
+   * HEAD (what is uncommitted now) rather than that commit, which would list
+   * every file the two branches disagree on.
+   */
+  movedOffStart: boolean;
 }
 
 /**

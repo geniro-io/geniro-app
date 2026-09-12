@@ -188,6 +188,7 @@ import {
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
+import type { AgentSubagentGroup } from './subagent-list';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
 import type { AgentTaskGroup } from './task-list';
@@ -5856,16 +5857,28 @@ export function Chats({
     // counter holds the list behind it now, and re-deriving that list wherever
     // it is drawn would be a second reading of the same threads.
     const subagentThreads: AgentThread[] = [];
+    // Kept per agent BESIDE that flat run, off the same walk: a workflow's
+    // popover draws one block per agent, exactly as its task chip does.
+    const subagentGroups: AgentSubagentGroup[] = [];
     let subagents = 0;
     for (const agent of agents) {
+      const own: AgentThread[] = [];
       for (const thread of agent.threads) {
         if (thread.kind !== 'subagent') {
           continue;
         }
-        subagentThreads.push(thread);
+        own.push(thread);
         if (thread.status === 'running') {
           subagents += 1;
         }
+      }
+      subagentThreads.push(...own);
+      if (own.length > 0) {
+        subagentGroups.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          threads: own,
+        });
       }
     }
     let done = 0;
@@ -5921,6 +5934,7 @@ export function Chats({
     return {
       subagents,
       subagentThreads,
+      subagentGroups,
       tasks: { done, total },
       taskRows,
       taskGroups,
@@ -7939,6 +7953,14 @@ export function Chats({
                             // loaded page has no thread here to count.
                             reportedOut={activeRun?.subagentsOut ?? 0}
                             threads={sidePanelLive.subagentThreads}
+                            // Split into a block per agent in a WORKFLOW only
+                            // — the task chip's gate, for the task chip's
+                            // reason.
+                            groups={
+                              activeRun?.workflowId
+                                ? sidePanelLive.subagentGroups
+                                : undefined
+                            }
                             // The same detail panel the agents panel's own
                             // delegate rows open — the shelf is the readier
                             // way to a delegate now, and a list that only

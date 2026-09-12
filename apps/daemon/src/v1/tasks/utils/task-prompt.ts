@@ -4,6 +4,48 @@ import type { TaskFileWire } from '../tasks.types';
 /** The closing sentence both engines are asked for, in the same words. */
 const REPORT_OPENING =
   'You are working a single task from a board. When you are finished, close with a report of what you did.';
+/**
+ * The ask both engines also need, and the one the first sentence does not
+ * actually make.
+ *
+ * "When you are finished" reads as an ordering an agent is free to satisfy
+ * loosely, and the card shows whichever report `TaskSettleService.findReport`
+ * sees LAST — so a review drawn part-way through the work (a self-review
+ * phase's `report_findings`, say) becomes the card's report, and the closing
+ * summary written after it is never the thing on screen. REPORTED as a card
+ * whose report was a mid-run code review rather than an account of the task.
+ *
+ * So it is stated as a position rather than as a moment, and the reason is
+ * stated with it: an agent that knows an earlier report displaces its closing
+ * one has a reason to hold the report back to the end.
+ */
+const REPORT_LAST =
+  'Send that report as the LAST thing you do — after every other message and tool call, with nothing following it. The card shows whichever report comes last, so one drawn part-way through the work stands in place of your closing one.';
+/**
+ * The card's RESULT, and the one thing the agent has to do for the board to be
+ * able to collect it.
+ *
+ * A task's work ends in a branch nobody has been shown. The run already carries
+ * whatever pull requests it opened — `PullRequestCaptureService` reads them out
+ * of the transcript on every turn end — and `TaskWire.pullRequests` is what
+ * draws them on the card, so nothing here needs a tool of its own. What it does
+ * need is for the pull request to EXIST and to be opened the one way that
+ * capture can see.
+ *
+ * `gh pr create` is named for exactly that reason rather than as a suggestion:
+ * the capture matches a tool call running that command paired with a result
+ * carrying a `…/pull/<n>` URL, which is what keeps somebody else's pull request
+ * — a `gh pr view`, a `git push` hint — from being filed as this card's work.
+ * One opened through the web, or through `gh api`, is a real pull request that
+ * the board will never show.
+ *
+ * CONDITIONAL on there being commits, because the alternative is worse than
+ * silence: a card that asked a question, or one whose answer was "nothing needs
+ * changing", would otherwise be closed with an empty pull request opened to
+ * satisfy an instruction.
+ */
+const REPORT_PULL_REQUEST =
+  'When the work leaves commits behind, open a pull request for it with `gh pr create` before you report, and give the link in the report. That command is also how the board attaches the pull request to the card as the result of the work, so one opened any other way will not appear there. Say in the report that there was nothing to open one for when that is the case.';
 const REPORT_PROSE =
   'Write the report as your final message: what changed, what you verified, and anything you deliberately left undone.';
 
@@ -24,6 +66,8 @@ const REPORT_PROSE =
  */
 export const TASK_REPORT_INSTRUCTIONS = [
   REPORT_OPENING,
+  REPORT_PULL_REQUEST,
+  REPORT_LAST,
   'Prefer the `report_findings` tool — it draws a structured report the user can read at a glance.',
   `If you cannot call it, ${REPORT_PROSE.charAt(0).toLowerCase()}${REPORT_PROSE.slice(1)}`,
 ].join('\n');
@@ -46,6 +90,8 @@ export const TASK_REPORT_INSTRUCTIONS = [
  */
 export const TASK_REPORT_INSTRUCTIONS_WORKFLOW = [
   REPORT_OPENING,
+  REPORT_PULL_REQUEST,
+  REPORT_LAST,
   REPORT_PROSE,
 ].join('\n');
 

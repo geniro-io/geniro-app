@@ -17,8 +17,10 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
+import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
@@ -72,7 +74,7 @@ describe('TasksService (in-memory sqlite)', () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [Project, Task],
+        entities: [Project, Task, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -101,6 +103,7 @@ describe('TasksService (in-memory sqlite)', () => {
       projectDao,
       events,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      new RunDao(em),
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -241,6 +244,84 @@ describe('TasksService (in-memory sqlite)', () => {
     await service.remove(task.id);
 
     expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+  });
+
+  /** A card in `status` whose run is in `runStatus`. */
+  const cardWithRun = async (
+    status: 'in_progress' | 'in_review' | 'done',
+    runStatus: 'running' | 'completed',
+    runId = 'run-1',
+  ) => {
+    const task = await service.create({ projectId, title: 'card', status });
+    await new RunDao(em).create({
+      id: runId,
+      workflowId: null,
+      status: runStatus,
+      agentKind: 'claude',
+      taskId: task.id,
+    });
+    await service.update(task.id, { runId });
+    return task;
+  };
+
+  it('marks the work FINISHED on a move to Done whose run has stopped', async () => {
+    const task = await cardWithRun('in_review', 'completed');
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'in_review', to: 'done' });
+
+    // The one moment the board may collect the card's worktree: Done, with
+    // nothing working in it.
+    expect(changes).toEqual([
+      { taskId: task.id, projectId, status: 'done', reason: 'work-finished' },
+    ]);
+  });
+
+  it('does NOT mark the work finished on a move to Done while the run still works', async () => {
+    const task = await cardWithRun('in_progress', 'running');
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    // The column is written the moment a card is dragged; collecting here
+    // would remove the checkout of an agent still working in it.
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'done' }]);
+  });
+
+  it('marks nothing finished on a move anywhere but Done, however its run ended', async () => {
+    const task = await cardWithRun('in_review', 'completed');
+    changes.length = 0;
+
+    await service.moveStatus(task.id, { from: 'in_review', to: 'todo' });
+
+    expect(changes).toEqual([{ taskId: task.id, projectId, status: 'todo' }]);
+  });
+
+  it('answers which cards are finished — a card no longer there counting as one', async () => {
+    const doneIdle = await service.create({
+      projectId,
+      title: 'done, nothing ran',
+      status: 'done',
+    });
+    const reviewed = await cardWithRun('in_review', 'completed', 'run-1');
+    const doneWorking = await cardWithRun('done', 'running', 'run-2');
+    const deleted = await service.create({ projectId, title: 'gone' });
+    await service.remove(deleted.id);
+
+    await expect(
+      service.finishedAmong([
+        doneIdle.id,
+        reviewed.id,
+        doneWorking.id,
+        deleted.id,
+        'never-a-card',
+      ]),
+    ).resolves.toEqual({
+      // In review is not finished, whatever its run did; Done with a run still
+      // working is not finished yet. Nothing will ever run in the worktree of
+      // a card that is gone.
+      taskIds: [doneIdle.id, deleted.id, 'never-a-card'],
+    });
   });
 
   it('accepts a move to the status the task is already in, as a no-op', async () => {
@@ -600,6 +681,7 @@ describe('TasksService — card numbering (in-memory sqlite)', () => {
       projectDao,
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      new RunDao(em),
     );
     const project = await projectDao.create({
       name: 'Geniro',

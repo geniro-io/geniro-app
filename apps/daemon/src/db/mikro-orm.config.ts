@@ -38,14 +38,11 @@ export default defineConfig({
   // true })`) and the versioned migration workflow stays deferred past v1.
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
-  // strip the prefix so the swc CJS transform's require() shim accepts the path.
-  //
-  // `fileURLToPath`, never `new URL(id).pathname`: the pathname is still
-  // PERCENT-ENCODED, so a daemon under any path with a space in it asked
-  // `require` for `…/Application%20Support/…` and failed to load its first
-  // entity. Every Geniro task worktree lives under `Application Support`, which
-  // is how it surfaced — `pnpm generate:api` could not boot its throwaway daemon
-  // there — and a packaged app installed at such a path would fail the same way.
+  // turn them back into paths so the swc CJS transform's require() shim accepts
+  // them. `fileURLToPath`, never `new URL(id).pathname`: the latter keeps the
+  // URL's percent-encoding, so a checkout under a path with a space in it (every
+  // task worktree, under `~/Library/Application Support/`) asked `require` for
+  // `Application%20Support` and the daemon died before Nest started.
   dynamicImportProvider: async (id: string) => {
     const path = id.startsWith('file://') ? fileURLToPath(id) : id;
     return import(path);

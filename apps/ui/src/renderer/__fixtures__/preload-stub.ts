@@ -73,6 +73,7 @@ const NO_GIT: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 const NO_PULL_REQUESTS: PullRequestsResult = {
@@ -208,6 +209,7 @@ export function createPreloadStub(
         changes: [],
         truncated: false,
         unavailableReason: 'Not a git repository.',
+        movedOffStart: false,
       });
     },
     prepareTaskWorktree: (input: {
@@ -219,6 +221,7 @@ export function createPreloadStub(
         ok: true,
         path: `/tmp/geniro-worktrees/${input.taskId}`,
         branch: `geniro/task-${input.taskId}`,
+        reused: false,
         error: null,
       });
     },

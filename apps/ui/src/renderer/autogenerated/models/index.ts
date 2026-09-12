@@ -2376,6 +2376,32 @@ export interface ExportedDto {
 /**
  * 
  * @export
+ * @interface FindFinishedTasksDto
+ */
+export interface FindFinishedTasksDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof FindFinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface FinishedTasksDto
+ */
+export interface FinishedTasksDto {
+    /**
+     * The subset whose work is finished — Done with no run working in it, or no longer a card at all
+     * @type {Array<string>}
+     * @memberof FinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface ForgottenInstructionsDto
  */
 export interface ForgottenInstructionsDto {
@@ -3239,6 +3265,19 @@ export interface ReorderRunGroupsDto {
 /**
  * 
  * @export
+ * @interface ReportPullRequestMergedDto
+ */
+export interface ReportPullRequestMergedDto {
+    /**
+     * The pull request, exactly as the awaiting-merge list gave it
+     * @type {string}
+     * @memberof ReportPullRequestMergedDto
+     */
+    url: string;
+}
+/**
+ * 
+ * @export
  * @interface RetriedDto
  */
 export interface RetriedDto {
@@ -4016,6 +4055,37 @@ export interface TaskAttachment {
 /**
  * 
  * @export
+ * @interface TaskAwaitingMergeDto
+ */
+export interface TaskAwaitingMergeDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    taskId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    projectId: string;
+    /**
+     * For the watcher’s own log lines
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    title: string;
+    /**
+     * Every pull request this card’s run opened, oldest first
+     * @type {Array<RunPullRequest>}
+     * @memberof TaskAwaitingMergeDto
+     */
+    pullRequests: Array<RunPullRequest>;
+}
+/**
+ * 
+ * @export
  * @interface TaskDeletedDto
  */
 export interface TaskDeletedDto {
@@ -4158,6 +4228,12 @@ export interface TaskDto {
      * @memberof TaskDto
      */
     reportItemId: string | null;
+    /**
+     * Pull requests the task's run opened, oldest first, as captured from the agent output
+     * @type {Array<RunPullRequest>}
+     * @memberof TaskDto
+     */
+    pullRequests: Array<RunPullRequest>;
     /**
      * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
      * @type {number}

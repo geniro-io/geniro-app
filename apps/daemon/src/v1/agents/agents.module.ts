@@ -337,6 +337,9 @@ import { defaultSpawn } from './utils/spawn-cli';
     // publishes the same verdict to the builder.
     ClaudeProbeService,
     ProcessRegistry,
+    // Exported for the graph executor: a follow-up message to a workflow run
+    // carries pictures the way a chat's does, saved under the run it joins.
+    AttachmentStoreService,
     // Exported so the graph executor's own run delete reaches the same
     // teardown obligation a chat delete does — a run-scoped CLI process is
     // reaped by nothing else.

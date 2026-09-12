@@ -3,7 +3,12 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { NewTaskDialog, type NewTaskInput } from './new-task-dialog';
+import { createPreloadStub } from '../__fixtures__/preload-stub';
+import {
+  type NewTaskAttachments,
+  NewTaskDialog,
+  type NewTaskInput,
+} from './new-task-dialog';
 import type { TaskFieldsContext } from './task-fields';
 
 (
@@ -36,10 +41,15 @@ const context = (over: Partial<TaskFieldsContext> = {}): TaskFieldsContext => ({
   ...over,
 });
 
+type CreateHandler = (
+  input: NewTaskInput,
+  attachments: NewTaskAttachments,
+) => void;
+
 function open(over: Partial<React.ComponentProps<typeof NewTaskDialog>> = {}): {
-  onCreate: ReturnType<typeof vi.fn<(input: NewTaskInput) => void>>;
+  onCreate: ReturnType<typeof vi.fn<CreateHandler>>;
 } {
-  const onCreate = vi.fn<(input: NewTaskInput) => void>();
+  const onCreate = vi.fn<CreateHandler>();
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -180,5 +190,117 @@ describe('the properties a draft carries', () => {
       (document.body.querySelector('#new-task-title') as HTMLInputElement)
         .value,
     ).toBe('');
+  });
+});
+
+/**
+ * What a draft can hold that the create route cannot take.
+ *
+ * REPORTED as "i cant add images to task when i just create task - only when
+ * edit". Both a picture and a file are bound to a card by its id, so the
+ * dialog stages them and hands them over beside the card's fields.
+ */
+describe('what a draft stages for the card it becomes', () => {
+  const description = (): HTMLTextAreaElement =>
+    document.body.querySelector('#new-task-description') as HTMLTextAreaElement;
+
+  /** Write the field the way typing does — the controlled value reads `input`. */
+  const setDescription = (text: string): void => {
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      'value',
+    )?.set;
+    act(() => {
+      setter?.call(description(), text);
+      description().dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  /**
+   * jsdom has no `execCommand`; this one does what the browser's does here —
+   * writes the text into the focused field and fires `input`.
+   */
+  const installInsertText = (): void => {
+    document.execCommand = ((_command: string, _ui: boolean, text: string) => {
+      const field = document.activeElement as HTMLTextAreaElement;
+      setDescription(field.value + text);
+      return true;
+    }) as unknown as typeof document.execCommand;
+  };
+
+  const pasteScreenshot = (): void => {
+    const shot = new File([new Uint8Array([1, 2, 3])], 'shot.png', {
+      type: 'image/png',
+    });
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', {
+      value: { files: [shot], types: ['Files'] },
+    });
+    description().focus();
+    act(() => {
+      description().dispatchEvent(event);
+    });
+  };
+
+  it('stages a pasted screenshot where it was pasted, and hands it over with the card', () => {
+    installInsertText();
+    const { onCreate } = open();
+
+    pasteScreenshot();
+
+    // The reference is in the text at once, and the dialog says what it is.
+    expect(description().value).toBe('![shot.png](staged-image:1)');
+    expect(
+      document.body.querySelector('[data-slot="new-task-staged"]')?.textContent,
+    ).toContain('1 picture is attached when the task is created');
+
+    typeTitle('With a screenshot');
+    submit();
+
+    const [input, staged] = onCreate.mock.calls[0]!;
+    expect(input.description).toBe('![shot.png](staged-image:1)');
+    expect(staged.images.map((image) => image.ref)).toEqual(['staged-image:1']);
+  });
+
+  it('drops a picture whose reference was deleted before Add', () => {
+    // Deleting the reference is how a user takes a pasted picture back out,
+    // and a picture nobody asked for must not be written to disk.
+    installInsertText();
+    const { onCreate } = open();
+
+    pasteScreenshot();
+    setDescription('Changed my mind');
+    expect(
+      document.body.querySelector('[data-slot="new-task-staged"]'),
+    ).toBeNull();
+
+    typeTitle('No screenshot after all');
+    submit();
+
+    expect(onCreate.mock.calls[0]![1].images).toEqual([]);
+  });
+
+  it('stages picked files on the panel’s own Files row', async () => {
+    window.geniro = createPreloadStub({
+      pickTaskFiles: vi.fn(async () => ['/docs/spec.pdf']),
+    });
+    const { onCreate } = open();
+
+    const attach = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Attach files',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      attach.click();
+    });
+
+    expect(row('Files').textContent).toContain('spec.pdf');
+
+    typeTitle('With a file');
+    submit();
+
+    expect(onCreate.mock.calls[0]![1]).toEqual({
+      images: [],
+      files: ['/docs/spec.pdf'],
+    });
   });
 });

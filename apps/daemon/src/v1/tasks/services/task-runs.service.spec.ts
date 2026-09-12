@@ -162,6 +162,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       projectDao,
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      runDao,
     );
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and

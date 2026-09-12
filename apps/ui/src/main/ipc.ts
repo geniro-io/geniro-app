@@ -222,7 +222,13 @@ export function registerIpc(
     const parsed = taskWorktreeSchema.parse(input);
     try {
       const made = await prepareWorktree(parsed);
-      return { ok: true, path: made.path, branch: made.branch, error: null };
+      return {
+        ok: true,
+        path: made.path,
+        branch: made.branch,
+        reused: made.reused,
+        error: null,
+      };
     } catch (error) {
       // Shaped rather than rethrown: an exception crossing IPC arrives as a
       // string with its structure gone, and the caller must be able to tell a
@@ -237,7 +243,13 @@ export function registerIpc(
             ? error.message
             : String(error)
           : stderr.split('\n')[0]!;
-      return { ok: false, path: null, branch: null, error: message };
+      return {
+        ok: false,
+        path: null,
+        branch: null,
+        reused: false,
+        error: message,
+      };
     }
   });
 

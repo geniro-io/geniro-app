@@ -2376,6 +2376,32 @@ export interface ExportedDto {
 /**
  * 
  * @export
+ * @interface FindFinishedTasksDto
+ */
+export interface FindFinishedTasksDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof FindFinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface FinishedTasksDto
+ */
+export interface FinishedTasksDto {
+    /**
+     * The subset whose work is finished — Done with no run working in it, or no longer a card at all
+     * @type {Array<string>}
+     * @memberof FinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface ForgottenInstructionsDto
  */
 export interface ForgottenInstructionsDto {

@@ -220,6 +220,7 @@ export function createPreloadStub(
         ok: true,
         path: `/tmp/geniro-worktrees/${input.taskId}`,
         branch: `geniro/task-${input.taskId}`,
+        reused: false,
         error: null,
       });
     },

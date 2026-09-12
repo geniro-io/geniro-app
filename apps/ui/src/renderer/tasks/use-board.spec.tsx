@@ -326,7 +326,7 @@ describe('useBoard', () => {
     });
   });
 
-  describe('collecting a settled run’s worktree', () => {
+  describe('collecting a finished card’s worktree', () => {
     let emit: ((event: unknown) => void) | null;
     type SettleWorktree = (taskId: string) => Promise<TaskWorktreeSettleResult>;
     let settle: ReturnType<typeof vi.fn<SettleWorktree>>;
@@ -351,15 +351,15 @@ describe('useBoard', () => {
       window.geniro.settleTaskWorktree = settle;
     });
 
-    it('collects it when the DAEMON says the run settled', async () => {
+    it('collects it when the DAEMON says the card’s work is finished', async () => {
       await mountWithClient();
 
       await act(async () => {
         emit?.({
           taskId: 't9',
           projectId: 'p1',
-          status: 'in_review',
-          reason: 'run-settled',
+          status: 'done',
+          reason: 'work-finished',
         });
       });
 
@@ -376,12 +376,31 @@ describe('useBoard', () => {
         emit?.({
           taskId: 't9',
           projectId: 'OTHER',
+          status: 'done',
+          reason: 'work-finished',
+        });
+      });
+
+      expect(settle).toHaveBeenCalledWith('t9');
+    });
+
+    it('does NOT collect it when the card’s run merely settled', async () => {
+      // The reported defect: the worktree went the moment the run settled,
+      // taking the cwd of a conversation the user was about to continue. The
+      // event is shaped as an older daemon still sends it — a window adopting
+      // a daemon from the previous build must not act on that label either.
+      await mountWithClient();
+
+      await act(async () => {
+        emit?.({
+          taskId: 't9',
+          projectId: 'p1',
           status: 'in_review',
           reason: 'run-settled',
         });
       });
 
-      expect(settle).toHaveBeenCalledWith('t9');
+      expect(settle).not.toHaveBeenCalled();
     });
 
     it('does NOT collect it when the card merely moved', async () => {

@@ -273,23 +273,28 @@ export function useBoard(
       return;
     }
     return client.onTaskChanged((event) => {
-      // The daemon OBSERVED this card's run reach a terminal status, which is
-      // the one moment its worktree is finished with. Main commits whatever
-      // the agent left onto the task's own branch and then removes the
-      // directory — the routine end state of a run, and the only thing that
-      // ever collected it before was a boot reaper that skips a dirty one.
+      // The daemon has decided this card's work is FINISHED — it is Done and
+      // no run is working in it — which is the one moment its worktree may go.
+      // Main commits whatever the agent left onto the task's own branch and
+      // then removes the directory.
+      //
+      // NOT when the card's run settles, which is what this keyed on before: a
+      // task's run is a chat the user continues after review, Retry re-sends
+      // into, and the CLI carries on by itself when a background command
+      // reports — all of it in that directory. Collecting at the settle took a
+      // live conversation's cwd out from under it, and every screenshot the
+      // agent had shown in it.
       //
       // Keyed on the daemon's REASON rather than on the card's column, which
-      // is written optimistically the moment a card is dragged: an earlier cut
-      // read the column and would have collected the worktree of an agent
-      // still working in it.
+      // is written optimistically the moment a card is dragged: a card dropped
+      // in Done while its agent is still working reaches this same broadcast.
       //
       // Deliberately NOT scoped to the open board. A worktree belongs to the
       // task, not to the project being looked at, and main answers with
       // `removed: false` for a task it never made one for — so the unscoped
       // call is a registry lookup, and scoping it would leave every other
       // project's worktrees uncollected for as long as this board is open.
-      if (event.reason === 'run-settled') {
+      if (event.reason === 'work-finished') {
         void window.geniro.settleTaskWorktree(event.taskId);
       }
       // The broadcast is client-wide, so most events belong to a board this
@@ -490,10 +495,11 @@ export function useBoard(
    *
    * The ORDER is the whole safety of it. Main creates the worktree first,
    * because the daemon needs a real directory to run in and runs no git
-   * itself; the daemon then starts the chat. If that second half fails, the
-   * worktree is removed in the failure path of the same operation — otherwise
-   * every failed press leaves a checkout on disk that nothing will ever
-   * collect, since the boot reaper only sees what a previous SESSION left.
+   * itself; the daemon then starts the chat. If that second half fails, a
+   * worktree THIS press made is removed in the failure path of the same
+   * operation — otherwise every failed press leaves a checkout on disk for a
+   * card whose work may never be finished, which is all the reaper collects.
+   * One that was the task's own, still standing, is left where it is.
    */
   const runTask = useCallback(
     async (taskId: string, prompt = ''): Promise<boolean> => {
@@ -549,7 +555,12 @@ export function useBoard(
           );
           return true;
         } catch (err: unknown) {
-          await window.geniro.pruneTaskWorktree(taskId);
+          // Given back only when THIS press made it. A worktree that was the
+          // task's own, still standing from an earlier run, stays: a refused
+          // start may mean that run is working in it right now.
+          if (!made.reused) {
+            await window.geniro.pruneTaskWorktree(taskId);
+          }
           setError(describe(err));
           return false;
         }

@@ -936,12 +936,19 @@ export interface TaskWorktreeResult {
   path: string | null;
   /** The branch it has checked out; null on failure. */
   branch: string | null;
+  /**
+   * Whether this was the task's OWN worktree, already standing and handed back
+   * as it was rather than made now. A caller whose start is then refused must
+   * leave a reused one alone: another run of this same task may be why the
+   * start was refused, and be working in it. False on failure.
+   */
+  reused: boolean;
   /** Why it failed, as git's own first line; null on success. */
   error: string | null;
 }
 
 /**
- * What became of a settled run's worktree.
+ * What became of a finished card's worktree.
  *
  * Two facts rather than one, because "kept" has two causes a caller may want
  * to tell apart: nothing could be committed (hooks refused it, or the machine

@@ -28,10 +28,7 @@ function namesWorkflow(run: Run): run is WorkflowRun {
   return Boolean(run.workflowId);
 }
 
-export function assertWorkflowRun(
-  run: Run | null,
-  runId: string,
-): WorkflowRun {
+export function assertWorkflowRun(run: Run | null, runId: string): WorkflowRun {
   if (!run) {
     throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
   }

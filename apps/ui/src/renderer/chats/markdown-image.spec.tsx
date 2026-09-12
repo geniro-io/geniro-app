@@ -100,7 +100,10 @@ describe('an image an agent referenced from its own markdown', () => {
     // path it is given literally — `%20` names no file.
     const load = vi.fn(async () => 'data:image/png;base64,PCT');
 
-    await render('![shot](/Users/me/Library/Application%20Support/x.png)', load);
+    await render(
+      '![shot](/Users/me/Library/Application%20Support/x.png)',
+      load,
+    );
 
     expect(load).toHaveBeenCalledWith(
       '/Users/me/Library/Application Support/x.png',

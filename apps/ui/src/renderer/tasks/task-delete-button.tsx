@@ -80,8 +80,8 @@ export function TaskDeleteButton({
           <div className="flex flex-col gap-1">
             <span className="text-sm font-medium">Delete this task?</span>
             <span className="text-xs text-muted-foreground">
-              The card cannot be brought back. Any branch its agent worked on
-              is kept.
+              The card cannot be brought back. Any branch its agent worked on is
+              kept.
             </span>
           </div>
           <div className="flex justify-end gap-2">

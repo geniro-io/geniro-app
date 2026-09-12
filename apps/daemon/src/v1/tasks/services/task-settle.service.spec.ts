@@ -543,6 +543,61 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('in_progress');
   });
 
+  /** Announce a status for run-1 and let the detached subscriber finish. */
+  const announce = async (status: RunStatus): Promise<void> => {
+    bus.publishRunStatus({
+      runId: 'run-1',
+      status,
+      at: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+
+  /**
+   * The card's status as the DATABASE holds it.
+   *
+   * Through a fresh fork, never the spec's shared `em`: that one's identity map
+   * hands a second `getById` the entity the first one loaded, so a test reading
+   * a card twice sees the first answer again — which is how the case below
+   * once "passed" its first check with the revive switched off.
+   */
+  const statusOf = async (taskId: string): Promise<string | undefined> =>
+    (await taskDao.getById(taskId, orm.em.fork() as EntityManager))?.status;
+
+  it('puts a FAILED card back to work when its run works again, and settles it from there', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+    service.onModuleInit();
+
+    // The user carried the conversation on in the chat itself.
+    await announce('running');
+    expect(await statusOf(task.id)).toBe('in_progress');
+
+    await announce('completed');
+    expect(await statusOf(task.id)).toBe('in_review');
+  });
+
+  it('leaves a card in review alone when its run works again', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'in_review' });
+    service.onModuleInit();
+
+    await announce('running');
+
+    expect(await statusOf(task.id)).toBe('in_review');
+  });
+
+  it('does not revive a failed card that has moved on to another run', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'failed' });
+    await tasks.update(task.id, { runId: 'run-2' });
+    service.onModuleInit();
+
+    await announce('running');
+
+    expect(await statusOf(task.id)).toBe('failed');
+  });
+
   it('settles a card ONCE, so a follow-up turn cannot drag it back', async () => {
     const task = await working();
     await settleRun('run-1', 'completed');

@@ -10,6 +10,7 @@ import {
   formatUsd,
   subagentThreadsByAgent,
   threadsOf,
+  withDurableNodeStatus,
 } from './agent-activity';
 import type { SubagentBlockEntry } from './transcript-groups';
 
@@ -625,5 +626,65 @@ describe('displayStatus', () => {
         typeof displayStatus
       >[0]),
     ).toBe('completed');
+  });
+});
+
+describe('withDurableNodeStatus — the daemon answers where the window cannot', () => {
+  const running = new Map([['engineer', { status: 'running' as const }]]);
+  const toolRow = (): ChatItem =>
+    item('tool_call', 'engineer', { id: 't1', name: 'Bash', input: {} });
+
+  it('a node whose running row fell above the loaded page reads as running', () => {
+    // The reported run: the Engineer's `running` status row was seq 926 of
+    // 2,817, so the window held its tool calls and no status — card `pending`,
+    // no `Working…` row.
+    const window = computeAgentActivity([toolRow()]);
+    expect(displayStatus(window.get('engineer'))).toBe('pending');
+
+    const out = withDurableNodeStatus(window, running, false);
+    expect(out.get('engineer')?.activeTurns).toBe(1);
+    expect(displayStatus(out.get('engineer'))).toBe('running');
+  });
+
+  it('a running node the window holds nothing for is running too', () => {
+    // The Manager parked in `await_agent` writes nothing for minutes.
+    const out = withDurableNodeStatus(computeAgentActivity([]), running, false);
+    expect(displayStatus(out.get('engineer'))).toBe('running');
+  });
+
+  it('the window WINS once it holds a status row — the snapshot is not live', () => {
+    const window = computeAgentActivity([
+      item('status', 'engineer', { nodeId: 'engineer', status: 'running' }),
+      item('status', 'engineer', { nodeId: 'engineer', status: 'completed' }),
+    ]);
+    const out = withDurableNodeStatus(window, running, false);
+    expect(out).toBe(window);
+    expect(displayStatus(out.get('engineer'))).toBe('completed');
+  });
+
+  it('ignores a running row once the RUN has settled — a daemon that died mid-turn', () => {
+    const window = computeAgentActivity([toolRow()]);
+    const out = withDurableNodeStatus(window, running, true);
+    expect(out).toBe(window);
+    expect(displayStatus(out.get('engineer'))).toBe('pending');
+  });
+
+  it('fills a known node’s missing status, but adds no card for an unknown one', () => {
+    // Known = the window gave it an entry without a status: a finished turn
+    // whose opening row is above the page. A tool row alone creates none.
+    const out = withDurableNodeStatus(
+      computeAgentActivity([
+        item('turn_complete', 'engineer', {
+          usage: { inputTokens: 1, outputTokens: 1 },
+        }),
+      ]),
+      new Map([
+        ['engineer', { status: 'completed' as const }],
+        ['trigger-1', { status: 'completed' as const }],
+      ]),
+      false,
+    );
+    expect(displayStatus(out.get('engineer'))).toBe('completed');
+    expect(out.has('trigger-1')).toBe(false);
   });
 });

@@ -10,7 +10,6 @@ import {
   type GeniroApi,
   type GitInfo,
   type PullRequestRefResult,
-  type PullRequestsResult,
   type Settings,
   type TaskWorktreeResult,
   type TaskWorktreeSettleResult,
@@ -74,12 +73,6 @@ const NO_GIT: GitInfo = {
   dirty: false,
   worktrees: [],
   worktreeOf: null,
-};
-
-const NO_PULL_REQUESTS: PullRequestsResult = {
-  branch: null,
-  originOwner: null,
-  pullRequests: [],
 };
 
 export function createPreloadStub(
@@ -254,10 +247,6 @@ export function createPreloadStub(
         error: null,
         stashLeft: null,
       });
-    },
-    getPullRequests: () => {
-      note('getPullRequests');
-      return Promise.resolve(NO_PULL_REQUESTS);
     },
     getPullRequestsByRef: (refs): Promise<PullRequestRefResult[]> => {
       note('getPullRequestsByRef');

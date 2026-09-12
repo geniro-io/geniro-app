@@ -417,20 +417,6 @@ async function runGit(dir: string, args: string[]): Promise<true | string> {
   }
 }
 
-/**
- * The folder's checked-out branch, or null for a non-repo and for a detached
- * HEAD — neither of which names one.
- *
- * Its own read rather than a field off {@link readGitInfo}: `github-prs.ts`
- * wants the branch and nothing else, and that function spends five git
- * subprocesses collecting the branch list, the dirty flag and every sibling
- * worktree.
- */
-export async function readHeadBranch(dir: string): Promise<string | null> {
-  const head = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  return head === null || head === 'HEAD' ? null : head;
-}
-
 /** A commit id as `rev-parse` prints one — never abbreviated. */
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
@@ -439,9 +425,7 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
  * it already carries uncommitted work. Stamped onto a chat when it is created,
  * so the diff view has a fixed point to measure against.
  *
- * Its own read rather than a field on {@link GitInfo}, which is the house
- * pattern {@link readHeadBranch} documents and which matters more here: that
- * type is rendered by the composer's chip on every folder change, and widening
+ * Its own read rather than a field on {@link GitInfo}: that type is rendered by the composer's chip on every folder change, and widening
  * it would put a sha through five files and two `NOT_A_REPO` literals for a
  * reading one caller takes once per chat. Two subprocesses against that
  * function's five, for the same reason.
@@ -469,20 +453,4 @@ export async function readGitStamp(dir: string): Promise<GitStamp> {
     // tree nobody looked at.
     dirty: status === null ? null : status !== '',
   };
-}
-
-/** `owner` out of both URL forms git writes for a GitHub remote. */
-const ORIGIN_OWNER = /[:/]([^/:]+)\/[^/]+?(?:\.git)?$/;
-
-/**
- * The GitHub owner of this folder's `origin` remote, or null.
- *
- * Parsed from the remote URL rather than asked of `gh`, and that is the whole
- * point: `gh` answers for the BASE repo, which on a fork clone carrying an
- * `upstream` remote is the upstream owner — the opposite of what a caller
- * asking "is this pull request mine" needs.
- */
-export async function readOriginOwner(dir: string): Promise<string | null> {
-  const url = await git(dir, ['remote', 'get-url', 'origin']);
-  return url === null ? null : (ORIGIN_OWNER.exec(url.trim())?.[1] ?? null);
 }

@@ -1111,17 +1111,6 @@ export interface PullRequestRefResult {
   pullRequest: PullRequestInfo | null;
 }
 
-export interface PullRequestsResult {
-  /** The folder's checked-out branch — the key "current PR" is matched on. */
-  branch: string | null;
-  /**
-   * GitHub login owning this folder's `origin` remote — the second half of the
-   * "current PR" key; see `chats/pull-request.ts`.
-   */
-  originOwner: string | null;
-  pullRequests: PullRequestInfo[];
-}
-
 /**
  * Where a chat export ended up — or that the user closed the dialog.
  *
@@ -1377,15 +1366,6 @@ export interface GeniroApi {
    */
   pullBranch(dir: string): Promise<BranchPullResult>;
   /**
-   * Every pull request on the repo this folder belongs to, plus the branch it
-   * currently has checked out.
-   *
-   * Both halves on one channel because a PR list is only useful here paired
-   * with the branch that says which of them is THIS folder's — asking twice
-   * would let the two answers come from either side of a branch switch.
-   */
-  getPullRequests(dir: string): Promise<PullRequestsResult>;
-  /**
    * Live state for the pull requests a THREAD opened, addressed by URL.
    *
    * A batch rather than one call per thread: the sidebar draws many rows and
@@ -1521,7 +1501,6 @@ export const IPC = {
   saveChatExport: 'geniro:saveChatExport',
   switchBranch: 'geniro:switchBranch',
   pullBranch: 'geniro:pullBranch',
-  getPullRequests: 'geniro:getPullRequests',
   getPullRequestsByRef: 'geniro:getPullRequestsByRef',
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',

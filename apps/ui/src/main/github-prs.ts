@@ -6,10 +6,8 @@ import type {
   PullRequestInfo,
   PullRequestRef,
   PullRequestRefResult,
-  PullRequestsResult,
   PullRequestState,
 } from '../shared/contracts';
-import { readHeadBranch, readOriginOwner } from './git-info';
 import { neutralEnv } from './probe-env';
 import { resolveBinary } from './resolve-binary';
 
@@ -19,12 +17,12 @@ const execFileAsync = promisify(execFile);
 const GH_TIMEOUT_MS = 15_000;
 
 /**
- * How many pull requests one branch may contribute.
+ * How many pull requests one repository's listing returns — the newest page.
  *
- * Roomy rather than tuned: the query is head-filtered, so this bounds how often
- * ONE branch name has been used for a pull request, which is a handful even on a
- * long-lived `main`. It is here so a pathological repo cannot hand the renderer
- * an unbounded list, not because any real branch approaches it.
+ * The listing is the fast path for a thread's own pull requests, which are
+ * recent by nature; one older than this page is read on its own by URL
+ * (`viewPullRequest`, bounded by {@link REF_VIEW_LIMIT}). It is here so a
+ * pathological repository cannot hand the renderer an unbounded list.
  */
 const PULL_REQUEST_LIMIT = 50;
 
@@ -36,18 +34,11 @@ const PULL_REQUEST_LIMIT = 50;
  * `additions` / `deletions` / `changedFiles` are what let a pull request state
  * its own size, and they are not free: measured on 2.72.0 against this repo, a
  * five-row query went from 0.68s to 1.18s with them. That is paid once per
- * repository per read, on a query already bounded to one head branch and gated
- * behind a five-minute freshness floor, for the figure a reader wants first
- * about a pull request they did not write.
+ * repository per read, gated behind the resolve's five-minute freshness floor,
+ * for the figure a reader wants first about a pull request.
  */
 const PULL_REQUEST_FIELDS =
   'number,title,state,isDraft,headRefName,isCrossRepository,headRepositoryOwner,author,url,updatedAt,additions,deletions,changedFiles';
-
-const NO_PULL_REQUESTS: PullRequestsResult = {
-  branch: null,
-  originOwner: null,
-  pullRequests: [],
-};
 
 /**
  * Run one `gh` command in `cwd`. Never throws, on the same rule the git helpers
@@ -203,72 +194,6 @@ async function listPullRequests(
 }
 
 /**
- * Newest first — the order every surface reads in, and what
- * `chats/pull-request.ts` picks the thread's CURRENT pull request from when
- * none on the branch is open. Sorted here rather than trusted from `gh`, since
- * that is a contract of {@link PullRequestsResult} and not of the CLI.
- *
- * A plain string compare orders gh's UTC RFC-3339 stamps.
- */
-function byNewest(a: PullRequestInfo, b: PullRequestInfo): number {
-  return b.updatedAt.localeCompare(a.updatedAt);
-}
-
-/**
- * The pull requests on the branch `dir` has checked out, plus the branch itself.
- *
- * Head-filtered at the QUERY, not in the renderer: a thread is one folder on one
- * branch, and everything the app draws about pull requests is scoped to that
- * (`chats/pull-request.ts`). Asking for the repo's whole list was the first
- * shape and cost three round trips to fetch fifty rows that were then filtered
- * down to one — and, because a cap has to be applied somewhere, needed a
- * separate head query underneath it anyway to guarantee the branch's own pull
- * request survived the truncation. One exact question replaces all of it.
- *
- * `--state all` because a branch's history is the point: an open pull request
- * and the merged one it replaced belong under the same thread. gh's own three
- * states then separate them again on screen.
- *
- * The branch travels with the list because it is what identifies these as THIS
- * folder's — the app stores no branch on a run, so the pairing is only ever
- * this live read. `originOwner` rides along for the fork case; the filtering
- * itself stays in the renderer, which is where a stranger's same-named fork
- * branch is told from the user's own (`isOurHead`).
- */
-export async function readPullRequests(
-  dir: string,
-): Promise<PullRequestsResult> {
-  // Resolved once, and BEFORE anything is spawned. On a machine with no `gh`
-  // the query cannot answer, so reading the branch would be a subprocess per
-  // folder on every window focus for a value the failure path throws away.
-  const binary = resolveBinary('gh');
-  if (binary === null) {
-    return NO_PULL_REQUESTS;
-  }
-  // Read first and awaited alone, because it is the query's own argument.
-  const branch = await readHeadBranch(dir);
-  if (branch === null) {
-    // A detached HEAD is on no branch, so there is nothing to ask about — and
-    // no surface would draw the answer either way.
-    return NO_PULL_REQUESTS;
-  }
-  const [originOwner, onBranch] = await Promise.all([
-    readOriginOwner(dir),
-    // `branch` is the only argv element in this file that is not a literal, and
-    // it stays safe by construction: git's refname rules reject spaces, `..`
-    // and control characters, and `--head` is passed as its own token, which
-    // gh (Cobra/pflag) consumes as the flag's VALUE whatever it starts with —
-    // probe-verified on 2.72.0 with a branch literally named `--json`. Keep it
-    // a separate token: `--head=<branch>`, or moving it last, would change that.
-    listPullRequests(binary, dir, ['--state', 'all', '--head', branch]),
-  ]);
-  if (onBranch === null) {
-    return NO_PULL_REQUESTS;
-  }
-  return { branch, originOwner, pullRequests: [...onBranch].sort(byNewest) };
-}
-
-/**
  * How many distinct REPOSITORIES one resolve may ask about.
  *
  * A thread that spans repositories is the case this whole path exists for — the
@@ -361,8 +286,7 @@ export async function readPullRequestsByRef(
   }
 
   const found = new Map<string, PullRequestInfo>();
-  // SEQUENTIAL, like `readPullRequests` above and for the same reason: each
-  // iteration is a process talking to GitHub, and a thread spanning six
+  // SEQUENTIAL: each iteration is a process talking to GitHub, and a thread spanning six
   // repositories would otherwise open six at once on the first paint.
   for (const [repo, group] of byRepo) {
     const rows = await listPullRequests(binary, dir, [

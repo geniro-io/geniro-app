@@ -127,6 +127,21 @@ function applyAnnouncement(
 }
 
 /**
+ * Whether a row was written by a DELEGATE rather than by its node's own agent.
+ *
+ * TWIN PARSER: the renderer's `subagentIdOf` (`chats/subagent-payload.ts`)
+ * reads the same `parentToolUseId` key, which `event-to-item.ts` stamps on
+ * every row a sub-agent's line produced.
+ */
+function writtenByDelegate(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) {
+    return false;
+  }
+  const value = (payload as { parentToolUseId?: unknown }).parentToolUseId;
+  return typeof value === 'string' && value !== '';
+}
+
+/**
  * The call thread one announcement was made in, or null for the node's own
  * conversation.
  *
@@ -157,12 +172,21 @@ function readCallId(payload: unknown): string | null {
  * were folded into a single list — the second call's `1 in_progress` patched
  * over the first call's `1 completed`, and the panel showed one plan that
  * belonged to neither.
+ *
+ * A DELEGATE's announcements are skipped rather than folded, for the same
+ * reason again: a delegate's rows carry its launcher's `nodeId` (and its call's
+ * `callId`), so keying by those alone would merge its list into the one this
+ * group answers for — the list the panel shows as the agent's own and the
+ * transcript's cards take their titles from.
  */
 export function foldTaskLists(
   rows: readonly { nodeId: string | null; payload: unknown }[],
 ): RunTaskGroup[] {
   const perThread = new Map<string, RunTaskGroup>();
   for (const row of rows) {
+    if (writtenByDelegate(row.payload)) {
+      continue;
+    }
     const announcement = readTaskAnnouncement(row.payload);
     if (announcement === null) {
       continue;

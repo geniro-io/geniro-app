@@ -89,6 +89,33 @@ describe('foldTaskLists', () => {
     expect(done(groups)).toBe('0/1,1/2');
   });
 
+  it('leaves a DELEGATE’s list out of its launcher’s — they share a node id', () => {
+    // A delegate's rows carry the launching agent's `nodeId`, so a fold keyed
+    // by node alone would let the delegate's task `1` rename and complete the
+    // agent's own.
+    const groups = foldTaskLists([
+      { nodeId: null, payload: snapshot([{ id: '1', title: 'Main' }]) },
+      {
+        nodeId: null,
+        payload: {
+          ...(snapshot([
+            { id: '1', title: 'Delegate', status: 'completed' },
+          ]) as Record<string, unknown>),
+          parentToolUseId: 'toolu_delegate',
+        },
+      },
+    ]);
+    expect(groups).toEqual([
+      {
+        nodeId: null,
+        callId: null,
+        tasks: [
+          { id: '1', title: 'Main', status: 'pending', activeForm: null },
+        ],
+      },
+    ]);
+  });
+
   it('keeps each CALL of one node apart, since every call numbers from 1 too', () => {
     // Two instances of one Engineer, each called with its own brief. Keyed by
     // node alone the second call's `1 in_progress` patched over the first

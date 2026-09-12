@@ -34,6 +34,8 @@ function reading(
         calls,
         workedMs: null,
         toolCalls: null,
+        status: 'running',
+        startedAt: null,
       },
     ],
   ]);

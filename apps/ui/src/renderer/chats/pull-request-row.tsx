@@ -133,36 +133,6 @@ function PullRequestMeta({
 }
 
 /**
- * One pull request in the right-hand panel's list.
- *
- * The state is the ICON's — its colour and its shape — never a word beside the
- * number. Within the settled group a merged pull request and an abandoned one
- * are the same row shape, and green-versus-red separates them at a glance where
- * a trailing `· merged` had to be read. The word survives in the row's tooltip
- * and in the icon's own screen-reader text.
- */
-export function PullRequestRow({
-  pullRequest,
-}: {
-  pullRequest: PullRequestInfo;
-}): React.JSX.Element {
-  return (
-    <PanelLinkRow
-      href={pullRequest.url}
-      title={pullRequest.title}
-      tooltip={`#${pullRequest.number} ${pullRequest.title} · ${lookOf(pullRequest).word}${sizeSentence(pullRequest)}`}
-      icon={<PullRequestStateIcon pullRequest={pullRequest} />}
-      meta={
-        <PullRequestMeta
-          name={`#${pullRequest.number}`}
-          pullRequest={pullRequest}
-        />
-      }
-    />
-  );
-}
-
-/**
  * THIS thread's pull request as a LABEL — a state glyph and the number, and
  * nothing else.
  *
@@ -221,8 +191,14 @@ function pullRequestLabel(
 /**
  * One pull request THIS THREAD opened, in the right-hand panel.
  *
- * Draws from whatever is known: a resolved row gets the title and the state its
- * sibling {@link PullRequestRow} draws, and an unresolved one still gets a row.
+ * The state is the ICON's — its colour and its shape — never a word beside the
+ * number: within the settled group a merged pull request and an abandoned one
+ * are the same row shape, and green-versus-red separates them at a glance where
+ * a trailing `· merged` had to be read. The word survives in the row's tooltip
+ * and in the icon's own screen-reader text.
+ *
+ * Draws from whatever is known: a resolved row gets the title and the state,
+ * and an unresolved one still gets a row.
  * That fallback is the point rather than a nicety — the thread demonstrably
  * opened this pull request, so "GitHub could not be asked" must not make it
  * disappear, which is exactly what a list built only from `gh` answers would do

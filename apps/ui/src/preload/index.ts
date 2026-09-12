@@ -103,10 +103,6 @@ const api: GeniroApi = {
     ipcRenderer.invoke(IPC.getChangesSince, dir, sha) as ReturnType<
       GeniroApi['getChangesSince']
     >,
-  getPullRequests: (dir) =>
-    ipcRenderer.invoke(IPC.getPullRequests, dir) as ReturnType<
-      GeniroApi['getPullRequests']
-    >,
   getPullRequestsByRef: (refs) =>
     ipcRenderer.invoke(IPC.getPullRequestsByRef, refs) as ReturnType<
       GeniroApi['getPullRequestsByRef']

@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GeniroApi, PullRequestsResult } from '../../shared/contracts';
+import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   ItemDto as ChatItem,
@@ -606,12 +606,6 @@ beforeEach(() => {
       branches: [],
       dirty: false,
       worktrees: [],
-    }),
-    // Default to a folder `gh` cannot speak for, matching the non-git default
-    // above: no pull-request surface is drawn unless a test opts into one.
-    getPullRequests: vi.fn().mockResolvedValue({
-      branch: null,
-      pullRequests: [],
     }),
     switchBranch: vi
       .fn()
@@ -12768,140 +12762,6 @@ describe('Chats — a fast action writes into the composer', () => {
     const field = composer(container);
     expect(document.activeElement).toBe(field);
     expect(field.selectionStart).toBe(field.value.length);
-  });
-});
-
-describe('Chats — the pull request above the composer', () => {
-  const openPullRequest = {
-    number: 70,
-    title: 'builder polish',
-    state: 'open' as const,
-    isDraft: false,
-    headRefName: 'fix/builder',
-    isCrossRepository: false,
-    headRepositoryOwner: 'someone',
-    author: 'someone',
-    url: 'https://github.com/o/r/pull/70',
-    updatedAt: '2026-08-01T00:00:00Z',
-    added: null,
-    removed: null,
-    changedFiles: null,
-  };
-
-  async function openMyChat(result: PullRequestsResult): Promise<HTMLElement> {
-    window.geniro.getPullRequests = vi.fn().mockResolvedValue(result);
-    api.listChats.mockResolvedValue([run1]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    // The read is an effect over the run list; one more flush lets it land
-    // before the assertions rather than racing them.
-    await act(async () => {});
-    return container;
-  }
-
-  it('puts NOTHING above the textarea for a thread that opened none', async () => {
-    // Reported on a chat one message old: it showed a pull request "которого
-    // там не должно быть". The branch's list answers a different question —
-    // a checkout routinely sits on a branch somebody else opened a pull
-    // request for — and the shelf claims the conversation produced what it
-    // holds. The sidebar row still states the branch fact, as plain text.
-    const container = await openMyChat({
-      branch: 'fix/builder',
-      originOwner: null,
-      pullRequests: [openPullRequest],
-    });
-
-    const shelf = container.querySelector('[data-slot="composer-shelf"]');
-    expect(shelf).not.toBeNull();
-    expect(shelf?.children).toHaveLength(0);
-    // Nor on the sidebar row, which made the same claim about every chat that
-    // happened to share the checkout — two unrelated conversations both naming
-    // #70. It is still on screen where it is NAMED as the branch's.
-    expect(
-      container.querySelector('[data-slot="current-pull-request"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('section[aria-label="Pull requests"]')
-        ?.textContent,
-    ).toContain('builder polish');
-  });
-
-  it('re-reads the folder after an in-app branch switch', async () => {
-    // The window never loses focus during an in-app switch, so the focus
-    // refresh cannot cover it: without the explicit re-read the composer band
-    // and every sidebar row would go on naming the PREVIOUS branch's pull
-    // request. Scope: this drives the composer's branch CHIP, so it pins that
-    // one call site — the saved-configuration and Pull-latest sites are wired
-    // the same way but are not covered here.
-    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
-      isRepo: true,
-      branch: 'main',
-      branches: ['main', 'dev'],
-      dirty: false,
-      worktrees: [],
-    });
-    window.geniro.switchBranch = vi.fn().mockResolvedValue({
-      ok: true,
-      branch: 'dev',
-      error: null,
-      dirty: false,
-      worktree: null,
-    });
-    const reads = vi
-      .fn()
-      .mockResolvedValue({ branch: 'dev', pullRequests: [] });
-    window.geniro.getPullRequests = reads;
-    api.listChats.mockResolvedValue([run1]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    const before = reads.mock.calls.length;
-
-    const branch = [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
-    await pickMenuRow(container, branch, 'dev');
-
-    expect(reads.mock.calls.length).toBeGreaterThan(before);
-  });
-
-  it('keeps another branch’s pull request off the panel as well', async () => {
-    // The panel is THIS thread's work, not the repo's. It used to list every
-    // pull request in the repo, which on a busy one buried the branch's own
-    // under fifty of other people's. End-to-end here rather than on the fold
-    // alone: the scoping is wiring in this component, so a panel handed the
-    // unfiltered list would pass every unit test underneath it.
-    const container = await openMyChat({
-      branch: 'fix/builder',
-      originOwner: null,
-      pullRequests: [
-        openPullRequest,
-        {
-          ...openPullRequest,
-          number: 71,
-          title: 'unrelated work',
-          headRefName: 'feat/other',
-        },
-      ],
-    });
-
-    expect(container.textContent).toContain('builder polish');
-    expect(container.textContent).not.toContain('unrelated work');
-  });
-
-  it('draws nothing when no pull request is on the folder’s branch', async () => {
-    // The end-to-end half of the branch match: a repo full of pull requests
-    // none of which is this thread's must not put someone else's on its
-    // composer.
-    const container = await openMyChat({
-      branch: 'main',
-      originOwner: null,
-      pullRequests: [openPullRequest],
-    });
-
-    expect(
-      container.querySelector('[data-slot="current-pull-request"]'),
-    ).toBeNull();
   });
 });
 

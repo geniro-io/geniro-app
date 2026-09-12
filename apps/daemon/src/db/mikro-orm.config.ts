@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
@@ -38,8 +39,18 @@ export default defineConfig({
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
   // strip the prefix so the swc CJS transform's require() shim accepts the path.
+  //
+  // `fileURLToPath` rather than `new URL(id).pathname`, which is the same
+  // conversion written the way that DECODES nothing: a URL's path is
+  // percent-encoded, so every entity under a directory whose name carries a
+  // space resolved to a `…/Application%20Support/…` that exists nowhere, and
+  // the daemon died at boot with `Cannot find module` before Nest started.
+  // Found from this repo's own worktrees, which live under
+  // `~/Library/Application Support/Geniro/worktrees/` — but nothing about it is
+  // local to that: an install path, a clone or a userData dir with a space, a
+  // `#`, or any non-ASCII character in it fails identically.
   dynamicImportProvider: async (id: string) => {
-    const path = id.startsWith('file://') ? new URL(id).pathname : id;
+    const path = id.startsWith('file://') ? fileURLToPath(id) : id;
     return import(path);
   },
 });

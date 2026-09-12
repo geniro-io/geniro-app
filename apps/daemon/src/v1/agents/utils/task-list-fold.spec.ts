@@ -89,6 +89,32 @@ describe('foldTaskLists', () => {
     expect(done(groups)).toBe('0/1,1/2');
   });
 
+  it('leaves a DELEGATE’s list out of its launcher’s — they share a node id', () => {
+    // A delegate's rows carry the launching agent's `nodeId`, so a fold keyed
+    // by node alone would let the delegate's task `1` rename and complete the
+    // agent's own.
+    const groups = foldTaskLists([
+      { nodeId: null, payload: snapshot([{ id: '1', title: 'Main' }]) },
+      {
+        nodeId: null,
+        payload: {
+          ...(snapshot([
+            { id: '1', title: 'Delegate', status: 'completed' },
+          ]) as Record<string, unknown>),
+          parentToolUseId: 'toolu_delegate',
+        },
+      },
+    ]);
+    expect(groups).toEqual([
+      {
+        nodeId: null,
+        tasks: [
+          { id: '1', title: 'Main', status: 'pending', activeForm: null },
+        ],
+      },
+    ]);
+  });
+
   it('is INDEPENDENT of how much transcript a client happens to hold', () => {
     // The defect this whole column exists to fix, stated as the difference
     // between two folds of the SAME run. A client folds the newest

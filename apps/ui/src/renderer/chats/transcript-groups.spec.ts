@@ -25,6 +25,7 @@ import {
   toolResultText,
   type TranscriptEntry,
   type TurnBlockEntry,
+  withDurableTaskLists,
   withLiveText,
 } from './transcript-groups';
 import { payloadString } from './transcript-item';
@@ -1763,6 +1764,50 @@ describe('buildTurnBlocks', () => {
       'turn-block',
     ]);
   });
+
+  it('a delegate declaration does not split the agent’s block — it draws nothing', () => {
+    // The reported shape: two `Engineer` blocks back to back on a workflow run,
+    // the second holding only a task card, with the daemon's `subagent_info`
+    // two rows above it. The row renders as nothing, so a block boundary there
+    // is a second avatar and `name · time` line with nothing between them.
+    const rows = [
+      item('message', { text: 'ask' }, null, 'user'),
+      item('message', { text: 'running the suite' }, 'engineer'),
+      call('Bash', 't1', { command: 'pnpm test' }, 'engineer'),
+      result('t1', 'ok', 'engineer'),
+      item(
+        'subagent_info',
+        { id: 'toolu_bg', label: null, kind: null, backgroundOpen: true },
+        'engineer',
+      ),
+      item(
+        'task_list',
+        {
+          mode: 'patch',
+          toolCallId: null,
+          tasks: [
+            { id: '3', title: null, status: 'in_progress', activeForm: null },
+          ],
+        },
+        'engineer',
+      ),
+    ];
+    const entries = buildTurnBlocks(
+      buildSubagentBlocks(groupTranscript(rows), rows),
+    );
+
+    expect(entries.map((e) => e.type)).toEqual(['item', 'turn-block']);
+    const block = entries[1];
+    if (block?.type !== 'turn-block') {
+      throw new Error('expected a turn block');
+    }
+    expect(block.nodeId).toBe('engineer');
+    expect(block.entries.map((e) => e.type)).toEqual([
+      'item',
+      'tools',
+      'task-list',
+    ]);
+  });
 });
 
 describe('buildTurnBlocks — sub-agent work', () => {
@@ -3267,6 +3312,133 @@ describe('groupTranscript task lists', () => {
       'task-list',
     ]);
     expect(countTools(entries)).toBe(2);
+  });
+
+  it('a delegate declaration does not chop the tool group it lands inside', () => {
+    // The daemon writes one per delegate state change — 69 on the reported run —
+    // and each used to read as the node "saying something".
+    const entries = groupTranscript([
+      call('Bash', 't1'),
+      result('t1'),
+      item('subagent_info', { id: 'toolu_bg', backgroundOpen: true }),
+      call('Bash', 't2'),
+      result('t2'),
+    ]);
+    expect(entries.map((e) => e.type)).toEqual(['tools']);
+    expect(entries[0]?.type === 'tools' && entries[0].pairs).toHaveLength(2);
+  });
+
+  describe('withDurableTaskLists — the daemon’s fold completes the cards', () => {
+    /**
+     * The reported window: the task's words were in the announcement that
+     * created it, which is older than the loaded page, so every row this client
+     * holds is a status patch naming a number.
+     */
+    const windowed = (): TranscriptEntry[] =>
+      groupTranscript([
+        tasks('patch', [{ id: '2', status: 'in_progress' }]),
+        item('message', { text: 'between' }),
+        tasks('patch', [{ id: '1', status: 'completed' }]),
+        tasks('patch', [{ id: '3', status: 'in_progress' }]),
+      ]);
+    const durable = [
+      {
+        nodeId: 'orch',
+        tasks: [
+          {
+            id: '1',
+            title: 'Plan',
+            status: 'completed' as const,
+            activeForm: null,
+          },
+          {
+            id: '2',
+            title: 'Build',
+            status: 'in_progress' as const,
+            activeForm: null,
+          },
+          {
+            id: '3',
+            title: 'Ship',
+            status: 'pending' as const,
+            activeForm: null,
+          },
+          {
+            id: '4',
+            title: 'Announce',
+            status: 'pending' as const,
+            activeForm: null,
+          },
+        ],
+      },
+    ];
+    const cards = (entries: readonly TranscriptEntry[]) =>
+      entries.flatMap((entry) => (entry.type === 'task-list' ? [entry] : []));
+
+    it('the LATEST card takes the current list’s rows, order and total', () => {
+      const [, latest] = cards(withDurableTaskLists(windowed(), durable));
+      expect(latest?.latest).toBe(true);
+      // Creation order, not first-sighting order — and task 4, which this
+      // window never saw at all, is in the total.
+      expect(latest?.tasks.map((task) => [task.id, task.title])).toEqual([
+        ['1', 'Plan'],
+        ['2', 'Build'],
+        ['3', 'Ship'],
+        ['4', 'Announce'],
+      ]);
+    });
+
+    it('the card’s own status wins — the daemon’s copy trails a live announcement', () => {
+      const [, latest] = cards(withDurableTaskLists(windowed(), durable));
+      // The daemon still says `pending` for task 3; the window holds the patch
+      // that started it.
+      expect(latest?.tasks.find((task) => task.id === '3')?.status).toBe(
+        'in_progress',
+      );
+    });
+
+    it('keeps a task the daemon has not folded yet rather than dropping it', () => {
+      const entries = groupTranscript([
+        tasks('patch', [{ id: '5', title: 'Late', status: 'pending' }]),
+      ]);
+      const [latest] = cards(withDurableTaskLists(entries, durable));
+      expect(latest?.tasks.map((task) => task.id)).toEqual([
+        '1',
+        '2',
+        '3',
+        '4',
+        '5',
+      ]);
+    });
+
+    it('an EARLIER card gains only its missing titles — its snapshot stays', () => {
+      const [earlier] = cards(withDurableTaskLists(windowed(), durable));
+      expect(earlier?.latest).toBe(false);
+      expect(earlier?.tasks).toEqual([
+        { id: '2', title: 'Build', status: 'in_progress', activeForm: null },
+      ]);
+    });
+
+    it('leaves a delegate’s card, and a node the fold has no list for, alone', () => {
+      const entries = groupTranscript([
+        item('task_list', {
+          mode: 'patch',
+          toolCallId: null,
+          parentToolUseId: 'toolu_delegate',
+          tasks: [
+            { id: '1', title: null, status: 'pending', activeForm: null },
+          ],
+        }),
+        tasks('patch', [{ id: '1', status: 'pending' }], null, 'writer'),
+      ]);
+      const out = cards(withDurableTaskLists(entries, durable));
+      expect(out.map((card) => card.tasks[0]?.title)).toEqual([null, null]);
+    });
+
+    it('hands the fold back untouched when the daemon holds no list', () => {
+      const entries = windowed();
+      expect(withDurableTaskLists(entries, [])).toBe(entries);
+    });
   });
 });
 

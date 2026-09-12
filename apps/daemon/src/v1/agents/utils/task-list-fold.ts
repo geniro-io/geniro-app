@@ -127,12 +127,31 @@ function applyAnnouncement(
 }
 
 /**
+ * Whether a row was written by a DELEGATE rather than by its node's own agent.
+ *
+ * TWIN PARSER: the renderer's `subagentIdOf` (`chats/subagent-payload.ts`)
+ * reads the same `parentToolUseId` key, which `event-to-item.ts` stamps on
+ * every row a sub-agent's line produced.
+ */
+function writtenByDelegate(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) {
+    return false;
+  }
+  const value = (payload as { parentToolUseId?: unknown }).parentToolUseId;
+  return typeof value === 'string' && value !== '';
+}
+
+/**
  * Fold every announcement a run has written into one list per AGENT.
  *
  * Keyed by `nodeId` (null for a 1:1 chat's one agent) for the reason the
  * renderer's `taskListsByAgent` is: a delegate's list is its own, and both CLIs
  * number tasks from 1, so folding two agents' rows together would have task `1`
- * mean two different things.
+ * mean two different things. Which is also why a DELEGATE's announcements are
+ * skipped rather than folded: a delegate carries its launcher's `nodeId`, so
+ * keying by node alone would merge its list into the one this row answers for —
+ * the list the panel shows as the agent's own and the transcript's cards take
+ * their titles from.
  */
 export function foldTaskLists(
   rows: readonly { nodeId: string | null; payload: unknown }[],
@@ -140,6 +159,9 @@ export function foldTaskLists(
   const perAgent = new Map<string | null, RunTaskRow[]>();
   const order: (string | null)[] = [];
   for (const row of rows) {
+    if (writtenByDelegate(row.payload)) {
+      continue;
+    }
     const announcement = readTaskAnnouncement(row.payload);
     if (announcement === null) {
       continue;

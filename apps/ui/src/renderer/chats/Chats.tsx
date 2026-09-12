@@ -212,6 +212,7 @@ import {
   subagentNamed,
   subagentSpokeSince,
   subagentTitle,
+  withDurableTaskLists,
   withLiveText,
   workflowCardsOf,
 } from './transcript-groups';
@@ -4855,12 +4856,22 @@ export function Chats({
     // always a top-level `item` entry (`ownerOf` gives it NO_OWNER), so
     // filtering here reaches every one of them.
     const redundant = compactionOnlyTurnEnds(items);
-    const folded =
+    // The task cards take what the loaded window cannot know — a task's words,
+    // stated only in the announcement that created it — from the daemon's fold
+    // of the whole run; see `withDurableTaskLists`. Only while `items` belong to
+    // the run that fold describes: a switch replaces the two a render apart, and
+    // two runs of one workflow share node ids, so a mismatched pair would title
+    // one run's cards with the other's tasks.
+    const durableTasks =
+      items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
+    const folded = withDurableTaskLists(
       redundant.size === 0
         ? groupTranscript(items)
         : groupTranscript(items).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
-          );
+          ),
+      durableTasks,
+    );
     // File changes come OUT of their group — see
     // `pullFileChangesOutOfGroups`. Here rather than inside the fold for the
     // reason that function records: an ACP agent reports its change on the

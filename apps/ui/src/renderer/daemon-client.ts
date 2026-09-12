@@ -55,7 +55,7 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
     if (group === null || typeof group !== 'object') {
       continue;
     }
-    const { nodeId, tasks } = group as Record<string, unknown>;
+    const { nodeId, callId, tasks } = group as Record<string, unknown>;
     if (!Array.isArray(tasks)) {
       continue;
     }
@@ -83,6 +83,9 @@ function readTaskGroups(groups: readonly unknown[]): RunTaskGroup[] {
     }
     out.push({
       nodeId: typeof nodeId === 'string' ? nodeId : null,
+      // Which of that node's CONVERSATIONS kept the list — a node called several
+      // times keeps one per call. Absent or blank reads as the node's own.
+      callId: typeof callId === 'string' && callId !== '' ? callId : null,
       tasks: rows,
     });
   }

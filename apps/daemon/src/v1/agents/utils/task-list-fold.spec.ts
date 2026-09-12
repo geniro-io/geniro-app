@@ -89,6 +89,37 @@ describe('foldTaskLists', () => {
     expect(done(groups)).toBe('0/1,1/2');
   });
 
+  it('keeps each CALL of one node apart, since every call numbers from 1 too', () => {
+    // Two instances of one Engineer, each called with its own brief. Keyed by
+    // node alone the second call's `1 in_progress` patched over the first
+    // call's `1 completed`, and the panel showed one list belonging to neither.
+    const inCall = (callId: string, payload: unknown): unknown => ({
+      ...(payload as Record<string, unknown>),
+      callId,
+    });
+    const groups = foldTaskLists([
+      {
+        nodeId: 'engineer',
+        payload: inCall('call-1', snapshot([{ id: '1' }, { id: '2' }])),
+      },
+      {
+        nodeId: 'engineer',
+        payload: inCall('call-2', snapshot([{ id: '1' }])),
+      },
+      {
+        nodeId: 'engineer',
+        payload: inCall('call-1', patch('1', 'completed')),
+      },
+      { nodeId: 'engineer', payload: snapshot([{ id: '1' }]) },
+    ]);
+    expect(groups.map((group) => group.callId)).toEqual([
+      'call-1',
+      'call-2',
+      null,
+    ]);
+    expect(done(groups)).toBe('1/2,0/1,0/1');
+  });
+
   it('is INDEPENDENT of how much transcript a client happens to hold', () => {
     // The defect this whole column exists to fix, stated as the difference
     // between two folds of the SAME run. A client folds the newest
@@ -155,7 +186,29 @@ describe('readRunTaskList / writeRunTaskList', () => {
 
   it('writes null when no agent has any rows, so the column stays empty', () => {
     expect(writeRunTaskList([])).toBeNull();
-    expect(writeRunTaskList([{ nodeId: null, tasks: [] }])).toBeNull();
+    expect(
+      writeRunTaskList([{ nodeId: null, callId: null, tasks: [] }]),
+    ).toBeNull();
+  });
+
+  it('reads a row stored before lists were kept per call as the node’s own', () => {
+    const stored = JSON.stringify([
+      {
+        nodeId: 'engineer',
+        tasks: [{ id: '1', title: 'a', status: 'pending', activeForm: null }],
+      },
+    ]);
+    expect(readRunTaskList(stored)[0]?.callId).toBeNull();
+    // …and a per-call row keeps its call through the round trip.
+    const perCall = foldTaskLists([
+      {
+        nodeId: 'engineer',
+        payload: { ...(snapshot([{ id: '1' }]) as object), callId: 'call-7' },
+      },
+    ]);
+    expect(readRunTaskList(writeRunTaskList(perCall))[0]?.callId).toBe(
+      'call-7',
+    );
   });
 
   it('degrades to no list rather than throwing on unreadable stored text', () => {

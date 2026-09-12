@@ -321,6 +321,13 @@ export interface SubagentBlockEntry {
   createdAt: string;
   /** The node that ran the delegation; null = the 1:1 chat's agent. */
   nodeId: string | null;
+  /**
+   * The `call_agent` thread of that node the delegation was issued in, or null
+   * for the node's own conversation — which INSTANCE of the agent launched it.
+   * Read off the launching call's payload, where the executor tags every row a
+   * callee sub-turn streams.
+   */
+  callId: string | null;
   /** What the delegate was asked to BE — the Task call's `subagent_type`. */
   kind: string | null;
   /** The Task call's one-line `description`. */
@@ -902,6 +909,27 @@ function entryNodeId(entry: TranscriptEntry): string | null {
 }
 
 /**
+ * The call thread one entry's rows were streamed in, for the one caller that
+ * has an entry and no launching call to read it from — the twin of
+ * {@link entryNodeId} for `payload.callId`.
+ *
+ * Only the two shapes a delegate's first row can take are read: a plain row,
+ * and a tool group (whose calls all share one thread, a group being keyed by
+ * node and thread). Anything else answers null — the node's own conversation —
+ * which is where the rows it describes were filed before calls were told apart.
+ */
+function entryCallId(entry: TranscriptEntry): string | null {
+  if (entry.type === 'item') {
+    return payloadString(entry.item.payload, 'callId');
+  }
+  if (entry.type === 'tools') {
+    const first = entry.pairs[0];
+    return first ? payloadString(first.call.payload, 'callId') : null;
+  }
+  return null;
+}
+
+/**
  * The LOWEST `seq` any row inside one entry carries — where that entry BEGINS
  * in the transcript — or null when it encloses no row at all.
  *
@@ -1273,6 +1301,31 @@ export function callBlockActivity(block: CallBlockEntry): string | null {
   return newestToolNameIn(block.entries);
 }
 
+/**
+ * Where one call has got to, as ONE line — what the agents panel's instance row
+ * says under the call's ask.
+ *
+ * The same two readings the block's own band draws, in the same order: what
+ * the callee last SAID (its result, once it has one), else the tool it is
+ * running. Only the FIRST line of the words, with a leading markdown marker
+ * dropped, because the row is a single line and a heading's `#` or a list's
+ * `-` would otherwise lead it.
+ */
+export function callBlockLatest(block: CallBlockEntry): string | null {
+  const said = callBlockSummary(block);
+  if (said !== null) {
+    const line = said
+      .split('\n')
+      .map((part) => part.replace(/^\s*(?:#+|[-*>]|\d+\.)\s*/, '').trim())
+      .find((part) => part.length > 0);
+    if (line !== undefined) {
+      return line;
+    }
+  }
+  const activity = callBlockActivity(block);
+  return activity === null ? null : `running ${activity}`;
+}
+
 function newestToolNameIn(entries: readonly TranscriptEntry[]): string | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]!;
@@ -1512,6 +1565,35 @@ export function collectSubagentBlocks(
   return out;
 }
 
+/**
+ * Every call block in a folded transcript, at any depth — the twin of
+ * {@link collectSubagentBlocks} for `call_agent` conversations.
+ *
+ * The agents panel reads one row per call thread off it, so each INSTANCE of a
+ * called agent can say where it has got to and what it has spent without the
+ * panel re-deriving the claiming rules the fold already applied. A callee can
+ * itself call, so blocks nested inside a block are collected too.
+ */
+export function collectCallBlocks(
+  entries: readonly TranscriptEntry[],
+): CallBlockEntry[] {
+  const out: CallBlockEntry[] = [];
+  const walk = (list: readonly TranscriptEntry[]): void => {
+    for (const entry of list) {
+      if (entry.type === 'call-block') {
+        out.push(entry);
+        walk(entry.entries);
+        continue;
+      }
+      if (entry.type === 'turn-block' || entry.type === 'subagent-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(entries);
+  return out;
+}
+
 /** One sub-agent block under assembly. */
 interface SubagentLaunch {
   call: ChatItem;
@@ -1704,6 +1786,9 @@ export function buildSubagentBlocks(
       // node whenever the launcher IS the chat agent.
       createdAt: launch ? launch.call.createdAt : entryCreatedAt(fallback),
       nodeId: launch ? launch.call.nodeId : entryNodeId(fallback),
+      callId: launch
+        ? payloadString(launch.call.payload, 'callId')
+        : entryCallId(fallback),
       kind:
         inputString(launch?.call, 'subagent_type') ?? declared?.kind ?? null,
       label:

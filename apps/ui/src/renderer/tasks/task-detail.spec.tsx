@@ -35,11 +35,12 @@ const task = (over: Partial<TaskDto> = {}): TaskDto =>
 function detail(
   over: Partial<TaskDto> & {
     onRun?: () => void;
+    onDelete?: () => void;
     task?: TaskDto;
     report?: ItemDto | null;
   } = {},
 ): HTMLDivElement {
-  const { onRun, task: given, report, ...fields } = over;
+  const { onRun, onDelete, task: given, report, ...fields } = over;
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -50,6 +51,7 @@ function detail(
         onClose={vi.fn()}
         onSave={vi.fn()}
         onRun={onRun}
+        onDelete={onDelete}
         report={report ?? null}
       />,
     );
@@ -155,6 +157,40 @@ describe('TaskDetail', () => {
 
     expect(buttonNamed(el, 'Running').disabled).toBe(true);
     expect(el.textContent).toContain('An agent is working this task');
+  });
+
+  it('deletes the card on the SECOND press, never the first', async () => {
+    // A card cannot be brought back, so the delete goes through the app's one
+    // confirm control: the first press only arms it.
+    const onDelete = vi.fn();
+    const el = detail({ onDelete });
+
+    act(() => {
+      buttonNamed(el, 'Delete').click();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+
+    await act(async () => {
+      buttonNamed(el, 'Delete task?').click();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to delete a card an agent is working, and says why beside it', () => {
+    // The card's worktree is collected with it — the directory the agent is
+    // writing in — so the control is disabled, with the reason as visible text.
+    const el = detail({
+      onRun: vi.fn(),
+      onDelete: vi.fn(),
+      task: aTask({ status: TaskStatus.InProgress, runId: 'run-1' }),
+    });
+
+    expect(buttonNamed(el, 'Delete').disabled).toBe(true);
+    expect(el.textContent).toContain('can be deleted once it has stopped');
+  });
+
+  it('offers no delete where nothing can delete', () => {
+    expect(buttonNamed(detail(), 'Delete')).toBeUndefined();
   });
 
   it('names the branch the agent is working on', () => {

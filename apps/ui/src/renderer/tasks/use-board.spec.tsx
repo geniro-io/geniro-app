@@ -36,11 +36,17 @@ interface Stub {
   listTasks: ReturnType<typeof vi.fn>;
   reconcileTasks: ReturnType<typeof vi.fn>;
   moveTaskStatus: ReturnType<typeof vi.fn>;
+  deleteTask: ReturnType<typeof vi.fn>;
 }
 
 function stubApis(
-  over: { moveTaskStatus?: ReturnType<typeof vi.fn> } = {},
+  over: {
+    moveTaskStatus?: ReturnType<typeof vi.fn>;
+    deleteTask?: ReturnType<typeof vi.fn>;
+  } = {},
 ): Stub {
+  const deleteTask =
+    over.deleteTask ?? vi.fn().mockResolvedValue({ deleted: true });
   const listTasks = vi.fn().mockResolvedValue([task()]);
   // The board LOADS through reconcile: one call that also settles any run
   // which finished while no window was open.
@@ -62,9 +68,9 @@ function stubApis(
         .fn()
         .mockResolvedValue({ running: 0, waiting: 0, eligible: [] }),
     },
-    tasks: { listTasks, moveTaskStatus, reconcileTasks },
+    tasks: { listTasks, moveTaskStatus, reconcileTasks, deleteTask },
   } as unknown as DaemonApis;
-  return { apis, listTasks, reconcileTasks, moveTaskStatus };
+  return { apis, listTasks, reconcileTasks, moveTaskStatus, deleteTask };
 }
 
 /** Mount the hook and hand back a live handle to its latest return value. */
@@ -141,6 +147,45 @@ describe('useBoard', () => {
 
     expect(board.current.tasks[0]?.status).toBe('todo');
     expect(board.current.error).toContain('not todo');
+  });
+
+  it('deletes a card, takes it off the board, and collects its worktree', async () => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis, deleteTask } = stubApis();
+    const board = await mount(apis);
+
+    let deleted = false;
+    await act(async () => {
+      deleted = await board.current.deleteTask('t1');
+    });
+
+    expect(deleted).toBe(true);
+    expect(deleteTask).toHaveBeenCalledWith({ taskId: 't1' });
+    expect(board.current.tasks).toEqual([]);
+    expect(prune).toHaveBeenCalledWith('t1');
+  });
+
+  it('keeps the card, and says why, when the delete is refused', async () => {
+    window.geniro = createPreloadStub();
+    const prune = vi.fn(() => Promise.resolve(true));
+    window.geniro.pruneTaskWorktree = prune;
+    const { apis } = stubApis({
+      deleteTask: vi.fn().mockRejectedValue(new Error('no task with id t1')),
+    });
+    const board = await mount(apis);
+
+    let deleted = true;
+    await act(async () => {
+      deleted = await board.current.deleteTask('t1');
+    });
+
+    expect(deleted).toBe(false);
+    expect(board.current.tasks).toHaveLength(1);
+    expect(board.current.error).toContain('no task with id t1');
+    // Nothing is collected for a card that is still on the board.
+    expect(prune).not.toHaveBeenCalled();
   });
 
   it('reloads when a task changes on the board being shown', async () => {

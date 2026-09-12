@@ -57,6 +57,11 @@ export interface BoardApi {
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
   moveTask: (taskId: string, to: string) => Promise<void>;
   /**
+   * Delete a card from the board. Answers whether it went, so the panel that
+   * asked closes only when it did.
+   */
+  deleteTask: (taskId: string) => Promise<boolean>;
+  /**
    * Start an agent on a card: main makes the worktree, the daemon starts the
    * chat inside it.
    */
@@ -368,6 +373,33 @@ export function useBoard(
     [apis, tasks],
   );
 
+  /**
+   * Delete a card — the daemon's delete, then the worktree its runs were cut
+   * from, which nothing else would ever collect once the card is gone.
+   *
+   * The worktree goes through `pruneTaskWorktree`, the path a failed start
+   * already takes: it removes only a directory this app recorded creating and
+   * keeps one holding unsaved work, and it never touches the BRANCH — so the
+   * agent's commits outlive the card that asked for them.
+   */
+  const deleteTask = useCallback(
+    async (taskId: string): Promise<boolean> => {
+      if (!apis) {
+        return false;
+      }
+      try {
+        await apis.tasks.deleteTask({ taskId });
+      } catch (err: unknown) {
+        setError(describe(err));
+        return false;
+      }
+      setTasks((current) => current.filter((row) => row.id !== taskId));
+      await window.geniro.pruneTaskWorktree(taskId).catch(() => false);
+      return true;
+    },
+    [apis],
+  );
+
   const selectProject = useCallback((projectId: string) => {
     setSelectedProjectId(projectId);
   }, []);
@@ -537,6 +569,7 @@ export function useBoard(
     createTask,
     updateTask,
     moveTask,
+    deleteTask,
     runTask,
     startingTaskId,
     loadReport,

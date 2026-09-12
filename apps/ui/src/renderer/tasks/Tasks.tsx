@@ -329,6 +329,11 @@ export function Tasks({
           onRun={() => {
             void board.runTask(openTask.id);
           }}
+          onDelete={async () => {
+            if (await board.deleteTask(openTask.id)) {
+              setOpenTaskId(null);
+            }
+          }}
         />
       ) : null}
 

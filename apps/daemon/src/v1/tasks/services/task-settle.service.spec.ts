@@ -1,3 +1,6 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import {
   defineConfig,
   type EntityManager,
@@ -17,6 +20,8 @@ import {
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import type { Workflow } from '../../graphs/graphs.types';
+import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
@@ -27,6 +32,7 @@ import type { ItemKind, RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TaskSettleService } from './task-settle.service';
 import { TasksService } from './tasks.service';
@@ -36,6 +42,16 @@ import { TasksService } from './tasks.service';
  * transcript row is recorded as its report — both are reads of stored state,
  * so faking the store would leave nothing to observe.
  */
+/**
+ * Where this spec's attachment deletes are aimed.
+ *
+ * Named explicitly rather than left to the service's default, which resolves
+ * `environment.userDataDir` — the one shared resource the specs redirect for
+ * themselves. Nothing is written here; the service only ever removes
+ * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ */
+const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
+
 describe('TaskSettleService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: TaskSettleService;
@@ -43,6 +59,8 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   let taskDao: TaskDao;
   let projectDao: ProjectDao;
   let runDao: RunDao;
+  let getWorkflow: ReturnType<typeof vi.fn>;
+  const workflows = new Map<string, Workflow>();
   let itemDao: ItemDao;
   let em: EntityManager;
   let bus: AgentEventBus;
@@ -80,8 +98,24 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     taskEvents = new TaskEventBus();
     changes = [];
     taskEvents.allChanges().subscribe((event) => changes.push(event));
-    tasks = new TasksService(em, taskDao, projectDao, taskEvents);
+    tasks = new TasksService(
+      em,
+      taskDao,
+      projectDao,
+      taskEvents,
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+    );
     bus = new AgentEventBus();
+    // The library is asked only for a WORKFLOW run's terminal nodes; a chat
+    // run never reaches it, which is what `getWorkflow` not being called in
+    // the chat cases asserts.
+    getWorkflow = vi.fn(async (slug: string) => {
+      const workflow = workflows.get(slug);
+      if (!workflow) {
+        throw new Error(`no workflow ${slug}`);
+      }
+      return { workflow };
+    });
     service = new TaskSettleService(
       em,
       bus,
@@ -90,6 +124,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       taskDao,
       projectDao,
       tasks,
+      { get: getWorkflow } as unknown as WorkflowStoreService,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -121,6 +156,55 @@ describe('TaskSettleService (in-memory sqlite)', () => {
   ) => {
     seq += 1;
     return itemDao.create({ runId, seq, kind, role, payload });
+  };
+
+  /**
+   * A card worked by a WORKFLOW run of `slug`, whose graph is registered with
+   * the store double.
+   *
+   * The shape is the one a fan-out actually takes: `plan` feeds two reviewers,
+   * and `sum` collects them. Only `sum` is terminal — which is the whole point,
+   * because a reviewer routinely writes the last row.
+   */
+  const workingGraph = async (runId = 'wf-1', slug = 'dev-team') => {
+    workflows.set(slug, {
+      name: 'Dev team',
+      nodes: [
+        { id: 'plan', kind: 'agent', agent: 'claude', label: 'plan' },
+        { id: 'a', kind: 'agent', agent: 'claude', label: 'a' },
+        { id: 'b', kind: 'agent', agent: 'claude', label: 'b' },
+        { id: 'sum', kind: 'agent', agent: 'claude', label: 'sum' },
+      ],
+      edges: [
+        { from: 'plan', to: 'a', kind: 'data' },
+        { from: 'plan', to: 'b', kind: 'data' },
+        { from: 'a', to: 'sum', kind: 'data' },
+        { from: 'b', to: 'sum', kind: 'data' },
+      ],
+    } as unknown as Workflow);
+    const task = await tasks.create({ projectId, title: 'ship it' });
+    await tasks.moveStatus(task.id, { from: 'backlog', to: 'in_progress' });
+    await runDao.create({
+      id: runId,
+      workflowId: slug,
+      status: 'running',
+      agentKind: null,
+      taskId: task.id,
+    });
+    await tasks.update(task.id, { runId });
+    return task;
+  };
+
+  /** A transcript row attributed to one node of a workflow run. */
+  const nodeRow = async (
+    runId: string,
+    nodeId: string,
+    kind: ItemKind,
+    role: string | null,
+    payload: string,
+  ) => {
+    seq += 1;
+    return itemDao.create({ runId, seq, kind, role, payload, nodeId });
   };
 
   const settleRun = async (runId: string, status: RunStatus) => {
@@ -157,6 +241,135 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await settleRun('run-1', 'completed');
 
     expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+  });
+
+  describe('a workflow run’s report', () => {
+    it('takes a TERMINAL node’s message, not whichever node wrote last', async () => {
+      const task = await workingGraph();
+      const conclusion = await nodeRow(
+        'wf-1',
+        'sum',
+        'message',
+        'assistant',
+        '{"text":"all three landed"}',
+      );
+      // A reviewer straggling in after the collector is the ordinary shape of
+      // a fan-out, and it is the highest `seq` in the run. Reading the
+      // transcript's last row would file THIS as the card's report.
+      await nodeRow(
+        'wf-1',
+        'b',
+        'message',
+        'assistant',
+        '{"text":"finished my slice"}',
+      );
+
+      await settleRun('wf-1', 'completed');
+
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(
+        conclusion.id,
+      );
+    });
+
+    it('prefers a terminal node’s structured report over its prose', async () => {
+      const task = await workingGraph();
+      const findings = await nodeRow(
+        'wf-1',
+        'sum',
+        'report_findings',
+        'assistant',
+        '{"findings":[]}',
+      );
+      await nodeRow('wf-1', 'sum', 'message', 'assistant', '{"text":"done"}');
+
+      await settleRun('wf-1', 'completed');
+
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(findings.id);
+    });
+
+    it('ignores a non-terminal node’s structured report', async () => {
+      const task = await workingGraph();
+      // A caller node holds an MCP endpoint and so CAN call the tool — but its
+      // findings are its own contribution, not the run's conclusion.
+      await nodeRow('wf-1', 'a', 'report_findings', 'assistant', '{}');
+      const conclusion = await nodeRow(
+        'wf-1',
+        'sum',
+        'message',
+        'assistant',
+        '{"text":"summed up"}',
+      );
+
+      await settleRun('wf-1', 'completed');
+
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(
+        conclusion.id,
+      );
+    });
+
+    it('falls back to the whole transcript when the workflow cannot be read', async () => {
+      const task = await workingGraph('wf-1', 'since-deleted');
+      workflows.delete('since-deleted');
+      const last = await nodeRow(
+        'wf-1',
+        'a',
+        'message',
+        'assistant',
+        '{"text":"whatever I said"}',
+      );
+
+      await settleRun('wf-1', 'completed');
+
+      // A workflow edited, renamed or deleted since the run started still
+      // settled a real card: the last message of an unknown shape is a better
+      // report than none at all.
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+    });
+
+    it('still finds the report when the terminal node ids have moved since the run finished', async () => {
+      const task = await workingGraph();
+      const last = await nodeRow(
+        'wf-1',
+        'sum',
+        'message',
+        'assistant',
+        '{"text":"summed up"}',
+      );
+      // The workflow was edited after the run finished but before it settled:
+      // `sum` now feeds a new node and is no longer terminal, so the run's
+      // own items carry no node id the CURRENT terminal set names.
+      workflows.set('dev-team', {
+        name: 'Dev team',
+        nodes: [
+          { id: 'plan', kind: 'agent', agent: 'claude', label: 'plan' },
+          { id: 'a', kind: 'agent', agent: 'claude', label: 'a' },
+          { id: 'b', kind: 'agent', agent: 'claude', label: 'b' },
+          { id: 'sum', kind: 'agent', agent: 'claude', label: 'sum' },
+          { id: 'final', kind: 'agent', agent: 'claude', label: 'final' },
+        ],
+        edges: [
+          { from: 'plan', to: 'a', kind: 'data' },
+          { from: 'plan', to: 'b', kind: 'data' },
+          { from: 'a', to: 'sum', kind: 'data' },
+          { from: 'b', to: 'sum', kind: 'data' },
+          { from: 'sum', to: 'final', kind: 'data' },
+        ],
+      } as unknown as Workflow);
+
+      await settleRun('wf-1', 'completed');
+
+      expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+    });
+
+    it('never asks the library about a CHAT run', async () => {
+      const task = await working();
+      await row('run-1', 'message', 'assistant', '{"text":"done"}');
+
+      await settleRun('run-1', 'completed');
+
+      expect(getWorkflow).not.toHaveBeenCalled();
+      expect((await taskDao.getById(task.id))?.reportItemId).not.toBeNull();
+    });
   });
 
   it('never reports the USER’s own message back as the agent’s report', async () => {

@@ -1,4 +1,4 @@
-import { Bot, ListChecks, Maximize2 } from 'lucide-react';
+import { Bot, Maximize2 } from 'lucide-react';
 import { memo, useContext } from 'react';
 
 import { InitialsAvatar } from '../components/ui/avatar';
@@ -15,11 +15,13 @@ import {
 } from './block-shell';
 import { formatElapsed, RunSettledContext, WorkingRow } from './live-row';
 import { NestedThreadContext, SubagentDetailContext } from './subagent-context';
-import { TaskCount } from './task-list';
+import { SubagentMetaChips } from './subagent-meta';
 import { taskProgress } from './task-payload';
 import { TranscriptEntryView } from './transcript-entry';
 import {
+  type CardEntry,
   countTools,
+  isCardEntry,
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -42,6 +44,107 @@ function shellStatusOf(
     case 'running':
       return 'running';
   }
+}
+
+/**
+ * Which cards a delegate's block must not hide.
+ *
+ * A render card — a findings report, a chart, a scorecard, a comparison, a
+ * gallery — is the ONLY copy of what it says: the result the agent gets back
+ * from those tools is a receipt, by design. A delegate's block is shut by
+ * default, which is right for a conversation and wrong for this — shut, the
+ * report becomes work the reader has to go looking for, a worse answer than the
+ * unattributed row that filing it under the delegate replaced.
+ *
+ * A TASK LIST does not open one: nearly every delegate keeps a list, so
+ * counting it would open every block and cost the fold its meaning. A WORKFLOW
+ * card cannot reach a block's entries at all today (`buildWorkflowCards` runs
+ * after `buildSubagentBlocks`), so its row states what it would mean rather
+ * than what happens.
+ *
+ * A TABLE over `CardEntry['type']` rather than a switch, and that is the whole
+ * point: `satisfies` makes a card kind added to the union fail HERE instead of
+ * shipping a block that silently stays shut. Hand-spelling the kinds again is
+ * exactly what {@link isCardEntry} was written to end — its own doc block
+ * records the six readers that each used to spell them, where "every miss was
+ * SILENT".
+ */
+const OPENS_BLOCK = {
+  'task-list': false,
+  findings: true,
+  chart: true,
+  metrics: true,
+  comparison: true,
+  gallery: true,
+  workflow: true,
+} as const satisfies Record<CardEntry['type'], boolean>;
+
+/**
+ * Which of those this delegate drew, in the order it drew them.
+ *
+ * Recursive on the same two nesting kinds {@link subagentTaskProgress} walks —
+ * a card inside a nested block is hidden by THIS one being shut just as
+ * thoroughly.
+ *
+ * The CARDS rather than a yes/no, because the block needs both answers from one
+ * walk: whether to open, and — for the reader who shuts it again — what to say
+ * on the closed header instead of nothing.
+ */
+function renderCards(entries: SubagentBlockEntry['entries']): CardEntry[] {
+  const found: CardEntry[] = [];
+  const walk = (list: SubagentBlockEntry['entries']): void => {
+    for (const entry of list) {
+      if (isCardEntry(entry)) {
+        if (OPENS_BLOCK[entry.type]) {
+          found.push(entry);
+        }
+        continue;
+      }
+      if (entry.type === 'turn-block' || entry.type === 'call-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(entries);
+  return found;
+}
+
+/** What each card is called, where a sentence has to name one. */
+const CARD_NOUN = {
+  'task-list': 'a task list',
+  findings: 'findings',
+  chart: 'a chart',
+  metrics: 'a scorecard',
+  comparison: 'a comparison',
+  gallery: 'a gallery',
+  workflow: 'a workflow',
+} as const satisfies Record<CardEntry['type'], string>;
+
+/**
+ * What a SHUT block says it is holding.
+ *
+ * `defaultOpen` opens a block that drew a card, but the reader's own press
+ * outranks it — and a reader who opened a running delegate and folded it away
+ * again is the likeliest one to be looking for what it later reported. Without
+ * this the closed header says only that some nested work exists, which is the
+ * silence the whole change exists to end.
+ *
+ * Findings carry their COUNT because that is the figure a reader acts on; the
+ * other four name themselves and a count of one chart says nothing.
+ */
+function renderCardSummary(cards: CardEntry[]): string | null {
+  if (cards.length > 1) {
+    return `drew ${cards.length} cards`;
+  }
+  const card = cards[0];
+  if (card === undefined) {
+    return null;
+  }
+  if (card.type === 'findings') {
+    const found = card.report.findings.length;
+    return `reported ${found === 1 ? '1 finding' : `${found} findings`}`;
+  }
+  return `drew ${CARD_NOUN[card.type]}`;
 }
 
 /**
@@ -112,21 +215,6 @@ function SubagentFacts({
       className="m-0 text-[11px] text-muted-foreground">
       {facts.join(' · ')}
     </p>
-  );
-}
-
-/**
- * The present facts, with a middot between each pair and nowhere else.
- *
- * Takes nulls so a caller can list every possible fact in reading order and let
- * this decide which survive — the alternative being a separator condition that
- * names its neighbours, which is what the header had and what it could not
- * carry two more facts of.
- */
-function joinFacts(facts: readonly React.ReactNode[]): React.ReactNode[] {
-  const present = facts.filter((fact) => fact !== null && fact !== false);
-  return present.flatMap((fact, index) =>
-    index === 0 ? [fact] : [<span key={`sep-${index}`}>·</span>, fact],
   );
 }
 
@@ -402,7 +490,8 @@ export function SubagentThread({
  * One background sub-agent as a collapsed aside in the conversation.
  *
  * Drawn on the same {@link BlockShell} as the agent-call block, and closed by
- * default — which is the difference that matters. A delegate's run of work is
+ * default unless it holds a card {@link OPENS_BLOCK} names — which is the
+ * difference that matters. A delegate's run of work is
  * not part of the conversation the reader is having; it is a thing that
  * happened underneath it. Open, it shows exactly the thread the detail dialog
  * shows, which is exactly the thread the main flow renders — one
@@ -423,6 +512,8 @@ export const SubagentBlock = memo(function SubagentBlock({
   const title = subagentTitle(block);
   const toolCount = countTools(block.entries);
   const tasks = subagentTaskProgress(block);
+  const cards = renderCards(block.entries);
+  const cardSummary = renderCardSummary(cards);
   return (
     <div data-role="subagent-block" data-subagent={block.id} className="w-full">
       <BlockShell
@@ -430,6 +521,12 @@ export const SubagentBlock = memo(function SubagentBlock({
         eyebrowIcon={<Bot aria-hidden="true" className="size-3" />}
         status={shellStatusOf(block, runSettledAt)}
         collapsible
+        defaultOpen={cards.length > 0}
+        summary={
+          cardSummary === null ? undefined : (
+            <span data-slot="subagent-card-summary">{cardSummary}</span>
+          )
+        }
         toggleLabel={`Show ${title}'s conversation`}
         header={
           <>
@@ -459,41 +556,20 @@ export const SubagentBlock = memo(function SubagentBlock({
                 its own tail (the task progress, which the card's
                 `overflow-hidden` was clipping anyway) instead of taking the
                 name with it. */}
-            <span className="flex min-w-0 max-w-[55%] shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
-              {joinFacts([
-                block.kind && block.label ? (
-                  <span key="kind">{block.kind}</span>
-                ) : null,
-                /* WHICH MODEL it ran, asked for by name against a column of a
-                   dozen verifiers that named their agent type and nothing
-                   else. On the header rather than only inside the block for
-                   the reason the figures are: it is closed by default, and a
-                   fact behind a click is one nobody reads while scanning. */
-                block.model ? <span key="model">{block.model}</span> : null,
-                toolCount > 0 ? (
-                  <span key="tools">
-                    {toolCount} tool{toolCount === 1 ? '' : 's'}
-                  </span>
-                ) : null,
-                /* What it spent, and how long it took — the reported ask. On
-                   the header and not only inside for the same reason the task
-                   progress is: the block is CLOSED by default, so a figure that
-                   needs a click is a figure nobody reads while scanning a
-                   column of twenty delegates. */
-                ...subagentSpendParts(block).map((part) => (
-                  <span key={part}>{part}</span>
-                )),
-                /* On the header rather than only inside, because the block is
-                   CLOSED by default: "how far is this delegate through its own
-                   plan" is the one thing worth knowing without opening it. */
-                tasks !== null ? (
-                  <span key="tasks" className="flex items-center gap-1">
-                    <ListChecks aria-hidden="true" className="size-3" />
-                    <TaskCount done={tasks.done} total={tasks.total} />
-                  </span>
-                ) : null,
-              ])}
-            </span>
+            {/* WHAT KIND of delegate, and nothing else.
+                The run used to carry six facts — kind, model, tools, cost,
+                tokens, duration, task progress — and REPORTED as breaking the
+                header, because on a card this narrow they do not fit one line
+                and the only thing that could give way was the delegate's own
+                name. Every measured figure has moved to `SubagentMetaChips` in
+                `headerAction`, which is outside this shrinkable run entirely;
+                the model went with them, as asked. What stays is the one fact
+                that IDENTIFIES this delegate rather than measuring it. */}
+            {block.kind && block.label ? (
+              <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden text-[10px] text-muted-foreground">
+                {block.kind}
+              </span>
+            ) : null}
           </>
         }
         // A real <button>, and it sits BESIDE the disclosure rather than
@@ -501,18 +577,30 @@ export const SubagentBlock = memo(function SubagentBlock({
         // whatever role it carries, and a control there also swallows presses
         // meant for the toggle.
         headerAction={
-          openDetail ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-6 shrink-0 text-muted-foreground"
-              aria-label={`Open ${title} in a panel`}
-              title="Open this sub-agent's conversation"
-              onClick={() => openDetail(block)}>
-              <Maximize2 className="size-3 shrink-0" />
-            </Button>
-          ) : null
+          <span className="flex items-center gap-1.5">
+            {/* The figures, as one small block with the long form behind a
+                hover. HERE rather than in the header run because that run is
+                the disclosure's own <button>, and a popover trigger inside one
+                is invalid HTML — the same rule this slot exists for. */}
+            <SubagentMetaChips
+              block={block}
+              title={title}
+              toolCount={toolCount}
+              tasks={tasks}
+            />
+            {openDetail ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-6 shrink-0 text-muted-foreground"
+                aria-label={`Open ${title} in a panel`}
+                title="Open this sub-agent's conversation"
+                onClick={() => openDetail(block)}>
+                <Maximize2 className="size-3 shrink-0" />
+              </Button>
+            ) : null}
+          </span>
         }>
         <SubagentThread
           block={block}

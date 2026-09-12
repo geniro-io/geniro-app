@@ -310,3 +310,59 @@ describe('standalone transcript rows', () => {
     },
   );
 });
+
+describe('a card entry reaches EntryCard from BOTH flows', () => {
+  // Deleting either flow's `isCardEntry` branch outright is a type error — the
+  // fall-through reads `entry.item`, which a card entry has not. What compiles
+  // clean is the branch answering with NOTHING, and both cases below then go
+  // red against a transcript that still draws the agent's words and silently
+  // drops its card. `entry-card.spec.tsx` cannot see that: it renders the
+  // component directly, past both dispatch sites.
+
+  it('draws a card standing on its own in the messenger flow', () => {
+    const entries = groupTranscript([
+      item(
+        'report_findings',
+        { findings: [{ file: 'src/a.ts', summary: 'A guard was weakened' }] },
+        null,
+      ),
+    ]);
+    act(() =>
+      root.render(
+        <>
+          {entries.map((entry, i) => (
+            <TranscriptEntryView key={i} entry={entry} />
+          ))}
+        </>,
+      ),
+    );
+
+    expect(container.textContent).toContain('src/a.ts');
+  });
+
+  it('draws a card folded into a turn block', () => {
+    const entries = buildTurnBlocks(
+      groupTranscript([
+        item(
+          'message',
+          { text: 'Here is what I found.' },
+          'writer',
+          'assistant',
+        ),
+        item(
+          'report_findings',
+          { findings: [{ file: 'src/b.ts', summary: 'A guard was weakened' }] },
+          'writer',
+        ),
+      ]),
+    );
+    const block = entries.find((entry) => entry.type === 'turn-block');
+    expect(block).toBeDefined();
+
+    act(() =>
+      root.render(<TranscriptEntryView entry={block!} nodes={NODES} />),
+    );
+
+    expect(container.textContent).toContain('src/b.ts');
+  });
+});

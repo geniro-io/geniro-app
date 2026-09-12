@@ -45,6 +45,7 @@ export function EffortSelect({
   nextTurnOnly = false,
   levelsAreModelSpecific = false,
   onChange,
+  showIcon = true,
   className,
   variant = 'ghost',
   id,
@@ -71,6 +72,22 @@ export function EffortSelect({
    */
   levelsAreModelSpecific?: boolean;
   onChange: (effort: string | null) => void;
+  /**
+   * The leading glyph, on by default.
+   *
+   * It IDENTIFIES the chip in a row of chips that carry no labels — the
+   * composer's footer, where `opus` beside `high` beside `auto-approve` is
+   * three words with nothing saying which axis each belongs to. In a LABEL
+   * COLUMN there is already a word for that, and the glyph then costs
+   * alignment instead: it pushes this value's text right by its own width, so
+   * a column mixing chips that have one with chips and plain text that do not
+   * has three different left edges. REPORTED as exactly that — "параметр
+   * как-то криво выглядит — может быть за счёт иконок, может быть за счёт
+   * выравнивания" — and it was both, which is one cause.
+   *
+   * The same trade `model-parameter-select`'s `showAxisName` already makes.
+   */
+  showIcon?: boolean;
   className?: string;
   /**
    * `ghost` is the composer's flat chip, `default` the bordered form field the
@@ -121,7 +138,7 @@ export function EffortSelect({
           : 'Reasoning effort'
       }
       className={className}
-      leadingIcon={<Gauge />}
+      {...(showIcon ? { leadingIcon: <Gauge /> } : {})}
       value={shown ?? CLI_DEFAULT_EFFORT}
       groups={[
         { items: rows },

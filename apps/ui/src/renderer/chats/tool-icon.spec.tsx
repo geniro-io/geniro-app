@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { TOOL_OPERATION_META } from './tool-icon';
+import { TOOL_OPERATION_META, toolRowAccent } from './tool-icon';
 import type { ToolOperation } from './tool-kind';
 
 /**
@@ -54,5 +54,62 @@ describe('TOOL_OPERATION_META', () => {
     // Delete is the one operation with a tone of its own: undoing an unwanted
     // edit is reading a diff; undoing an unwanted delete may be impossible.
     expect(TOOL_OPERATION_META.delete.tone).toBe('text-destructive');
+  });
+
+  it('marks a delete apart from every other operation', () => {
+    const deleted = TOOL_OPERATION_META.delete.accent;
+    const others = Object.entries(TOOL_OPERATION_META)
+      .filter(([operation]) => operation !== 'delete')
+      .map(([, meta]) => meta.accent);
+    expect(others).not.toContain(deleted);
+  });
+});
+
+/**
+ * The ROW stripe, a different question from the glyph: the glyph says WHICH
+ * operation, the stripe says what that operation COST. `execute` and `edit`
+ * share one on purpose — both are the agent changing something, and this
+ * transcript's colour rule is that a hue names a consequence rather than a
+ * category, so a hue per operation would make the stripe decoration.
+ */
+describe('toolRowAccent', () => {
+  it('gives an MCP call no stripe at all', () => {
+    // Classified, but its CONSEQUENCE is unknown: a server tool may well write
+    // files, so the "only looked" stripe would be the same unverifiable claim
+    // the unclassifiable branch below refuses to make.
+    expect(toolRowAccent({ name: 'mcp__fs__write' })).toBeNull();
+  });
+
+  it('keeps the two striped classes apart, and each internally equal', () => {
+    // BOTH equivalence classes are written down, because a fourth hue can be
+    // introduced by splitting either one. Observed: read, search and fetch.
+    // Acted: a command and an edit. Splitting either is then a red test and a
+    // decision rather than a drift.
+    const observed = [
+      toolRowAccent({ name: 'Read' }),
+      toolRowAccent({ name: 'Grep' }),
+      toolRowAccent({ name: 'WebFetch' }),
+    ];
+    const acted = [
+      toolRowAccent({ name: 'Bash' }),
+      toolRowAccent({ name: 'Edit' }),
+    ];
+    expect(new Set(observed).size).toBe(1);
+    expect(new Set(acted).size).toBe(1);
+    expect(observed[0]).not.toBe(acted[0]);
+  });
+
+  it('gives a command and a file edit the SAME stripe, on purpose', () => {
+    // The equality is written down rather than left implicit so that separating
+    // the two is a red test and a decision, not a silent drift.
+    expect(toolRowAccent({ name: 'Bash' })).toBe(
+      toolRowAccent({ name: 'Edit' }),
+    );
+  });
+
+  it('answers null for a call it cannot classify', () => {
+    // A stripe here would state a fact about a tool nobody in this app can read.
+    expect(toolRowAccent({ name: 'SomeTotallyUnknownTool' })).toBeNull();
+    expect(toolRowAccent(null)).toBeNull();
   });
 });

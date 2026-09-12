@@ -57,6 +57,43 @@ export class LocalImageService {
    */
   async read(runId: string, path: string): Promise<LocalImageWire> {
     const trimmed = path.trim();
+    const mediaType = this.assertImagePath(trimmed);
+    const absolute = isAbsolute(trimmed)
+      ? trimmed
+      : resolve(await this.cwdOf(runId), trimmed);
+    return this.readAt(trimmed, absolute, mediaType);
+  }
+
+  /**
+   * The same read with no RUN behind it — for a path that is already absolute.
+   *
+   * A task's description holds pictures too (a pasted screenshot, a diagram the
+   * user dropped in), and a card is not a run: it has no transcript, no cwd and
+   * no `Run` row. Everything the run supplied was the base a RELATIVE reference
+   * is measured against, so a caller holding an absolute path needs none of it
+   * — which is why this is a second entry point rather than a nullable runId
+   * threaded through the one above.
+   *
+   * Every guard the run-bound path applies still applies: a known image
+   * extension, a real regular file, a size ceiling, and the scheme refusal.
+   */
+  async readAbsolute(path: string): Promise<LocalImageWire> {
+    const trimmed = path.trim();
+    const mediaType = this.assertImagePath(trimmed);
+    if (!isAbsolute(trimmed)) {
+      throw new BadRequestException(
+        'IMAGE_PATH_NOT_ABSOLUTE',
+        `${trimmed} is not an absolute path, and there is no folder to measure it against`,
+      );
+    }
+    return Promise.resolve(this.readAt(trimmed, trimmed, mediaType));
+  }
+
+  /**
+   * The three refusals that keep this an IMAGE channel rather than a file-read
+   * one, applied identically by both entry points.
+   */
+  private assertImagePath(trimmed: string): AttachmentMediaType {
     if (trimmed === '') {
       throw new BadRequestException(
         'IMAGE_PATH_EMPTY',
@@ -79,10 +116,14 @@ export class LocalImageService {
         `${trimmed} is not one of ${Object.keys(IMAGE_EXTENSIONS).join(', ')}`,
       );
     }
-    const absolute = isAbsolute(trimmed)
-      ? trimmed
-      : resolve(await this.cwdOf(runId), trimmed);
+    return mediaType;
+  }
 
+  private readAt(
+    trimmed: string,
+    absolute: string,
+    mediaType: AttachmentMediaType,
+  ): LocalImageWire {
     let real: string;
     try {
       // Canonicalized before the stat, so the size and the file-kind checks and

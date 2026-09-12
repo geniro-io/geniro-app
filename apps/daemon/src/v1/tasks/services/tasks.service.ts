@@ -1,19 +1,24 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
+import type { ChatApprovalMode } from '../../agents/chat.types';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
+import { Project } from '../../projects/entity/project.entity';
+import type { AgentKind } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
-import type {
-  TaskChangeReason,
-  TaskPriority,
-  TaskSource,
-  TaskStatus,
-  TaskStatusMove,
-  TaskWire,
+import {
+  type TaskChangeReason,
+  type TaskPriority,
+  type TaskSource,
+  type TaskStatus,
+  type TaskStatusMove,
+  type TaskWire,
 } from '../tasks.types';
+import { parseTaskFiles } from '../utils/task-files';
+import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 
 /** How many tasks one project's board may hold — a guard, not a design limit. */
@@ -28,11 +33,14 @@ const MAX_TASKS_PER_PROJECT = 1000;
  */
 @Injectable()
 export class TasksService {
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly events: TaskEventBus,
+    private readonly attachments: TaskAttachmentService,
   ) {}
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
@@ -56,11 +64,20 @@ export class TasksService {
     dueDate?: string;
     /** Absent = run in the project's folder. See {@link Task.folder}. */
     folder?: string;
+    /**
+     * The run configuration for this card. Absent throughout = inherit the
+     * project's, on `folder`'s own rule.
+     */
+    agentKind?: AgentKind;
+    model?: string;
+    effort?: string;
+    approval?: ChatApprovalMode;
+    configDir?: string;
+    workflowSlug?: string;
     source?: TaskSource;
     sourceRef?: string;
   }): Promise<TaskWire> {
     const em = this.em.fork();
-    await this.requireProject(input.projectId, em);
     const held = await this.taskDao.countInProject(input.projectId, em);
     if (held >= MAX_TASKS_PER_PROJECT) {
       throw new BadRequestException(
@@ -69,29 +86,58 @@ export class TasksService {
       );
     }
     const status = input.status ?? 'backlog';
-    const created = await this.taskDao.create(
-      {
-        projectId: input.projectId,
-        title: input.title,
-        description: input.description ?? null,
-        status,
-        labels: JSON.stringify(input.labels ?? []),
-        priority: input.priority ?? 'none',
-        dueDate: input.dueDate ?? null,
-        folder:
-          input.folder === undefined ? null : resolveTaskFolder(input.folder),
-        source: input.source ?? 'geniro',
-        sourceRef: input.sourceRef ?? null,
-        // Appended to the end of its column, never inserted: a new card is the
-        // user's newest thought and moving it is one drag away.
-        position: await this.taskDao.nextPositionIn(
-          input.projectId,
+    // ONE transaction around the counter and the insert, because both are
+    // read-modify-writes over a value that must not repeat. The bump is
+    // separated from the row it numbers by an await (`nextPositionIn`), and
+    // each request runs on its own fork, so without this two creates read the
+    // same counter and write the same absolute value — two cards holding one
+    // user-visible number, which is exactly what taking the number from the
+    // counter rather than from `max(number)` exists to prevent. `position` is
+    // inside for the same reason: it is `max + 1` over the same column.
+    const created = await em.transactional(async (tx) => {
+      // The card's number, from the PROJECT's own counter — never from
+      // `max(number)`, which would reuse the number of a deleted card and let
+      // two commits name different work by one identifier.
+      const project = await this.requireProject(input.projectId, tx);
+      project.taskCounter += 1;
+      const number = project.taskCounter;
+      return this.taskDao.create(
+        {
+          projectId: input.projectId,
+          title: input.title,
+          number,
+          description: input.description ?? null,
           status,
-          em,
-        ),
-      },
-      em,
-    );
+          labels: JSON.stringify(input.labels ?? []),
+          priority: input.priority ?? 'none',
+          dueDate: input.dueDate ?? null,
+          folder:
+            input.folder === undefined ? null : resolveTaskFolder(input.folder),
+          agentKind: input.agentKind ?? null,
+          model: input.model ?? null,
+          effort: input.effort ?? null,
+          approval: input.approval ?? null,
+          // Checked to exist for `Project.configDir`'s reason: a card pointing
+          // at a profile that is not there starts a brand-new signed-out one,
+          // since the CLI creates whatever directory it is handed.
+          configDir:
+            input.configDir === undefined
+              ? null
+              : resolveTaskConfigDir(input.configDir),
+          workflowSlug: input.workflowSlug ?? null,
+          source: input.source ?? 'geniro',
+          sourceRef: input.sourceRef ?? null,
+          // Appended to the end of its column, never inserted: a new card is
+          // the user's newest thought and moving it is one drag away.
+          position: await this.taskDao.nextPositionIn(
+            input.projectId,
+            status,
+            tx,
+          ),
+        },
+        tx,
+      );
+    });
     this.events.publishTaskChanged({
       taskId: created.id,
       projectId: created.projectId,
@@ -113,6 +159,12 @@ export class TasksService {
       priority?: TaskPriority;
       dueDate?: string | null;
       folder?: string | null;
+      agentKind?: AgentKind | null;
+      model?: string | null;
+      effort?: string | null;
+      approval?: ChatApprovalMode | null;
+      configDir?: string | null;
+      workflowSlug?: string | null;
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
@@ -146,6 +198,27 @@ export class TasksService {
       // be cut from — the same rule `worktreePath` below states in full.
       task.folder =
         patch.folder === null ? null : resolveTaskFolder(patch.folder);
+    }
+    // The run configuration, each on `folder`'s contract above: `null` hands
+    // the field back to the project's default, absent leaves it alone.
+    if (patch.agentKind !== undefined) {
+      task.agentKind = patch.agentKind;
+    }
+    if (patch.model !== undefined) {
+      task.model = patch.model;
+    }
+    if (patch.effort !== undefined) {
+      task.effort = patch.effort;
+    }
+    if (patch.approval !== undefined) {
+      task.approval = patch.approval;
+    }
+    if (patch.configDir !== undefined) {
+      task.configDir =
+        patch.configDir === null ? null : resolveTaskConfigDir(patch.configDir);
+    }
+    if (patch.workflowSlug !== undefined) {
+      task.workflowSlug = patch.workflowSlug;
     }
     if (patch.branch !== undefined) {
       task.branch = patch.branch;
@@ -261,6 +334,20 @@ export class TasksService {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
     await this.taskDao.deleteById(taskId, em);
+    // The pasted images go with the card. Nothing else can reach them once the
+    // row is gone — there is no surface in the app that lists a deleted card's
+    // files — so a screenshot of a console or a private repository would sit on
+    // disk for good. After the row, and not inside a transaction with it: the
+    // delete is what the caller asked for, and a filesystem error must not
+    // report a card that IS deleted as still standing, nor swallow the
+    // broadcast the board redraws from.
+    try {
+      await this.attachments.removeTask(taskId);
+    } catch (error) {
+      this.logger.warn(
+        `could not drop attachments for task ${taskId}: ${String(error)}`,
+      );
+    }
     // Captured off the row BEFORE the delete rather than re-read after: a
     // soft-deleted task is invisible to `getById` (the `softDelete` filter),
     // so there is nothing left here to read `status`/`projectId` off of.
@@ -291,13 +378,18 @@ export class TasksService {
   private async requireProject(
     projectId: string,
     em: EntityManager,
-  ): Promise<void> {
-    if (!(await this.projectDao.getById(projectId, em))) {
+  ): Promise<Project> {
+    const project = await this.projectDao.getById(projectId, em);
+    if (!project) {
       throw new NotFoundException(
         'PROJECT_NOT_FOUND',
         `no project with id ${projectId}`,
       );
     }
+    // Returned MANAGED, so a caller that bumps `taskCounter` has its change
+    // written by the same `em.flush()` that inserts the card — one unit of
+    // work, so a card can never exist holding a number the counter forgot.
+    return project;
   }
 }
 
@@ -306,12 +398,20 @@ function toWire(task: Task): TaskWire {
     id: task.id,
     projectId: task.projectId,
     title: task.title,
+    number: task.number,
     description: task.description,
+    attachments: parseTaskFiles(task.attachments),
     status: task.status,
     labels: parseLabels(task.labels),
     source: task.source,
     sourceRef: task.sourceRef,
     folder: task.folder,
+    agentKind: task.agentKind,
+    model: task.model,
+    effort: task.effort,
+    approval: task.approval,
+    configDir: task.configDir,
+    workflowSlug: task.workflowSlug,
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,
@@ -340,10 +440,24 @@ function resolveTaskFolder(folder: string): string {
 }
 
 /**
- * Labels are stored as a JSON array in a text column, like `Item.payload`.
- * A row whose text is unreadable renders as no labels rather than failing the
- * whole board: the column is a display detail, and one corrupt row must not
- * make the project unopenable.
+ * A card's own agent config directory, canonicalized and checked to exist.
+ *
+ * Its own helper for `resolveTaskFolder`'s reason — both writes need it — and
+ * checked at all for `Project.configDir`'s: the CLI CREATES whatever directory
+ * it is handed and then ends the turn "Not logged in", so a typo here starts a
+ * brand-new signed-out profile instead of failing.
+ */
+function resolveTaskConfigDir(configDir: string): string {
+  return resolveValidDirectory(configDir, {
+    errorCode: 'INVALID_CONFIG_DIR',
+    noun: 'config directory',
+  });
+}
+
+/**
+ * The card's labels, tolerating a column written by an older build or by a
+ * hand that edited the database — a corrupt row renders as NO labels rather
+ * than failing the whole board.
  */
 function parseLabels(raw: string): string[] {
   try {

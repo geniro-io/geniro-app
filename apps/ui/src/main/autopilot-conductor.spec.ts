@@ -137,9 +137,12 @@ describe('AutopilotConductor', () => {
     expect(starts).toHaveLength(1);
   });
 
-  // `ask` would park forever: no approval expires, and a turn's silence
-  // deadline is suspended while it waits on a verdict.
-  it('forces acceptEdits and names itself as the starter', async () => {
+  // Any mode that can ASK parks forever: no approval expires, and a turn's
+  // silence deadline is suspended while it waits on a verdict. That included
+  // `acceptEdits`, which this used to send — it auto-accepts EDITS and routes
+  // every Bash call to the approval seam, so an unattended run stopped at the
+  // first command it wanted to run.
+  it('forces auto-approval and names itself as the starter', async () => {
     const { fetchMock, starts } = daemon({
       p1: {
         projectId: 'p1',
@@ -151,7 +154,7 @@ describe('AutopilotConductor', () => {
     await new AutopilotConductor(deps()).tick();
 
     expect(starts[0]?.body).toMatchObject({
-      approval: 'acceptEdits',
+      approval: 'auto',
       startedBy: 'autopilot',
       from: 'todo',
       cwd: '/wt/t1',
@@ -324,5 +327,90 @@ describe('AutopilotConductor', () => {
     await first;
 
     expect(starts).toHaveLength(1);
+  });
+
+  // A refusal mocked as `{ ok: false, status }` with no `text()` makes
+  // `describeFailure`'s `res.text()` throw before `detailOf` is reached, so
+  // these cases supply a real body. This is the daemon's own debug JSONL, and
+  // the reader exists so a refused autopilot start names its CAUSE instead of
+  // repeating a bare status code for hours.
+  describe('reading what a refused start actually said', () => {
+    const eligible = [{ id: 't1', title: 'Feedback', status: 'todo' }];
+
+    /** A stand-in daemon whose task-start route answers with a REAL body. */
+    function daemonRefusingWithBody(
+      status: number,
+      body: string,
+    ): ReturnType<typeof vi.fn> {
+      return vi.fn(
+        async (_url: string | URL, init?: RequestInit): Promise<Response> => {
+          if (init?.method === 'POST') {
+            return { ok: false, status, text: async () => body } as Response;
+          }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              enabled: true,
+              breakerOpen: false,
+              eligible: eligible.map((task) => ({
+                folder: QUEUE_FOLDER,
+                ...task,
+              })),
+            }),
+          } as Response;
+        },
+      );
+    }
+
+    it('names the daemon’s error code and sentence for a JSON refusal', async () => {
+      const fetchMock = daemonRefusingWithBody(
+        400,
+        JSON.stringify({
+          errorCode: 'TASK_RUN_NO_AGENT',
+          description: 'this project has no agent configured to run it',
+        }),
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      const log = vi.fn();
+
+      await new AutopilotConductor(deps({ log })).tick();
+
+      expect(log).toHaveBeenCalledWith(
+        'autopilot did not start "Feedback": POST /v1/tasks/t1/runs answered ' +
+          '400: TASK_RUN_NO_AGENT — this project has no agent configured to run it',
+      );
+    });
+
+    it('falls back to the raw body when it does not parse as JSON', async () => {
+      const fetchMock = daemonRefusingWithBody(500, 'upstream timed out');
+      vi.stubGlobal('fetch', fetchMock);
+      const log = vi.fn();
+
+      await new AutopilotConductor(deps({ log })).tick();
+
+      expect(log).toHaveBeenCalledWith(
+        'autopilot did not start "Feedback": POST /v1/tasks/t1/runs answered ' +
+          '500: upstream timed out',
+      );
+    });
+
+    it('truncates a body past the cap rather than logging it whole', async () => {
+      // Mirrors `MAX_DETAIL_CHARS` in autopilot-conductor.ts (300) — that
+      // constant is not exported, so the cap is pinned here by its effect.
+      const longBody = 'x'.repeat(400);
+      const fetchMock = daemonRefusingWithBody(500, longBody);
+      vi.stubGlobal('fetch', fetchMock);
+      const log = vi.fn();
+
+      await new AutopilotConductor(deps({ log })).tick();
+
+      const truncated = `${'x'.repeat(300)}…`;
+      expect(log).toHaveBeenCalledWith(
+        `autopilot did not start "Feedback": POST /v1/tasks/t1/runs answered 500: ${truncated}`,
+      );
+      const [line] = log.mock.calls[0] as [string];
+      expect(line).not.toContain(longBody);
+    });
   });
 });

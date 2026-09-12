@@ -37,6 +37,14 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     McpServerService,
     WorkflowTitleBackfillService,
   ],
-  exports: [WorkflowStoreService, WorkflowTitleBackfillService],
+  // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
+  // a workflow instead of an agent — the graph twin of the `ChatService` export
+  // that module already borrows, and running the same way: tasks import graphs,
+  // graphs never import tasks.
+  exports: [
+    WorkflowStoreService,
+    WorkflowTitleBackfillService,
+    GraphExecutorService,
+  ],
 })
 export class GraphsModule {}

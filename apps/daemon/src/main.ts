@@ -44,6 +44,7 @@ import { registerSecret } from './v1/diagnostics/utils/redact';
 import { SinkLogger } from './v1/diagnostics/utils/sink-logger';
 import { GraphExecutorService } from './v1/graphs/services/graph-executor.service';
 import { WorkflowTitleBackfillService } from './v1/graphs/services/workflow-title-backfill.service';
+import { TaskNumberBackfillService } from './v1/projects/services/task-number-backfill.service';
 
 installCrashGuards();
 
@@ -197,6 +198,13 @@ bootstrapper.addExtension(
       // workflow twice and which task not once. Boot is the only moment —
       // nothing revisits a settled run.
       await app.get(WorkflowTitleBackfillService).backfillQuietly();
+
+      // Cards gained an identifier (`GEN-12`) after boards already held cards,
+      // and both halves of it are written at CREATION — so without this every
+      // card made beforehand draws none for the rest of its life, on the one
+      // board the user has actually been working. Boot is the only moment: a
+      // card is not re-saved when it is looked at.
+      await app.get(TaskNumberBackfillService).backfillQuietly();
 
       // Resolved here, STARTED from `onListening` — see that comment. This is
       // the only line of it that may run before the server is up, and it only

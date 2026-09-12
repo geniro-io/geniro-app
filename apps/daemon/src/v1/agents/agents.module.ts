@@ -33,6 +33,7 @@ import { ChatService } from './services/chat.service';
 import { ChatExportService } from './services/chat-export.service';
 import { ChatMetricsService } from './services/chat-metrics.service';
 import { ChatSearchService } from './services/chat-search.service';
+import { ChatShellsService } from './services/chat-shells.service';
 import { ChatTimelineService } from './services/chat-timeline.service';
 import { ChatTitleService } from './services/chat-title.service';
 import { CliSessionsService } from './services/cli-sessions.service';
@@ -91,6 +92,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     SkillsController,
   ],
   providers: [
+    ChatShellsService,
     ChatService,
     ChatSearchService,
     ChatTimelineService,
@@ -364,6 +366,10 @@ import { defaultSpawn } from './utils/spawn-cli';
     // what it loaded, and that report is what keeps the MCP panel off a cold
     // re-dial.
     McpHarvestStore,
+    // Exported for the tasks module: a card's description holds pictures too —
+    // a pasted screenshot, a diagram dropped in — and how a local picture
+    // reaches the screen has ONE reader in this app.
+    LocalImageService,
     ItemDao,
     NodeStateDao,
     CallContextDao,

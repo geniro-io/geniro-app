@@ -3,6 +3,60 @@
 /**
  * 
  * @export
+ * @interface ActiveTask
+ */
+export interface ActiveTask {
+    /**
+     * The task
+     * @type {string}
+     * @memberof ActiveTask
+     */
+    id: string;
+    /**
+     * The live run working it
+     * @type {string}
+     * @memberof ActiveTask
+     */
+    runId: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof ActiveTask
+     */
+    agentKind: AgentKind | null;
+}
+
+
+/**
+ * 
+ * @export
+ * @interface AddTaskAttachmentDto
+ */
+export interface AddTaskAttachmentDto {
+    /**
+     * 
+     * @type {AttachmentMediaType}
+     * @memberof AddTaskAttachmentDto
+     */
+    mediaType: AttachmentMediaType;
+    /**
+     * The image bytes, base64-encoded
+     * @type {string}
+     * @memberof AddTaskAttachmentDto
+     */
+    data: string;
+    /**
+     * The file’s own name, when the clipboard carried one
+     * @type {string}
+     * @memberof AddTaskAttachmentDto
+     */
+    name?: string;
+}
+
+
+/**
+ * 
+ * @export
  * @interface AgentApprovalCapability
  */
 export interface AgentApprovalCapability {
@@ -670,6 +724,19 @@ export type ApprovalMode = typeof ApprovalMode[keyof typeof ApprovalMode];
 /**
  * 
  * @export
+ * @interface AttachTaskFileDto
+ */
+export interface AttachTaskFileDto {
+    /**
+     * An absolute path on this machine
+     * @type {string}
+     * @memberof AttachTaskFileDto
+     */
+    path: string;
+}
+/**
+ * 
+ * @export
  * @interface AttachmentDataDto
  */
 export interface AttachmentDataDto {
@@ -707,6 +774,31 @@ export const AttachmentMediaType = {
 } as const;
 export type AttachmentMediaType = typeof AttachmentMediaType[keyof typeof AttachmentMediaType];
 
+/**
+ * 
+ * @export
+ * @interface BlockedTask
+ */
+export interface BlockedTask {
+    /**
+     * 
+     * @type {string}
+     * @memberof BlockedTask
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof BlockedTask
+     */
+    title: string;
+    /**
+     * Why this card cannot start, in words a user can act on
+     * @type {string}
+     * @memberof BlockedTask
+     */
+    reason: string;
+}
 /**
  * 
  * @export
@@ -1242,6 +1334,19 @@ export interface ChatSearchResultDto {
      * @memberof ChatSearchResultDto
      */
     partialReason: string | null;
+}
+/**
+ * 
+ * @export
+ * @interface ChatShellsDto
+ */
+export interface ChatShellsDto {
+    /**
+     * 
+     * @type {Array<OpenShell>}
+     * @memberof ChatShellsDto
+     */
+    shells: Array<OpenShell>;
 }
 /**
  * 
@@ -1853,6 +1958,42 @@ export interface CreateTaskDto {
      * @memberof CreateTaskDto
      */
     folder?: string;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof CreateTaskDto
+     */
+    agentKind?: AgentKind;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    model?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    effort?: string;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof CreateTaskDto
+     */
+    approval?: ChatApprovalMode;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    configDir?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateTaskDto
+     */
+    workflowSlug?: string;
     /**
      * 
      * @type {TaskSource}
@@ -2664,6 +2805,37 @@ export type NodeStatus = typeof NodeStatus[keyof typeof NodeStatus];
 /**
  * 
  * @export
+ * @interface OpenShell
+ */
+export interface OpenShell {
+    /**
+     * the tool call that detached it — the id a kill is addressed to
+     * @type {string}
+     * @memberof OpenShell
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenShell
+     */
+    command: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof OpenShell
+     */
+    nodeId: string | null;
+    /**
+     * 
+     * @type {number}
+     * @memberof OpenShell
+     */
+    startedAt: number;
+}
+/**
+ * 
+ * @export
  * @interface PlanLimits
  */
 export interface PlanLimits {
@@ -2772,6 +2944,12 @@ export interface ProjectDto {
      * @memberof ProjectDto
      */
     groupId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof ProjectDto
+     */
+    taskKey: string | null;
     /**
      * 
      * @type {AgentKind}
@@ -2913,6 +3091,18 @@ export interface ProjectQueueDto {
      * @memberof ProjectQueueDto
      */
     eligible: Array<QueuedTask>;
+    /**
+     * Cards in the intake column that cannot start as they stand, with the reason — never handed out as eligible
+     * @type {Array<BlockedTask>}
+     * @memberof ProjectQueueDto
+     */
+    blocked: Array<BlockedTask>;
+    /**
+     * The cards whose agent is working right now, in no particular order — `running` is this list’s length
+     * @type {Array<ActiveTask>}
+     * @memberof ProjectQueueDto
+     */
+    active: Array<ActiveTask>;
 }
 
 
@@ -3214,6 +3404,12 @@ export interface RunDto {
      * @memberof RunDto
      */
     taskId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof RunDto
+     */
+    taskIdentifier: string | null;
     /**
      * 
      * @type {number}
@@ -3623,6 +3819,25 @@ export interface SetRunPinnedDto {
 /**
  * 
  * @export
+ * @interface ShellKillDto
+ */
+export interface ShellKillDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof ShellKillDto
+     */
+    killed: boolean;
+    /**
+     * 
+     * @type {string}
+     * @memberof ShellKillDto
+     */
+    reason: string | null;
+}
+/**
+ * 
+ * @export
  * @interface ShellOutputDto
  */
 export interface ShellOutputDto {
@@ -3682,6 +3897,12 @@ export interface StartTaskRunDto {
      */
     startDirty?: boolean;
     /**
+     * Extra instructions for this one press, on top of the card
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    prompt?: string;
+    /**
      * 
      * @type {AgentKind}
      * @memberof StartTaskRunDto
@@ -3712,13 +3933,34 @@ export interface StartTaskRunDto {
      */
     configDir?: string;
     /**
+     * Run this press through a workflow instead of a single agent; outranks every agent field above
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    workflowSlug?: string;
+    /**
      * 
      * @type {string}
      * @memberof StartTaskRunDto
      */
     customInstructions?: string;
+    /**
+     * Who pressed Run — `user` (default) or the `autopilot` timer, which is held to the project cap, the failure breaker and a forced approval mode
+     * @type {string}
+     * @memberof StartTaskRunDto
+     */
+    startedBy?: StartTaskRunDtoStartedByEnum;
 }
 
+
+/**
+ * @export
+ */
+export const StartTaskRunDtoStartedByEnum = {
+    User: 'user',
+    Autopilot: 'autopilot'
+} as const;
+export type StartTaskRunDtoStartedByEnum = typeof StartTaskRunDtoStartedByEnum[keyof typeof StartTaskRunDtoStartedByEnum];
 
 /**
  * 
@@ -3745,6 +3987,25 @@ export interface SweptArchivedDto {
      * @memberof SweptArchivedDto
      */
     deleted: number;
+}
+/**
+ * 
+ * @export
+ * @interface TaskAttachment
+ */
+export interface TaskAttachment {
+    /**
+     * The absolute path this file is referenced by
+     * @type {string}
+     * @memberof TaskAttachment
+     */
+    path: string;
+    /**
+     * What to call it — the file’s own name
+     * @type {string}
+     * @memberof TaskAttachment
+     */
+    name: string;
 }
 /**
  * 
@@ -3785,10 +4046,22 @@ export interface TaskDto {
     title: string;
     /**
      * 
+     * @type {number}
+     * @memberof TaskDto
+     */
+    number: number | null;
+    /**
+     * 
      * @type {string}
      * @memberof TaskDto
      */
     description: string | null;
+    /**
+     * Files bound to this card, in the order they were attached
+     * @type {Array<TaskFile>}
+     * @memberof TaskDto
+     */
+    attachments: Array<TaskFile>;
     /**
      * 
      * @type {TaskStatus}
@@ -3819,6 +4092,42 @@ export interface TaskDto {
      * @memberof TaskDto
      */
     folder: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof TaskDto
+     */
+    agentKind: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    model: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    effort: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof TaskDto
+     */
+    approval: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    configDir: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    workflowSlug: string | null;
     /**
      * 
      * @type {string}
@@ -3876,6 +4185,37 @@ export interface TaskDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface TaskFile
+ */
+export interface TaskFile {
+    /**
+     * Stable within this card, so a row can be removed
+     * @type {string}
+     * @memberof TaskFile
+     */
+    id: string;
+    /**
+     * The file’s own name, for the list
+     * @type {string}
+     * @memberof TaskFile
+     */
+    name: string;
+    /**
+     * Where it is on this machine
+     * @type {string}
+     * @memberof TaskFile
+     */
+    path: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof TaskFile
+     */
+    bytes: number | null;
+}
 
 /**
  * 
@@ -4159,6 +4499,42 @@ export interface UpdateTaskDto {
      * @memberof UpdateTaskDto
      */
     folder?: string | null;
+    /**
+     * 
+     * @type {AgentKind}
+     * @memberof UpdateTaskDto
+     */
+    agentKind?: AgentKind | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    model?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    effort?: string | null;
+    /**
+     * 
+     * @type {ChatApprovalMode}
+     * @memberof UpdateTaskDto
+     */
+    approval?: ChatApprovalMode | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    configDir?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateTaskDto
+     */
+    workflowSlug?: string | null;
 }
 
 

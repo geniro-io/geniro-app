@@ -4,8 +4,11 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
+import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { terminalNodeIds } from '../../graphs/utils/graph-order';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { isBreakerOpen } from '../../projects/utils/breaker';
+import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import type { TaskStatus, TaskWire } from '../tasks.types';
@@ -53,6 +56,7 @@ export class TaskSettleService implements OnModuleInit {
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
+    private readonly workflows: WorkflowStoreService,
   ) {}
 
   onModuleInit(): void {
@@ -152,7 +156,7 @@ export class TaskSettleService implements OnModuleInit {
       return;
     }
 
-    const reportItemId = await this.findReport(runId, em);
+    const reportItemId = await this.findReport(run, em);
     if (reportItemId !== null) {
       await this.tasks.update(task.id, { reportItemId });
     }
@@ -262,9 +266,35 @@ export class TaskSettleService implements OnModuleInit {
    * last message is the fallback — an agent that could not call the tool still
    * finished by saying what it did, and a card with no report at all is the
    * outcome worth avoiding.
+   *
+   * A WORKFLOW run narrows both lookups to the graph's TERMINAL nodes, and that
+   * is not a refinement — it is what makes the answer mean anything. A chat has
+   * one voice, so its highest-`seq` message is its conclusion; a graph is N
+   * nodes writing into one stream, so the same query returns whichever node of
+   * a fan-out finished last. `report_findings` is only ever sought on the
+   * chance a node had the tool by another route (a caller node holds an MCP
+   * endpoint), which is why the workflow variant of the instructions does not
+   * name it.
    */
   private async findReport(
+    run: Pick<Run, 'id' | 'workflowId'>,
+    em: EntityManager,
+  ): Promise<string | null> {
+    const nodeIds = await this.terminalNodesOf(run.workflowId);
+    const found = await this.findReportAmong(run.id, nodeIds, em);
+    if (found !== null || nodeIds === undefined) {
+      return found;
+    }
+    // The workflow can be edited between this run finishing and its card
+    // settling, moving its terminal node ids — a stale set matches no row of
+    // this run just as an absent one would, so the filtered miss falls back
+    // to the unfiltered read rather than reporting no result at all.
+    return this.findReportAmong(run.id, undefined, em);
+  }
+
+  private async findReportAmong(
     runId: string,
+    nodeIds: string[] | undefined,
     em: EntityManager,
   ): Promise<string | null> {
     const findings = await this.itemDao.latestOfKind(
@@ -272,6 +302,7 @@ export class TaskSettleService implements OnModuleInit {
       'report_findings',
       undefined,
       em,
+      nodeIds,
     );
     if (findings) {
       return findings.id;
@@ -281,7 +312,41 @@ export class TaskSettleService implements OnModuleInit {
       'message',
       'assistant',
       em,
+      nodeIds,
     );
     return message?.id ?? null;
+  }
+
+  /**
+   * Which nodes of a workflow are its conclusion, or undefined for a chat run
+   * and for anything this cannot answer.
+   *
+   * Undefined means "no node filter", which is the honest degrade: a workflow
+   * whose YAML has since been edited, renamed or deleted still settled a real
+   * card, and the last message of an unknown shape is a better report than
+   * none. Reading TODAY's definition is the same approximation `HandoffService`
+   * makes for a legacy node, and it is safe here because the answer is only
+   * ever used to PREFER one row over another.
+   */
+  private async terminalNodesOf(
+    workflowId: string | null,
+  ): Promise<string[] | undefined> {
+    if (workflowId === null) {
+      return undefined;
+    }
+    try {
+      const { workflow } = await this.workflows.get(workflowId);
+      const ids = terminalNodeIds(workflow.nodes, workflow.edges);
+      // An empty set would match no row at all, turning "we could not tell
+      // which node concludes" into "this run produced no report".
+      return ids.size === 0 ? undefined : [...ids];
+    } catch (error) {
+      this.logger.warn(
+        `could not read workflow ${workflowId} to find its terminal nodes: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return undefined;
+    }
   }
 }

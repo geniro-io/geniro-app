@@ -132,11 +132,37 @@ export function isCommandRunning(
   processes: readonly ProcessRow[],
   command: string,
 ): boolean {
+  return pidsRunningCommand(processes, command).length > 0;
+}
+
+/**
+ * WHICH processes are running `command` — {@link isCommandRunning}'s answer,
+ * with the rows kept.
+ *
+ * One matcher for both, deliberately: the question "is this still running" and
+ * the question "what do I kill to stop it" must never be able to disagree, and
+ * a second normalization is how they would. The reading is
+ * {@link isCommandRunning}'s in full — a contains on a normalized prefix,
+ * because a CLI wraps what it runs.
+ *
+ * That looseness is why the caller kills a process GROUP and not a pid: the
+ * wrapper and the command it wraps are two rows for one thing, and both are
+ * this answer.
+ */
+export function pidsRunningCommand(
+  processes: readonly ProcessRow[],
+  command: string,
+): number[] {
   const needle = normalizeCommand(command).slice(0, COMMAND_MATCH_CHARS);
+  // An empty needle would match EVERY row. That is a difference of one
+  // character from killing the user's whole process table, so it is refused
+  // here rather than left to each caller to remember.
   if (needle === '') {
-    return false;
+    return [];
   }
-  return processes.some((row) => normalizeCommand(row.args).includes(needle));
+  return processes
+    .filter((row) => normalizeCommand(row.args).includes(needle))
+    .map((row) => row.pid);
 }
 
 function normalizeCommand(value: string): string {

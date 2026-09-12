@@ -100,17 +100,59 @@ describe('BreakdownColumn', () => {
     expect(barWidths(el)[0]).toBe('100%');
   });
 
-  it('agrees with a one-turn row', () => {
-    // Found by driving the real ledger: one cursor-agent turn beside 114 claude
-    // ones rendered "1 turns".
+  it('states what a group COST and MOVED, never its turn count', () => {
+    // REPORTED as "я не могу увидеть, сколько я потратил by agent в долларах. Я
+    // могу видеть тёрнс, но тёрнс мне вообще ничего не дает". The row showed
+    // money only when `isCosted` held — and that demands EVERY group carry a
+    // cost, so one agent reporting none took the dollars off every row. On the
+    // real ledger claude had spent $32,581.96 and the agent column read
+    // `3359 turns`, because cursor-agent's cost was null.
     const el = card([
-      { key: 'claude', totals: totals({ turns: 114, costUsd: null }) },
-      { key: 'cursor-agent', totals: totals({ turns: 1, costUsd: null }) },
+      {
+        key: 'claude',
+        totals: totals({
+          turns: 114,
+          costUsd: 32.5,
+          inputTokens: 1_000,
+          outputTokens: 200,
+        }),
+      },
+      {
+        key: 'cursor-agent',
+        totals: totals({
+          turns: 1,
+          costUsd: null,
+          inputTokens: null,
+          outputTokens: null,
+        }),
+      },
     ]);
 
-    expect(el.textContent).toContain('1 turn');
-    expect(el.textContent).not.toContain('1 turns');
-    expect(el.textContent).toContain('114 turns');
+    expect(el.textContent).toContain('$32.50');
+    expect(el.textContent).toContain('1.2k tokens');
+    // The turn count is gone from this card entirely — a revert that merely
+    // ADDED dollars beside it would still satisfy the two lines above.
+    expect(el.textContent).not.toContain('turns');
+    expect(el.textContent).not.toContain('114');
+  });
+
+  it('says so for a group nothing measured, rather than showing a zero', () => {
+    // cursor-agent before its polled spend is folded in: no cost, no tokens.
+    // `$0.00` or `0 tokens` would each claim a measurement nobody took.
+    const el = card([
+      {
+        key: 'cursor-agent',
+        totals: totals({
+          costUsd: null,
+          inputTokens: null,
+          outputTokens: null,
+        }),
+      },
+    ]);
+
+    expect(el.textContent).toContain('not measured');
+    expect(el.textContent).not.toContain('$0.00');
+    expect(el.textContent).not.toContain('0 tokens');
   });
 
   it('gives a tiny-but-real row a visible bar', () => {

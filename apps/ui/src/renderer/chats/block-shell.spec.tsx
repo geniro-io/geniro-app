@@ -53,9 +53,9 @@ describe('BlockShell', () => {
   });
 
   it('starts CLOSED when collapsible, and opens on click', () => {
-    // One prop decides both facts: collapsible blocks are asides the reader
-    // opens deliberately, so there is no collapsible-and-already-open state to
-    // ask for.
+    // A collapsible block is an aside the reader opens deliberately, so it
+    // starts shut — `defaultOpen` is the one thing that can make it START open,
+    // and a press outranks both, which is the second half of this case.
     act(() =>
       root.render(
         <BlockShell
@@ -88,6 +88,39 @@ describe('BlockShell', () => {
     act(() =>
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
     );
+
+    expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
+    expect(container.textContent).toContain('inner thread');
+  });
+
+  it('opens a block already on screen when defaultOpen turns true', () => {
+    // The reason `open` is DERIVED rather than seeded into `useState`, which
+    // reads its argument only at mount. A render card streams in after the
+    // delegate's block is already drawn, so a seeded block would stay shut on
+    // exactly the delegate whose report the prop exists to reveal.
+    //
+    // Pinned HERE rather than through `SubagentBlock`: both of its cases render
+    // their card in the first render of a fresh root, so neither ever changes
+    // `defaultOpen` after mount — the branch was described in a comment and
+    // entered by nothing.
+    const shell = (defaultOpen: boolean): React.JSX.Element => (
+      <BlockShell
+        eyebrow="Sub-agent"
+        eyebrowIcon={<span />}
+        header={<span>code-reviewer</span>}
+        status="done"
+        collapsible
+        defaultOpen={defaultOpen}
+        toggleLabel="Show the sub-agent's conversation">
+        <p>inner thread</p>
+      </BlockShell>
+    );
+
+    act(() => root.render(shell(false)));
+    expect(toggle()?.getAttribute('aria-expanded')).toBe('false');
+
+    // The SAME root — a re-render, not a remount.
+    act(() => root.render(shell(true)));
 
     expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('inner thread');

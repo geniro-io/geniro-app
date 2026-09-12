@@ -142,14 +142,158 @@ describe('the richer card', () => {
     expect(el.textContent).not.toContain('2h');
   });
 
-  it('gives each label its own colour dot', () => {
-    const el = card({ labels: ['design', 'infra'] });
+  it('draws every fact as the SAME pill, with the label’s colour on its dot', () => {
+    // Linear's board card, given as the reference. Priority, labels, the due
+    // date and the branch were four arrangements of a small glyph and some
+    // muted text, so a card's tags were indistinguishable from its dates —
+    // REPORTED first as "они какие-то кривые и непонятные". One shape for all
+    // of them is what makes the row readable; the DOT is what says which
+    // label, which is why the pill itself stays neutral.
+    const el = card({
+      labels: ['design', 'infra'],
+      priority: 'urgent',
+      dueDate: '2030-01-01',
+      branch: 'geniro/task-1',
+    });
 
+    // priority + 2 labels + due + branch
+    expect(el.querySelectorAll('[data-slot="task-chip"]').length).toBe(5);
     const dots = [...el.querySelectorAll('span')].filter((node) =>
       node.className.includes('bg-group-'),
     );
     expect(dots.length).toBe(2);
     // Different names, different swatches — the point of colouring them.
     expect(dots[0]?.className).not.toBe(dots[1]?.className);
+  });
+
+  it('closes with the date it was created, not the date it moved', () => {
+    // REVERSES an earlier cut of the update time, which was a third metadata
+    // row holding a lone figure. There is one metadata row now, and a quiet
+    // dateline under it is what closes the card — Linear's own footer.
+    // `updated` moves whenever anything touches the card and says nothing a
+    // reader can act on; its age is a fact about the card.
+    const el = card({ createdAt: '2026-08-19T10:00:00.000Z' });
+
+    expect(el.textContent).toContain('Created Aug 19');
+  });
+});
+
+/**
+ * A card whose agent is working RIGHT NOW.
+ *
+ * REPORTED as "на тех задачах, которые сейчас делает агент, автоматически
+ * должна быть иконка агента и какой-то лоадер на карточках задач" — the board
+ * drew a working card exactly like a resting one, so the only way to tell was
+ * to open it.
+ */
+describe('TaskCard — while an agent is on it', () => {
+  const live = (agentKind: string | null) => ({
+    id: 't1',
+    runId: 'r1',
+    agentKind,
+  });
+
+  it('names the CLI and spins', () => {
+    const el = card({}, { active: live('claude') });
+
+    expect(el.textContent).toContain('claude');
+    expect(el.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('says `cursor`, the word the rest of the app uses', () => {
+    // The daemon spells it `cursor-agent`, which is the binary's name. One
+    // shared fold (`shortAgentLabel`) rather than a second mapping here.
+    expect(card({}, { active: live('cursor-agent') }).textContent).toContain(
+      'cursor',
+    );
+  });
+
+  it('calls a workflow run a workflow rather than nothing', () => {
+    // A graph run records no single CLI — its agents are per node — so the
+    // honest word is what the run IS.
+    expect(card({}, { active: live(null) }).textContent).toContain('workflow');
+  });
+
+  it('puts it on the accessible name AHEAD of the column', () => {
+    // The column says `In progress`, which is equally true of a card whose
+    // agent finished minutes ago and is waiting to be reviewed.
+    const name = card({}, { active: live('claude') }).getAttribute(
+      'aria-label',
+    );
+
+    expect(name).toContain('claude is working on it');
+    expect(name?.indexOf('working on it')).toBeLessThan(
+      name?.indexOf('In progress') ?? -1,
+    );
+  });
+
+  it('draws none of it on a card at rest', () => {
+    // `task.runId` is NOT the test — it outlives the run it names, since a
+    // settled card's report is read through exactly that id — so a card with
+    // a finished run must look at rest.
+    const el = card({ runId: 'r1' });
+
+    expect(el.querySelector('.animate-spin')).toBeNull();
+    expect(el.getAttribute('aria-label')).not.toContain('working on it');
+  });
+});
+
+/**
+ * The priority is a GLYPH on the card, and a glyph nobody can decode is chrome.
+ *
+ * REPORTED against the urgent one: "у меня есть иконка с восклицательным
+ * знаком в треугольничке напротив таски… Я не понимаю, что она значит. Там
+ * никакой информации нет." It is a warning triangle on a board that had just
+ * started marking cards the autopilot refuses, so it read as an error about
+ * that card — and the accessible name, which has carried the word all along,
+ * is not something a sighted reader can reach.
+ */
+describe('TaskCard — the priority glyph', () => {
+  const glyphTitle = (el: HTMLElement): string | null =>
+    el.querySelector('span[title]')?.getAttribute('title') ?? null;
+
+  it('names itself on hover', () => {
+    expect(glyphTitle(card({ priority: 'urgent' }))).toBe('Urgent priority');
+  });
+
+  it('puts the tooltip on a WRAPPER, since an svg takes none from `title`', () => {
+    // An SVG element's tooltip comes from a `<title>` CHILD; the attribute
+    // lucide would forward draws nothing at all. So the pin is that the
+    // titled node is not the icon itself.
+    const titled = card({ priority: 'high' }).querySelector('[title]');
+
+    expect(titled?.tagName).toBe('SPAN');
+  });
+
+  it('draws no glyph, and no tooltip, on an untriaged card', () => {
+    // `none` is off the scale rather than the bottom of it — a card with no
+    // priority set says nothing about one.
+    expect(glyphTitle(card({ priority: 'none' }))).toBeNull();
+  });
+});
+
+/**
+ * What a card is CALLED.
+ *
+ * ASKED FOR as Linear's own scheme — "нужно добавить номер, вот как в linear,
+ * то есть по первым буквам проекта и номер" — and the point is that `GEN-12`
+ * goes in a commit message, a chat or a note to somebody else, where a UUID
+ * cannot.
+ */
+describe('TaskCard — the identifier', () => {
+  it('draws it, and puts it on the accessible name first', () => {
+    const el = card({ number: 12 }, { taskKey: 'GEN' });
+
+    expect(el.textContent).toContain('GEN-12');
+    expect(el.getAttribute('aria-label')?.startsWith('GEN-12')).toBe(true);
+  });
+
+  it('draws nothing for a card the backfill has not reached', () => {
+    // `GEN-0` names a card that does not exist; the two halves also arrive on
+    // different rows, so either can be missing on its own.
+    expect(
+      card({ number: null }, { taskKey: 'GEN' }).textContent,
+    ).not.toContain('GEN');
+    expect(card({ number: 12 }).textContent).not.toContain('-12');
   });
 });

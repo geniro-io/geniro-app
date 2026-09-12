@@ -123,6 +123,52 @@ describe('ProjectsService (in-memory sqlite)', () => {
     });
   });
 
+  it('disambiguates a card key another live project already holds', async () => {
+    // `projectKey` takes one initial per word, so two boards collide readily —
+    // and every name with no Latin letters in it derives the SAME fallback, so
+    // two Cyrillic-named boards on one machine always collide. The chat
+    // sidebar draws `Run.taskIdentifier` in one global list, so the collision
+    // puts two different cards on screen under one label with nothing to tell
+    // them apart and no route to edit either key.
+    const first = await service.create({ name: 'Проект', folder });
+    const second = await service.create({
+      name: 'Другой',
+      folder: otherFolder,
+    });
+
+    expect(first.taskKey).toBe('TSK');
+    expect(second.taskKey).not.toBe(first.taskKey);
+    expect(second.taskKey).toBe('TSK2');
+  });
+
+  it('does NOT hand a deleted project’s key to the next board', async () => {
+    // The invariant is per PROJECT and settled at create: no two projects ever
+    // share a key. It has to hold against deleted boards because
+    // `Run.taskIdentifier` is denormalized onto the run row and outlives the
+    // task — deleting a project deletes its tasks, not the chats those tasks
+    // opened — so the removed board's `TSK-12` is still drawn in the one global
+    // chat sidebar. Reading only LIVE projects freed `TSK` again and put two
+    // unrelated conversations on screen under one label, which is the very
+    // defect the disambiguation exists to prevent.
+    const first = await service.create({ name: 'Проект', folder });
+    expect(first.taskKey).toBe('TSK');
+    await service.remove(first.id);
+
+    const second = await service.create({ name: 'Другой', folder });
+
+    expect(second.taskKey).not.toBe('TSK');
+  });
+
+  it('never blocks a create over a key the user did not type', async () => {
+    // The folder check REFUSES; this one appends. The difference is whose
+    // value it is — a folder is chosen, a key is derived and invisible.
+    await service.create({ name: 'Проект', folder });
+
+    await expect(
+      service.create({ name: 'Ещё один', folder: otherFolder }),
+    ).resolves.toMatchObject({ name: 'Ещё один' });
+  });
+
   it('refuses moving a project onto an occupied folder, but lets it keep its own', async () => {
     const first = await service.create({ name: 'First', folder });
     const second = await service.create({

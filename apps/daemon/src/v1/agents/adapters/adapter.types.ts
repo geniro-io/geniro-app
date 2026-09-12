@@ -2828,6 +2828,25 @@ export interface AgentTurnHandle {
    */
   sendUserMessage(message: FollowUpMessage): boolean;
   /**
+   * The delegate a render card drawn RIGHT NOW can be credited to, or null.
+   *
+   * A host render tool (`report_findings`, `show_chart`, …) arrives over the
+   * MCP endpoint, which is addressed `(runId, nodeId)` alone — a delegate runs
+   * inside the same CLI process and calls the same endpoint, so the request
+   * names nobody. Only the live turn can answer, and it answers by INFERENCE.
+   * The whole judgment therefore lives behind this one method rather than in
+   * the caller: a card filed under the wrong delegate reads exactly like a
+   * correct attribution, so there must be no second place to get it wrong.
+   *
+   * Three conditions, each a case that was wrong without it. The main thread
+   * must have stopped talking, since it goes on working — and calling these
+   * tools — while a delegate is out. Exactly one delegate must be open,
+   * counted over the LIVE set rather than over the ids that resolved, because
+   * one the CLI announced with no launching call is still a second delegate.
+   * And that delegate's own launching call must be known.
+   */
+  attributableDelegate(): string | null;
+  /**
    * Re-mode the tool-approval posture of the turn ALREADY RUNNING, returning
    * whether the CLI was actually told.
    *

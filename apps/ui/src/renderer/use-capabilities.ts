@@ -7,6 +7,25 @@ import type { DaemonApis } from './daemon-api';
 const POLL_INTERVAL_MS = 2_000;
 const MAX_POLLS = 5;
 
+/** What {@link useCapabilities} answers. */
+export interface CapabilitiesState {
+  /**
+   * The daemon's answer, or `null` while unread — see the fail-open note
+   * below for the other way this stays `null` for good.
+   */
+  capabilities: CapabilitiesDto | null;
+  /**
+   * Whether the FIRST read is still outstanding — cleared the moment it
+   * settles, whichever way: a landed answer and a failed read both clear it,
+   * so a caller can tell "still asking" from "asked and got nothing", which
+   * `capabilities === null` alone cannot. The background re-asks the
+   * unsettled claude-mode probe keeps making afterward do not reopen this —
+   * they refine an answer already on screen rather than gate whether one
+   * exists yet.
+   */
+  loading: boolean;
+}
+
 /**
  * `GET /v1/capabilities` — the machine's feature availability, read ONCE per
  * daemon handle and shared by every surface that needs it.
@@ -24,25 +43,31 @@ const MAX_POLLS = 5;
  * verdict actually reach the screen this session rather than only after a
  * remount.
  *
- * Fails OPEN: a failed read yields `null`, and every caller treats that as
- * "not answered" rather than as a negative verdict — an unreachable daemon is
- * not evidence about any CLI.
+ * Fails OPEN: a failed read yields `capabilities: null`, and every caller
+ * treats that as "not answered" rather than as a negative verdict — an
+ * unreachable daemon is not evidence about any CLI. What the failure DOES
+ * clear is `loading`: the read settled, it just settled with nothing, and a
+ * caller that conflated the two spun a waiting chip for the life of the
+ * handle over a probe that had already given up.
  */
 export function useCapabilities(
   capabilitiesApi: DaemonApis['capabilities'] | null,
-): CapabilitiesDto | null {
+): CapabilitiesState {
   const [capabilities, setCapabilities] = useState<CapabilitiesDto | null>(
     null,
   );
+  const [loading, setLoading] = useState(capabilitiesApi !== null);
 
   useEffect(() => {
     if (capabilitiesApi === null) {
       setCapabilities(null);
+      setLoading(false);
       return;
     }
     let cancelled = false;
     let attempts = 0;
     let timer: number | undefined;
+    setLoading(true);
     const poll = (): void => {
       void capabilitiesApi
         .getCapabilities()
@@ -51,6 +76,7 @@ export function useCapabilities(
             return;
           }
           setCapabilities(caps);
+          setLoading(false);
           // Only the claude mode probe is asynchronous daemon-side; the config-dir
           // answers are compile-time config and are settled on the first read.
           const unsettled =
@@ -64,6 +90,7 @@ export function useCapabilities(
         .catch(() => {
           if (!cancelled) {
             setCapabilities(null);
+            setLoading(false);
           }
         });
     };
@@ -76,5 +103,5 @@ export function useCapabilities(
     };
   }, [capabilitiesApi]);
 
-  return capabilities;
+  return { capabilities, loading };
 }

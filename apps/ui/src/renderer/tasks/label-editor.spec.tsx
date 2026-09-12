@@ -21,7 +21,10 @@ afterEach(() => {
   container = null;
 });
 
-function editor(labels: string[]): {
+function editor(
+  labels: string[],
+  suggestions: readonly string[] = [],
+): {
   el: HTMLDivElement;
   onChange: ReturnType<typeof vi.fn>;
 } {
@@ -30,7 +33,13 @@ function editor(labels: string[]): {
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root!.render(<LabelEditor labels={labels} onChange={onChange} />);
+    root!.render(
+      <LabelEditor
+        labels={labels}
+        suggestions={suggestions}
+        onChange={onChange}
+      />,
+    );
   });
   return { el: container, onChange };
 }
@@ -134,5 +143,114 @@ describe('LabelEditor', () => {
     const { el } = editor(Array.from({ length: 20 }, (_, i) => `label-${i}`));
 
     expect(addButton(el)).toBeUndefined();
+  });
+
+  describe('the labels this board already uses', () => {
+    const suggestion = (el: HTMLElement, label: string): HTMLButtonElement =>
+      el.querySelector<HTMLButtonElement>(
+        `[aria-label="Add label ${label}"]`,
+      ) as HTMLButtonElement;
+
+    const suggestions = (el: HTMLElement): string[] =>
+      [...el.querySelectorAll('button')]
+        .map((node) => node.getAttribute('aria-label') ?? '')
+        .filter((name) => name.startsWith('Add label '))
+        .map((name) => name.slice('Add label '.length));
+
+    it('offers them only once the user has reached for + Label', () => {
+      // A permanent row of them would be noise on every card; the moment
+      // somebody wants one is the moment they pressed the button.
+      const { el } = editor([], ['bug', 'ui']);
+      expect(suggestions(el)).toEqual([]);
+
+      act(() => {
+        addButton(el).click();
+      });
+
+      expect(suggestions(el)).toEqual(['bug', 'ui']);
+    });
+
+    it('adds one on a press, without retyping it', () => {
+      const { el, onChange } = editor(['design'], ['bug']);
+      act(() => {
+        addButton(el).click();
+      });
+
+      act(() => {
+        suggestion(el, 'bug').click();
+      });
+
+      expect(onChange).toHaveBeenCalledWith(['design', 'bug']);
+    });
+
+    it('holds focus so the press is not eaten by the field’s own blur', () => {
+      // `onBlur` commits and closes the editor, which unmounts the chip before
+      // its click can land — so without the prevented mousedown the control
+      // does nothing at all.
+      const { el } = editor([], ['bug']);
+      act(() => {
+        addButton(el).click();
+      });
+
+      const event = new MouseEvent('mousedown', {
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        suggestion(el, 'bug').dispatchEvent(event);
+      });
+
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it('never offers a label the card already carries', () => {
+      const { el } = editor(['bug'], ['bug', 'ui']);
+      act(() => {
+        addButton(el).click();
+      });
+
+      expect(suggestions(el)).toEqual(['ui']);
+    });
+
+    it('narrows to what has been typed, case-insensitively', () => {
+      const { el } = editor([], ['bug', 'Backend', 'ui']);
+      act(() => {
+        addButton(el).click();
+      });
+
+      act(() => {
+        type(field(el), 'B');
+      });
+
+      expect(suggestions(el)).toEqual(['bug', 'Backend']);
+    });
+
+    it('caps the row and SAYS how many it is withholding', () => {
+      // A label that exists but is off screen must not read as one that does
+      // not exist — the sentence is what points at typing as the way past it.
+      const { el } = editor(
+        [],
+        Array.from({ length: 12 }, (_unused, i) => `label-${i}`),
+      );
+      act(() => {
+        addButton(el).click();
+      });
+
+      expect(suggestions(el)).toHaveLength(8);
+      expect(el.textContent).toContain('+4 more');
+    });
+
+    it('stays open after a press, so several can be added in a row', () => {
+      const { el } = editor([], ['bug', 'ui']);
+      act(() => {
+        addButton(el).click();
+      });
+
+      act(() => {
+        suggestion(el, 'bug').click();
+      });
+
+      expect(field(el)).not.toBeNull();
+    });
   });
 });

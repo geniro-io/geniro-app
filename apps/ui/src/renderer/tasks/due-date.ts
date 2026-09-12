@@ -63,3 +63,23 @@ export function dueDateView(
     : `${monthName} ${Number(day)}, ${year}`;
   return { label, overdue, dueToday: false };
 }
+
+/**
+ * A card-footer date: `Aug 19`, with the year only when it is not this one.
+ *
+ * Absolute rather than relative, unlike the detail panel's `formatRelativeTime`
+ * — Linear's board card is the reference and it states the date, which is what
+ * a footer is for: a fact to place the card by, not a clock to read. "3 months
+ * ago" gives the eye nothing to sort on.
+ */
+export function shortDate(iso: string, now: Date = new Date()): string | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) {
+    return null;
+  }
+  const month = MONTHS[at.getMonth()] ?? '';
+  const day = at.getDate();
+  return at.getFullYear() === now.getFullYear()
+    ? `${month} ${day}`
+    : `${month} ${day}, ${at.getFullYear()}`;
+}

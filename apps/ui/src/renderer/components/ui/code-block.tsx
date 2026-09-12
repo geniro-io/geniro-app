@@ -67,6 +67,24 @@ export function CodeBlock({
           data-language={grammar ?? 'text'}
           className={cn(
             'm-0 max-h-64 overflow-auto rounded-md bg-muted px-2.5 py-2 font-mono text-xs leading-relaxed text-foreground',
+            // PLAIN TEXT WRAPS; real code scrolls.
+            //
+            // A `<pre>` is `white-space: pre`, so a long line runs off the
+            // right edge and — on macOS, where scrollbars are hidden until you
+            // scroll — simply reads as cut off. That is right for CODE, whose
+            // columns carry meaning, and wrong for the commonest thing in this
+            // block: a tool RESULT, which `ToolBodyView` sends here whatever it
+            // holds. REPORTED as "а еще вижу там оборванное сообщение" over an
+            // async-agent launch receipt — six lines of ordinary English prose,
+            // every one of them clipped mid-sentence at the same x.
+            //
+            // `grammar === null` is the discriminator and it is the one already
+            // being computed: no registered language means nothing here is
+            // being highlighted, which is as close to "this is not code" as
+            // this component can get. `break-words` covers the other half of
+            // the same report — an unbroken 150-character path with no space to
+            // wrap at, which is what those receipts carry.
+            grammar === null && 'whitespace-pre-wrap break-words',
             className,
           )}>
           <code>{highlighted ?? code}</code>

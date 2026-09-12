@@ -410,6 +410,19 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const reconnectAfterSeqRef = useRef(-1);
   const [reconnectNonce, setReconnectNonce] = useState(0);
   const runsRef = useRef<ChatRun[]>([]);
+  /**
+   * Run ids this window has already settled one way or another — it put the
+   * row in itself, or it asked the listing for it. See {@link adoptUnknownRun}.
+   *
+   * A ref rather than a read of `runs`, and that is load-bearing rather than
+   * tidy: `runsRef` is an effect-synced mirror a COMMIT behind the state, so a
+   * run created and activated in the same tick is not in it yet — and asking
+   * the listing for a run this window just made would replace the optimistic
+   * row with the daemon's copy, undoing the local correction a refused send
+   * makes to it.
+   */
+  const resolvedRunIdsRef = useRef<Set<string>>(new Set());
+
   // A boolean rather than Workflows' `| null` sentinel deliberately: `runs` has
   // a dozen array-op call sites (map/filter/find/setRuns updaters) that a
   // null union would force to re-guard.
@@ -987,6 +1000,10 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    */
   const addRun = useCallback(
     (run: ChatRun): void => {
+      // KNOWN from here on: this window made this run, so nothing about it has
+      // to be asked of the listing — and asking would arrive a moment later
+      // and overwrite the row below with the daemon's copy of it.
+      resolvedRunIdsRef.current.add(run.id);
       if (chatScopeRef.current === 'archived') {
         showScope('active');
         return;
@@ -1037,8 +1054,52 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     setRuns((prev) => prev.filter((run) => run.id !== runId));
   }, []);
 
+  /**
+   * Take a run this window has never listed into the sidebar.
+   *
+   * REPORTED as "i see task is running, but i dont see chat… when i click on
+   * button chat inside task - i can see it, but not in list". A run started
+   * from the BOARD — or by the autopilot, or in another window — exists the
+   * moment the card is pressed, and this client learns of it in one of two
+   * ways: it announces (`run_status`), or the user is taken straight into it
+   * (the card's own thread button). NEITHER put a row in the list. The status
+   * handler rewrites rows with `prev.map`, which touches only rows it already
+   * has, and activating a run opens the transcript without ever consulting the
+   * listing — which is exactly the pair of symptoms reported: a working thread
+   * missing from the sidebar, and readable only by the way in that skips it.
+   *
+   * The whole LISTING is refetched rather than the one run, and that is a
+   * reuse decision rather than an economy: there is no single-run route, and
+   * the listing is what already knows the scope on show, the sort order, the
+   * workflow runs beside the chats, and the pull-request capture pass. A route
+   * for one run would have to restate all of it.
+   *
+   * ONCE per run id, which is what keeps it from being a fetch per
+   * announcement — those fire many times a second through a turn. A refresh
+   * that does not produce the row (an active run announcing while the archive
+   * is on show) is therefore also asked for once and then let be, rather than
+   * retried for the life of the run.
+   */
+  const adoptUnknownRun = useCallback(
+    (runId: string): void => {
+      if (
+        runsRef.current.some((run) => run.id === runId) ||
+        resolvedRunIdsRef.current.has(runId)
+      ) {
+        return;
+      }
+      resolvedRunIdsRef.current.add(runId);
+      refreshRuns();
+    },
+    [refreshRuns],
+  );
+
   const activateRun = useCallback(
     async (runId: string): Promise<void> => {
+      // Before anything else: the board hands this a run whose row the sidebar
+      // may not hold, and without the row the header has no title, no status
+      // and no Stop — the thread opens as "New chat" over its own transcript.
+      adoptUnknownRun(runId);
       const previous = activeRunIdRef.current;
       if (previous && previous !== runId) {
         client.leaveRun(previous);
@@ -1159,7 +1220,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     setLiveText(EMPTY_LIVE_TEXT);
     setStreaming(false);
     setError(null);
-  }, [client]);
+  }, [adoptUnknownRun, client]);
 
   useEffect(() => {
     refreshRuns();
@@ -1250,6 +1311,11 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // focused run's room, so before this a background run's settle was
     // invisible until the next refetch.
     const unsubscribeRunStatus = client.onRunStatus((event) => {
+      // A run nobody in this window started, announcing itself for the first
+      // time — a card the board just ran, or the autopilot's own. The row
+      // update below is a `prev.map`, so without this it would be dropped
+      // silently and the thread would work away unlisted.
+      adoptUnknownRun(event.runId);
       const status = event.status;
       // An activity-only announce carries no status and must not touch the
       // badge. It fires on every tool call without reading the run, so while
@@ -1655,7 +1721,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         client.leaveRun(active);
       }
     };
-  }, [client, chatApi, addItem, activateRun, refreshRuns]);
+  }, [client, chatApi, addItem, activateRun, refreshRuns, adoptUnknownRun]);
 
   const [deadRequestKeys, setDeadRequestKeys] = useState<Set<string>>(
     new Set(),

@@ -11,8 +11,8 @@ import {
 } from './acp-models';
 
 /**
- * A `session/new` result carrying the PRE-1.0 `models` block — the carrier ACP
- * removed at schema v1.16.0 and real agents still send.
+ * A `session/new` result carrying the PRE-1.0 `models` block — the carrier no
+ * stable schema ever declared, and real agents still send.
  */
 function sessionResult(
   models: Record<string, unknown> | undefined,
@@ -151,7 +151,7 @@ describe('the ACP 1.0 configOptions carrier', () => {
   });
 
   it('falls back to the legacy block when the reply carries no model option', () => {
-    // An agent predating schema v1.16.0 sends `models` alone; reading only
+    // An agent on the pre-1.0 surface sends `models` alone; reading only
     // configOptions would report it as having no models at all.
     const legacyOnly = {
       ...configOptionsResult(undefined),

@@ -44,6 +44,12 @@ function deps(
   sessionsByRun: Record<string, string[]>,
   /** Per-conversation watermark, keyed by session id. Absent = never priced. */
   watermarks: Record<string, number> = {},
+  /**
+   * Runs found through a cursor NODE rather than through their own agent —
+   * i.e. workflows. Their `node_state` rows are stamped `cursor-agent`, which
+   * is what the service filters on once a run row names no agent.
+   */
+  cursorNodeRunIds: string[] = [],
 ): {
   service: CursorUsageService;
   writes: { id: string; data: Partial<Run> }[];
@@ -59,8 +65,16 @@ function deps(
   let onItem: (event: { runId: string }) => void = () => undefined;
 
   const runDao = {
-    getAll: async () => {
+    // Honours the FILTER, because the service now makes two different reads:
+    // the 1:1 cursor chats, and then the runs merely holding a cursor node,
+    // which it addresses by id. A double that ignored the filter answered the
+    // cursor runs twice and counted every conversation of theirs twice with it.
+    getAll: async (where?: { id?: { $in?: string[] } }) => {
       counts.listed += 1;
+      const ids = where?.id?.$in;
+      if (ids !== undefined) {
+        return runs.filter((run) => ids.includes(run.id));
+      }
       return runs.filter((run) => run.agentKind === AgentKind.CursorAgent);
     },
     getById: async (id: string) => runs.find((run) => run.id === id) ?? null,
@@ -71,12 +85,23 @@ function deps(
   } as unknown as RunDao;
 
   const nodeStates = {
+    /**
+     * Which runs hold a node that RAN on an agent — how a workflow's cursor
+     * node is found, its run row naming no agent of its own.
+     *
+     * These fixtures are all 1:1 chats, so the honest answer is none: every
+     * case below is reached through `Run.agentKind`, exactly as before.
+     */
+    runIdsForAgent: async () => cursorNodeRunIds,
     listByRun: async (runId: string) =>
       (sessionsByRun[runId] ?? []).map(
         (agentSessionId, index) =>
           ({
             agentSessionId,
             nodeId: `node-${index}`,
+            agentKind: cursorNodeRunIds.includes(runId)
+              ? AgentKind.CursorAgent
+              : null,
             cursorSpendThroughMs: watermarks[agentSessionId] ?? null,
           }) as NodeState,
       ),
@@ -182,6 +207,53 @@ describe('CursorUsageService', () => {
     expect(
       (published[0] as { spendUpdatedAt: number }).spendUpdatedAt,
     ).toBeGreaterThan(0);
+  });
+
+  it('prices a cursor node inside a WORKFLOW, whose run names no agent', async () => {
+    // The reported wrong figure. A workflow run's `agentKind` is null — its
+    // agents are per node — so selecting runs on that column skipped every
+    // workflow, however much cursor work it did. Measured on a real profile: a
+    // `dev-team` run whose QA node worked an hour on cursor with 160 tool calls
+    // was priced at nothing, and geniro reported $2.05 of cursor spend for a
+    // morning the user's own Cursor dashboard showed far more for.
+    const workflow = cursorRun({
+      id: 'run-wf',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    const { service, writes } = deps(
+      [workflow],
+      { 'run-wf': ['conv-wf'] },
+      {},
+      ['run-wf'],
+    );
+    answerWith(event('conv-wf', 1_234.5));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([
+      { id: 'run-wf', data: { cursorCostCents: 1_234.5, cursorCostEvents: 1 } },
+    ]);
+  });
+
+  it('ignores a NON-cursor node of a run it reached through a cursor one', async () => {
+    // A workflow routes work to several CLIs, and only the cursor nodes hold a
+    // Cursor conversation. A claude node's session id belongs to that CLI's own
+    // store — offering it here would ask Cursor to price a conversation it has
+    // never heard of, and any match would be a coincidence of id shape.
+    const workflow = cursorRun({
+      id: 'run-wf',
+      agentKind: null,
+      workflowId: 'dev-team',
+    });
+    // `cursorNodeRunIds` is empty, so every node this run reports is stamped
+    // with no agent — the shape of a run reached in error.
+    const { service, writes } = deps([workflow], { 'run-wf': ['conv-wf'] });
+    answerWith(event('conv-wf', 999));
+
+    await service.refresh(true);
+
+    expect(writes).toEqual([]);
   });
 
   it('says nothing about a run whose figure has not moved', async () => {

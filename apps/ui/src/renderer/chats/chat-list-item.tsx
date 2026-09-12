@@ -104,6 +104,7 @@ export const ChatListItem = memo(function ChatListItem({
   activity = null,
   awaiting = null,
   agentKind = null,
+  taskIdentifier = null,
   pullRequest = null,
   active,
   unseen = false,
@@ -162,6 +163,15 @@ export const ChatListItem = memo(function ChatListItem({
    * {@link agentLabel}.
    */
   agentKind?: string | null;
+  /**
+   * The board card this thread is the work for — `GEN-12` — or null for a
+   * conversation nobody started from one.
+   *
+   * Read off the RUN row, which carries it denormalized: the sidebar holds
+   * runs and no board, and the identifier is two rows away on the daemon side
+   * (see `Run.taskIdentifier`).
+   */
+  taskIdentifier?: string | null;
   /**
    * The pull request this thread's folder is on, or null when there is none.
    *
@@ -626,8 +636,33 @@ export const ChatListItem = memo(function ChatListItem({
           the thread. The pull request leads, since it is the fact that comes
           and goes; the agent is on every row, so it reads as the column it is
           rather than as news. */}
-      <span data-slot="chat-row-labels" className="flex items-center gap-1">
+      <span
+        data-slot="chat-row-labels"
+        className="flex min-w-0 items-center gap-1">
+        {/* The card LEADS, unlike the volatile-first order the other two
+            follow, and its own job is what decides that: it is an IDENTIFIER —
+            asked for as "to make those threads identifiable in the list" — so
+            it is scanned down a column, which only works while it sits at the
+            same x on every row that has one. It can afford to: unlike the pull
+            request, it never appears or disappears mid-session, so leading
+            with it shifts nothing. Monospaced for the reason the card and the
+            panel set it that way: it is a key, not a word. */}
+        {taskIdentifier === null ? null : (
+          <Badge
+            data-slot="task-identifier"
+            variant="muted"
+            title={`Working the board card ${taskIdentifier}`}
+            className="px-1.5 py-0 font-mono font-normal">
+            {taskIdentifier}
+          </Badge>
+        )}
         {pullRequest ? <PullRequestBadge pullRequest={pullRequest} /> : null}
+        {/* The one label allowed to give up room: the card and the pull
+            request are both short and bounded (a key, a number), where the
+            agent word can be the longest thing on the strip
+            (`cursor-agent`) — so at the rail's narrow end this is the one
+            that degrades, rather than the strip clipping or spilling past
+            its row. */}
         <Badge
           data-slot="agent-kind"
           variant="muted"
@@ -636,7 +671,7 @@ export const ChatListItem = memo(function ChatListItem({
               ? 'A team of agents running as a graph'
               : `Driven by ${agentKind ?? 'an unrecorded CLI'}`
           }
-          className="gap-1 px-1.5 py-0 font-normal">
+          className="min-w-0 shrink gap-1 truncate px-1.5 py-0 font-normal">
           {agentLabel(agentKind, isWorkflow, workflowName)}
         </Badge>
       </span>

@@ -66,6 +66,31 @@ describe('CodeBlock', () => {
     render(<CodeBlock code="x" language={null} caption="/proj/a.ts" />);
     expect(container.textContent).toContain('/proj/a.ts');
   });
+
+  it('WRAPS plain text, and leaves real code to scroll', () => {
+    // A `<pre>` is `white-space: pre`, so a long line runs past the right edge
+    // — and on macOS, where scrollbars stay hidden until you scroll, that reads
+    // as a message cut in half. REPORTED as "а еще вижу там оборванное
+    // сообщение" over an async-agent launch receipt: six lines of ordinary
+    // English prose, every one clipped mid-sentence at the same x, because a
+    // tool RESULT comes through this component whatever it holds.
+    //
+    // Code keeps `pre` — its columns carry meaning and a wrapped diff or
+    // stack trace is worse than a scrolled one. `grammar === null` is the
+    // discriminator, and these two cases are the two sides of it.
+    //
+    // The CLASS is the assertion because it IS the mechanism: jsdom computes no
+    // layout, so the wrap itself is unobservable, and nothing else survives a
+    // revert.
+    render(<CodeBlock code={'a '.repeat(400)} />);
+    const plain = container.querySelector('[data-slot="code-block"]');
+    expect(plain?.className).toContain('whitespace-pre-wrap');
+    expect(plain?.className).toContain('break-words');
+
+    render(<CodeBlock code="const a = 1;" language="typescript" />);
+    const code = container.querySelector('[data-slot="code-block"]');
+    expect(code?.className).not.toContain('whitespace-pre-wrap');
+  });
 });
 
 describe('languageForPath', () => {

@@ -156,9 +156,20 @@ export const ItemKindSchema = z
     'tool_result',
     'turn_complete',
     'turn_cancelled',
+    /**
+     * DECLARED BUT NEVER WRITTEN. No caller of `persistItemAndEmit` passes
+     * either kind, and no historical row carries one. They stay because this
+     * enum is CLOSED: `ItemWireSchema.kind` references it and `@ZodResponse`
+     * serializes the items array through it, while `Item.kind` is plain TEXT
+     * with no migrator — so removing a member cannot be undone by a migration
+     * and one unexpected legacy row would fail the array parse and 500 the
+     * whole history page. Per-turn usage rides `turn_complete.usage`, and an
+     * attachment rides the message item's own payload.
+     */
     'usage',
     'system',
     'error',
+    /** Declared but never written — see `usage` above. */
     'attachment',
     'status',
     'approval_request',

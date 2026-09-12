@@ -2,11 +2,17 @@ import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import {
+  AttachmentMediaTypeSchema,
+  ChatApprovalModeSchema,
+} from '../../agents/chat.types';
+import { AgentKindSchema } from '../../runs/runs.types';
+import {
   TASK_DESCRIPTION_MAX,
   TASK_LABEL_MAX,
   TASK_LABELS_MAX,
   TASK_SOURCE_REF_MAX,
   TASK_TITLE_MAX,
+  TaskAttachmentSchema,
   TaskPrioritySchema,
   TaskSourceSchema,
   TaskStatusSchema,
@@ -61,6 +67,17 @@ export const createTaskSchema = z.object({
   dueDate: z.iso.date().optional(),
   /** Omitted = run in the project's folder. See `Task.folder`. */
   folder: z.string().min(1).optional(),
+  /**
+   * The run configuration for THIS card, overriding the project's. Omitted
+   * throughout means inherit, which is what makes the project's the default —
+   * spelled exactly as `createProjectSchema` spells the same six fields.
+   */
+  agentKind: AgentKindSchema.optional(),
+  model: z.string().min(1).optional(),
+  effort: z.string().min(1).optional(),
+  approval: ChatApprovalModeSchema.optional(),
+  configDir: z.string().min(1).optional(),
+  workflowSlug: z.string().min(1).optional(),
   source: TaskSourceSchema.optional(),
   sourceRef: z.string().min(1).max(TASK_SOURCE_REF_MAX).optional(),
 });
@@ -96,6 +113,17 @@ export const updateTaskSchema = z
      * and there is no other way to say it.
      */
     folder: z.string().min(1).nullable().optional(),
+    /**
+     * The run configuration, on `folder`'s own contract above: explicit null
+     * hands the field back to the project's default, an omitted key leaves it
+     * alone. `updateProjectSchema` spells the same six identically.
+     */
+    agentKind: AgentKindSchema.nullable().optional(),
+    model: z.string().min(1).nullable().optional(),
+    effort: z.string().min(1).nullable().optional(),
+    approval: ChatApprovalModeSchema.nullable().optional(),
+    configDir: z.string().min(1).nullable().optional(),
+    workflowSlug: z.string().min(1).nullable().optional(),
   })
   .refine(
     (dto) => Object.values(dto).some((value) => value !== undefined),
@@ -130,3 +158,40 @@ export class TaskDeletedDto extends createZodDto(
     deleted: z.boolean().describe('True when the task row was removed'),
   }),
 ) {}
+
+/**
+ * The bytes of one picture pasted into a card's description.
+ *
+ * Base64 on the wire, like the chat composer's own attachments, and bounded
+ * where the DECODED size is known — see `TaskAttachmentService.save`.
+ */
+export const addTaskAttachmentSchema = z.object({
+  mediaType: AttachmentMediaTypeSchema,
+  data: z.string().min(1).describe('The image bytes, base64-encoded'),
+  name: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('The file’s own name, when the clipboard carried one'),
+});
+export class AddTaskAttachmentDto extends createZodDto(
+  addTaskAttachmentSchema,
+) {}
+export class TaskAttachmentDto extends createZodDto(TaskAttachmentSchema) {}
+
+/**
+ * A picture the description references, read back for the panel to draw.
+ *
+ * A QUERY parameter and not a path segment, matching the chat route it shares
+ * a reader with: the value is a filesystem path and carries slashes of its own.
+ */
+export const taskImageQuerySchema = z.object({
+  path: z.string().min(1),
+});
+export class TaskImageQueryDto extends createZodDto(taskImageQuerySchema) {}
+
+/** A file the user picked, bound to a card by PATH — geniro copies nothing. */
+export const attachTaskFileSchema = z.object({
+  path: z.string().min(1).describe('An absolute path on this machine'),
+});
+export class AttachTaskFileDto extends createZodDto(attachTaskFileSchema) {}

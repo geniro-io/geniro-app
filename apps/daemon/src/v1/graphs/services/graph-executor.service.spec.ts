@@ -1759,6 +1759,7 @@ describe('GraphExecutorService', () => {
       cancel: cancelled,
       respondApproval: () => false,
       sendUserMessage: () => false,
+      attributableDelegate: (): string | null => null,
       setApprovalMode: () => false,
     });
 
@@ -2883,6 +2884,69 @@ describe('GraphExecutorService — agent calls', () => {
       service.startRunBySlug('ghost', { cwd: dir, prompt: 'go' }),
     ).rejects.toThrow('WORKFLOW_NOT_FOUND');
     expect(runDao.runs.size).toBe(0);
+  });
+
+  it('startRunBySlug forwards taskId, taskIdentifier, title and an explicit groupId to the RUN ROW', async () => {
+    // The same hazard the customInstructions spec above pins:
+    // `startRunBySlug`'s parameter is a `Pick`/`Omit` of `StartWorkflowRunInput`,
+    // forwarded through `{ ...input, slug, workflow }` — a field the spread
+    // silently forgets still type-checks (the literal below still satisfies
+    // the interface), so this has to be read back off the DAO's own row and
+    // not off the return value or a mock's call args. `taskId` is the one
+    // `task-settle.service.ts:140` reads to find the card to move on settle
+    // — drop it and a task-started workflow run strands its card in
+    // `in_progress` forever, with Run disabled.
+    const { service, runDao, storeGet } = setup(4870, {
+      autoGroupId: 'grp-auto',
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      taskId: 'task-1',
+      taskIdentifier: 'GEN-12',
+      title: 'Fix the flaky test',
+      groupId: 'grp-explicit',
+    });
+    await drain();
+
+    const row = runDao.runs.get(run.id);
+    expect(row?.taskId).toBe('task-1');
+    expect(row?.taskIdentifier).toBe('GEN-12');
+    expect(row?.title).toBe('Fix the flaky test');
+    // The caller's own group wins over the auto-claim rule (`grp-auto` is
+    // what the rule would have answered) — the other half of that contract,
+    // an OMITTED groupId still resolving through the rule, is the next spec.
+    expect(row?.groupId).toBe('grp-explicit');
+  });
+
+  it('startRunBySlug: an explicit null groupId is never re-resolved; an omitted one still is', async () => {
+    // `groupId` is `string | null | undefined` rather than `string | null`
+    // for exactly this reason — an explicit null is a caller SAYING "no
+    // group", which the auto-claim rule must not then overturn, while an
+    // omitted field falls through to it. Collapsing the two (e.g. `?? await
+    // resolveAutoGroupId(...)`) would re-resolve a caller's deliberate null
+    // and still pass every OTHER spec in this file.
+    const { service, runDao, storeGet } = setup(4870, {
+      autoGroupId: 'grp-auto',
+    });
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const explicitNull = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      groupId: null,
+    });
+    await drain();
+    expect(runDao.runs.get(explicitNull.id)?.groupId).toBeNull();
+
+    const omitted = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    expect(runDao.runs.get(omitted.id)?.groupId).toBe('grp-auto');
   });
 
   it('settles a node failed (not a run-crashing throw) when adapter.start throws', async () => {

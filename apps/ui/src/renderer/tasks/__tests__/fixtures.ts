@@ -26,10 +26,20 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     source: TaskSource.Geniro,
     sourceRef: null,
     folder: null,
+    // The card's own run configuration — null throughout means it inherits the
+    // project's, which is the ordinary state of a card nobody has configured.
+    agentKind: null,
+    model: null,
+    effort: null,
+    approval: null,
+    configDir: null,
+    workflowSlug: null,
     branch: null,
     worktreePath: null,
     runId: null,
     reportItemId: null,
+    number: null,
+    attachments: [],
     position: 0,
     priority: TaskPriority.None,
     dueDate: null,
@@ -43,6 +53,7 @@ export function aProject(over: Partial<ProjectDto> = {}): ProjectDto {
   return {
     id: 'p1',
     name: 'One',
+    taskKey: 'ONE',
     folder: '/w',
     groupId: null,
     agentKind: null,

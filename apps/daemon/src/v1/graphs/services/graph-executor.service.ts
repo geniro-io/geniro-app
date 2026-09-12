@@ -131,6 +131,39 @@ export interface StartWorkflowRunInput {
    * snapshotted onto the run like the instructions above.
    */
   cursorMaxMode?: boolean;
+  /**
+   * The board card this run was started for, when one was.
+   *
+   * Absent for every run started from the workflow library, which is the case
+   * `Run.taskId` describes as "a run nobody started from a card". A task run
+   * sets it because it is one half of the run↔task edge — `Task.runId` is the
+   * other, written by `TaskRunsService` in the same operation — and without it
+   * `TaskSettleService` cannot move the card when the graph finishes.
+   */
+  taskId?: string;
+  /**
+   * That card's identifier (`GEN-12`), on `taskId`'s own terms and passed in
+   * for the same reason it is on the chat path: see `Run.taskIdentifier`.
+   */
+  taskIdentifier?: string;
+  /**
+   * A name for the run, overriding the deliberate `title: null` below.
+   *
+   * Only a caller that has a better name than the seed prompt passes one, and
+   * today that is a task run, whose card already carries the title a person
+   * wrote. Nothing else should: see the block at the `title` field for why a
+   * run of a workflow must not be stamped with that workflow's own name.
+   */
+  title?: string;
+  /**
+   * The sidebar group to file this run under, overriding the workflow's own
+   * auto-file rule.
+   *
+   * A task run belongs to its PROJECT's group — the same answer the chat arm of
+   * `TaskRunsService` gives — because the run works in a worktree, a path no
+   * folder rule has ever seen. Absent means resolve the rule as usual.
+   */
+  groupId?: string | null;
 }
 
 /**
@@ -428,20 +461,10 @@ export class GraphExecutorService {
    */
   async startRunBySlug(
     slug: string,
-    input: Pick<
-      StartWorkflowRunInput,
-      'cwd' | 'prompt' | 'customInstructions' | 'cursorMaxMode'
-    >,
+    input: Omit<StartWorkflowRunInput, 'slug' | 'workflow'>,
   ): Promise<RunWire> {
     const { workflow } = await this.store.get(slug);
-    return this.startRun({
-      slug,
-      workflow,
-      cwd: input.cwd,
-      prompt: input.prompt,
-      customInstructions: input.customInstructions,
-      cursorMaxMode: input.cursorMaxMode,
-    });
+    return this.startRun({ ...input, slug, workflow });
   }
 
   /**
@@ -471,10 +494,18 @@ export class GraphExecutorService {
     // so no folder names its runs. Resolved here for the reason the chat
     // service resolves its own here: this is the one place a workflow run row
     // is created, so the rule cannot be missed by a second caller.
-    const groupId = await this.groups.resolveAutoGroupId({
-      cwd,
-      workflowId: input.slug,
-    });
+    // A caller that names one WINS, and only a task run does: its project's
+    // group is a deliberate answer about where this run belongs, where the
+    // rule below is a guess made from a folder the run does not work in. An
+    // explicit null is a caller saying "no group", which is also an answer —
+    // hence `!== undefined` rather than a `??` that would re-resolve it.
+    const groupId =
+      input.groupId !== undefined
+        ? input.groupId
+        : await this.groups.resolveAutoGroupId({
+            cwd,
+            workflowId: input.slug,
+          });
     const em = this.em.fork();
     const run = await this.runDao.create(
       {
@@ -499,7 +530,14 @@ export class GraphExecutorService {
         // nameless in between: the renderer's own `runLabel` already falls back
         // to the workflow's name for an untitled workflow run, which is also
         // where that name now lives permanently — as the row's label chip.
-        title: null,
+        //
+        // A CALLER may still name one, and exactly one does: a task run, whose
+        // card carries a title a person wrote. That is the opposite of the
+        // stamp this null exists to prevent — it names the WORK rather than
+        // restating which workflow ran it.
+        title: input.title?.trim() || null,
+        taskId: input.taskId ?? null,
+        taskIdentifier: input.taskIdentifier ?? null,
       },
       em,
     );
@@ -1224,6 +1262,7 @@ export class GraphExecutorService {
       // follow-up belongs to. A workflow's follow-up goes through
       // `sendMessage`, which hands it to the agents the trigger feeds.
       sendUserMessage: () => false,
+      attributableDelegate: () => null,
       setApprovalMode: () => false,
     };
     this.registry.register(runId, aggregateHandle);
@@ -1243,6 +1282,22 @@ export class GraphExecutorService {
       try {
         // On-demand callees that were never called settle 'skipped' so their
         // chips don't read as pending forever.
+        //
+        // The node state ALONE, deliberately — no transcript row. It used to
+        // write one as well, which the agents panel then said again from this
+        // very column, so a run whose manager routed everything to one
+        // specialist closed with `− Engineer skipped — never called` and
+        // `− Researcher skipped — never called` in the conversation. REPORTED
+        // as "он написал, что never called engineer или researcher, и нам не
+        // нужно этого писать": a node that was never called has, by
+        // construction, nothing to say — those two rows were the whole of its
+        // transcript presence — so the row reported an absence of events as
+        // though it were one.
+        //
+        // The distinction is which SURFACE answers which question. The panel
+        // lists every node in the graph and what became of it, so "why is
+        // Engineer not here" is answered there, permanently, off `node_state`.
+        // The transcript is what HAPPENED, and nothing happened.
         for (const node of nodes) {
           if (
             !onDemand.has(node.id) ||
@@ -1256,11 +1311,6 @@ export class GraphExecutorService {
             { status: 'skipped', endedAt: Date.now() },
             em,
           );
-          await persistItem(node.id, 'status', null, {
-            nodeId: node.id,
-            status: 'skipped',
-            reason: 'never called',
-          });
         }
         // A user cancel rolls up cancelled; any other non-completed node (a
         // failure, or a CLI killed externally without cancel()) is a failure —

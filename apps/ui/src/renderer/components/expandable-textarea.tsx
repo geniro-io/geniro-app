@@ -45,10 +45,21 @@ export function ExpandableTextarea({
   maxRows = 10,
   placeholder,
   className,
+  onPaste,
 }: {
   id?: string;
   value: string;
   onChange: (next: string) => void;
+  /**
+   * A paste this field's owner wants first refusal on — dropping a screenshot
+   * into a task description, which writes a markdown reference rather than the
+   * file's name.
+   *
+   * Passed through rather than handled here: WHAT a pasted file becomes is the
+   * caller's business (a chat stages it as an attachment, a description writes
+   * a path), and this component knows about neither.
+   */
+  onPaste?: (event: React.ClipboardEvent<HTMLTextAreaElement>) => void;
   /** Names the field in the popup header, e.g. "Role / system prompt". */
   title: string;
   /** The FLOOR — how tall the field is with nothing in it. */
@@ -120,6 +131,7 @@ export function ExpandableTextarea({
         placeholder={placeholder}
         // pr-9 keeps typed text from running under the expand button.
         className={cn('pr-9', className)}
+        onPaste={onPaste}
         onChange={(event) => onChange(event.target.value)}
       />
       <Button

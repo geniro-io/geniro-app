@@ -41,6 +41,7 @@ function makeBlock({
   stopped = false,
   failed = false,
   model,
+  card = false,
 }: {
   /** The launching Task tool returned. */
   withResult?: boolean;
@@ -50,6 +51,11 @@ function makeBlock({
   failed?: boolean;
   /** The model its CLI says it resolved to, declared as the daemon declares it. */
   model?: string;
+  /**
+   * The delegate drew a findings card, carrying the `parentToolUseId` the
+   * daemon's own `attributeCard` stamps onto a render-family row.
+   */
+  card?: boolean;
 } = {}): SubagentBlockEntry {
   const items: ChatItem[] = [
     item('tool_call', {
@@ -87,6 +93,19 @@ function makeBlock({
       result: 'two hits',
       parentToolUseId: 'task-1',
     }),
+    ...(card
+      ? [
+          item('report_findings', {
+            parentToolUseId: 'task-1',
+            findings: [
+              {
+                file: 'src/parse.ts',
+                summary: 'An off-by-one in the loop bound',
+              },
+            ],
+          }),
+        ]
+      : []),
   ];
   if (stopped) {
     // The turn ends with the delegate's tool never having returned.
@@ -147,6 +166,59 @@ function badge(): Element | null {
 }
 
 describe('SubagentBlock', () => {
+  /** The block's own disclosure — `aria-expanded` on its header button. */
+  const expanded = (): string | null | undefined =>
+    container
+      .querySelector('button[aria-expanded]')
+      ?.getAttribute('aria-expanded');
+
+  it('OPENS a delegate that drew a findings card, with no press', () => {
+    // Two things at once, and both are the point. The card is the ONLY copy of
+    // what it says — the result the agent got back from that tool is a receipt
+    // — so a shut fold turns a report into work the reader has to go looking
+    // for, which is a worse answer than the unattributed row that filing it
+    // under the delegate replaced. And reaching this block at all is the
+    // end-to-end pin on the daemon's stamp: `parentToolUseId` on a card row is
+    // the whole of what files it here rather than in the main flow.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ card: true })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+
+    expect(expanded()).toBe('true');
+    expect(container.textContent).toContain('src/parse.ts');
+  });
+
+  it('lets the reader shut it, and then SAYS what it is holding', () => {
+    // `defaultOpen` is a DEFAULT, not a lock — the press outranks it from then
+    // on. That is what makes the closed header's line load-bearing rather than
+    // decorative: a reader who opened a running delegate and folded it away
+    // before it reported is exactly the one who would otherwise be left with a
+    // silent header over the only copy of its findings.
+    act(() =>
+      root.render(
+        <TranscriptEntryView
+          entry={makeBlock({ card: true })}
+          soloAgent
+          chatAgentName="claude"
+        />,
+      ),
+    );
+    act(() => {
+      container
+        .querySelector('button[aria-expanded]')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(expanded()).toBe('false');
+    expect(container.textContent).toContain('reported 1 finding');
+  });
+
   it('renders the delegate as a block that is COLLAPSED by default', () => {
     act(() =>
       root.render(
@@ -171,12 +243,15 @@ describe('SubagentBlock', () => {
     expect(container.textContent).not.toContain('Look for off-by-one errors.');
   });
 
-  it('names the MODEL on the closed header, and does not repeat it inside', () => {
-    // ASKED FOR against a column of a dozen verifiers whose headers read
-    // `geniro:finding-verifier-agent · 33 tools` — the agent type and nothing
-    // about what it was running on. The header is what a reader scans, since
-    // the block is shut by default; the body under it would be the same
-    // reading printed twice a couple of inches apart.
+  it('keeps the MODEL off the header row and states it in the popover', () => {
+    // It USED to be on the header, asked for against a column of verifiers that
+    // named their agent type and nothing about what it ran on. That was right
+    // while the row had space; it stopped being right when the row grew to six
+    // facts and wrapped, taking the delegate's own name with it — REPORTED as
+    // "у нас сейчас сломан UI… всё не помещается в одну строку", with the fix
+    // named in the same breath: "модель тоже не нужно писать, только в поповере
+    // будет". It is the longest fact on the row and the one least often the
+    // reason somebody is scanning a column of delegates.
     act(() =>
       root.render(
         <TranscriptEntryView
@@ -187,16 +262,22 @@ describe('SubagentBlock', () => {
       ),
     );
 
-    // The disclosure IS the header row — the fact has to be legible without
-    // pressing it.
-    expect(disclosure()?.textContent).toContain('claude-opus-5');
+    expect(disclosure()?.textContent).not.toContain('claude-opus-5');
+
+    // Not lost, and not even behind the press for a screen reader: the
+    // trigger's accessible name carries the whole reading.
+    const trigger = container.querySelector<HTMLElement>(
+      '[data-slot="subagent-meta"] button',
+    );
+    expect(trigger?.getAttribute('aria-label')).toContain('claude-opus-5');
 
     act(() =>
-      disclosure()?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true })),
     );
-
-    // ONCE in the whole enclosure, open or shut.
-    expect(container.textContent?.split('claude-opus-5').length).toBe(2);
+    expect(
+      container.querySelector('[data-slot="subagent-meta-detail"]')
+        ?.textContent,
+    ).toContain('claude-opus-5');
   });
 
   it('expands into the delegate own thread — its ask, its work, its result', () => {
@@ -441,15 +522,24 @@ describe('SubagentBlock', () => {
     };
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
 
-    // The disclosure BUTTON specifically — it is the header row, and asserting
-    // on it rather than on the block is what makes this a test about the
-    // CLOSED state: the same strings under the facts line inside would satisfy
-    // a container-wide assertion the moment anything opened the block.
-    const header = container.querySelector(
-      '[data-role="subagent-block"] button[aria-label^="Show"]',
-    );
-    expect(header?.textContent).toContain('26.1k tokens');
-    expect(header?.textContent).toContain('took 2s');
+    // Still on the CLOSED header — which is the claim — but as glyphed chips
+    // in `headerAction` rather than words inside the disclosure button, since
+    // a run of six labelled facts is what broke the row. The disclosure is
+    // asserted shut so this stays a test about the closed state.
+    expect(disclosure()?.getAttribute('aria-expanded')).toBe('false');
+    // The LABELS are what wrapped, so they have to be gone from the row rather
+    // than merely repeated in the chips — a revert that left the words in the
+    // header would satisfy every assertion below this one.
+    expect(disclosure()?.textContent).not.toContain('tokens');
+    expect(disclosure()?.textContent).not.toContain('took ');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-tokens"]')
+        ?.textContent,
+    ).toBe('26.1k');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-duration"]')
+        ?.textContent,
+    ).toBe('2s');
   });
 
   it('states a delegate’s COST on the closed header, marked approximate', () => {
@@ -466,10 +556,9 @@ describe('SubagentBlock', () => {
     };
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
 
-    const header = container.querySelector(
-      '[data-role="subagent-block"] button[aria-label^="Show"]',
-    );
-    expect(header?.textContent).toContain('≈$0.23');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-cost"]')?.textContent,
+    ).toBe('≈$0.23');
   });
 
   it('shows tokens but NO dollars when the cost could not be derived', () => {
@@ -484,7 +573,13 @@ describe('SubagentBlock', () => {
     };
     act(() => root.render(<TranscriptEntryView entry={block} soloAgent />));
 
-    expect(container.textContent).toContain('29.4k tokens');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-tokens"]')
+        ?.textContent,
+    ).toBe('29.4k');
+    expect(
+      container.querySelector('[data-slot="subagent-meta-cost"]'),
+    ).toBeNull();
     expect(container.textContent).not.toContain('$');
   });
 

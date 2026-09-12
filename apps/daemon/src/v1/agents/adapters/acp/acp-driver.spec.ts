@@ -1230,9 +1230,9 @@ describe('AcpSession model selection', () => {
     }
 
     it('sets the model with session/set_config_option, not session/set_model', () => {
-      // ACP removed `session/set_model` at schema v1.16.0. An agent that
+      // No stable schema ever declared `session/set_model`. An agent that
       // enumerated its models under `configOptions` is one that implements the
-      // replacement, so sending the removed method would be a refused frame
+      // replacement, so sending the legacy method would be a refused frame
       // and a degrade notice for a model the agent was perfectly able to use.
       const h = harness(wanting);
       h.feed(initializeReply(1));
@@ -1267,8 +1267,8 @@ describe('AcpSession model selection', () => {
     });
 
     it('keeps the legacy frame for an agent that offers no model option', () => {
-      // Removal from the SPEC is not removal from the binaries. An agent
-      // predating v1.16.0 enumerates under `models` and answers only
+      // Absence from the SPEC is not absence from the binaries. An agent
+      // on the pre-1.0 surface enumerates under `models` and answers only
       // `session/set_model`.
       const h = harness(wanting);
       h.feed(initializeReply(1));

@@ -47,6 +47,7 @@ const api = vi.hoisted(() => ({
   readChatTotals: vi.fn(),
   sweepArchivedChats: vi.fn(),
   searchChat: vi.fn(),
+  readChatShells: vi.fn(),
   readChatTimeline: vi.fn(),
 }));
 /** The sidebar's groups (`/v1/groups`); filing ONE run rides `api` above. */
@@ -215,6 +216,7 @@ function approval(runId: string, seq: number, requestId: string): ChatItem {
 const run1: ChatRun = {
   id: 'r1',
   status: 'running',
+  taskIdentifier: null,
   awaiting: null,
   holdingFor: 0,
   shellsOpen: 0,
@@ -674,6 +676,7 @@ beforeEach(() => {
   api.sweepArchivedChats.mockReset().mockResolvedValue({ deleted: 0 });
   // The timeline rail's own read. An empty rail is the resting answer for every
   // test here; the rail itself is pinned in `conversation-timeline.spec.tsx`.
+  api.readChatShells.mockReset().mockResolvedValue({ shells: [] });
   api.readChatTimeline.mockReset().mockResolvedValue({ markers: [] });
   api.readChatTotals.mockReset().mockResolvedValue({
     totals: {
@@ -1078,13 +1081,19 @@ describe('Chats — searching one conversation', () => {
         '[data-slot="timeline-marker"]',
       ),
     );
+    // Newest first — the rail's own order, pinned in
+    // `conversation-timeline.spec.tsx`; restated here only so the click below
+    // is addressing the row this spec means.
     expect(markers.map((b) => b.textContent)).toEqual([
-      'the first ask',
       'the second ask',
+      'the first ask',
     ]);
 
     await act(async () => {
-      markers[0]!.click();
+      // The OLDER message, addressed by its words: this spec is about the
+      // wiring reaching `jumpToSeq` with the right seq, so it must not depend
+      // on which row that message occupies.
+      markers.find((b) => b.textContent === 'the first ask')!.click();
     });
 
     // The same wash a search hit lands on — the jump is one mechanism, so this
@@ -3669,6 +3678,7 @@ describe('Chats workflow runs', () => {
   const wfRun: ChatRun = {
     id: 'w1',
     status: 'running',
+    taskIdentifier: null,
     awaiting: null,
     holdingFor: 0,
     shellsOpen: 0,
@@ -4357,6 +4367,7 @@ describe('Chats — handing a conversation to the user', () => {
     const wfRun: ChatRun = {
       id: 'w1',
       status: 'running',
+      taskIdentifier: null,
       awaiting: null,
       holdingFor: 0,
       shellsOpen: 0,
@@ -7629,6 +7640,23 @@ describe('Chats sidebar list', () => {
     // The slug never shows as the label; the preview line does.
     expect(row!.textContent).not.toContain('review-team');
     expect(row!.textContent).toContain('Merged the fix.');
+  });
+
+  it('shows the board card’s identifier as a label on its sidebar row', async () => {
+    // Every run fixture in this file carries `taskIdentifier: null`, which
+    // renders the same whether or not the prop is still wired through — this
+    // is the one case that tells a working badge from a silently dropped one.
+    api.listChats.mockResolvedValue([{ ...run1, taskIdentifier: 'GEN-12' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    const row = [
+      ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
+    ].find((el) => el.textContent?.includes('My chat'));
+    const badge = row?.querySelector('[data-slot="task-identifier"]');
+
+    expect(badge).not.toBeNull();
+    expect(badge?.textContent).toBe('GEN-12');
   });
 
   it('renames a run INLINE in the row — no dialog — and updates the label', async () => {

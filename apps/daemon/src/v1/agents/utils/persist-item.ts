@@ -157,6 +157,7 @@ export function runToWire(
     configDirPin,
     groupId: run.groupId,
     taskId: run.taskId,
+    taskIdentifier: run.taskIdentifier,
     pinnedPosition: run.pinnedPosition,
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),

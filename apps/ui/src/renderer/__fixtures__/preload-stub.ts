@@ -113,6 +113,10 @@ export function createPreloadStub(
       note('pickAgentBinary');
       return Promise.resolve(null);
     },
+    pickTaskFiles: () => {
+      note('pickTaskFiles');
+      return Promise.resolve([]);
+    },
     pickWorkflowImport: () => {
       note('pickWorkflowImport');
       return Promise.resolve(null);

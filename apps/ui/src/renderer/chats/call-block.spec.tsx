@@ -505,6 +505,164 @@ describe('CallBlock', () => {
     ).toBeNull();
   });
 
+  it('clamps a running callee’s status line to three lines, one when shut', () => {
+    // REPORTED as "когда последнее сообщение агента, которого мы вызываем в
+    // workflow, превышает три строки, мы должны обрезать до третьей строки",
+    // against a call card holding twenty-five lines of grey italic text. The
+    // line is one sentence — `<callee> is running <tool>` — and the TOOL NAME
+    // is what runs long: an ACP agent's tool title is routinely the whole
+    // shell command, so the status line rendered a program.
+    //
+    // The class IS the mechanism here rather than a proxy for it: jsdom
+    // computes no layout, so the clamp itself is unobservable, and there is
+    // nothing else a revert could leave behind.
+    const longCommand =
+      'cd /Users/x/Projects/ManifestOS && gh pr list --state open --base main ' +
+      '--json number,title,headRefName,author,updatedAt,changedFiles,files ' +
+      '--limit 30 2>&1 | python3 -c "import json,sys; prs=json.load(sys.stdin)"';
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Review it.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'tool_call',
+        { id: 'tool-1', name: longCommand, callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+
+    // SHUT — one line, which is this band's own documented rule.
+    const shutLine = container.querySelector('[data-slot="block-pending"]');
+    expect(shutLine?.className).toContain('truncate');
+    expect(shutLine?.className).not.toContain('line-clamp-3');
+
+    expand();
+
+    // OPEN — three, the reported ask.
+    const openLine = container.querySelector('[data-slot="block-pending"]');
+    expect(openLine?.className).toContain('line-clamp-3');
+    // The sentence still names the tool: clamping shortens what is drawn, not
+    // what is said.
+    expect(openLine?.textContent).toContain('is running');
+  });
+
+  it('falls back to the CONTEXT reading when the CLI reports no tokens', () => {
+    // REPORTED as "its not showing amount of tokens for cursor agent", against
+    // an open call card whose footer read `11 tools` and nothing else. Nothing
+    // was hidden: measured across the whole ledger, every one of 3,359 claude
+    // turns carries input and output tokens and NOT ONE of 82 cursor turns
+    // does — nor a cost, nor a duration. The payload below is a real cursor
+    // `turn_complete`, copied field for field.
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'turn_complete',
+        {
+          callId: 'call-1',
+          usage: {
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: null,
+            durationMs: null,
+            contextTokens: 362_787,
+            contextWindowTokens: 1_048_576,
+          },
+        },
+        'poet',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    expand();
+
+    // Labelled `ctx`, never `tokens`: it is how full the window is, not what
+    // the turn spent, and the two must not be read as one figure.
+    const ctx = container.querySelector('[data-slot="block-footer-context"]');
+    expect(ctx?.textContent).toBe('362.8k ctx');
+    expect(
+      container.querySelector('[data-slot="block-footer-tokens"]'),
+    ).toBeNull();
+  });
+
+  it('does NOT show the context figure when real token usage was reported', () => {
+    // The fallback fills a gap; it does not add a second large number beside
+    // an exact answer. A claude turn reports both, and only the spend is the
+    // answer to "what did this cost".
+    const entries = groupTranscript([
+      item(
+        'call_started',
+        { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+        'orch',
+      ),
+      item(
+        'status',
+        { status: 'running', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+      item(
+        'turn_complete',
+        {
+          callId: 'call-1',
+          usage: {
+            inputTokens: 310,
+            outputTokens: 117_300,
+            costUsd: 44.17,
+            contextTokens: 362_787,
+            contextWindowTokens: 1_048_576,
+          },
+        },
+        'poet',
+      ),
+      item(
+        'status',
+        { status: 'completed', nodeId: 'poet', callId: 'call-1' },
+        'poet',
+      ),
+    ]);
+    const block = entries[0];
+    if (block?.type !== 'call-block') {
+      throw new Error('expected a call block');
+    }
+    act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    expand();
+
+    expect(
+      container.querySelector('[data-slot="block-footer-tokens"]')?.textContent,
+    ).toBe('117.6k tokens');
+    expect(
+      container.querySelector('[data-slot="block-footer-context"]'),
+    ).toBeNull();
+  });
+
   it('states the SPENT figures on the shut card, beside the last message', () => {
     // ASKED FOR as "here i should see tokens and price as well" — the footer's
     // figures were behind the fold, so a shut card said how far the callee had

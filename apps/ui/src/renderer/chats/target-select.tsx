@@ -20,6 +20,7 @@ export function TargetSelect({
   workflows,
   cliDetections,
   onChange,
+  triggerLabel,
   'aria-label': ariaLabel = 'Agent or workflow for new runs',
 }: {
   value: string;
@@ -27,6 +28,15 @@ export function TargetSelect({
   /** Per-CLI detection, or null while the probe has not answered. */
   cliDetections: readonly CliDetection[] | null;
   onChange: (target: string) => void;
+  /**
+   * What the chip reads when the value names nothing the picker can show.
+   *
+   * The composer never needs it — a run always points somewhere — but the task
+   * board has a genuine UNSET state: a card inherits from its project, and a
+   * project may name nothing at all. Without a label a blank chip there reads
+   * as a control that failed to load rather than as a choice not yet made.
+   */
+  triggerLabel?: React.ReactNode;
   /**
    * Overridden by the run-configuration editor, whose picker is about a saved
    * setup rather than the next run. Not cosmetic: that editor opens as a dialog
@@ -40,6 +50,7 @@ export function TargetSelect({
     <Select
       variant="ghost"
       value={value}
+      {...(triggerLabel === undefined ? {} : { triggerLabel })}
       aria-label={ariaLabel}
       searchPlaceholder="Search agents, workflows…"
       groups={[

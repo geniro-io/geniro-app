@@ -4,9 +4,16 @@ import * as React from 'react';
 import { cn } from '../components/ui/utils';
 
 /**
- * A single transcript row. `variant` maps 1:1 to the surfaced item kinds, giving
- * each its own chrome once and for all — the transcript never re-picks bubble
- * styling by hand. `data-role` is the stable hook the Chats tests query.
+ * A single transcript row: one variant per KIND OF ROW, so the transcript never
+ * re-picks bubble styling by hand. `data-role` is the stable hook the Chats
+ * tests query.
+ *
+ * The variants are NOT the item kinds: several unrelated kinds pass `note` —
+ * a status, a receipt, a verdict — because what they share is being centred
+ * chrome. `tool` is the same from the other side — one
+ * variant for every tool call, which is why a tool's OPERATION reaches a row as
+ * a className rather than as an eleventh variant nobody would keep in step with
+ * the classifier.
  */
 // `min-w-0` is load-bearing, not tidiness: the bubble is a flex ITEM of the
 // transcript column, so its default `min-width: auto` is its content's

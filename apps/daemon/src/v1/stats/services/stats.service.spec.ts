@@ -5,6 +5,8 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunDao } from '../../agents/dao/run.dao';
+import { Run } from '../../runs/entity/run.entity';
 import { UsageEventDao } from '../dao/usage-event.dao';
 import { UsageEvent } from '../entity/usage-event.entity';
 import type { UsageEventInput } from '../stats.types';
@@ -20,12 +22,15 @@ describe('StatsService (in-memory sqlite)', () => {
   let orm: MikroORM;
   let service: StatsService;
   let dao: UsageEventDao;
+  let runDao: RunDao;
 
   beforeAll(async () => {
     orm = await MikroORM.init(
       defineConfig({
         dbName: ':memory:',
-        entities: [UsageEvent],
+        // `Run` rides along because the service now reads spend that no TURN
+        // reported off the run row — see its polled-spend fold.
+        entities: [UsageEvent, Run],
         ignoreUndefinedInQuery: true,
         allowGlobalContext: true,
         namingStrategy: UnderscoreNamingStrategy,
@@ -43,7 +48,8 @@ describe('StatsService (in-memory sqlite)', () => {
     await orm.schema.clear();
     const em = orm.em.fork();
     dao = new UsageEventDao(em);
-    service = new StatsService(em, dao);
+    runDao = new RunDao(em);
+    service = new StatsService(em, dao, runDao);
   });
 
   /**
@@ -84,6 +90,95 @@ describe('StatsService (in-memory sqlite)', () => {
       ...overrides,
     });
   }
+
+  describe('spend nobody’s turn reported', () => {
+    it('counts the account poll recorded on the run row', async () => {
+      // cursor-agent prices nothing on its own wire — measured across a real
+      // ledger, 0 of 82 cursor turns carry a cost where 3,359 of 3,359 claude
+      // turns do — so its money reaches this app only through an account poll
+      // that lands on `Run.cursorCostCents`. The Stats page reads the LEDGER,
+      // so before this it answered `costUsd: null` for cursor over 82 turns
+      // while the runs themselves held $215.01 it never looked at. REPORTED as
+      // "если посмотреть на курсор дашборда и на мой… они должны совпадать".
+      const when = new Date(2026, 7, 10, 9);
+      await record(when, {
+        runId: 'run-cursor',
+        agentKind: 'cursor-agent',
+        model: 'kimi-k3',
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+      });
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-cursor',
+          agentKind: 'cursor-agent',
+          model: 'kimi-k3',
+          cwd: '/work/project',
+          status: 'completed',
+          cursorCostCents: 250,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      // The money reaches the headline…
+      expect(stats.totals.costUsd).toBe(2.5);
+      // …and the AGENT row, which is what the report was about.
+      expect(
+        stats.byAgent.find((g) => g.key === 'cursor-agent')?.totals.costUsd,
+      ).toBe(2.5);
+      // …and the day, so the chart still sums to the headline.
+      expect(
+        stats.days.find((d) => d.totals.costUsd !== null)?.totals.costUsd,
+      ).toBe(2.5);
+      // The TURN is not counted twice — the ledger already holds it.
+      expect(stats.totals.turns).toBe(1);
+      // But it IS costed now: `costedTurns` is the denominator of cost-per-turn
+      // and excluded this turn only because its price was unknown.
+      expect(stats.totals.costedTurns).toBe(1);
+    });
+
+    it('leaves a run alone when its poll recorded nothing', async () => {
+      // A cursor run the poll has never priced — no Keychain item, a signed-out
+      // account, no network — must read as unmeasured rather than as free.
+      const when = new Date(2026, 7, 10, 9);
+      await record(when, {
+        runId: 'run-cursor',
+        agentKind: 'cursor-agent',
+        costUsd: null,
+      });
+      const em = orm.em.fork();
+      em.create(
+        Run,
+        {
+          id: 'run-cursor',
+          agentKind: 'cursor-agent',
+          status: 'completed',
+          cursorCostCents: null,
+          updatedAt: when,
+        },
+        { partial: true },
+      );
+      await em.flush();
+
+      const stats = await readUsage(
+        new Date(2026, 7, 10),
+        new Date(2026, 7, 12),
+      );
+
+      expect(stats.totals.costUsd).toBeNull();
+      expect(stats.totals.costedTurns).toBe(0);
+    });
+  });
 
   describe('totals', () => {
     it('sums every turn in the period', async () => {

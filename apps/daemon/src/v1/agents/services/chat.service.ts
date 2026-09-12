@@ -84,7 +84,7 @@ import {
   readModelParameters,
   writeModelParameters,
 } from '../utils/model-parameters';
-import { openDelegateIds } from '../utils/open-delegates';
+import { delegateIdOf, openDelegateIds } from '../utils/open-delegates';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -683,6 +683,12 @@ export class ChatService implements OnModuleInit {
      */
     taskId?: string;
     /**
+     * That card's own identifier (`GEN-12`), passed in rather than looked up:
+     * this module may not read the tasks module, and the caller holds both
+     * halves of it already. See `Run.taskIdentifier`.
+     */
+    taskIdentifier?: string;
+    /**
      * Which group to file this chat under, when the caller knows better than
      * the folder rule below.
      *
@@ -758,6 +764,7 @@ export class ChatService implements OnModuleInit {
         cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
         taskId: input.taskId ?? null,
+        taskIdentifier: input.taskIdentifier ?? null,
         title: input.title ?? null,
         // New chats always carry an explicit mode; only pre-selector rows
         // stay null.
@@ -2544,6 +2551,29 @@ export class ChatService implements OnModuleInit {
       const stranded = openDelegateIds(
         rows.map((row) => parsePayload(row.payload)),
       );
+      // WHICH NODE each delegate belongs to, taken from its own rows.
+      //
+      // A delegate is launched BY a node and every row it produces carries that
+      // node's id; the closes written here used to carry null, because this
+      // service is the chat path and a chat has no nodes. On a chat that is
+      // invisible — null is the right answer there — and on a WORKFLOW run it
+      // silently voided the whole repair: the renderer folds delegates per
+      // agent, so eleven closes filed at run level reached none of the eleven
+      // delegates sitting under `qa`, and the card went on counting them.
+      //
+      // REPORTED as "он пишет, что один из app-агентов активен, хотя он же
+      // должен быть закончен", and measured on that very run — 22 opens under
+      // `qa`, 11 closes under NULL, `11 active · 14 threads` on a card whose
+      // run had finished an hour earlier.
+      const nodeOf = new Map<string, string | null>();
+      for (const row of rows) {
+        // `parsePayload` first, exactly as the fold above does — the column is
+        // a JSON string, and reading it raw yields no id and so no node.
+        const id = delegateIdOf(parsePayload(row.payload));
+        if (id !== null && !nodeOf.has(id)) {
+          nodeOf.set(id, row.nodeId);
+        }
+      }
       for (const id of stranded) {
         const mapped = mapEventToItem({
           type: 'subagent_info',
@@ -2574,6 +2604,7 @@ export class ChatService implements OnModuleInit {
           mapped.kind,
           mapped.role,
           mapped.payload,
+          nodeOf.get(id) ?? null,
         );
       }
       if (stranded.length > 0) {
@@ -2779,6 +2810,40 @@ export class ChatService implements OnModuleInit {
     // announce, or every duplicate terminal (claude sends two, 7ms apart) is a
     // second broadcast to every window saying what the first already said.
     if (!open?.delete(event.workId)) {
+      return;
+    }
+    if (open.size === 0) {
+      this.shellRuns.delete(runId);
+    }
+    this.announceShellsOpen(runId);
+  }
+
+  /**
+   * A detached command the USER stopped is out of the live count too —
+   * `ChatShellsService.kill`'s half of the close.
+   *
+   * The count is kept off the CLI's OWN brackets, and a kill reaches none of
+   * them: the launch was answered the moment the command was accepted and the
+   * process is dead by the time this is called, so no `shell_info` event is
+   * ever coming for it. Without this the badge reads `working · waiting on
+   * background work` for the rest of the session over a command the user just
+   * stopped — the same defect the announce below exists to prevent, arriving by
+   * a road the CLI does not travel.
+   *
+   * A shell whose open recorded no work id is a NO-OP here rather than a guess:
+   * the map is keyed by that id, so there is nothing to remove, and the row is
+   * off the list either way — that count comes back down when the run's live
+   * state is dropped. Same for a run this daemon holds no live state for at all
+   * (the case a kill is most often pressed in: a command left over from a
+   * conversation whose CLI is long gone), where the count is already zero and
+   * announcing again would say nothing new.
+   */
+  noteShellClosed(runId: string, workId: string | null): void {
+    if (workId === null) {
+      return;
+    }
+    const open = this.shellRuns.get(runId);
+    if (!open?.delete(workId)) {
       return;
     }
     if (open.size === 0) {
@@ -3784,7 +3849,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'report_findings',
             null,
-            report,
+            this.attributeCard(runId, report),
           );
         } catch (err) {
           // The row IS the card, so a row that was never written is a report
@@ -3819,7 +3884,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_chart',
             null,
-            chart,
+            this.attributeCard(runId, chart),
           );
         } catch (err) {
           // Logged here and kept here, for the reason spelled out above: a
@@ -3859,7 +3924,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_metrics',
             null,
-            metrics,
+            this.attributeCard(runId, metrics),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -3889,7 +3954,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_comparison',
             null,
-            comparison,
+            this.attributeCard(runId, comparison),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -3930,7 +3995,7 @@ export class ChatService implements OnModuleInit {
             await this.seqs.reserve(runId),
             'show_gallery',
             null,
-            gallery,
+            this.attributeCard(runId, gallery),
           );
         } catch (err) {
           // Logged here and kept here, like its siblings: a persist failure
@@ -5330,6 +5395,36 @@ export class ChatService implements OnModuleInit {
     });
   }
 
+  /**
+   * Stamp a render-family card with the delegate that drew it, whenever the
+   * turn can say which one that is.
+   *
+   * These rows are written by the host-tool sinks rather than by
+   * `mapEventToItem`, which is where every OTHER row gets its
+   * `parentToolUseId` — so without this they arrive attributed to the main
+   * thread.
+   *
+   * WHETHER a delegate can be named is the turn's judgment and not this
+   * service's: {@link AgentTurnHandle.attributableDelegate} owns the conditions
+   * and answers null the moment any of them fails.
+   *
+   * TWIN PARSER: the renderer reads this key back in
+   * `apps/ui/src/renderer/chats/subagent-payload.ts` (`subagentIdOf`), which
+   * files the card under that thread. The payload crosses the wire as
+   * `z.unknown()`, so nothing generated spans the seam and a rename on either
+   * side compiles clean.
+   */
+  private attributeCard<T extends object>(
+    runId: string,
+    payload: T,
+  ): T & { parentToolUseId?: string } {
+    const delegate =
+      this.registry.runningHandle(runId)?.attributableDelegate() ?? null;
+    return delegate === null
+      ? payload
+      : { ...payload, parentToolUseId: delegate };
+  }
+
   private async persist(
     em: EntityManager,
     runId: string,
@@ -5337,13 +5432,19 @@ export class ChatService implements OnModuleInit {
     kind: ItemKind,
     role: string | null,
     payload: unknown,
+    /**
+     * Which node the row belongs to. Null — the chat path's own answer — for
+     * everything but a row this service writes ON BEHALF of a workflow node,
+     * which today is a stranded delegate's close.
+     */
+    nodeId: string | null = null,
   ): Promise<ItemWire> {
     const item = await persistItemAndEmit(
       { itemDao: this.itemDao, bus: this.bus },
       em,
       {
         runId,
-        nodeId: null,
+        nodeId,
         seq,
         kind,
         role,

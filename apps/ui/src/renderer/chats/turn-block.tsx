@@ -3,26 +3,24 @@ import { memo, useContext } from 'react';
 import { InitialsAvatar } from '../components/ui/avatar';
 import { cn } from '../components/ui/utils';
 import { CallBlock } from './call-block';
-import { ChartCard } from './chart-block';
-import { ComparisonCard } from './comparison-block';
-import { FindingsCard } from './findings-block';
-import { GalleryCard } from './gallery-block';
+import { EntryCard } from './entry-card';
 import { liveRowKind } from './live-row';
 import { MarkdownContent } from './markdown-content';
-import { MetricsCard } from './metrics-block';
 import { formatClockTime } from './relative-time';
 import { SubagentBlock } from './subagent-block';
 import { NestedThreadContext } from './subagent-context';
-import { TaskListCard } from './task-list';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolGroup } from './tool-group';
-import type { TranscriptEntry, TurnBlockEntry } from './transcript-groups';
+import {
+  isCardEntry,
+  type TranscriptEntry,
+  type TurnBlockEntry,
+} from './transcript-groups';
 import {
   payloadString,
   TranscriptItem,
   type TranscriptNodeMeta,
 } from './transcript-item';
-import { WorkflowCard } from './workflow-block';
 
 /**
  * One agent's contiguous run of work as ONE avatar-framed block — the
@@ -101,26 +99,8 @@ export const TurnBlock = memo(function TurnBlock({
     if (entry.type === 'turn-block') {
       return null; // turn blocks never nest — the fold is one level deep
     }
-    if (entry.type === 'task-list') {
-      return <TaskListCard key={entry.id} entry={entry} />;
-    }
-    if (entry.type === 'findings') {
-      return <FindingsCard key={entry.id} report={entry.report} />;
-    }
-    if (entry.type === 'chart') {
-      return <ChartCard key={entry.id} chart={entry.chart} />;
-    }
-    if (entry.type === 'metrics') {
-      return <MetricsCard key={entry.id} metrics={entry.metrics} />;
-    }
-    if (entry.type === 'comparison') {
-      return <ComparisonCard key={entry.id} comparison={entry.comparison} />;
-    }
-    if (entry.type === 'gallery') {
-      return <GalleryCard key={entry.id} gallery={entry.gallery} />;
-    }
-    if (entry.type === 'workflow') {
-      return <WorkflowCard key={entry.id} entry={entry} />;
+    if (isCardEntry(entry)) {
+      return <EntryCard key={entry.id} entry={entry} />;
     }
     const item = entry.item;
     // The block IS the bubble: plain markdown text inside, no extra chrome.

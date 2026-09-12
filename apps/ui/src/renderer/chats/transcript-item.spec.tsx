@@ -275,6 +275,25 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain(
       '− Epilogue skipped — an upstream node did not complete',
     );
+
+    // But a `never called` skip is an ABSENCE, and absences are not events.
+    // REPORTED as "он написал, что never called engineer или researcher, и нам
+    // не нужно этого писать": a workflow whose manager routed everything to one
+    // specialist closed with two of these in the conversation, restating what
+    // the agents panel says from `node_state` for every node in the graph. The
+    // daemon no longer writes them; this is what makes an EXISTING transcript
+    // read right, since no daemon change reaches rows already on disk.
+    render(
+      <TranscriptItem
+        item={item(
+          'status',
+          { status: 'skipped', reason: 'never called' },
+          'epilogue',
+        )}
+        nodes={NODES}
+      />,
+    );
+    expect(container.textContent).toBe('');
   });
 
   it('a trigger node\'s status row is hidden entirely ("start → completed" noise)', () => {
@@ -930,5 +949,38 @@ describe('errorRecovery — which cure an error row offers', () => {
 
   it('offers nothing when the chat can do neither', () => {
     expect(errorRecovery(null, null, null)).toBeUndefined();
+  });
+});
+
+describe('an ungrouped tool row', () => {
+  // The orphan path — a `tool_call` whose pair never formed lands here, and
+  // this file's own comment says it must not read worse than a grouped row.
+  // It wears the SAME `toolRowAccent`, wired at a second site, so it needs its
+  // own pin or the two sites can silently diverge.
+  const renderCall = (name: string): void => {
+    act(() =>
+      root.render(
+        <TranscriptItem
+          item={item('tool_call', { id: 't1', name, input: {} })}
+          nodes={NODES}
+        />,
+      ),
+    );
+  };
+
+  it('stripes it by what the call DID', () => {
+    renderCall('Bash');
+
+    expect(container.querySelector('[data-role="tool"]')?.className).toContain(
+      'border-l-primary/40',
+    );
+  });
+
+  it('withholds the stripe where the consequence is unknown', () => {
+    renderCall('mcp__fs__write');
+
+    expect(
+      container.querySelector('[data-role="tool"]')?.className,
+    ).not.toContain('border-l-2');
   });
 });

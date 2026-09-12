@@ -29,6 +29,7 @@ import {
 } from './system-payload';
 import { ThinkingDisclosure } from './thinking-block';
 import { ToolBodyView } from './tool-body-view';
+import { toolRowAccent } from './tool-icon';
 import {
   toolInputBody,
   toolLocationsBody,
@@ -258,7 +259,10 @@ export const TranscriptItem = memo(function TranscriptItem({
           (item.payload as { input?: unknown } | null)?.input,
         ) ?? toolLocationsBody(item.payload);
       return (
-        <MessageBubble variant="tool" role={tag(`🔧 ${name}`)}>
+        <MessageBubble
+          variant="tool"
+          role={tag(`🔧 ${name}`)}
+          className={toolRowAccent(item.payload) ?? undefined}>
           {body === null ? null : <ToolBodyView body={body} />}
         </MessageBubble>
       );
@@ -361,6 +365,24 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       const name = nodeName(item.nodeId) ?? 'run';
       const reason = payloadString(item.payload, 'reason');
+      // NEVER CALLED is an absence, not an event.
+      //
+      // A skipped row that EXPLAINS something — an upstream node failed, so
+      // this one could not run — is worth drawing, and still is. This one says
+      // only that a node the graph offers was not needed, which the agents
+      // panel already states from `node_state` for every node in the workflow.
+      // So a run whose manager routed everything to one specialist closed with
+      // `− Engineer skipped — never called` and `− Researcher skipped — never
+      // called` in the conversation, duplicating the panel a few inches away.
+      // REPORTED as "он написал, что never called engineer или researcher, и
+      // нам не нужно этого писать".
+      //
+      // The daemon has stopped writing these, and this is the half that makes
+      // an EXISTING conversation read right — the reported rows are in the
+      // author's own history, where no daemon change can reach them.
+      if (status === 'skipped' && reason === 'never called') {
+        return null;
+      }
       const line =
         status === 'failed'
           ? `✗ ${name} failed`

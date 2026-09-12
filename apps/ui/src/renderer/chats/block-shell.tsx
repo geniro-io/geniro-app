@@ -317,6 +317,8 @@ export function BlockToolFooter({
   count,
   tokens = null,
   costUsd = null,
+  contextTokens = null,
+  contextWindowTokens = null,
   note,
 }: {
   count: number;
@@ -324,9 +326,37 @@ export function BlockToolFooter({
   tokens?: number | null;
   /** What it cost; null when the CLI reported none. */
   costUsd?: number | null;
+  /**
+   * How full this agent's own context window is — the FALLBACK figure, drawn
+   * only when {@link tokens} is absent.
+   *
+   * REPORTED as "its not showing amount of tokens for cursor agent", against a
+   * call card whose footer read `11 tools` and nothing else. Measured across
+   * the whole ledger: of 3,359 claude turns every one carries input and output
+   * tokens, and of 82 cursor turns NOT ONE does — nor a cost, nor a duration.
+   * So there is no token count to show, and the row was not hiding one.
+   *
+   * What cursor does report per turn is this: the window reading the daemon
+   * reads out of that CLI's own session store. It is a DIFFERENT QUANTITY —
+   * how much the conversation currently occupies, not what this turn spent —
+   * which is why it is labelled `ctx` rather than `tokens` and never shares
+   * their slot. It fills the gap only where the real figure is missing: a
+   * claude row already answers "what did this cost" exactly, and a second
+   * large number beside that answer would invite the two to be read as one.
+   */
+  contextTokens?: number | null;
+  /** The window that reading is scaled against; null when unknown. */
+  contextWindowTokens?: number | null;
   note?: React.ReactNode;
 }): React.JSX.Element | null {
-  if (count === 0 && tokens === null && costUsd === null && !note) {
+  const showContext = tokens === null && contextTokens !== null;
+  if (
+    count === 0 &&
+    tokens === null &&
+    costUsd === null &&
+    !showContext &&
+    !note
+  ) {
     return null;
   }
   return (
@@ -343,6 +373,18 @@ export function BlockToolFooter({
           {formatTokens(tokens)} tokens
         </span>
       )}
+      {showContext && contextTokens !== null ? (
+        <span
+          data-slot="block-footer-context"
+          title={
+            contextWindowTokens === null
+              ? 'How full this agent’s context window is. This CLI reports no per-turn token usage, so this is the only token figure it gives.'
+              : `Context window ${formatTokens(contextTokens)} of ${formatTokens(contextWindowTokens)}. This CLI reports no per-turn token usage, so this is the only token figure it gives.`
+          }
+          className="tabular-nums">
+          {formatTokens(contextTokens)} ctx
+        </span>
+      ) : null}
       {costUsd === null ? null : (
         <span data-slot="block-footer-cost" className="tabular-nums">
           {formatExactUsd(costUsd)}
@@ -370,14 +412,42 @@ export function BlockTitle({
 export function BlockPendingLine({
   children,
   pulse = true,
+  clamp = 'none',
 }: {
   children: React.ReactNode;
   pulse?: boolean;
+  /**
+   * How much of the line to show when it runs long.
+   *
+   * REPORTED as "когда последнее сообщение агента, которого мы вызываем в
+   * workflow, превышает три строки, мы должны обрезать до третьей строки", over
+   * a call card carrying twenty-five lines of grey italic text. It is one
+   * sentence — `QA is running <tool>` — and the tool NAME is what runs long:
+   * an ACP agent's tool title is routinely the whole shell command, `cd … && gh
+   * pr list … | python3 -c "…"`, so a status line rendered a program.
+   *
+   * Two clamps rather than one, because the two places this line appears want
+   * different answers and each already had one written down. The OPEN card
+   * gets `three`, which is the ask and matches `InlineClampText`, the clamp the
+   * callee's own result already uses. The SHUT band gets `one`, which is that
+   * band's own documented rule — it is a state readout, and its other arm
+   * (the callee's last words) has always been `truncate`; the pending arm was
+   * simply the one that never got it, so a long tool name grew the shut card
+   * exactly as it grew the open one.
+   *
+   * Never paired with a `display` utility: `line-clamp-*` works by setting
+   * `display: -webkit-box`, and a `block`/`flex` beside it silently cancels the
+   * clamp — the trap `renderer-components.md` records from a measured bug.
+   */
+  clamp?: 'none' | 'one' | 'three';
 }): React.JSX.Element {
   return (
     <span
+      data-slot="block-pending"
       className={cn(
         'text-[11px] text-muted-foreground italic',
+        clamp === 'three' && 'line-clamp-3',
+        clamp === 'one' && 'block min-w-0 flex-1 truncate',
         pulse && 'animate-pulse',
       )}>
       {children}
@@ -404,12 +474,20 @@ export function BlockPendingLine({
  * (one card's status chip moving, the other's not) is invisible until someone
  * puts them side by side.
  *
- * **`collapsible` is what separates the two callers, and it is not styling.**
- * A call block is the point of the row it sits on and always renders open; a
- * sub-agent block is an aside the reader opens deliberately, so it starts
- * closed. One prop, not two: no caller wants collapsible-and-already-open, and
- * a separate `defaultOpen` only created a combination nothing produced except
- * the test written for it.
+ * **`collapsible` is what separates a fold from a plain card, and it is not
+ * styling.** A block the reader opens deliberately is an aside; one that cannot
+ * be folded is the point of the row it sits on. Every live caller is
+ * collapsible today, so `collapsible: false` is the shape rather than a case
+ * anything currently takes.
+ *
+ * `defaultOpen` is the one exception to starting shut, and it earned itself: a
+ * delegate's block
+ * can hold a RENDER CARD — a findings report, a chart — and that row is the
+ * only copy of what it says, the tool result being a receipt. Shut, the card is
+ * work the reader has to go looking for, which is worse than the unattributed
+ * row filing it under the delegate replaced. So a block that holds one opens.
+ * It is DERIVED rather than seeded, because cards stream in after the block is
+ * already on screen.
  *
  * `headerAction` renders BESIDE the disclosure button, never inside it.
  * Interactive content nested in a `<button>` is invalid HTML whatever role it
@@ -421,6 +499,7 @@ export function BlockShell({
   header,
   status,
   collapsible = false,
+  defaultOpen = false,
   toggleLabel,
   headerAction,
   summary,
@@ -454,7 +533,10 @@ export function BlockShell({
   children: React.ReactNode;
 } & (
   | {
-      /** Render the header as a disclosure over the body, closed to start. */
+      /**
+       * Render the header as a disclosure over the body, closed to start
+       * unless {@link defaultOpen} says otherwise.
+       */
       collapsible: true;
       /**
        * Accessible name for the disclosure button. Required by the TYPE, not
@@ -463,10 +545,22 @@ export function BlockShell({
        * `<span>` and an icon.
        */
       toggleLabel: string;
+      /**
+       * Open even though it can be folded — for a block holding something the
+       * reader must not have to go looking for. Re-read on every render, not
+       * seeded at mount, so a row arriving later still opens the block; the
+       * user's own press outranks it from then on.
+       */
+      defaultOpen?: boolean;
     }
-  | { collapsible?: false; toggleLabel?: never }
+  | { collapsible?: false; toggleLabel?: never; defaultOpen?: never }
 )): React.JSX.Element {
-  const [open, setOpen] = useState(!collapsible);
+  // DERIVED, with the user's own press layered over it — never seeded into
+  // `useState`, which reads its argument only at mount. A card arrives after
+  // the block is on screen, so a seeded block would stay shut on exactly the
+  // delegate whose report it exists to reveal. Same shape as `ToolRow`.
+  const [override, setOverride] = useState<boolean | null>(null);
+  const open = override ?? (!collapsible || defaultOpen);
   const headerInner = (
     <>
       {collapsible ? (
@@ -531,7 +625,7 @@ export function BlockShell({
               type="button"
               aria-expanded={open}
               aria-label={toggleLabel}
-              onClick={() => setOpen((v) => !v)}
+              onClick={() => setOverride(!open)}
               className={headerClass}>
               {headerInner}
             </button>

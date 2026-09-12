@@ -822,8 +822,9 @@ export class McpServerService {
             'can step between them. ' +
             'It is also not for numbers you have measured: use show_chart or show_metrics for those, which draw ' +
             'the data itself rather than a picture of it. ' +
-            'Name each image by its path on disk — absolute, or relative to the working directory. Do not paste ' +
-            'image data; this app reads the files. ' +
+            'Name each image by its FULL path on disk — always, even for a file right beside you. A relative path ' +
+            "is measured against this conversation's own working directory, which is frequently not the one you " +
+            'wrote the file in, and the tile then fails to load. Do not paste image data; this app reads the files. ' +
             'Call it ONCE per set, and do not also list the paths as text: the user sees the pictures, so writing ' +
             'the filenames out again shows the same thing twice. Say what the images SHOW in your reply. ' +
             'The result is a short receipt counting what was shown, never the paths themselves.',
@@ -844,7 +845,7 @@ export class McpServerService {
                     path: {
                       type: 'string',
                       description:
-                        'Where the file is: an absolute path, or one relative to the working directory.',
+                        "The file's FULL path on disk. A relative one is measured against this conversation's own working directory, which is frequently not the directory you wrote the file in.",
                     },
                     caption: {
                       type: 'string',

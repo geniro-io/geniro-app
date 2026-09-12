@@ -19,6 +19,7 @@ function fakeHandle(): {
       cancel,
       respondApproval: vi.fn(),
       sendUserMessage: vi.fn(),
+      attributableDelegate: (): string | null => null,
       setApprovalMode: vi.fn(),
     },
     resolve,
@@ -164,6 +165,7 @@ describe('ProcessRegistry shutdown isolation', () => {
       cancel: badCancel,
       respondApproval: vi.fn(),
       sendUserMessage: vi.fn(),
+      attributableDelegate: (): string | null => null,
       setApprovalMode: vi.fn(),
     });
     const good = fakeHandle();

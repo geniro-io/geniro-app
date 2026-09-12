@@ -1181,6 +1181,15 @@ export interface GeniroApi {
   pickProjectFolder(): Promise<string | null>;
   /** Open the native file picker for an agent binary; returns the path or null. */
   pickAgentBinary(): Promise<string | null>;
+  /**
+   * Files to attach to a task, by absolute path — several at once, since
+   * attaching is routinely a set (a bundle and its manifest, three
+   * screenshots). Empty when the user cancelled.
+   *
+   * A PICKER and not an upload: geniro copies nothing, so what crosses here is
+   * the paths of files that stay exactly where the user put them.
+   */
+  pickTaskFiles(): Promise<string[]>;
   /** Read the persisted settings. */
   getSettings(): Promise<Settings>;
   /** Merge a partial patch into settings; returns the updated settings. */
@@ -1456,6 +1465,7 @@ export const IPC = {
   onClearAgentCaches: 'geniro:onClearAgentCaches',
   pickProjectFolder: 'geniro:pickProjectFolder',
   pickAgentBinary: 'geniro:pickAgentBinary',
+  pickTaskFiles: 'geniro:pickTaskFiles',
   getSettings: 'geniro:getSettings',
   updateSettings: 'geniro:updateSettings',
   detectClis: 'geniro:detectClis',

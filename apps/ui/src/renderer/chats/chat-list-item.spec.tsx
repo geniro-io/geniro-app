@@ -323,6 +323,117 @@ describe('ChatListItem', () => {
     expect(badge?.getAttribute('title')).toContain('builder polish');
   });
 
+  it('labels a task’s thread with the card it is working', async () => {
+    // ASKED FOR as "add label to threads that connected to our tasks with task
+    // number. To make those threads identifiable in the list" — the run rows
+    // for a board's cards were indistinguishable from every other
+    // conversation, which is the whole of the report.
+    const container = await mount(
+      <ChatListItem {...props({ taskIdentifier: 'GEN-12' })} />,
+    );
+
+    expect(
+      container.querySelector('[data-slot="task-identifier"]')?.textContent,
+    ).toBe('GEN-12');
+  });
+
+  it('draws NO card label on a thread nobody started from one', async () => {
+    // Every other conversation on the machine, which is most of them: an
+    // absent card is silence rather than an empty badge holding the column.
+    const container = await mount(<ChatListItem {...props()} />);
+
+    expect(container.querySelector('[data-slot="task-identifier"]')).toBeNull();
+  });
+
+  it('puts the card label FIRST among the row’s labels', async () => {
+    // It is an identifier, so it is scanned down a column — which only works
+    // while it sits at the same x on every row that has one. The pull request
+    // comes and goes; this does not, so leading with it shifts nothing.
+    // With a PULL REQUEST beside it, or the assertion holds for the wrong
+    // reason: a row carrying one label has it first however the two are
+    // ordered, and this row's other label is the one that comes and goes.
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          taskIdentifier: 'GEN-12',
+          agentKind: 'claude',
+          pullRequest: {
+            number: 70,
+            title: 'builder polish',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'fix/builder',
+            isCrossRepository: false,
+            headRepositoryOwner: 'someone',
+            author: 'someone',
+            url: 'https://github.com/o/r/pull/70',
+            updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
+          },
+        })}
+      />,
+    );
+
+    const labels = container.querySelector('[data-slot="chat-row-labels"]')!;
+    expect(labels.children).toHaveLength(3);
+    expect(labels.firstElementChild?.getAttribute('data-slot')).toBe(
+      'task-identifier',
+    );
+  });
+
+  it('lets the strip shrink, with the agent label the one that gives way', async () => {
+    // `badge.tsx` sets EVERY badge `shrink-0`, and the strip itself carried no
+    // `min-w-0` — at the sidebar rail's narrow end a row carrying both a task
+    // card and a pull request had nowhere to give, and would clip or spill
+    // rather than degrade the way the composer shelf's chips are built to.
+    // jsdom computes no layout, so the emitted classes ARE the mechanism here,
+    // not a proxy for it.
+    const container = await mount(
+      <ChatListItem
+        {...props({
+          taskIdentifier: 'GEN-12',
+          agentKind: 'cursor-agent',
+          pullRequest: {
+            number: 70,
+            title: 'builder polish',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'fix/builder',
+            isCrossRepository: false,
+            headRepositoryOwner: 'someone',
+            author: 'someone',
+            url: 'https://github.com/o/r/pull/70',
+            updatedAt: '2026-08-01T00:00:00Z',
+            added: null,
+            removed: null,
+            changedFiles: null,
+          },
+        })}
+      />,
+    );
+
+    const labels = container.querySelector('[data-slot="chat-row-labels"]')!;
+    expect(labels.className.split(/\s+/)).toContain('min-w-0');
+
+    // The card and the pull request are both short and bounded — a key, a
+    // number — so they stay fixed; the agent word can be the longest thing on
+    // the strip (`cursor-agent`), so it is the one built to truncate.
+    const agent = container.querySelector('[data-slot="agent-kind"]')!;
+    const agentClasses = agent.className.split(/\s+/);
+    expect(agentClasses).toContain('min-w-0');
+    expect(agentClasses).toContain('truncate');
+    expect(agentClasses).not.toContain('shrink-0');
+
+    const cardBadge = container.querySelector('[data-slot="task-identifier"]')!;
+    expect(cardBadge.className.split(/\s+/)).toContain('shrink-0');
+    const prBadge = container.querySelector(
+      '[data-slot="current-pull-request"]',
+    )!;
+    expect(prBadge.className.split(/\s+/)).toContain('shrink-0');
+  });
+
   it('labels every row with the agent driving it', async () => {
     // The second label asked for beside the pull request. `cursor-agent` is
     // the BINARY's name; the label says `cursor`, which is the user's own

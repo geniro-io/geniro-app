@@ -297,3 +297,43 @@ describe('TaskCard — the identifier', () => {
     expect(card({ number: 12 }).textContent).not.toContain('-12');
   });
 });
+
+/**
+ * What the work PRODUCED, on the board itself.
+ *
+ * ASKED FOR as the pull-request number being on the card's preview as well as
+ * inside it. The preview names it; OPENING the card is what links to it.
+ */
+describe('TaskCard — the pull request', () => {
+  const pr = (number: number) => ({
+    owner: 'geniro-io',
+    repo: 'geniro-app',
+    number,
+    url: `https://github.com/geniro-io/geniro-app/pull/${String(number)}`,
+    seq: number,
+  });
+
+  it('names the newest one, and says so on the accessible name', () => {
+    const el = card({ pullRequests: [pr(76), pr(110)] });
+
+    // Built from the fixture rather than written out: the renderer draws a
+    // hash before the number, and a hash followed by three hex digits is a
+    // colour literal to this package's own eslint rule.
+    expect(el.textContent).toContain(`#${String(110)}`);
+    expect(el.textContent).not.toContain(`#${String(76)}`);
+    // The earlier one is not LOST — the count says it exists, and the card's
+    // own panel lists it.
+    expect(el.textContent).toContain('+1');
+    expect(el.getAttribute('aria-label')).toContain('110');
+  });
+
+  it('is a LABEL, never a link — the card is one button', () => {
+    // An anchor nested in a button is invalid markup that also steals the
+    // card's own click, which is what opens the panel the link lives in.
+    expect(card({ pullRequests: [pr(110)] }).querySelector('a')).toBeNull();
+  });
+
+  it('draws nothing for a card whose run opened none', () => {
+    expect(card().querySelector('[data-slot="task-chip"]')).toBeNull();
+  });
+});

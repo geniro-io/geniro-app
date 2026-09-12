@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -9,6 +9,56 @@ import { MAX_ATTACHMENT_BYTES } from '../../agents/chat.types';
 import { TaskAttachmentService } from './task-attachment.service';
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+describe('TaskAttachmentService.adopt — a report’s screenshot', () => {
+  let root: string;
+  let source: string;
+  let service: TaskAttachmentService;
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), 'geniro-task-adopt-'));
+    source = mkdtempSync(join(tmpdir(), 'geniro-agent-scratch-'));
+    service = new TaskAttachmentService(root);
+  });
+
+  afterAll(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(source, { recursive: true, force: true });
+  });
+
+  it('COPIES the file under the card’s own directory, keeping its name', async () => {
+    const shot = join(source, 'panel.png');
+    writeFileSync(shot, PNG);
+    const taskId = randomUUID();
+
+    const path = await service.adopt(taskId, shot);
+
+    expect(path.startsWith(join(root, taskId))).toBe(true);
+    expect(path.endsWith('/panel.png')).toBe(true);
+    expect(readFileSync(path)).toEqual(PNG);
+    // A copy, so the agent's scratch file being reaped costs the card nothing.
+    rmSync(shot);
+    expect(readFileSync(path)).toEqual(PNG);
+  });
+
+  it('refuses what is not an image file on this machine', async () => {
+    const codeOf = async (path: string): Promise<string | undefined> => {
+      try {
+        await service.adopt(randomUUID(), path);
+      } catch (err) {
+        return (err as { errorCode?: string }).errorCode;
+      }
+      return undefined;
+    };
+    const notes = join(source, 'notes.txt');
+    writeFileSync(notes, 'x');
+    expect(await codeOf('shots/a.png')).toBe('ATTACHMENT_PATH_INVALID');
+    expect(await codeOf(notes)).toBe('ATTACHMENT_NOT_AN_IMAGE');
+    expect(await codeOf(join(source, 'missing.png'))).toBe(
+      'ATTACHMENT_NOT_FOUND',
+    );
+  });
+});
 
 describe('TaskAttachmentService', () => {
   let root: string;

@@ -46,6 +46,26 @@ const REPORT_LAST =
  */
 const REPORT_PULL_REQUEST =
   'When the work leaves commits behind, open a pull request for it with `gh pr create` before you report, and give the link in the report. That command is also how the board attaches the pull request to the card as the result of the work, so one opened any other way will not appear there. Say in the report that there was nothing to open one for when that is the case.';
+/**
+ * The PICTURES of the work — screenshots of a UI change, a chart it produced —
+ * and the one form the board can collect them in.
+ *
+ * Asked for because a card's report is otherwise words about a change nobody
+ * has seen: the agent routinely HAS the screenshots (it took them to check its
+ * own work), and they went no further than its scratch directory. A markdown
+ * image with an ABSOLUTE path is named because that is the whole contract —
+ * `TaskSettleService` reads the report and the closing message for exactly that
+ * shape (`utils/report-images.ts`) and copies each image onto the card's files,
+ * so it outlives the scratch directory the agent wrote it to. Anything else —
+ * a bare path in prose, a relative one — is text the settle cannot tell from a
+ * sentence that merely mentions a file.
+ *
+ * Conditional like the pull request, for the same reason: a card whose work has
+ * nothing to look at must not be handed a screenshot taken to satisfy an
+ * instruction.
+ */
+const REPORT_SCREENSHOTS =
+  'When you took screenshots or produced images that show the result, reference each one in the report or your final message as a markdown image with its absolute path — `![what it shows](/absolute/path/to/image.png)`. Every image referenced that way is copied onto the task, so it stays with the card after the conversation is over.';
 const REPORT_PROSE =
   'Write the report as your final message: what changed, what you verified, and anything you deliberately left undone.';
 
@@ -67,6 +87,7 @@ const REPORT_PROSE =
 export const TASK_REPORT_INSTRUCTIONS = [
   REPORT_OPENING,
   REPORT_PULL_REQUEST,
+  REPORT_SCREENSHOTS,
   REPORT_LAST,
   'Prefer the `report_findings` tool — it draws a structured report the user can read at a glance.',
   `If you cannot call it, ${REPORT_PROSE.charAt(0).toLowerCase()}${REPORT_PROSE.slice(1)}`,
@@ -91,6 +112,7 @@ export const TASK_REPORT_INSTRUCTIONS = [
 export const TASK_REPORT_INSTRUCTIONS_WORKFLOW = [
   REPORT_OPENING,
   REPORT_PULL_REQUEST,
+  REPORT_SCREENSHOTS,
   REPORT_LAST,
   REPORT_PROSE,
 ].join('\n');

@@ -197,6 +197,7 @@ import {
   taskListsByAgent,
   taskProgress,
 } from './task-payload';
+import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -252,6 +253,7 @@ import {
 } from './use-thread-pull-requests';
 import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
+import { useWorktreeOrigin } from './use-worktree-origin';
 import { rootAgentOf } from './workflow-root';
 
 /**
@@ -3079,6 +3081,16 @@ export function Chats({
   );
 
   /**
+   * Put a task's worktree back when its chat outlived it — see
+   * `task-worktree.ts`. Every send path goes through `startTurn`, and Retry
+   * through its own call, so those are the two places that use it.
+   */
+  const restoreWorktree = useCallback(
+    (taskId: string) => restoreTaskWorktree(apis, taskId),
+    [apis],
+  );
+
+  /**
    * Start one turn: mark the run working, send, render the user message
    * (addItem de-dupes when the WS copy arrives).
    *
@@ -3140,15 +3152,20 @@ export function Chats({
       );
       try {
         const sendMessageDto = { text, ...(images?.length ? { images } : {}) };
-        // A workflow run's message goes to the agents its trigger feeds, which
-        // only the executor knows — the chat route refuses a workflow run.
-        const userItem =
-          runsRef.current.find((run) => run.id === runId)?.workflowId != null
-            ? await workflowApi.sendWorkflowRunMessage({
-                runId,
-                sendMessageDto,
-              })
-            : await chatApi.sendChatMessage({ runId, sendMessageDto });
+        const run = runsRef.current.find((row) => row.id === runId);
+        // A TASK's chat outlives its worktree — the board collects that once
+        // the card is Done — so a refusal naming the missing folder puts the
+        // worktree back and sends once more (`sendRestoringWorktree`).
+        const userItem = await sendRestoringWorktree(
+          () =>
+            // A workflow run's message goes to the agents its trigger feeds,
+            // which only the executor knows — the chat route refuses one.
+            run?.workflowId != null
+              ? workflowApi.sendWorkflowRunMessage({ runId, sendMessageDto })
+              : chatApi.sendChatMessage({ runId, sendMessageDto }),
+          run?.taskId ?? null,
+          restoreWorktree,
+        );
         addItem(userItem, true);
       } catch (err) {
         if (before !== null) {
@@ -3163,7 +3180,7 @@ export function Chats({
         throw err;
       }
     },
-    [chatApi, workflowApi, addItem],
+    [chatApi, workflowApi, addItem, restoreWorktree],
   );
 
   /**
@@ -3945,6 +3962,11 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+  // The repository a TASK run's worktree was cut from, for the header chip —
+  // asked only for a task's run, whose folder geniro named by the task's id.
+  const taskWorktreeOf = useWorktreeOrigin(
+    activeRun?.taskId != null ? activeRun.cwd : null,
+  );
   /**
    * The daemon's own per-node context readings for a WORKFLOW run — the source
    * that made `NodeState.contextTokens` reach a client at all.
@@ -6457,12 +6479,19 @@ export function Chats({
     if (runId === undefined || !chatApi || activeRun?.workflowId) {
       return null;
     }
+    const taskId = activeRun?.taskId ?? null;
     return () => {
-      void chatApi.retryChat({ runId }).catch((err: unknown) => {
+      // Retry after a task's worktree was collected is the reported case
+      // itself — the transcript's failure row offers exactly this press.
+      void sendRestoringWorktree(
+        () => chatApi.retryChat({ runId }),
+        taskId,
+        restoreWorktree,
+      ).catch((err: unknown) => {
         setError(daemonErrorDetail(err) ?? String(err));
       });
     };
-  }, [activeRun?.id, chatApi]);
+  }, [activeRun?.id, activeRun?.taskId, chatApi, restoreWorktree]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
@@ -7429,6 +7458,7 @@ export function Chats({
                         // run's life — and after three rejected positions in the
                         // composer below.
                         cwd={activeRun.cwd}
+                        worktreeOf={taskWorktreeOf}
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.
                         configDir={activeRun.configDir}

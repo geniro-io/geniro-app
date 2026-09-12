@@ -5,7 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type { DaemonApis } from '../daemon-api';
-import { useDescriptionPaste } from './use-description-paste';
+import {
+  referencesStagedImage,
+  resolveStagedImage,
+  stripStagedImages,
+  useDescriptionPaste,
+  useStagedDescriptionPaste,
+} from './use-description-paste';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -280,5 +286,155 @@ describe('useDescriptionPaste', () => {
     expect(result.defaultPrevented).toBe(true);
     expect(exec).toHaveBeenCalledWith('insertText', false, '/docs/spec.pdf');
     expect(api.addTaskAttachment).not.toHaveBeenCalled();
+  });
+});
+
+describe('staged picture references', () => {
+  // `staged-image:1` is a PREFIX of `staged-image:12`, which is the case every
+  // match here has to get right: a match that stopped at the digits would
+  // rewrite both pictures when one was saved.
+  const text =
+    'Before\n![Pasted image](staged-image:1)\nmiddle ![shot.png](staged-image:12) after';
+
+  it('repoints ONE picture at its saved path and leaves the others staged', () => {
+    const next = resolveStagedImage(
+      text,
+      'staged-image:1',
+      '/u/task-attachments/t1/a.png',
+    );
+
+    expect(next).toContain('![Pasted image](/u/task-attachments/t1/a.png)');
+    expect(next).toContain('![shot.png](staged-image:12)');
+  });
+
+  it('takes a picture that could not be saved out WHOLE, alt text and all', () => {
+    expect(resolveStagedImage(text, 'staged-image:12', null)).toBe(
+      'Before\n![Pasted image](staged-image:1)\nmiddle  after',
+    );
+  });
+
+  it('strips every staged reference, which is what a card is created with', () => {
+    expect(stripStagedImages(text)).toBe('Before\n\nmiddle  after');
+  });
+
+  it('knows whether a picture is still referenced', () => {
+    expect(referencesStagedImage(text, 'staged-image:12')).toBe(true);
+    expect(referencesStagedImage(text, 'staged-image:2')).toBe(false);
+  });
+});
+
+/**
+ * Pasting a screenshot into a card that does not exist yet.
+ *
+ * REPORTED as "i cant add images to task when i just create task - only when
+ * edit": the dialog took a file's path and nothing else.
+ */
+describe('useStagedDescriptionPaste', () => {
+  function mountStaged(): {
+    paste: (data: DataTransfer) => { defaultPrevented: boolean };
+    state: () => ReturnType<typeof useStagedDescriptionPaste>;
+  } {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    let latest: ReturnType<typeof useStagedDescriptionPaste> | null = null;
+    function Probe(): null {
+      latest = useStagedDescriptionPaste();
+      return null;
+    }
+    act(() => {
+      root!.render(<Probe />);
+    });
+    const field = document.createElement('textarea');
+    document.body.appendChild(field);
+    pasteField = field;
+    return {
+      paste: (data) => {
+        field.focus();
+        let prevented = false;
+        const event = {
+          clipboardData: data,
+          currentTarget: field,
+          preventDefault: () => {
+            prevented = true;
+          },
+        } as unknown as React.ClipboardEvent<HTMLTextAreaElement>;
+        act(() => {
+          latest!.onPaste(event);
+        });
+        return { defaultPrevented: prevented };
+      },
+      state: () => latest!,
+    };
+  }
+
+  it('writes the reference at the caret AT ONCE, and keeps the bytes for the create', async () => {
+    // Nothing is uploaded — there is no card to upload to — so there is
+    // nothing to wait for before the picture takes its place in the text.
+    const exec = stubExecCommand(true);
+    const harness = mountStaged();
+
+    const result = harness.paste(clipboard(png()));
+
+    expect(result.defaultPrevented).toBe(true);
+    expect(exec).toHaveBeenCalledWith(
+      'insertText',
+      false,
+      '![shot.png](staged-image:1)',
+    );
+    const [staged] = harness.state().staged;
+    expect(staged).toMatchObject({
+      ref: 'staged-image:1',
+      mediaType: 'image/png',
+      name: 'shot.png',
+    });
+    // The three bytes of `png()`, base64.
+    await expect(staged!.data).resolves.toBe('AQID');
+  });
+
+  it('stages nothing when the reference could not be written, and says so', () => {
+    stubExecCommand(false);
+    const harness = mountStaged();
+
+    harness.paste(clipboard(png()));
+
+    expect(harness.state().staged).toEqual([]);
+    expect(harness.state().error).toContain('paste again');
+  });
+
+  it('never re-uses a number, even across a reset', () => {
+    // A reference left in the text from before a reset must not come to mean
+    // a different picture.
+    const exec = stubExecCommand(true);
+    const harness = mountStaged();
+
+    harness.paste(clipboard(png()));
+    act(() => {
+      harness.state().reset();
+    });
+    harness.paste(clipboard(png('again.png')));
+
+    expect(harness.state().staged.map((image) => image.ref)).toEqual([
+      'staged-image:2',
+    ]);
+    expect(exec).toHaveBeenLastCalledWith(
+      'insertText',
+      false,
+      '![again.png](staged-image:2)',
+    );
+  });
+
+  it('still writes a NON-image file as its own path', () => {
+    const exec = stubExecCommand(true);
+    window.geniro = createPreloadStub({ filePath: () => '/docs/spec.pdf' });
+    const harness = mountStaged();
+
+    const pdf = new File([new Uint8Array([1])], 'spec.pdf', {
+      type: 'application/pdf',
+    });
+    harness.paste(clipboard(pdf));
+
+    expect(exec).toHaveBeenCalledWith('insertText', false, '/docs/spec.pdf');
+    expect(harness.state().staged).toEqual([]);
   });
 });

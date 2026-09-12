@@ -612,9 +612,9 @@ export function Tasks({
           onClose={() => {
             setNewTaskOpen(false);
           }}
-          onCreate={(input) => {
+          onCreate={(input, staged) => {
             setNewTaskOpen(false);
-            void board.createTask({ projectId, ...input });
+            void board.createTask({ projectId, ...input }, staged);
           }}
         />
       ) : null}

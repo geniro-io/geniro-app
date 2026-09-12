@@ -1,6 +1,7 @@
 import {
   Bot,
   FileWarning,
+  FolderGit2,
   FolderOpen,
   IdCard,
   Timer,
@@ -213,24 +214,28 @@ function threadMetricsTitle(
 function ThreadIdentity({
   agentKind,
   cwd,
+  worktreeOf = null,
   configDir,
   configDirPin = null,
 }: {
   agentKind: string | null;
   cwd: string | null;
+  worktreeOf?: string | null;
   configDir: string | null;
   configDirPin?: ConfigDirPin | null;
 }): React.JSX.Element | null {
   // The folder leads, and the agent stands in for it on a run that has none —
-  // a workflow, whose agents are per node, has neither and draws nothing.
-  const leaf = cwd === null ? agentKind : folderName(cwd);
+  // a workflow, whose agents are per node, has neither and draws nothing. A
+  // task's worktree is named by the task's id, so the REPOSITORY it was cut
+  // from is the name that says which directory this is.
+  const leaf = cwd === null ? agentKind : folderName(worktreeOf ?? cwd);
   if (leaf === null) {
     return null;
   }
   return (
     <HoverPopover
       slot="thread-identity"
-      label={`Thread identity: ${[agentKind, cwd, configDir].filter((part) => part !== null).join(', ')}`}
+      label={`Thread identity: ${[agentKind, cwd, worktreeOf, configDir].filter((part) => part !== null).join(', ')}`}
       panelLabel="Thread identity"
       side="bottom"
       // `end` — the panel's right edge on the trigger's — because the chip now
@@ -266,6 +271,14 @@ function ThreadIdentity({
           icon={<FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />}
           name="Folder"
           value={cwd}
+          fallback={null}
+        />
+        <IdentityRow
+          icon={<FolderGit2 aria-hidden="true" className="size-3.5 shrink-0" />}
+          // Beside the folder rather than instead of it: the worktree is where
+          // the agent actually works, and this is what it is a checkout OF.
+          name="Repository"
+          value={worktreeOf}
           fallback={null}
         />
         <IdentityRow
@@ -387,6 +400,7 @@ export function ChatHeader({
   isWorkflow,
   agentKind = null,
   cwd = null,
+  worktreeOf = null,
   configDir = null,
   configDirPin = null,
   status,
@@ -426,6 +440,16 @@ export function ChatHeader({
    * the identity line already exists and already truncates.
    */
   cwd?: string | null;
+  /**
+   * The repository a TASK run's folder was cut from, or null.
+   *
+   * A task's agent works in a worktree geniro makes under its own data
+   * directory, named by the task's id — so the chip read
+   * `794addc7-273d-4924-8…`, REPORTED as "seems like it didnt take correct
+   * directory". The directory was right and its name said nothing; with this
+   * the chip names the repository, and the panel states both.
+   */
+  worktreeOf?: string | null;
   /**
    * The agent config directory this run's turns use — which account/profile
    * the CLI runs as — or null for the CLI's own default.
@@ -590,6 +614,7 @@ export function ChatHeader({
         <ThreadIdentity
           agentKind={agentKind}
           cwd={cwd}
+          worktreeOf={worktreeOf}
           configDir={configDir}
           configDirPin={configDirPin}
         />

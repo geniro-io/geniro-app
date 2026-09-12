@@ -73,6 +73,7 @@ const NO_GIT: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 const NO_PULL_REQUESTS: PullRequestsResult = {

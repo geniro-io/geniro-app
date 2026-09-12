@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
@@ -37,9 +38,13 @@ export default defineConfig({
   // true })`) and the versioned migration workflow stays deferred past v1.
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
-  // strip the prefix so the swc CJS transform's require() shim accepts the path.
+  // turn one back into a path so the swc CJS transform's require() shim accepts
+  // it. `fileURLToPath`, never `new URL(id).pathname`: the latter leaves the
+  // percent-escapes in, so a daemon under any path with a space — every task
+  // worktree under `~/Library/Application Support/Geniro/` — asked require()
+  // for `Application%20Support/…` and could not load a single entity.
   dynamicImportProvider: async (id: string) => {
-    const path = id.startsWith('file://') ? new URL(id).pathname : id;
+    const path = id.startsWith('file://') ? fileURLToPath(id) : id;
     return import(path);
   },
 });

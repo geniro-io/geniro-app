@@ -102,6 +102,7 @@ const workflowApi = vi.hoisted(() => ({
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
+  sendWorkflowRunMessage: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
@@ -7491,7 +7492,7 @@ describe('Chats run composer chips', () => {
     expect(modelTrigger(container).title).toContain('next message');
   });
 
-  it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {
+  it('a workflow run shows workflow + folder + trigger chips, and its send goes to the workflow', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -7561,10 +7562,34 @@ describe('Chats run composer chips', () => {
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // Workflow runs take one task — the round send stays disabled.
-    expect(composerButton(container, 'Send')?.disabled).toBe(true);
-    // No model chip either: each agent node names its own model in the YAML.
+    // No model chip: each agent node names its own model in the YAML.
     expect(modelTrigger(container)).toBeUndefined();
+
+    // A follow-up is a message like any other — REPORTED as "i should be able
+    // to add message for workflow" against a composer that was disabled here.
+    // It goes to the WORKFLOW route, which hands it to the trigger's agents;
+    // the chat route refuses a workflow run outright.
+    expect(composerButton(container, 'Send')?.disabled).toBe(true);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'and the tests too'),
+    );
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and the tests too');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(composerButton(container, 'Send')?.disabled).toBe(false);
+    await act(async () => {
+      composerButton(container, 'Send')!.click();
+    });
+
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
+      runId: 'w1',
+      sendMessageDto: { text: 'and the tests too' },
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 });
 

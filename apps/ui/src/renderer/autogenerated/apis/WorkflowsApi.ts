@@ -20,10 +20,12 @@ import type {
   ExportWorkflowDto,
   ExportedDto,
   ImportWorkflowDto,
+  ItemDto,
   NodeStateDto,
   RunDto,
   RunWorkflowDto,
   SaveWorkflowDto,
+  SendMessageDto,
   WorkflowDeletedDto,
   WorkflowFileDto,
   WorkflowSummaryDto,
@@ -69,6 +71,11 @@ export interface WorkflowsApiListWorkflowRunsRequest {
 export interface WorkflowsApiSaveWorkflowRequest {
     slug: string;
     saveWorkflowDto: SaveWorkflowDto;
+}
+
+export interface WorkflowsApiSendWorkflowRunMessageRequest {
+    runId: string;
+    sendMessageDto: SendMessageDto;
 }
 
 export interface WorkflowsApiStartWorkflowRunRequest {
@@ -585,6 +592,61 @@ export class WorkflowsApi extends runtime.BaseAPI {
      */
     async saveWorkflow(requestParameters: WorkflowsApiSaveWorkflowRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<WorkflowFileDto> {
         const response = await this.saveWorkflowRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async sendWorkflowRunMessageRaw(requestParameters: WorkflowsApiSendWorkflowRunMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<ItemDto>> {
+        if (requestParameters['runId'] == null) {
+            throw new runtime.RequiredError(
+                'runId',
+                'Required parameter "runId" was null or undefined when calling sendWorkflowRunMessage().'
+            );
+        }
+
+        if (requestParameters['sendMessageDto'] == null) {
+            throw new runtime.RequiredError(
+                'sendMessageDto',
+                'Required parameter "sendMessageDto" was null or undefined when calling sendWorkflowRunMessage().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/workflows/runs/{runId}/messages`;
+        urlPath = urlPath.replace(`{${"runId"}}`, encodeURIComponent(String(requestParameters['runId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['sendMessageDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async sendWorkflowRunMessage(requestParameters: WorkflowsApiSendWorkflowRunMessageRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<ItemDto> {
+        const response = await this.sendWorkflowRunMessageRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

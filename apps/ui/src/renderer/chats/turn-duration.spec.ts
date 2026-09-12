@@ -11,6 +11,7 @@ import {
   scanTurns,
   threadWorkedMs,
   turnDurations,
+  withDurableOpenTurns,
 } from './turn-duration';
 
 let seq = 0;
@@ -491,5 +492,55 @@ describe('formatDuration', () => {
 
   it('never renders a negative duration', () => {
     expect(formatDuration(-5)).toBe('0s');
+  });
+});
+
+describe('withDurableOpenTurns — a turn older than the loaded page', () => {
+  const startedAt = Date.parse('2026-09-12T21:04:48Z');
+  const durable = new Map([['engineer', { status: 'running', startedAt }]]);
+  /** What the window holds: the node's work, and not the row that opened it. */
+  const windowed = (): ChatItem[] => [
+    item('tool_call', '2026-09-12T22:41:24Z', {
+      nodeId: 'engineer',
+      payload: { id: 't1', name: 'Bash' },
+    }),
+  ];
+
+  it('opens the turn from the node row, so the clock moves', () => {
+    const { open } = scanTurns(windowed(), { nodeScoped: true });
+    expect(open).toEqual([]);
+
+    const seeded = withDurableOpenTurns(open, durable, () => false);
+    expect(seeded).toEqual([
+      { agentKey: 'engineer', startedAt, parkedMs: 0, openSince: [] },
+    ]);
+    expect(openTurnWorkedMs(seeded, startedAt + 60_000)).toBe(60_000);
+    expect(openTurnWorkedMs(seeded, startedAt + 120_000)).toBe(120_000);
+  });
+
+  it('defers to the window once it holds the node’s status', () => {
+    const open = scanTurns(windowed(), { nodeScoped: true }).open;
+    expect(withDurableOpenTurns(open, durable, () => true)).toBe(open);
+  });
+
+  it('opens nothing for a node that is not running, or never recorded a start', () => {
+    const open = scanTurns(windowed(), { nodeScoped: true }).open;
+    const rows = new Map([
+      ['engineer', { status: 'completed', startedAt }],
+      ['manager', { status: 'running', startedAt: null }],
+    ]);
+    expect(withDurableOpenTurns(open, rows, () => false)).toBe(open);
+  });
+
+  it('never doubles a turn the window already opened', () => {
+    const open = [
+      {
+        agentKey: 'engineer',
+        startedAt: startedAt + 5,
+        parkedMs: 0,
+        openSince: [],
+      },
+    ];
+    expect(withDurableOpenTurns(open, durable, () => false)).toBe(open);
   });
 });

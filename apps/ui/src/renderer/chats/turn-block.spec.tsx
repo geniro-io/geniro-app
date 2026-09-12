@@ -139,6 +139,23 @@ describe('TurnBlock identity frame', () => {
     expect(container.textContent).toContain('Working on it.');
   });
 
+  it('names its agent in a TITLE at the top of the block, once', () => {
+    // REPORTED as a "strange design for engineer block without any title": the
+    // name was a small line UNDER the card, so between two titled cards the
+    // block read as an untitled box, and a long one named its agent a screen
+    // after its first words.
+    renderTurn(false, 'writer');
+    const header = container.querySelector('[data-slot="turn-block-header"]');
+    expect(header?.textContent).toContain('Writer');
+    const words = container.querySelector('[data-role="assistant"]');
+    expect(
+      header!.compareDocumentPosition(words!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // Once — the title replaces the line under the card rather than joining it.
+    expect(container.textContent?.split('Writer')).toHaveLength(2);
+  });
+
   it('drops the frame INSIDE a sub-agent enclosure, even in a multi-agent run', () => {
     // The frame there is not merely redundant, it is wrong: its avatar and
     // sender line come from `nodeId`, which every delegate row carries as the

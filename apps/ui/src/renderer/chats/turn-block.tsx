@@ -169,26 +169,39 @@ export const TurnBlock = memo(function TurnBlock({
       </div>
     );
   }
+  // The block is TITLED, on the eyebrow the transcript's other agent cards
+  // already wear (`MANAGER · ANSWERED → ENGINEER`, `Question for Manager`). It
+  // carried its name only as a small `Engineer · 22:42` line UNDER the card, so
+  // a block sandwiched between two titled cards read as an untitled box —
+  // REPORTED as "strange design for engineer block without any title", on the
+  // Engineer carrying on after its Manager answered — and on a long block the
+  // name arrived a screen after the words it identified.
+  const time = formatClockTime(block.createdAt);
   return (
     <div
       data-role="turn-block"
       data-subagent={block.subagentId ?? undefined}
       className="flex w-full gap-3">
       <InitialsAvatar name={name} colorKey={block.nodeId ?? name} />
-      <div className="flex min-w-0 flex-1 flex-col items-start">
-        <div className="flex w-full flex-col gap-2.5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed">
-          {subagentLabel}
-          {block.entries.map(renderInner)}
-        </div>
-        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-muted-foreground">
-          <span className="font-medium text-foreground/60">{name}</span>
-          {formatClockTime(block.createdAt) ? (
+      <div className="flex min-w-0 flex-1 flex-col gap-2.5 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm leading-relaxed">
+        <div
+          data-slot="turn-block-header"
+          className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] leading-4 font-medium tracking-wide text-muted-foreground uppercase">
+          <span className="min-w-0 truncate text-foreground/80">{name}</span>
+          {subagentLabel === null ? null : (
             <>
-              <span>·</span>
-              <span>{formatClockTime(block.createdAt)}</span>
+              <span aria-hidden="true">·</span>
+              {subagentLabel}
+            </>
+          )}
+          {time ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="normal-case tabular-nums">{time}</span>
             </>
           ) : null}
         </div>
+        {block.entries.map(renderInner)}
       </div>
     </div>
   );

@@ -78,6 +78,8 @@ import {
   displayStatus,
   subagentThreadsByAgent,
   threadsOf,
+  windowHoldsStatus,
+  withDurableNodeStatus,
 } from './agent-activity';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
@@ -229,6 +231,7 @@ import {
   scanTurns,
   threadWorkedMs,
   TurnDurationContext,
+  withDurableOpenTurns,
 } from './turn-duration';
 import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
@@ -4741,7 +4744,17 @@ export function Chats({
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
-  const activity = useMemo(() => computeAgentActivity(items), [items]);
+  const windowActivity = useMemo(() => computeAgentActivity(items), [items]);
+  // A node whose status rows are above the loaded page takes its status from
+  // the daemon's own `node_state` — see `withDurableNodeStatus`. The run ROW
+  // gates a `running` reading, so a daemon that died mid-turn cannot leave a
+  // `Working…` row under a finished run.
+  const runRowSettled =
+    activeRun !== null && isSettledRunStatus(activeRun.status);
+  const activity = useMemo(
+    () => withDurableNodeStatus(windowActivity, nodeReadings, runRowSettled),
+    [windowActivity, nodeReadings, runRowSettled],
+  );
   /**
    * Each agent's OWN task list as it stands now, for the side panel.
    *
@@ -5247,10 +5260,15 @@ export function Chats({
   const openTurnForHeader = useMemo(
     () =>
       parkWhileHeld(
-        turnScan.open,
+        // A node working one turn for longer than the loaded page has its
+        // opening row above it — `withDurableOpenTurns` reads the start off the
+        // node's own row, or every clock built on this froze.
+        withDurableOpenTurns(turnScan.open, nodeReadings, (nodeId) =>
+          windowHoldsStatus(windowActivity, nodeId),
+        ),
         activeRunId === null ? undefined : holding.get(activeRunId),
       ),
-    [turnScan.open, holding, activeRunId],
+    [turnScan.open, nodeReadings, windowActivity, holding, activeRunId],
   );
   /**
    * The open turns any LIVE readout may count — the header's total and each

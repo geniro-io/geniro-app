@@ -220,6 +220,50 @@ export function parkWhileHeld(
 }
 
 /**
+ * The open turns, completed from the DAEMON's node rows where the loaded window
+ * cannot see a node's turn begin.
+ *
+ * A workflow node's turn opens on its `running` status row, and a long run
+ * loads only its newest `HISTORY_PAGE` items — so a node working one turn for
+ * longer than that window had no open turn at all, and every live clock built
+ * on it froze: the agent card's `worked` sat on the last settled total while
+ * the agent visibly kept working (REPORTED as "engineer is working, but timer
+ * doesn't move"), and the header's total with it. `node_state` records when the
+ * running turn began (`startedAt`), which is the one fact the window lost.
+ *
+ * Same rule as `withDurableNodeStatus` in `agent-activity.ts`, through the same
+ * predicate: once the window holds a status row for the node, the scan's own
+ * answer stands. A seeded turn carries no parked stretches — the approval rows
+ * that would have measured them are above the page too — so a card parked for
+ * a while before the window began counts that wait, which is the smaller error
+ * than a clock that does not move.
+ */
+export function withDurableOpenTurns(
+  open: readonly OpenTurn[],
+  durable: ReadonlyMap<string, { status: string; startedAt: number | null }>,
+  windowHoldsStatus: (nodeId: string) => boolean,
+): readonly OpenTurn[] {
+  let out: OpenTurn[] | null = null;
+  for (const [nodeId, row] of durable) {
+    if (
+      row.status !== 'running' ||
+      row.startedAt === null ||
+      windowHoldsStatus(nodeId) ||
+      open.some((turn) => turn.agentKey === nodeId)
+    ) {
+      continue;
+    }
+    (out ??= [...open]).push({
+      agentKey: nodeId,
+      startedAt: row.startedAt,
+      parkedMs: 0,
+      openSince: [],
+    });
+  }
+  return out ?? open;
+}
+
+/**
  * What the in-flight turns have worked as of `now` — 0 when nothing is running.
  *
  * Measured the same way the wall-clock fallback measures a settled turn, so the

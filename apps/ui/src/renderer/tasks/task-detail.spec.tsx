@@ -156,6 +156,24 @@ describe('TaskDetail', () => {
     expect(onSave).toHaveBeenCalledWith({ folder: null });
   });
 
+  it('lets a long folder path SHRINK, so the panel never scrolls sideways', () => {
+    // REPORTED as "sometimes i may have horizontal scroll for task card": the
+    // path's button inherited `buttonVariants`' `shrink-0`, so a long path
+    // refused to give up width and pushed the whole panel wider than itself.
+    // jsdom lays nothing out, so the pin is the two classes that ARE the fix:
+    // the button may shrink, and its text truncates in a box of its own
+    // (`text-overflow` does not apply to text directly inside a flex box).
+    const long =
+      '/Users/someone/Library/Application Support/Geniro/worktrees/a-very-long-task-worktree';
+    const el = detailWith({ projectFolder: long, task: { folder: null } });
+
+    const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
+    const classes = folder.className.split(/\s+/);
+    expect(classes).toContain('shrink');
+    expect(classes).not.toContain('shrink-0');
+    expect(folder.querySelector('span.truncate')?.textContent).toBe(long);
+  });
+
   it('runs the task when there is a handler for it', () => {
     const onRun = vi.fn();
     const el = detail({ onRun });

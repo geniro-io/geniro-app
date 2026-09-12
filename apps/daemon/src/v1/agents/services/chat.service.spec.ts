@@ -2676,7 +2676,7 @@ describe('ChatService', () => {
     });
   });
 
-  describe('retry reopens a conversation without replaying it', () => {
+  describe('retry carries a failed turn on', () => {
     it('refuses a run that is WORKING before it closes anything', async () => {
       // Order is the whole finding. `sessions.close` is unconditional and kills
       // the process group — the live CLI, its MCP servers and every delegate
@@ -2724,6 +2724,39 @@ describe('ChatService', () => {
       expect(startArg.resumeOnly).toBeFalsy();
       // Written as what it is: a second send. The transcript shows the message
       // twice rather than implying the agent replied to nothing.
+      const said = itemDao.items.filter(
+        (row) => row.runId === run.id && row.role === 'user',
+      );
+      expect(said).toHaveLength(2);
+    });
+
+    it('RE-SENDS on a CLI that CAN reopen, too — a reopen that asks nothing is not a retry', async () => {
+      // REPORTED against a cursor chat: "ретрай: когда я на него нажимаю, он не
+      // работает". The press wrote "Reopened this conversation … nothing was
+      // sent again" and the agent sat idle, because the resume-only turn asks
+      // it nothing. With a message to carry on from, every CLI re-sends it.
+      const { service, nodeDao, cursor, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      nodeDao.preset('sess-1');
+      await service.sendMessage(run.id, 'the interrupted ask');
+      cursor.emit({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: null,
+        finalText: null,
+      });
+      cursor.finish();
+      await drain();
+
+      await service.retry(run.id);
+
+      const startArg = cursor.start.mock.calls.at(-1)?.[0] as AgentTurnInput;
+      expect(startArg.prompt).toBe('the interrupted ask');
+      expect(startArg.resumeSessionId).toBe('sess-1');
+      expect(startArg.resumeOnly).toBeFalsy();
       const said = itemDao.items.filter(
         (row) => row.runId === run.id && row.role === 'user',
       );

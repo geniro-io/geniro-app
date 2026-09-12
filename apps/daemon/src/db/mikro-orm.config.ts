@@ -38,11 +38,11 @@ export default defineConfig({
   // true })`) and the versioned migration workflow stays deferred past v1.
   //
   // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
-  // turn one back into a path so the swc CJS transform's require() shim accepts
-  // it. `fileURLToPath`, never `new URL(id).pathname`: the latter leaves the
-  // percent-escapes in, so a daemon under any path with a space — every task
-  // worktree under `~/Library/Application Support/Geniro/` — asked require()
-  // for `Application%20Support/…` and could not load a single entity.
+  // turn them back into paths so the swc CJS transform's require() shim accepts
+  // them. `fileURLToPath`, never `new URL(id).pathname`: the latter keeps the
+  // URL's percent-encoding, so a checkout under a path with a space in it (every
+  // task worktree, under `~/Library/Application Support/`) asked `require` for
+  // `Application%20Support` and the daemon died before Nest started.
   dynamicImportProvider: async (id: string) => {
     const path = id.startsWith('file://') ? fileURLToPath(id) : id;
     return import(path);

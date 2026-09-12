@@ -2376,6 +2376,32 @@ export interface ExportedDto {
 /**
  * 
  * @export
+ * @interface FindFinishedTasksDto
+ */
+export interface FindFinishedTasksDto {
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof FindFinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
+ * @interface FinishedTasksDto
+ */
+export interface FinishedTasksDto {
+    /**
+     * The subset whose work is finished — Done with no run working in it, or no longer a card at all
+     * @type {Array<string>}
+     * @memberof FinishedTasksDto
+     */
+    taskIds: Array<string>;
+}
+/**
+ * 
+ * @export
  * @interface ForgottenInstructionsDto
  */
 export interface ForgottenInstructionsDto {
@@ -4196,6 +4222,12 @@ export interface TaskDto {
      * @memberof TaskDto
      */
     reportItemId: string | null;
+    /**
+     * Pull requests the task's run opened, oldest first, as captured from the agent output
+     * @type {Array<RunPullRequest>}
+     * @memberof TaskDto
+     */
+    pullRequests: Array<RunPullRequest>;
     /**
      * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
      * @type {number}

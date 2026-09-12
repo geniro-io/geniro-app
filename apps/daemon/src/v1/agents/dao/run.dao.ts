@@ -3,8 +3,9 @@ import { Injectable } from '@nestjs/common';
 import { BaseDao } from '@packages/mikroorm';
 
 import { Run } from '../../runs/entity/run.entity';
-import type { ChatListScope } from '../chat.types';
+import type { ChatListScope, RunPullRequest } from '../chat.types';
 import { positive } from '../utils/positive-figure';
+import { readRunPullRequests } from '../utils/pull-request-capture';
 
 @Injectable()
 export class RunDao extends BaseDao<Run> {
@@ -326,6 +327,49 @@ export class RunDao extends BaseDao<Run> {
       return null;
     }
     return { workedMs: row.workedMs, toolCalls: row.toolCalls };
+  }
+
+  /**
+   * Which pull requests each of these runs OPENED, keyed by run id.
+   *
+   * ONE query for a whole board. The tasks module draws a card's pull requests
+   * as the result of the work done on it, and a card names a run — so asking
+   * per card would be a query per card on every listing, for a column almost
+   * every one of them has nothing in.
+   *
+   * A run with none is ABSENT from the map rather than present with an empty
+   * list, which is what lets the caller read a miss as "none": a task pointing
+   * at a run that has since been deleted has to answer the same way as one
+   * whose transcript opened nothing, and neither is a state worth a branch.
+   *
+   * `disableIdentityMap` on {@link listChats}' reasoning — a read-only path
+   * over rows nothing here will write.
+   */
+  async pullRequestsOf(
+    runIds: readonly string[],
+    txEm?: EntityManager,
+  ): Promise<Map<string, RunPullRequest[]>> {
+    const ids = [...new Set(runIds)];
+    if (ids.length === 0) {
+      return new Map();
+    }
+    const rows = await this.getRepo(txEm).find(
+      { id: { $in: ids } },
+      {
+        // The column and its key: `pullRequests` is JSON TEXT and the rest of a
+        // run row is most of what the chat list reads.
+        fields: ['id', 'pullRequests'],
+        disableIdentityMap: true,
+      },
+    );
+    const byRun = new Map<string, RunPullRequest[]>();
+    for (const row of rows) {
+      const captured = readRunPullRequests(row.pullRequests);
+      if (captured.length > 0) {
+        byRun.set(row.id, captured);
+      }
+    }
+    return byRun;
   }
 
   /**

@@ -45,6 +45,8 @@ function harness(options?: {
   isNodeLive?: (nodeId: string) => boolean;
   /** Instant turns record no resumable session (thread continuation off). */
   noSession?: boolean;
+  /** Whether a caller can be woken; default: never (the pre-wake behaviour). */
+  wakeNode?: (nodeId: string, prompt: string) => boolean;
 }): {
   broker: CallBroker;
   capability: RunCallCapability;
@@ -94,6 +96,7 @@ function harness(options?: {
     },
     isCancelled: () => options?.cancelled ?? false,
     isNodeLive: options?.isNodeLive ?? (() => true),
+    wakeNode: options?.wakeNode ?? (() => false),
   };
   const broker = new CallBroker();
   broker.registerRun('run-1', capability);
@@ -922,6 +925,172 @@ describe('CallBroker — parked questions (M4)', () => {
       call_id: 'call-1',
     });
     expect(errorOf(final)).toContain('QUESTION_ORPHANED');
+  });
+
+  it('WAKES a caller whose turn ended when its callee asks — the callee keeps its question', async () => {
+    // REPORTED as "workflow stopped to work in the middle without any error":
+    // a Manager ended its turn, its Engineer asked something, and the park
+    // orphaned the question — cancelling the Engineer — while the run closed
+    // as completed. With a turn to give, the caller is woken instead.
+    const wakes: { nodeId: string; prompt: string }[] = [];
+    const { broker, items, deferred } = harness({
+      launch: 'defer',
+      isNodeLive: () => false,
+      wakeNode: (nodeId, prompt) => {
+        wakes.push({ nodeId, prompt });
+        return true;
+      },
+    });
+    void broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    const { failed, delivered } = park(broker, { ttlMs: 60_000 });
+
+    expect(failed.count).toBe(0);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.nodeId).toBe('orch');
+    expect(wakes[0]!.prompt).toContain('"Which color?"');
+    expect(wakes[0]!.prompt).toContain('answer_agent(call_id: "call-1"');
+    // The transcript says why the caller is talking again.
+    const notice = items.find(
+      (i) => i.kind === 'system' && i.nodeId === 'orch',
+    );
+    expect(notice?.payload).toMatchObject({ severity: 'info' });
+    // The woken caller answers exactly as a live one would have.
+    const answered = broker.answerAgent('run-1', 'orch', {
+      call_id: 'call-1',
+      answer: 'Red',
+    });
+    expect(answered.status).toBe('ok');
+    expect(delivered).toEqual(['Red']);
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'painted',
+      error: null,
+      sessionId: null,
+    });
+  });
+
+  it('wakes a caller only ONCE per question — ending again unanswered orphans it, and says so', async () => {
+    const wakes: string[] = [];
+    const { broker, items, deferred } = harness({
+      launch: 'defer',
+      wakeNode: (nodeId) => {
+        wakes.push(nodeId);
+        return true;
+      },
+    });
+    const sync = broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+    });
+    const { failed } = park(broker, { ttlMs: 60_000 });
+    expect((await sync).status).toBe('question');
+
+    // The caller's turn ended with the question unanswered: woken once…
+    broker.drainCaller('run-1', 'orch');
+    expect(wakes).toEqual(['orch']);
+    expect(failed.count).toBe(0);
+
+    // …and its woken turn ended the same way: orphaned now, never re-woken.
+    broker.drainCaller('run-1', 'orch');
+    expect(wakes).toEqual(['orch']);
+    expect(failed.count).toBe(1);
+    expect(
+      items.filter((i) => i.kind === 'call_answer').at(-1)!.payload,
+    ).toMatchObject({ outcome: 'orphaned' });
+    // A stop with no error anywhere is the reported defect, so it is said.
+    const said = items.filter((i) => i.kind === 'system').at(-1)!.payload;
+    expect(String(said.message)).toContain('Helper was stopped');
+    deferred[0]!.resolve({
+      status: 'cancelled',
+      finalText: null,
+      error: null,
+      sessionId: null,
+    });
+  });
+
+  it('wakes a caller whose async result landed after its turn ended — once', async () => {
+    const wakes: { nodeId: string; prompt: string }[] = [];
+    let live = true;
+    const { broker, deferred } = harness({
+      launch: 'defer',
+      isNodeLive: () => live,
+      wakeNode: (nodeId, prompt) => {
+        wakes.push({ nodeId, prompt });
+        return true;
+      },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    // The caller ends with its callee still working — nothing to report yet.
+    live = false;
+    broker.drainCaller('run-1', 'orch');
+    expect(wakes).toHaveLength(0);
+
+    // The callee lands: THAT is when the caller is owed a turn.
+    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]!.nodeId).toBe('orch');
+    expect(wakes[0]!.prompt).toContain('await_agent(call_id: "call-1")');
+    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(wakes).toHaveLength(1);
+
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      sessionId: null,
+    });
+    const collected = await broker.awaitAgent('run-1', 'orch', {
+      call_id: 'call-1',
+    });
+    expect(collected.status).toBe('ok');
+  });
+
+  it('leaves a result to a LIVE caller, which collects it itself', async () => {
+    const wakeNode = vi.fn(() => true);
+    const { broker, deferred } = harness({ launch: 'defer', wakeNode });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    broker.noteCalleeSettling('run-1', 'call-1');
+    expect(wakeNode).not.toHaveBeenCalled();
+    deferred[0]!.resolve({
+      status: 'completed',
+      finalText: 'done',
+      error: null,
+      sessionId: null,
+    });
+  });
+
+  it('a caller that ends with a finished result nobody collected is woken to collect it', async () => {
+    const prompts: string[] = [];
+    const { broker } = harness({
+      wakeNode: (_nodeId, prompt) => {
+        prompts.push(prompt);
+        return true;
+      },
+    });
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'm',
+      mode: 'async',
+    });
+    // Let the instant launch's settle chain run: the result is now WAITING.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    broker.drainCaller('run-1', 'orch');
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('Helper has finished call-1');
+    broker.drainCaller('run-1', 'orch');
+    expect(prompts).toHaveLength(1);
   });
 
   it('parkQuestion refuses unknown calls and double parking', async () => {

@@ -104,6 +104,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       projectDao,
       taskEvents,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      runDao,
     );
     bus = new AgentEventBus();
     // The library is asked only for a WORKFLOW run's terminal nodes; a chat
@@ -241,6 +242,54 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await settleRun('run-1', 'completed');
 
     expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+  });
+
+  /**
+   * The card's RESULT — the pull requests the work produced.
+   *
+   * Read from the RUN on every projection rather than stored on the task, so
+   * these pin the projection and not a column: `PullRequestCaptureService`
+   * already keeps the run's answer current out of the transcript, and a copy on
+   * the card would be the stale one the moment a follow-up turn opened another.
+   */
+  describe('the card’s pull requests', () => {
+    const captured = {
+      owner: 'geniro-io',
+      repo: 'geniro-app',
+      number: 110,
+      url: 'https://github.com/geniro-io/geniro-app/pull/110',
+      seq: 12,
+    };
+
+    it('carries the pull requests its run opened, on both read paths', async () => {
+      const task = await working();
+      await runDao.updateById('run-1', {
+        pullRequests: JSON.stringify([captured]),
+      });
+
+      // The listing answers for a whole board in one query and the single-task
+      // read answers for one card; a card losing its result on a rename is
+      // exactly what having two paths costs if only one of them is wired.
+      const [listed] = await tasks.listForProject(projectId);
+      expect(listed?.pullRequests).toEqual([captured]);
+      expect((await tasks.get(task.id)).pullRequests).toEqual([captured]);
+    });
+
+    it('answers empty for a card whose run has been deleted', async () => {
+      const task = await working();
+      await runDao.updateById('run-1', {
+        pullRequests: JSON.stringify([captured]),
+      });
+      // The chat is deleted from the sidebar; the card still names it until the
+      // settle service hears about it. A missing run must read as "none" rather
+      // than throwing the listing for every other card on the board.
+      await runDao.hardDeleteIncludingSoftDeleted({ id: 'run-1' });
+
+      expect((await tasks.get(task.id)).pullRequests).toEqual([]);
+      expect((await tasks.listForProject(projectId))[0]?.pullRequests).toEqual(
+        [],
+      );
+    });
   });
 
   describe('a workflow run’s report', () => {
@@ -635,20 +684,20 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(await streak()).toBe(2);
   });
 
-  it('names the SETTLE as the reason the card moved', async () => {
+  it('moves the card to review WITHOUT marking its work finished', async () => {
     const task = await working();
 
     await settleRun('run-1', 'completed');
 
-    // The client cannot derive this: a card's column is written optimistically
-    // the moment it is dragged, so only the daemon can say an agent stopped —
-    // and the renderer collects the worktree off exactly this field.
-    expect(
-      changes.filter((event) => event.taskId === task.id).at(-1),
-    ).toMatchObject({ status: 'in_review', reason: 'run-settled' });
+    // The reported defect: the worktree went the moment the run settled, and
+    // with it the cwd of a conversation the user was about to continue. A card
+    // in review is not finished — its run is a chat, and it runs in there.
+    const last = changes.filter((event) => event.taskId === task.id).at(-1);
+    expect(last).toMatchObject({ status: 'in_review' });
+    expect(last?.reason).toBeUndefined();
   });
 
-  it('gives NO reason for a move the user made themselves', async () => {
+  it('gives NO reason for a move to Done while the agent is still working', async () => {
     const task = await working();
 
     await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
@@ -656,6 +705,36 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     // A drag reaches the same broadcast. Were it to carry the reason, the
     // renderer would remove the worktree of an agent still working in it.
     expect(changes.at(-1)?.reason).toBeUndefined();
+  });
+
+  it('marks the work finished once the run settles under a card already in Done', async () => {
+    const task = await working();
+    await tasks.moveStatus(task.id, { from: 'in_progress', to: 'done' });
+
+    await settleRun('run-1', 'completed');
+
+    // Both conditions hold now — Done, and nothing working in it — so the
+    // worktree may go. The card stays where the user put it rather than being
+    // dragged back to review by its own run.
+    expect(changes.at(-1)).toMatchObject({
+      taskId: task.id,
+      status: 'done',
+      reason: 'work-finished',
+    });
+    expect((await taskDao.getById(task.id))?.status).toBe('done');
+  });
+
+  it('marks the work finished when a settled card is moved to Done', async () => {
+    const task = await working();
+    await settleRun('run-1', 'completed');
+
+    await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
+
+    expect(changes.at(-1)).toMatchObject({
+      taskId: task.id,
+      status: 'done',
+      reason: 'work-finished',
+    });
   });
 
   it('releases a card whose run was deleted, and lets it be run again', async () => {

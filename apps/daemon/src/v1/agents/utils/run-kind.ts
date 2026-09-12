@@ -21,11 +21,18 @@ export function assertChatRun(run: Run | null, runId: string): Run {
   return run;
 }
 
-export function assertWorkflowRun(run: Run | null, runId: string): Run {
+/** A run {@link assertWorkflowRun} has vouched for: it names its workflow. */
+export type WorkflowRun = Run & { workflowId: string };
+
+function namesWorkflow(run: Run): run is WorkflowRun {
+  return Boolean(run.workflowId);
+}
+
+export function assertWorkflowRun(run: Run | null, runId: string): WorkflowRun {
   if (!run) {
     throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
   }
-  if (!run.workflowId) {
+  if (!namesWorkflow(run)) {
     throw new BadRequestException(
       'NOT_A_WORKFLOW_RUN',
       'run is not a workflow (graph) run',

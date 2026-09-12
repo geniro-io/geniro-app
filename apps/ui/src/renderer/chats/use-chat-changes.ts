@@ -21,6 +21,11 @@ export interface ChatChanges {
   truncated: boolean;
   /** Why there is no answer at all, from the reader itself. */
   unavailableReason: string | null;
+  /**
+   * The checkout moved off the chat's starting commit, so `changes` is what is
+   * uncommitted now rather than what changed since that commit.
+   */
+  movedOffStart: boolean;
   /** An IPC failure, which is a different thing from git having no answer. */
   error: string | null;
   loading: boolean;
@@ -59,6 +64,7 @@ export function useChatChanges(
   const [changes, setChanges] = useState<GitChange[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [unavailableReason, setReason] = useState<string | null>(null);
+  const [movedOffStart, setMovedOffStart] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [read, setRead] = useState(false);
@@ -92,6 +98,7 @@ export function useChatChanges(
           setChanges(result.changes);
           setTruncated(result.truncated);
           setReason(result.unavailableReason);
+          setMovedOffStart(result.movedOffStart);
           setRead(true);
         })
         .catch((err: unknown) => {
@@ -116,6 +123,7 @@ export function useChatChanges(
     setChanges([]);
     setTruncated(false);
     setReason(null);
+    setMovedOffStart(false);
     setError(null);
     setRead(false);
     lastReadAt.current = 0;
@@ -133,6 +141,7 @@ export function useChatChanges(
     changes,
     truncated,
     unavailableReason,
+    movedOffStart,
     error,
     loading,
     summary,

@@ -72,6 +72,7 @@ describe('TaskMergeService (in-memory sqlite)', () => {
       projectDao,
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      runDao,
     );
     service = new TaskMergeService(em, taskDao, runDao, tasks);
     const project = await projectDao.create({

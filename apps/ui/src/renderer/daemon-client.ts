@@ -684,12 +684,13 @@ export interface TaskChangedEvent {
   projectId: string;
   status: TaskStatus;
   /**
-   * Present only when the DAEMON moved this card because the run working it
-   * reached a terminal status. Nothing a client can derive: a card's column is
-   * written optimistically the moment it is dragged, so "the agent has
-   * stopped" is a claim only the daemon is in a position to make.
+   * Present only when the DAEMON has decided this card's work is finished —
+   * Done, with no run working in it. Nothing a client can derive: a card's
+   * column is written optimistically the moment it is dragged, and a run
+   * settling is not the work ending, since the user continues that chat after
+   * review.
    */
-  reason?: 'run-settled';
+  reason?: 'work-finished';
 }
 
 /**
@@ -727,7 +728,7 @@ export function parseTaskChanged(data: unknown): TaskChangedEvent | null {
     // Narrowed to the one value this renderer acts on, unlike `status` above:
     // the reason gates a DESTRUCTIVE act, so an unknown one from a newer
     // daemon must read as "no reason given" rather than be passed through.
-    ...(reason === 'run-settled' ? { reason } : {}),
+    ...(reason === 'work-finished' ? { reason } : {}),
   };
 }
 

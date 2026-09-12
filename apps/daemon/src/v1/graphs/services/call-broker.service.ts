@@ -89,6 +89,11 @@ interface AsyncCallEntry {
    */
   calleeId: string;
   settled: Promise<CallEnvelope>;
+  /**
+   * Whether the caller has been WOKEN to collect this result — once per call,
+   * for the reason {@link ParkedQuestion.ownerTold} is once per question.
+   */
+  told: boolean;
 }
 
 /** A parked mid-turn question — the callee is blocked on answer_agent. */
@@ -105,6 +110,12 @@ interface ParkedQuestion {
   ttlMs: number;
   deliver(answer: string): boolean;
   fail(): void;
+  /**
+   * Whether the caller has already been WOKEN with this question. A caller
+   * that ends again without answering is not woken a second time — which is
+   * what keeps one that keeps ending its turn from looping on one question.
+   */
+  ownerTold: boolean;
 }
 
 interface ActiveCall {
@@ -179,6 +190,63 @@ interface RunCallState {
   pendingAsync: Map<string, AsyncCallEntry>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
+}
+
+/** A question a woken caller is being told about. */
+interface WakeQuestion {
+  callId: string;
+  /** The callee, by the name the caller knows it by. */
+  callee: string;
+  question: string;
+  options: readonly string[];
+}
+
+/** A result a woken caller is being told to collect. */
+interface WakeResult {
+  callId: string;
+  callee: string;
+}
+
+/**
+ * The message a woken caller receives. Written to the AGENT, since it opens a
+ * turn of that agent's own conversation, and naming the exact tool call that
+ * settles each item so nothing about what to do next has to be inferred.
+ */
+function wakePrompt(
+  asked: readonly WakeQuestion[],
+  finished: readonly WakeResult[],
+): string {
+  const lines = [
+    '[geniro] Your previous turn ended with calls of yours still open:',
+  ];
+  for (const item of asked) {
+    const options =
+      item.options.length > 0 ? ` (options: ${item.options.join(' / ')})` : '';
+    lines.push(
+      '',
+      `- ${item.callee} is blocked on a question in ${item.callId}: "${item.question}"${options}`,
+      `  Answer it with answer_agent(call_id: "${item.callId}", answer: ...) — or, if it is the user's decision rather than yours, ask the user first — then collect the result with await_agent(call_id: "${item.callId}").`,
+    );
+  }
+  for (const item of finished) {
+    lines.push(
+      '',
+      `- ${item.callee} has finished ${item.callId}. Collect its result with await_agent(call_id: "${item.callId}") and carry on from there.`,
+    );
+  }
+  return lines.join('\n');
+}
+
+/** The transcript's account of a wake, filed under the caller that was woken. */
+function wakeNotice(
+  asked: readonly WakeQuestion[],
+  finished: readonly WakeResult[],
+): string {
+  const reasons = [
+    ...asked.map((item) => `${item.callee} asked a question in ${item.callId}`),
+    ...finished.map((item) => `${item.callee} finished ${item.callId}`),
+  ];
+  return `Started another turn for this agent: ${reasons.join('; ')} after its turn had ended.`;
 }
 
 /**
@@ -429,6 +497,7 @@ export class CallBroker implements OnModuleInit {
         owner: callerNodeId,
         calleeId: callee.id,
         settled: call.settled,
+        told: false,
       });
     }
     return {
@@ -628,6 +697,7 @@ export class CallBroker implements OnModuleInit {
       ttlMs,
       deliver: input.deliver,
       fail: input.fail,
+      ownerTold: false,
     };
     state.capability.persistItem(call.owner, 'call_question', null, {
       callId,
@@ -637,20 +707,16 @@ export class CallBroker implements OnModuleInit {
       options: input.options,
       payload: input.payload,
     });
-    // Nobody can ever answer_agent this question: a fire-and-forget caller
-    // never sees envelopes, and a settled owner raced the park past its
-    // drainCaller sweep. Orphan NOW instead of grinding through the TTL with
-    // the run held open (the question row above still shows what was asked).
-    if (
-      call.mode === 'fire_and_forget' ||
-      !state.capability.isNodeLive(call.owner)
-    ) {
-      this.failParked(
+    // A fire-and-forget caller never sees envelopes, so nobody can ever
+    // answer_agent this question: orphan NOW instead of grinding through the
+    // TTL with the run held open (the question row above still shows what was
+    // asked).
+    if (call.mode === 'fire_and_forget') {
+      this.orphan(
         state,
         callId,
         call,
         'QUESTION_ORPHANED: no live caller can answer this question',
-        'orphaned',
       );
       return true;
     }
@@ -661,7 +727,26 @@ export class CallBroker implements OnModuleInit {
         owner: call.owner,
         calleeId: call.calleeId,
         settled: call.settled,
+        told: false,
       });
+    }
+    // A caller whose turns have all ENDED is woken with the question rather
+    // than having its callee killed under it. Orphaning here is what made a
+    // workflow "stop in the middle without any error": a Manager said "I'll
+    // report back" and ended its turn, its Engineer then asked something, and
+    // the Engineer was cancelled while the run closed as completed. It is
+    // orphaned only when there is no turn left to give the caller.
+    if (
+      !state.capability.isNodeLive(call.owner) &&
+      !this.wakeOwner(runId, state, call.owner, [callId], [])
+    ) {
+      this.orphan(
+        state,
+        callId,
+        call,
+        'QUESTION_ORPHANED: no live caller can answer this question',
+      );
+      return true;
     }
     const envelope = questionEnvelope(callId, call);
     for (const notify of call.questionWaiters.splice(0)) {
@@ -671,27 +756,190 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * Fail every parked question owned by a settling caller — nobody is left
-   * to answer it (the executor calls this when a caller node's LAST live
-   * turn settles, next to its approval sweep).
+   * A caller node's LAST live turn has settled (the executor calls this next
+   * to its approval sweep): wake it ONCE with whatever it left open — the
+   * questions its callees are blocked on, and the async results nothing has
+   * collected — so the conversation it started can finish.
+   *
+   * It used to fail the questions outright as QUESTION_ORPHANED, on the
+   * reasoning that a settled caller can never answer_agent. It can now: a wake
+   * is another turn of that caller's own conversation. A question it was
+   * ALREADY woken for, and ended again without answering, is orphaned as
+   * before — with a row that says so — which bounds this to one wake apiece.
    */
   drainCaller(runId: string, callerNodeId: string): void {
     const state = this.runs.get(runId);
     if (!state) {
       return;
     }
+    const questions: string[] = [];
     for (const [callId, call] of state.activeCalls) {
       if (call.owner !== callerNodeId || !call.parked) {
         continue;
       }
-      this.failParked(
-        state,
-        callId,
-        call,
-        'QUESTION_ORPHANED: the calling agent ended before answering',
-        'orphaned',
-      );
+      if (call.parked.ownerTold) {
+        this.orphan(
+          state,
+          callId,
+          call,
+          'QUESTION_ORPHANED: the calling agent ended before answering',
+        );
+        continue;
+      }
+      questions.push(callId);
     }
+    // A result is WAITING once its call has settled — one still running is
+    // reported by `noteCalleeSettling` when it lands instead.
+    const results = [...state.pendingAsync]
+      .filter(
+        ([callId, entry]) =>
+          entry.owner === callerNodeId &&
+          !entry.told &&
+          !state.activeCalls.has(callId),
+      )
+      .map(([callId]) => callId);
+    if (questions.length === 0 && results.length === 0) {
+      return;
+    }
+    if (this.wakeOwner(runId, state, callerNodeId, questions, results)) {
+      return;
+    }
+    for (const callId of questions) {
+      const call = state.activeCalls.get(callId);
+      if (call) {
+        this.orphan(
+          state,
+          callId,
+          call,
+          'QUESTION_ORPHANED: the calling agent ended before answering',
+        );
+      }
+    }
+  }
+
+  /**
+   * A callee's turn is settling. If its result is owed to a caller whose turns
+   * have all ENDED — an async call, or a sync one that parked and so became
+   * collectable — wake that caller to collect it.
+   *
+   * The half `drainCaller` cannot cover: that runs when the CALLER ends, and a
+   * callee still working at that moment has no result to report yet. A Manager
+   * that launches an Engineer, says "I'll report back" and ends its turn is
+   * exactly this case — without it the Engineer's work lands in a result
+   * nothing ever collects, and the run closes as though the work were done.
+   *
+   * Called by the executor from the callee's own settle bookkeeping, BEFORE the
+   * turn stops holding the run open, so the wake is counted before the run can
+   * decide it has finished.
+   */
+  noteCalleeSettling(runId: string, callId: string): void {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    const entry = state?.pendingAsync.get(callId);
+    if (!state || !call || !entry || entry.told) {
+      return;
+    }
+    // A live caller collects it itself; one that then ends without doing so
+    // is told by `drainCaller`.
+    if (state.capability.isNodeLive(call.owner)) {
+      return;
+    }
+    this.wakeOwner(runId, state, call.owner, [], [callId]);
+  }
+
+  /**
+   * Start another turn for `owner` carrying what it left open, marking each
+   * item told so it is never woken for twice, and saying in its transcript why
+   * it is talking again. False when the run cannot take a turn (cancelled,
+   * finished) — the caller then falls back to what it did before wakes existed.
+   */
+  private wakeOwner(
+    runId: string,
+    state: RunCallState,
+    owner: string,
+    questions: readonly string[],
+    results: readonly string[],
+  ): boolean {
+    const asked = questions.flatMap((callId): WakeQuestion[] => {
+      const call = state.activeCalls.get(callId);
+      return call?.parked
+        ? [
+            {
+              callId,
+              callee: this.calleeName(state, owner, call.calleeId),
+              question: call.parked.question,
+              options: call.parked.options,
+            },
+          ]
+        : [];
+    });
+    const finished = results.flatMap((callId): WakeResult[] => {
+      const entry = state.pendingAsync.get(callId);
+      return entry
+        ? [{ callId, callee: this.calleeName(state, owner, entry.calleeId) }]
+        : [];
+    });
+    if (asked.length === 0 && finished.length === 0) {
+      return false;
+    }
+    if (!state.capability.wakeNode(owner, wakePrompt(asked, finished))) {
+      return false;
+    }
+    for (const item of asked) {
+      const parked = state.activeCalls.get(item.callId)?.parked;
+      if (parked) {
+        parked.ownerTold = true;
+      }
+      // Its window counts from the moment the caller is TOLD, as it does for
+      // a question first seen through await_agent.
+      this.rearmQuestionTtl(runId, item.callId);
+    }
+    for (const item of finished) {
+      const entry = state.pendingAsync.get(item.callId);
+      if (entry) {
+        entry.told = true;
+      }
+    }
+    state.capability.persistItem(owner, 'system', null, {
+      severity: 'info',
+      message: wakeNotice(asked, finished),
+    });
+    return true;
+  }
+
+  /**
+   * Orphan a parked question — and say so in the caller's transcript, since a
+   * callee cancelled under its own question is otherwise a stop with no error
+   * anywhere. The result is marked told as well: the caller has had its
+   * chance, and a turn spent only to report this orphaning back would be noise.
+   */
+  private orphan(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+    reason: string,
+  ): void {
+    const entry = state.pendingAsync.get(callId);
+    if (entry) {
+      entry.told = true;
+    }
+    state.capability.persistItem(call.owner, 'system', null, {
+      message: `${this.calleeName(state, call.owner, call.calleeId)} was stopped: it asked a question in ${callId} and no turn of this agent was left to answer it.`,
+    });
+    this.failParked(state, callId, call, reason, 'orphaned');
+  }
+
+  /** A callee by the name its caller knows it by, else its node id. */
+  private calleeName(
+    state: RunCallState,
+    owner: string,
+    calleeId: string,
+  ): string {
+    return (
+      state.capability.calleesOf
+        .get(owner)
+        ?.find((node) => node.id === calleeId)?.name ?? calleeId
+    );
   }
 
   /**

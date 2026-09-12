@@ -18,6 +18,8 @@ import type {
   AddTaskAttachmentDto,
   AttachTaskFileDto,
   CreateTaskDto,
+  FindFinishedTasksDto,
+  FinishedTasksDto,
   LocalImageDto,
   MoveTaskStatusDto,
   ReconcileTasksDto,
@@ -51,6 +53,10 @@ export interface TasksApiDeleteTaskRequest {
 export interface TasksApiDetachTaskFileRequest {
     taskId: string;
     attachmentId: string;
+}
+
+export interface TasksApiFindFinishedTasksRequest {
+    findFinishedTasksDto: FindFinishedTasksDto;
 }
 
 export interface TasksApiListTasksRequest {
@@ -347,6 +353,53 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async detachTaskFile(requestParameters: TasksApiDetachTaskFileRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
         const response = await this.detachTaskFileRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async findFinishedTasksRaw(requestParameters: TasksApiFindFinishedTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<FinishedTasksDto>> {
+        if (requestParameters['findFinishedTasksDto'] == null) {
+            throw new runtime.RequiredError(
+                'findFinishedTasksDto',
+                'Required parameter "findFinishedTasksDto" was null or undefined when calling findFinishedTasks().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/finished`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['findFinishedTasksDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async findFinishedTasks(requestParameters: TasksApiFindFinishedTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<FinishedTasksDto> {
+        const response = await this.findFinishedTasksRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

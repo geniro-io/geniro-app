@@ -628,6 +628,46 @@ describe('priority and due date', () => {
   });
 });
 
+/**
+ * The work's RESULT on the card.
+ *
+ * The rows are the chat surface's own, so what is pinned here is that the panel
+ * DRAWS them at all and that it says nothing when there is nothing to say —
+ * which is the whole of what this screen contributes.
+ */
+describe('the card’s pull requests', () => {
+  const opened = {
+    owner: 'geniro-io',
+    repo: 'geniro-app',
+    number: 110,
+    url: 'https://github.com/geniro-io/geniro-app/pull/110',
+    seq: 12,
+  };
+
+  it('links what the card’s run opened, without opening the thread', () => {
+    const el = detail({ pullRequests: [opened] });
+
+    expect(el.textContent).toContain('Pull requests');
+    // `gh` is never asked in this environment, so the row renders from the ref
+    // alone — which is the arm that has to work: a card whose result vanished
+    // because the machine is signed out would be worse than one that links
+    // what the agent opened and says nothing about its state.
+    const link = [...el.querySelectorAll('a')].find(
+      (node) => node.getAttribute('href') === opened.url,
+    );
+    // The number is built from the fixture rather than written out: the
+    // renderer draws it as `#110`, and a hash followed by three hex digits is
+    // a colour literal to this package's own eslint rule.
+    expect(link?.textContent).toContain(String(opened.number));
+  });
+
+  it('draws no section for a card whose run opened none', () => {
+    // The heading belongs to the section, so it cannot outlive what it labels —
+    // the rule the Report section beside it already follows.
+    expect(detail().textContent).not.toContain('Pull requests');
+  });
+});
+
 describe('status', () => {
   /** Mounts the panel with a move handler, which `detail` does not offer. */
   function withMove(

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
+  RunPullRequestSchema,
 } from '../agents/chat.types';
 import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
 
@@ -201,6 +202,29 @@ export const TaskWireSchema = z.object({
     .nullable()
     .describe(
       "The transcript item holding the agent's report, so the card can show it without replaying the run",
+    ),
+  /**
+   * The pull requests this card's RUN opened — the result of the work, drawn on
+   * the card rather than left in the conversation that produced it.
+   *
+   * Read from the run on every projection instead of stored on the task, and
+   * that is the whole design: `PullRequestCaptureService` already keeps this
+   * for every run there is, out of the transcript's own `gh pr create` calls,
+   * and a second copy on the card would be a stale answer beside a live one
+   * the moment a follow-up turn opened another. So a card OWNS no pull request
+   * — it owns the run, and the run owns these.
+   *
+   * Empty when the card has never been run, when its run opened none, and when
+   * the run it named has since been deleted. None of the three is worth telling
+   * apart here: each of them is a card with nothing to show.
+   *
+   * Oldest first, as the run stores them; the renderer reverses for display,
+   * where the last thing a run did is what its reader is looking for.
+   */
+  pullRequests: z
+    .array(RunPullRequestSchema)
+    .describe(
+      "Pull requests the task's run opened, oldest first, as captured from the agent output",
     ),
   position: z
     .number()

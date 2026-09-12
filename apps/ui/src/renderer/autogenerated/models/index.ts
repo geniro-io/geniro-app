@@ -3265,6 +3265,19 @@ export interface ReorderRunGroupsDto {
 /**
  * 
  * @export
+ * @interface ReportPullRequestMergedDto
+ */
+export interface ReportPullRequestMergedDto {
+    /**
+     * The pull request, exactly as the awaiting-merge list gave it
+     * @type {string}
+     * @memberof ReportPullRequestMergedDto
+     */
+    url: string;
+}
+/**
+ * 
+ * @export
  * @interface RetriedDto
  */
 export interface RetriedDto {
@@ -4032,6 +4045,37 @@ export interface TaskAttachment {
      * @memberof TaskAttachment
      */
     name: string;
+}
+/**
+ * 
+ * @export
+ * @interface TaskAwaitingMergeDto
+ */
+export interface TaskAwaitingMergeDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    taskId: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    projectId: string;
+    /**
+     * For the watcher’s own log lines
+     * @type {string}
+     * @memberof TaskAwaitingMergeDto
+     */
+    title: string;
+    /**
+     * Every pull request this card’s run opened, oldest first
+     * @type {Array<RunPullRequest>}
+     * @memberof TaskAwaitingMergeDto
+     */
+    pullRequests: Array<RunPullRequest>;
 }
 /**
  * 

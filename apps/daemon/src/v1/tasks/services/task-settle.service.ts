@@ -61,6 +61,16 @@ export class TaskSettleService implements OnModuleInit {
 
   onModuleInit(): void {
     this.bus.allStatuses().subscribe((event) => {
+      if (event.status === 'running') {
+        void this.reviveFailedCard(event.runId).catch((error: unknown) => {
+          this.logger.warn(
+            `could not put the task for run ${event.runId} back to work: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+        return;
+      }
       // An announce carries a null status to say only what the run is DOING;
       // it asserts nothing about settling.
       if (event.status == null || !isTerminalRunStatus(event.status)) {
@@ -88,6 +98,39 @@ export class TaskSettleService implements OnModuleInit {
         );
       });
     });
+  }
+
+  /**
+   * Put a FAILED card back to work when the run it failed on works again.
+   *
+   * A card's run is an ordinary chat, so a turn that errored is routinely
+   * followed by the user carrying the conversation on IN THE CHAT — which goes
+   * straight to `ChatService` and never through `TaskRunsService`, the path
+   * that moves a card when the panel's Follow up is pressed. Without this the
+   * card sat in `failed` for good under a conversation that went on to finish
+   * cleanly, because `settle` only ever moves a card still `in_progress`.
+   * REPORTED on the card that asked for merged pull requests to end in `done`,
+   * which its own recovered run could then never reach.
+   *
+   * So the run announcing `running` again — a new turn, or the CLI carrying on
+   * by itself — makes the card `in_progress`, and the ordinary settle takes it
+   * from there. ONLY `failed` is lifted: a card in review is one whose
+   * conversation the user continues deliberately, and dragging it back to
+   * `in_progress` is exactly what `settle`'s own once-only rule refuses.
+   */
+  private async reviveFailedCard(runId: string): Promise<void> {
+    const em = this.em.fork();
+    const run = await this.runDao.getById(runId, em);
+    if (!run?.taskId) {
+      return;
+    }
+    const task = await this.taskDao.getById(run.taskId, em);
+    // A card that has since been started on a DIFFERENT run failed on that
+    // one, not on this.
+    if (!task || task.runId !== runId || task.status !== 'failed') {
+      return;
+    }
+    await this.tasks.moveStatus(task.id, { from: 'failed', to: 'in_progress' });
   }
 
   /**

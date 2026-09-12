@@ -19,6 +19,7 @@ import {
   watchSystemAppearance,
 } from './native-appearance';
 import { isAllowedTopFrameNavigation } from './navigation-policy';
+import { PullRequestMergeWatcher } from './pull-request-merge-watcher';
 import { purgeLegacySecret } from './purge-legacy-secret';
 import { readSettings } from './settings';
 import { createUpdateService } from './update-service';
@@ -116,6 +117,26 @@ const autopilot = new AutopilotConductor({
   log: (message) => {
     void reportMainLog(supervisor.getHandle(), 'info', message, {
       source: 'autopilot',
+    });
+  },
+});
+
+/**
+ * The board's OTHER unattended timer, and the counterpart of the conductor
+ * above: that one starts the work, this one ends it.
+ *
+ * It belongs to main for the same reasons and one sharper — `gh` runs here.
+ * The daemon knows which pull requests a card's agent opened and cannot ask
+ * GitHub what became of them, because it holds no login and shells out to
+ * nothing; this process holds both. Like the conductor it needs no IPC channel:
+ * it reads its cards from the daemon and reports a merge back to it, so a
+ * window being open changes nothing about what it does.
+ */
+const mergeWatcher = new PullRequestMergeWatcher({
+  handle: () => supervisor.getHandle(),
+  log: (message) => {
+    void reportMainLog(supervisor.getHandle(), 'info', message, {
+      source: 'merge-watcher',
     });
   },
 });
@@ -497,6 +518,7 @@ function main(): void {
     // starts a card whose work is finished, so the two cannot meet over one
     // worktree and neither has to wait for the other.
     autopilot.start();
+    mergeWatcher.start();
     await loadDevToolsExtension();
 
     // Open the window FIRST and let the daemon boot in parallel: first paint
@@ -524,6 +546,13 @@ function main(): void {
     });
   });
 
+  // Coming back to the window is when a pull request is most likely to have
+  // been merged somewhere else — the user was just in their browser. The sweep
+  // keeps its own five-minute floor, so a burst of focus changes costs one.
+  app.on('browser-window-focus', () => {
+    void mergeWatcher.sweepIfStale();
+  });
+
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       app.quit();
@@ -542,6 +571,7 @@ function main(): void {
     // Quitting is not an armed state — the daemon goes back to its ordinary
     // idle window rather than being held open by a process that is ending.
     autopilot.stop();
+    mergeWatcher.stop();
     keepAlive.dispose();
     event.preventDefault();
     void supervisor.stop().finally(() => {

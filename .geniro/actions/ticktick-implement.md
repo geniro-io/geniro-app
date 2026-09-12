@@ -2,7 +2,7 @@
 name: ticktick-implement
 description: "Use when a TickTick task URL's items should be implemented in this repo one at a time, each verified in the real Electron dev app with before/after screenshots and an approval gate between items."
 model: inherit
-allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, mcp__ticktick__get_task_by_id, mcp__ticktick__get_comment, mcp__claude-in-chrome__*]
+allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, mcp__ticktick__get_task_by_id, mcp__ticktick__get_comment, mcp__playwright__*, mcp__geniro-*__show_gallery]
 argument-hint: "[ticktick_task_url]"
 risk_class: low
 created: 2026-08-25
@@ -38,22 +38,27 @@ Both are shown to the user, and the run does not move to the next item without t
       the title and content, and `mcp__ticktick__get_comment` with `<projectId>` + `<taskId>` for the
       discussion. Abort if the task has no content. Never open a browser for the text: MCP returns
       it directly and a browser round-trip only adds a login the text does not need.
-   b. **Screenshots — the user's OWN Chrome, via Claude's browser tools.** The content embeds them
+   b. **Screenshots — the Playwright MCP browser, signed into TickTick.** The content embeds them
       as `![image](<attachmentId>/<uuid>.png)`; MCP returns no image bytes and the attachment URLs
-      404 unauthenticated, so this half does need a browser — and it must be the user's personal
-      Chrome, where they are already signed into TickTick. Use `mcp__claude-in-chrome__*`, NOT
-      `agent-browser` and NOT playwright: those launch their own profile, which is signed out.
-      (This is a deliberate exception to the repo-wide "browser automation is always agent-browser"
-      rule in `.geniro/instructions/global.md` — that rule assumes a throwaway browser, and here the
-      whole point is the user's existing session. The Electron half of this action, steps 5 and 6,
-      still uses `agent-browser`: Claude's Chrome tools drive Chrome tabs, not an Electron binary.)
-      Call `mcp__claude-in-chrome__tabs_context_mcp` first, open a NEW tab with
-      `mcp__claude-in-chrome__tabs_create_mcp`, navigate it to `<ticktick_task_url>`, and confirm the
-      session is live — the app renders the task, rather than the marketing page with a "Sign In"
-      link. If it is signed out, that is the ONLY case that involves the user: ask with
-      `AskUserQuestion` to sign in to TickTick in that tab, wait for their confirmation, then
-      re-check. Never attempt to log in on their behalf and never ask before the check has failed.
-      Close the tab when the screenshots are saved.
+      404 unauthenticated, so this half needs a browser that holds the user's TickTick session.
+      Use `mcp__playwright__*` — asked for by name ("use playwright"): the Claude Chrome extension
+      reports "not connected" in the headless turns geniro runs, so `mcp__claude-in-chrome__*` is
+      not an option there, and `agent-browser` launches a throwaway profile that is signed out.
+      (A deliberate exception to the repo-wide "browser automation is always agent-browser" rule in
+      `.geniro/instructions/global.md`, which assumes a throwaway browser; the Electron half of this
+      action, steps 5 and 6, still uses `agent-browser`.)
+      Navigate to `<ticktick_task_url>` and confirm the session is live — the app renders the task
+      (title `<project> - TickTick`) rather than redirecting to TickTick's or Google's sign-in page.
+      If it is signed out, that is the ONLY case that involves the user: ask with `AskUserQuestion`
+      to sign in in that Playwright window, wait for their confirmation, then re-check. Never enter
+      credentials on their behalf and never ask before the check has failed.
+      The attachments are the page's large `<img>` elements
+      (`https://api.ticktick.com/api/v1/attachment/<projectId>/<taskId>/<id>.png`). To save one,
+      navigate the tab TO that URL first — a `fetch` from the ticktick.com page is refused by CORS —
+      then `browser_evaluate` a `fetch(location.href)` read into a `data:` URL through
+      `FileReader`, with `filename` set to a path INSIDE this worktree (the tool refuses any other
+      root), and decode the base64 in the shell. `browser_run_code_unsafe` cannot `import('fs')`,
+      so it cannot write the file itself. Close the browser when the screenshots are saved.
    c. Save every screenshot under `.geniro/state/ticktick/<taskId>/ref-<n>.png` and read each one
       with the `Read` tool — the images define the expected result and the text alone does not. If a
       screenshot still cannot be retrieved, say which item is missing its evidence rather than
@@ -91,8 +96,11 @@ Both are shown to the user, and the run does not move to the next item without t
    c. Rebuild and relaunch the dev app so the running instance is the code just written
       (`pnpm build`, then kill the Electron process and repeat step 5's launch), then capture
       `agent-browser screenshot .geniro/state/ticktick/<taskId>/item-N-after.png`.
-   d. Show the user both images in the reply as markdown — `![before](<abs path>)` and
-      `![after](<abs path>)` — plus their plain paths. Never `open` a screenshot into Preview.
+   d. Show the user both images with geniro's `show_gallery` tool — one call, full paths, before
+      then after — plus their plain paths. NOT as markdown images: a path containing a space never
+      renders as one in geniro's transcript, and every task worktree lives under
+      `~/Library/Application Support/`, so `![before](<abs path>)` reached the user as raw text.
+      Never `open` a screenshot into Preview.
    e. Ask with `AskUserQuestion`: "Item N — <title>. Approve and continue to item N+1?" with
       options `Continue`, `Redo this item` (loop back to 6b with their notes), `Stop here`. Do NOT
       start item N+1 without an explicit `Continue`. On `Stop here`, go to step 7 with the items

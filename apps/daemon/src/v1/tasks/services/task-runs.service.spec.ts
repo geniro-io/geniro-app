@@ -21,6 +21,7 @@ import {
 import type { RunWire } from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
+import type { RunGroupsService } from '../../agents/services/run-groups.service';
 import type { GraphExecutorService } from '../../graphs/services/graph-executor.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -78,6 +79,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let startWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteChat: ReturnType<typeof vi.fn>;
+  let resolveAutoGroupId: ReturnType<typeof vi.fn>;
 
   /**
    * A complete run row on the wire.
@@ -158,9 +160,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
-      new RunDao(em),
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      runDao,
     );
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and
@@ -221,6 +223,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       startRunBySlug: startWorkflowRun,
       deleteRun: deleteWorkflowRun,
     } as unknown as GraphExecutorService;
+    // No sidebar rule claims anything by default; a test that needs one says so.
+    resolveAutoGroupId = vi.fn(async () => null);
+    const groups = { resolveAutoGroupId } as unknown as RunGroupsService;
     service = new TaskRunsService(
       em,
       taskDao,
@@ -230,6 +235,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       chats,
       new ProjectQueueService(em, projectDao, taskDao, runDao),
       executor,
+      groups,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -422,6 +428,33 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // so resolving the group from the cwd would file every task run loose.
     expect(createChat).toHaveBeenCalledWith(
       expect.objectContaining({ taskId: task.id, groupId: 'group-7' }),
+    );
+    // The project's group is a deliberate answer, so no rule is consulted.
+    expect(resolveAutoGroupId).not.toHaveBeenCalled();
+  });
+
+  it('files the run under the group claiming the card’s REAL folder when the project names none', async () => {
+    // REPORTED against the autopilot: "tasks have no folder of their own …
+    // they land in UNGROUPED although they belong to the geniro folder". With
+    // no project group the rule is asked about the folder the card works in —
+    // never the worktree the run is given, which no rule has ever claimed.
+    const loose = await projectDao.create({
+      name: 'Loose',
+      folder: '/tmp/geniro-task-runs-loose',
+      agentKind: 'claude',
+    });
+    const task = await tasks.create({ projectId: loose.id, title: 'ship it' });
+    await tasks.moveStatus(task.id, { from: 'backlog', to: 'todo' });
+    resolveAutoGroupId.mockResolvedValueOnce('folder-group');
+
+    await service.start(task.id, start());
+
+    expect(resolveAutoGroupId).toHaveBeenCalledWith({
+      cwd: '/tmp/geniro-task-runs-loose',
+      workflowId: null,
+    });
+    expect(createChat).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, groupId: 'folder-group' }),
     );
   });
 

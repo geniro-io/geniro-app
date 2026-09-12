@@ -76,9 +76,9 @@ describe('TaskFilesService (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
-      new RunDao(em),
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      new RunDao(em),
     );
     service = new TaskFilesService(em, taskDao, tasks);
     const project = await projectDao.create({ name: 'B', folder: dir });

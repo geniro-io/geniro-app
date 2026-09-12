@@ -19,6 +19,7 @@ import { cn } from '../components/ui/utils';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { DaemonApis } from '../daemon-api';
 import { TaskAttachments } from './task-attachments';
+import { TaskDeleteButton } from './task-delete-button';
 import {
   PropertyGroup,
   PropertyRow,
@@ -57,6 +58,7 @@ export function TaskDetail({
   onSave,
   onMove,
   onRun,
+  onDelete,
   onFollowUp,
   onOpenThread,
   onAttachFiles,
@@ -83,6 +85,8 @@ export function TaskDetail({
   onMove?: (to: string) => void;
   /** Start an agent on this card — opens the run dialog, which asks first. */
   onRun?: () => void;
+  /** Delete this card — its trash icon asks in a popup before it goes. */
+  onDelete?: () => void | Promise<void>;
   /**
    * Say the next thing to this card's agent, from the card.
    *
@@ -256,7 +260,7 @@ export function TaskDetail({
     onRun === undefined
       ? 'Open a project to run this task.'
       : running
-        ? 'An agent is working this task. Open its chat to follow along.'
+        ? 'An agent is working this task. Open its chat to follow along — the card can be deleted once it has stopped.'
         : null;
 
   /**
@@ -315,6 +319,17 @@ export function TaskDetail({
       <div
         data-slot="task-detail-actions"
         className="ml-auto flex shrink-0 items-center gap-1.5">
+        {/* Destructive, so FIRST in the group — furthest from the ✕ — and it
+            asks in a popup before anything goes. Refused while an agent works
+            the card: its worktree goes with it, and that is the directory the
+            agent is writing in. The reason is the sentence under Run
+            configuration, since a disabled button shows no tooltip. */}
+        {onDelete === undefined ? null : (
+          <TaskDeleteButton
+            disabled={running || starting}
+            onConfirm={onDelete}
+          />
+        )}
         {/* ICON-ONLY, unlike Run: at the panel's 320px floor two labelled
             buttons and two window controls do not fit, and of the pair this is
             the one whose glyph carries it — a spinner while the agent is in

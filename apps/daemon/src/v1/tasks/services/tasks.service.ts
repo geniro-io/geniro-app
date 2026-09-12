@@ -7,11 +7,10 @@ import { RunDao } from '../../agents/dao/run.dao';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import type { AgentKind } from '../../runs/runs.types';
+import type { AgentKind, RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
-  type TaskChangeReason,
   type TaskPriority,
   type TaskSource,
   type TaskStatus,
@@ -19,6 +18,7 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { parseTaskFiles } from '../utils/task-files';
+import { isWorkFinished } from '../utils/work-finished';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 
@@ -40,10 +40,49 @@ export class TasksService {
     private readonly em: EntityManager,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
-    private readonly runDao: RunDao,
     private readonly events: TaskEventBus,
     private readonly attachments: TaskAttachmentService,
+    private readonly runDao: RunDao,
   ) {}
+
+  /**
+   * Which of these cards' work is FINISHED (`isWorkFinished`). A card that is
+   * no longer there counts: nothing will ever run in its worktree again.
+   *
+   * Asked by the Electron main process about the worktrees its registry still
+   * holds — the one reader that knows which directories exist and nothing
+   * about what became of their cards — which is why it answers for a list.
+   */
+  async finishedAmong(
+    taskIds: readonly string[],
+  ): Promise<{ taskIds: string[] }> {
+    const em = this.em.fork();
+    const finished: string[] = [];
+    for (const taskId of new Set(taskIds)) {
+      const task = await this.taskDao.getById(taskId, em);
+      if (
+        task === null ||
+        isWorkFinished(task.status, await this.runStatusOf(task.runId, em))
+      ) {
+        finished.push(taskId);
+      }
+    }
+    return { taskIds: finished };
+  }
+
+  /**
+   * Tell every board a card's work has just become finished, without moving
+   * the card — its run has settled under a card the user had already called
+   * Done. See `TaskChangedEvent.reason`.
+   */
+  announceWorkFinished(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+      reason: 'work-finished',
+    });
+  }
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
     const em = this.em.fork();
@@ -309,11 +348,7 @@ export class TasksService {
    * re-sending it is not a conflict, and failing it would make a retried
    * request look like a lost race.
    */
-  async moveStatus(
-    taskId: string,
-    move: TaskStatusMove,
-    reason?: TaskChangeReason,
-  ): Promise<TaskWire> {
+  async moveStatus(taskId: string, move: TaskStatusMove): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
 
@@ -354,13 +389,31 @@ export class TasksService {
     task.status = move.to;
     task.position = position;
     task.updatedAt = at;
+    // A card called Done whose run has already stopped is FINISHED now, and
+    // the board may collect its worktree. One called Done while its agent is
+    // still working finishes when that run settles, and `TaskSettleService`
+    // says so then — the column alone is written the moment a card is dragged.
+    const finished =
+      move.to === 'done' &&
+      isWorkFinished(move.to, await this.runStatusOf(task.runId, em));
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,
       status: task.status,
-      reason,
+      ...(finished ? { reason: 'work-finished' as const } : {}),
     });
     return this.wireOf(task, em);
+  }
+
+  /** The status of the run working a card, or null when it has none left. */
+  private async runStatusOf(
+    runId: string | null,
+    em: EntityManager,
+  ): Promise<RunStatus | null> {
+    if (runId === null) {
+      return null;
+    }
+    return (await this.runDao.getById(runId, em))?.status ?? null;
   }
 
   async remove(taskId: string): Promise<{ deleted: boolean }> {

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { app, BrowserWindow, nativeImage, session, shell } from 'electron';
 
-import { TRAFFIC_LIGHT_INSET } from '../shared/contracts';
+import { type DaemonHandle, TRAFFIC_LIGHT_INSET } from '../shared/contracts';
 import { themeWindowBackground } from '../shared/themes';
 import { installApplicationMenu } from './app-menu';
 import { AutopilotConductor } from './autopilot-conductor';
@@ -11,6 +11,7 @@ import { installContextMenu } from './context-menu';
 import { DaemonKeepAlive } from './daemon-keepalive';
 import { notifyDaemonReady } from './daemon-ready-notify';
 import { DaemonSupervisor } from './daemon-supervisor';
+import { readFinishedTasks } from './finished-tasks';
 import { registerIpc } from './ipc';
 import {
   applyTheme,
@@ -30,7 +31,7 @@ import {
 import {
   prepareWorktree,
   pruneWorktreeForTask,
-  reapOrphanedWorktrees,
+  reapFinishedWorktrees,
 } from './worktree-service';
 
 /**
@@ -376,6 +377,43 @@ function createWindow(): void {
 }
 
 /**
+ * Collect the worktrees whose card's work is finished, once a daemon is there
+ * to say which those are — see `reapFinishedWorktrees`.
+ *
+ * On every daemon start rather than once per launch: it acts only on a card
+ * the daemon calls finished, so a second pass costs a registry read and a git
+ * call per entry, and a window re-opened after a while is exactly when a run
+ * that settled under a Done card with nobody watching is waiting to be
+ * collected. One pass at a time, so two quick re-ensures cannot both try to
+ * commit and remove the same checkout.
+ */
+let reaping = false;
+function reapWorktrees(handle: DaemonHandle): void {
+  if (reaping) {
+    return;
+  }
+  reaping = true;
+  void reapFinishedWorktrees((taskIds) => readFinishedTasks(handle, taskIds))
+    .then(({ removed }) => {
+      if (removed.length > 0) {
+        void reportMainLog(
+          handle,
+          'info',
+          `worktree reaper cleared ${removed.length} finished or vanished task worktree(s)`,
+          { source: 'worktrees' },
+        );
+      }
+    })
+    .catch(() => {
+      // A reaper that cannot run costs disk and nothing else; a launch that
+      // fails because of one would cost the user their app.
+    })
+    .finally(() => {
+      reaping = false;
+    });
+}
+
+/**
  * Bring the daemon up and hand the renderer its address.
  *
  * The one entry point for both the launch and a later re-ensure, so the window
@@ -391,6 +429,7 @@ function ensureDaemon(): void {
       // The window is opened BEFORE this, so whatever it already reported about
       // its own load has been waiting for an address to send it to.
       void flushMainLogs(handle);
+      reapWorktrees(handle);
     })
     .catch((err: unknown) => {
       console.error('[ui] daemon failed to start:', err);
@@ -453,17 +492,10 @@ function main(): void {
     // running. Not gated on the auto-check setting: a user who switched checks
     // off still has whatever the last update left on their disk.
     void updates.sweepDebris();
-    // Worktrees a force-quit or a crash left behind, cleared before any task
-    // can start one. Detached rather than awaited: it shells out to git once
-    // per leftover, and the window must not wait behind that. It confirms
-    // every entry before touching it and leaves anything holding unsaved work
-    // exactly where it is — see `worktree-service.ts`.
-    void reapOrphanedWorktrees().catch(() => {
-      // A reaper that cannot run costs disk and nothing else; a launch that
-      // fails because of one would cost the user their app.
-    });
-    // AFTER the reaper: a tick that started a task while leftovers were still
-    // being cleared could have its own fresh worktree reaped out from under it.
+    // Worktrees are collected once a daemon is up to say which cards are
+    // finished — `reapWorktrees`, from `ensureDaemon`. The autopilot never
+    // starts a card whose work is finished, so the two cannot meet over one
+    // worktree and neither has to wait for the other.
     autopilot.start();
     await loadDevToolsExtension();
 

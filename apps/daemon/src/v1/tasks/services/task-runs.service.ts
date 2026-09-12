@@ -8,6 +8,7 @@ import {
 
 import { RunDao } from '../../agents/dao/run.dao';
 import { ChatService } from '../../agents/services/chat.service';
+import { RunGroupsService } from '../../agents/services/run-groups.service';
 import { GraphExecutorService } from '../../graphs/services/graph-executor.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -91,6 +92,7 @@ export class TaskRunsService {
     private readonly chats: ChatService,
     private readonly queue: ProjectQueueService,
     private readonly executor: GraphExecutorService,
+    private readonly groups: RunGroupsService,
   ) {}
 
   async start(taskId: string, input: StartTaskRun): Promise<TaskWire> {
@@ -198,6 +200,20 @@ export class TaskRunsService {
       }
     }
 
+    // Where the run is FILED in the sidebar. The project's group when it names
+    // one — a deliberate answer about where its runs belong. Otherwise the
+    // group whose rule claims the card's REAL folder: the run itself works in
+    // a worktree, a path no rule was ever written for, so leaving the choice
+    // to the run's own cwd filed every task run as Ungrouped — REPORTED
+    // against the autopilot as "tasks have no folder of their own … they land
+    // in UNGROUPED although they belong to the geniro folder".
+    const groupId =
+      project.groupId ??
+      (await this.groups.resolveAutoGroupId({
+        cwd: task.folder ?? project.folder,
+        workflowId: target.kind === 'workflow' ? target.workflowSlug : null,
+      }));
+
     // Held so `abandon` can take the run down with the rest. Without it a
     // failure after creation leaves a run whose `taskId` points at a card that
     // no longer names it, working directory already pruned by the caller.
@@ -208,6 +224,7 @@ export class TaskRunsService {
           task,
           project,
           input,
+          groupId,
         });
         runId = run.id;
         // No `sendMessage` here, and that is the arm's whole difference: a
@@ -240,9 +257,9 @@ export class TaskRunsService {
         // is the whole reason it is denormalized: the sidebar holds run rows
         // and no board — see `Run.taskIdentifier`.
         ...identifierOf(task, project),
-        // The PROJECT's group rather than the folder rule: the run works in a
-        // worktree, a path nothing has ever been filed under.
-        groupId: project.groupId,
+        // Resolved above from the project, else from the card's real folder —
+        // never from this worktree, a path nothing has ever been filed under.
+        groupId,
       });
 
       runId = run.id;
@@ -262,14 +279,20 @@ export class TaskRunsService {
    * executor to do differently, and each is an answer the library route has no
    * way to give: the card's `taskId` (so `TaskSettleService` can move it when
    * the graph finishes), the card's own title (so the sidebar names the WORK
-   * rather than restating which workflow ran), and the project's group (a
-   * worktree being a path no auto-file rule has ever seen).
+   * rather than restating which workflow ran), and the group resolved for it
+   * in `startClaimed` (a worktree being a path no auto-file rule has ever
+   * seen).
    */
   private startWorkflowRun(
     slug: string,
-    context: { task: Task; project: Project; input: StartTaskRun },
+    context: {
+      task: Task;
+      project: Project;
+      input: StartTaskRun;
+      groupId: string | null;
+    },
   ): Promise<{ id: string }> {
-    const { task, project, input } = context;
+    const { task, project, input, groupId } = context;
     return this.executor.startRunBySlug(slug, {
       cwd: input.cwd,
       prompt: this.brief(task, input),
@@ -280,7 +303,7 @@ export class TaskRunsService {
       taskId: task.id,
       ...identifierOf(task, project),
       title: task.title,
-      groupId: project.groupId,
+      groupId,
     });
   }
 

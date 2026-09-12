@@ -2,6 +2,7 @@ import { useContext, useEffect, useState } from 'react';
 
 import { ZoomableImage } from '../components/ui/image-viewer';
 import { LocalImageLoaderContext, refusalFor } from './local-image-loader';
+import { localPathOf } from './markdown-paths';
 
 /**
  * One image an agent referenced from its own markdown.
@@ -29,7 +30,7 @@ export function MarkdownImage({
   const load = useContext(LocalImageLoaderContext);
   // `src` is typed loosely by the markdown renderer's HTML props; only a string
   // is a reference we can do anything with.
-  const reference = typeof src === 'string' ? src.trim() : '';
+  const reference = typeof src === 'string' ? localPathOf(src.trim()) : '';
   const refusal = reference === '' ? 'no image source' : refusalFor(reference);
   const inline = reference.startsWith('data:');
   const [resolved, setResolved] = useState<string | null>(null);

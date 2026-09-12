@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
+  RunPullRequestSchema,
 } from '../agents/chat.types';
 import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
 
@@ -235,6 +236,41 @@ export interface TaskStatusMove {
   from: TaskStatus;
   to: TaskStatus;
 }
+
+/**
+ * One card sitting in review with pull requests that could end it.
+ *
+ * The daemon's half of the merge watch, and the split is the same one
+ * `RunPullRequestSchema` already states: this process knows WHICH pull requests
+ * belong to a card (its run captured them out of the agent's own output) and
+ * can never know what they currently ARE, because that is a live question for
+ * GitHub. The Electron main process holds the `gh` login and asks it, then
+ * reports a merge back — so neither side stores a state that goes stale.
+ *
+ * `pullRequests` is never empty: a card with nothing to watch is not awaiting a
+ * merge, and listing it would cost the watcher a pass that can decide nothing.
+ */
+export const TaskAwaitingMergeSchema = z.object({
+  taskId: z.string(),
+  projectId: z.string(),
+  title: z.string().describe('For the watcher’s own log lines'),
+  pullRequests: z
+    .array(RunPullRequestSchema)
+    .describe('Every pull request this card’s run opened, oldest first'),
+});
+export type TaskAwaitingMergeWire = z.infer<typeof TaskAwaitingMergeSchema>;
+
+/**
+ * How many cards one merge sweep may name.
+ *
+ * A bound rather than a tuning: every card handed out costs the watcher at
+ * least a lookup against GitHub, so an unattended tick must not be able to
+ * grow with a board somebody left in review for a year. Cards are handed out
+ * least-recently-changed first, so a capped sweep still reaches every one of
+ * them — each pass moves the ones it settles out of the column, and the next
+ * takes the next oldest.
+ */
+export const TASKS_AWAITING_MERGE_MAX = 100;
 
 /**
  * What starting a run for one task needs to know.

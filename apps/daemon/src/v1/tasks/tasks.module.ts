@@ -9,6 +9,7 @@ import { TaskDao } from './dao/task.dao';
 import { TaskAttachmentService } from './services/task-attachment.service';
 import { TaskEventBus } from './services/task-events.bus';
 import { TaskFilesService } from './services/task-files.service';
+import { TaskMergeService } from './services/task-merge.service';
 import { TaskQueueService } from './services/task-queue.service';
 import { TaskRunsService } from './services/task-runs.service';
 import { TaskSettleService } from './services/task-settle.service';
@@ -56,6 +57,7 @@ import { TasksService } from './services/tasks.service';
     TasksService,
     TaskRunsService,
     TaskSettleService,
+    TaskMergeService,
     TaskQueueService,
   ],
   exports: [TaskDao, TaskEventBus],

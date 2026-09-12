@@ -262,6 +262,17 @@ export function useBoard(
   reloadRef.current = reload;
   const selectedRef = useRef(selectedProjectId);
   selectedRef.current = selectedProjectId;
+  /**
+   * The runs this board's cards are holding, for the pull-request announce
+   * below — a Set rather than a scan of `tasks`, since that event fires for
+   * every chat in the app and this board is routinely not the subject.
+   */
+  const boardRunsRef = useRef<Set<string>>(new Set());
+  boardRunsRef.current = new Set(
+    tasks
+      .map((task) => task.runId)
+      .filter((runId): runId is string => runId !== null),
+  );
 
   useEffect(() => {
     if (!client) {
@@ -290,6 +301,29 @@ export function useBoard(
       // The broadcast is client-wide, so most events belong to a board this
       // one is not showing.
       if (event.projectId === selectedRef.current) {
+        reloadRef.current();
+      }
+    });
+  }, [client]);
+
+  useEffect(() => {
+    if (!client) {
+      return;
+    }
+    // A card's pull requests are the RUN's, captured from its transcript when
+    // a turn ends — which is a different moment from the card settling, and
+    // routinely the later of the two. Without this the result of the work
+    // appears on the card only at the next listing, so a reader watching a
+    // task finish sees the report land and the link not.
+    //
+    // The announce is client-wide and fires for every chat in the app, so it
+    // is narrowed to a run this board is actually holding; the daemon is
+    // already silent when a run's pull requests have not changed.
+    return client.onRunStatus((event) => {
+      if (event.pullRequests === undefined) {
+        return;
+      }
+      if (boardRunsRef.current.has(event.runId)) {
         reloadRef.current();
       }
     });

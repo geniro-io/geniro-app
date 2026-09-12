@@ -27,7 +27,7 @@ import {
   VALUE_INSET,
 } from './task-fields';
 import { taskIdentifier } from './task-identifier';
-import { TaskFollowUp, TaskReport } from './task-report';
+import { TaskFollowUp, TaskPullRequests, TaskReport } from './task-report';
 import { useDescriptionPaste } from './use-description-paste';
 
 /** Where the choice between the side panel and the popup is remembered. */
@@ -573,6 +573,11 @@ export function TaskDetail({
           </button>
         )}
       </div>
+
+      {/* The work's RESULT, above the report: a short list of links, where the
+          report is prose of any length. It draws itself away when the card's
+          run opened none, which is most cards. */}
+      <TaskPullRequests task={task} />
 
       {/* Drawn for a FAILED card even with no report row behind it: the
           commonest failure is an agent that died before it said anything, and

@@ -90,6 +90,37 @@ function stubApis(
   };
 }
 
+/**
+ * A daemon client carrying BOTH broadcasts the board subscribes to.
+ *
+ * Both, always: the hook takes each in its own effect, so a stub offering one
+ * of them throws on mount — which is how a test about task changes comes to
+ * fail over a feature it says nothing about.
+ */
+function fakeClient(): {
+  client: DaemonClient;
+  taskChanged: (event: unknown) => void;
+  runStatus: (event: unknown) => void;
+} {
+  let onTask: ((event: unknown) => void) | null = null;
+  let onRun: ((event: unknown) => void) | null = null;
+  const client = {
+    onTaskChanged: (listener: (event: unknown) => void) => {
+      onTask = listener;
+      return () => undefined;
+    },
+    onRunStatus: (listener: (event: unknown) => void) => {
+      onRun = listener;
+      return () => undefined;
+    },
+  } as unknown as DaemonClient;
+  return {
+    client,
+    taskChanged: (event: unknown) => onTask?.(event),
+    runStatus: (event: unknown) => onRun?.(event),
+  };
+}
+
 /** Mount the hook and hand back a live handle to its latest return value. */
 async function mount(
   apis: DaemonApis,
@@ -167,13 +198,7 @@ describe('useBoard', () => {
   });
 
   it('reloads when a task changes on the board being shown', async () => {
-    let emit: ((event: unknown) => void) | null = null;
-    const client = {
-      onTaskChanged: (listener: (event: unknown) => void) => {
-        emit = listener;
-        return () => undefined;
-      },
-    } as unknown as DaemonClient;
+    const { client, taskChanged: emit } = fakeClient();
     const { apis, reconcileTasks: listTasks } = stubApis();
     await mount(apis, client);
     const before = listTasks.mock.calls.length;
@@ -189,13 +214,7 @@ describe('useBoard', () => {
     // The broadcast is client-wide, so every other project's traffic arrives
     // here too; reloading on it would refetch this board on every keystroke
     // happening in another window.
-    let emit: ((event: unknown) => void) | null = null;
-    const client = {
-      onTaskChanged: (listener: (event: unknown) => void) => {
-        emit = listener;
-        return () => undefined;
-      },
-    } as unknown as DaemonClient;
+    const { client, taskChanged: emit } = fakeClient();
     const { apis, reconcileTasks: listTasks } = stubApis();
     await mount(apis, client);
     const before = listTasks.mock.calls.length;
@@ -205,6 +224,74 @@ describe('useBoard', () => {
     });
 
     expect(listTasks.mock.calls.length).toBe(before);
+  });
+
+  /**
+   * A card's pull requests are the RUN's, and they are captured when a TURN
+   * ends — a different moment from the card settling, and routinely the later
+   * of the two. Without this the work's result reaches the card only at the
+   * next listing.
+   */
+  describe('a run announcing what it opened', () => {
+    const announced = {
+      runId: 'run-1',
+      status: null,
+      pullRequests: [
+        {
+          owner: 'geniro-io',
+          repo: 'geniro-app',
+          number: 110,
+          url: 'https://github.com/geniro-io/geniro-app/pull/110',
+          seq: 12,
+        },
+      ],
+    };
+
+    it('reloads when the run belongs to a card on this board', async () => {
+      const { client, runStatus: emit } = fakeClient();
+      const { apis, reconcileTasks: listTasks } = stubApis();
+      listTasks.mockResolvedValue([task({ runId: 'run-1' })]);
+      await mount(apis, client);
+      const before = listTasks.mock.calls.length;
+
+      await act(async () => {
+        emit(announced);
+      });
+
+      expect(listTasks.mock.calls.length).toBeGreaterThan(before);
+    });
+
+    it('ignores a run no card here is holding', async () => {
+      // This broadcast carries every chat in the app, so an unnarrowed reload
+      // would refetch the board on every turn the user takes anywhere.
+      const { client, runStatus: emit } = fakeClient();
+      const { apis, reconcileTasks: listTasks } = stubApis();
+      listTasks.mockResolvedValue([task({ runId: 'run-1' })]);
+      await mount(apis, client);
+      const before = listTasks.mock.calls.length;
+
+      await act(async () => {
+        emit({ ...announced, runId: 'someone-elses-chat' });
+      });
+
+      expect(listTasks.mock.calls.length).toBe(before);
+    });
+
+    it('ignores an announce that says nothing about pull requests', async () => {
+      // Most of them: the daemon speaks on this channel for activity, status
+      // and titles, and only ever carries pull requests when they CHANGED.
+      const { client, runStatus: emit } = fakeClient();
+      const { apis, reconcileTasks: listTasks } = stubApis();
+      listTasks.mockResolvedValue([task({ runId: 'run-1' })]);
+      await mount(apis, client);
+      const before = listTasks.mock.calls.length;
+
+      await act(async () => {
+        emit({ runId: 'run-1', status: 'running' });
+      });
+
+      expect(listTasks.mock.calls.length).toBe(before);
+    });
   });
 
   describe('attaching files', () => {
@@ -282,18 +369,14 @@ describe('useBoard', () => {
   });
 
   describe('collecting a settled run’s worktree', () => {
-    let emit: ((event: unknown) => void) | null;
+    let emit: ((event: unknown) => void) | null = null;
     type SettleWorktree = (taskId: string) => Promise<TaskWorktreeSettleResult>;
     let settle: ReturnType<typeof vi.fn<SettleWorktree>>;
 
     const mountWithClient = async () => {
-      emit = null;
-      const client = {
-        onTaskChanged: (listener: (event: unknown) => void) => {
-          emit = listener;
-          return () => undefined;
-        },
-      } as unknown as DaemonClient;
+      const fake = fakeClient();
+      emit = fake.taskChanged;
+      const client = fake.client;
       const { apis } = stubApis();
       await mount(apis, client);
     };
@@ -403,13 +486,7 @@ describe('useBoard error text and refresh scope', () => {
   it('does not re-read the project list when a task changes', async () => {
     // The broadcast echoes the board's own writes back to it. One counter for
     // both effects turned every card move into a `listProjects` too.
-    let emit: ((event: unknown) => void) | null = null;
-    const client = {
-      onTaskChanged: (listener: (event: unknown) => void) => {
-        emit = listener;
-        return () => undefined;
-      },
-    } as unknown as DaemonClient;
+    const { client, taskChanged: emit } = fakeClient();
     const { apis, reconcileTasks: listTasks } = stubApis();
     const listProjects = apis.projects.listProjects as ReturnType<typeof vi.fn>;
     await mount(apis, client);

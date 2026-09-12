@@ -4153,6 +4153,12 @@ export interface TaskDto {
      */
     reportItemId: string | null;
     /**
+     * Pull requests the task's run opened, oldest first, as captured from the agent output
+     * @type {Array<RunPullRequest>}
+     * @memberof TaskDto
+     */
+    pullRequests: Array<RunPullRequest>;
+    /**
      * Order within the column, ascending and unique — gaps are expected, since a delete or a move leaves one and nothing renumbers
      * @type {number}
      * @memberof TaskDto

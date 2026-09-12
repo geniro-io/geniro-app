@@ -102,6 +102,7 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
+      new RunDao(em),
       taskEvents,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
     );
@@ -241,6 +242,54 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await settleRun('run-1', 'completed');
 
     expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+  });
+
+  /**
+   * The card's RESULT — the pull requests the work produced.
+   *
+   * Read from the RUN on every projection rather than stored on the task, so
+   * these pin the projection and not a column: `PullRequestCaptureService`
+   * already keeps the run's answer current out of the transcript, and a copy on
+   * the card would be the stale one the moment a follow-up turn opened another.
+   */
+  describe('the card’s pull requests', () => {
+    const captured = {
+      owner: 'geniro-io',
+      repo: 'geniro-app',
+      number: 110,
+      url: 'https://github.com/geniro-io/geniro-app/pull/110',
+      seq: 12,
+    };
+
+    it('carries the pull requests its run opened, on both read paths', async () => {
+      const task = await working();
+      await runDao.updateById('run-1', {
+        pullRequests: JSON.stringify([captured]),
+      });
+
+      // The listing answers for a whole board in one query and the single-task
+      // read answers for one card; a card losing its result on a rename is
+      // exactly what having two paths costs if only one of them is wired.
+      const [listed] = await tasks.listForProject(projectId);
+      expect(listed?.pullRequests).toEqual([captured]);
+      expect((await tasks.get(task.id)).pullRequests).toEqual([captured]);
+    });
+
+    it('answers empty for a card whose run has been deleted', async () => {
+      const task = await working();
+      await runDao.updateById('run-1', {
+        pullRequests: JSON.stringify([captured]),
+      });
+      // The chat is deleted from the sidebar; the card still names it until the
+      // settle service hears about it. A missing run must read as "none" rather
+      // than throwing the listing for every other card on the board.
+      await runDao.hardDeleteIncludingSoftDeleted({ id: 'run-1' });
+
+      expect((await tasks.get(task.id)).pullRequests).toEqual([]);
+      expect((await tasks.listForProject(projectId))[0]?.pullRequests).toEqual(
+        [],
+      );
+    });
   });
 
   describe('a workflow run’s report', () => {

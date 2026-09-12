@@ -158,6 +158,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
+      new RunDao(em),
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
     );

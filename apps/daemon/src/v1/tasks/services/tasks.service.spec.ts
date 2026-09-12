@@ -17,6 +17,7 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
@@ -99,6 +100,7 @@ describe('TasksService (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
+      new RunDao(em),
       events,
       new TaskAttachmentService(ATTACHMENTS_ROOT),
     );
@@ -598,6 +600,7 @@ describe('TasksService — card numbering (in-memory sqlite)', () => {
       em,
       taskDao,
       projectDao,
+      new RunDao(em),
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
     );

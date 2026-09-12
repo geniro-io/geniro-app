@@ -38,6 +38,9 @@ export function aTask(over: Partial<TaskDto> = {}): TaskDto {
     worktreePath: null,
     runId: null,
     reportItemId: null,
+    // What the card's run opened — empty for a card nothing has run, which is
+    // every fixture that does not say otherwise.
+    pullRequests: [],
     number: null,
     attachments: [],
     position: 0,

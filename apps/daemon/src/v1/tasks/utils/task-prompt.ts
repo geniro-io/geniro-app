@@ -21,6 +21,31 @@ const REPORT_OPENING =
  */
 const REPORT_LAST =
   'Send that report as the LAST thing you do — after every other message and tool call, with nothing following it. The card shows whichever report comes last, so one drawn part-way through the work stands in place of your closing one.';
+/**
+ * The card's RESULT, and the one thing the agent has to do for the board to be
+ * able to collect it.
+ *
+ * A task's work ends in a branch nobody has been shown. The run already carries
+ * whatever pull requests it opened — `PullRequestCaptureService` reads them out
+ * of the transcript on every turn end — and `TaskWire.pullRequests` is what
+ * draws them on the card, so nothing here needs a tool of its own. What it does
+ * need is for the pull request to EXIST and to be opened the one way that
+ * capture can see.
+ *
+ * `gh pr create` is named for exactly that reason rather than as a suggestion:
+ * the capture matches a tool call running that command paired with a result
+ * carrying a `…/pull/<n>` URL, which is what keeps somebody else's pull request
+ * — a `gh pr view`, a `git push` hint — from being filed as this card's work.
+ * One opened through the web, or through `gh api`, is a real pull request that
+ * the board will never show.
+ *
+ * CONDITIONAL on there being commits, because the alternative is worse than
+ * silence: a card that asked a question, or one whose answer was "nothing needs
+ * changing", would otherwise be closed with an empty pull request opened to
+ * satisfy an instruction.
+ */
+const REPORT_PULL_REQUEST =
+  'When the work leaves commits behind, open a pull request for it with `gh pr create` before you report, and give the link in the report. That command is also how the board attaches the pull request to the card as the result of the work, so one opened any other way will not appear there. Say in the report that there was nothing to open one for when that is the case.';
 const REPORT_PROSE =
   'Write the report as your final message: what changed, what you verified, and anything you deliberately left undone.';
 
@@ -41,6 +66,7 @@ const REPORT_PROSE =
  */
 export const TASK_REPORT_INSTRUCTIONS = [
   REPORT_OPENING,
+  REPORT_PULL_REQUEST,
   REPORT_LAST,
   'Prefer the `report_findings` tool — it draws a structured report the user can read at a glance.',
   `If you cannot call it, ${REPORT_PROSE.charAt(0).toLowerCase()}${REPORT_PROSE.slice(1)}`,
@@ -64,6 +90,7 @@ export const TASK_REPORT_INSTRUCTIONS = [
  */
 export const TASK_REPORT_INSTRUCTIONS_WORKFLOW = [
   REPORT_OPENING,
+  REPORT_PULL_REQUEST,
   REPORT_LAST,
   REPORT_PROSE,
 ].join('\n');

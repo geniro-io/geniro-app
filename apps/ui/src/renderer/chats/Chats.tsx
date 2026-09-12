@@ -76,9 +76,11 @@ import {
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
+  MAIN_THREAD_ID,
   subagentThreadsByAgent,
   threadsOf,
 } from './agent-activity';
+import { type InstanceTaskList, threadIdOfCall } from './agent-instances';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
@@ -194,7 +196,7 @@ import { TargetSelect } from './target-select';
 import type { AgentTaskGroup } from './task-list';
 import {
   type AgentTaskRow,
-  taskListsByAgent,
+  taskListsByThread,
   taskProgress,
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
@@ -204,6 +206,9 @@ import {
   buildSubagentBlocks,
   buildTurnBlocks,
   buildWorkflowCards,
+  callBlockLatest,
+  callBlockUsage,
+  collectCallBlocks,
   collectSubagentBlocks,
   entryStartSeq,
   groupTranscript,
@@ -4781,7 +4786,21 @@ export function Chats({
     // chat's rows carry `nodeId: null` while its agent card is keyed by
     // `CHAT_AGENT_KEY`, and that mapping is this screen's own — the fold has no
     // business knowing it.
-    const byAgent = new Map<string, AgentTaskRow[]>();
+    //
+    // A LIST per agent, one entry per CONVERSATION it kept a checklist in: a
+    // node called several times runs one conversation per call, each numbering
+    // its tasks from 1, so the panel draws each under its own instance.
+    const byAgent = new Map<string, InstanceTaskList[]>();
+    const add = (
+      nodeId: string | null,
+      callId: string | null,
+      tasks: InstanceTaskList['tasks'],
+    ): void => {
+      const key = nodeId ?? CHAT_AGENT_KEY;
+      const lists = byAgent.get(key) ?? [];
+      lists.push({ threadId: threadIdOfCall(callId), tasks });
+      byAgent.set(key, lists);
+    };
     // The DAEMON's fold wins, and that is the whole of the fix: it folded every
     // announcement the run has ever written, while the fold below can only see
     // the transcript WINDOW this client loaded. Neither shipped CLI re-states
@@ -4795,12 +4814,12 @@ export function Chats({
     const folded = activeRun?.taskList ?? [];
     if (folded.length > 0) {
       for (const group of folded) {
-        byAgent.set(group.nodeId ?? CHAT_AGENT_KEY, group.tasks);
+        add(group.nodeId, group.callId, group.tasks);
       }
       return byAgent;
     }
-    for (const [nodeId, tasks] of taskListsByAgent(items, subagentIdOf)) {
-      byAgent.set(nodeId ?? CHAT_AGENT_KEY, tasks);
+    for (const list of taskListsByThread(items, subagentIdOf)) {
+      add(list.nodeId, list.callId, list.tasks);
     }
     return byAgent;
   }, [items, activeRun?.taskList]);
@@ -5393,6 +5412,12 @@ export function Chats({
      * block's own ring on the very rule `cardContextOf` states below — an order
      * written down twice is an order two surfaces eventually disagree on.
      */
+    // Each call's own block, which is where an INSTANCE's latest words and its
+    // spend are already folded — read rather than re-derived, so the panel's
+    // instance row and the transcript's block cannot disagree about one call.
+    const callBlocks = new Map(
+      collectCallBlocks(durableEntries).map((block) => [block.callId, block]),
+    );
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -5401,9 +5426,14 @@ export function Chats({
         if (thread.kind !== 'call') {
           return thread;
         }
+        const block = callBlocks.get(thread.id);
+        const usage = block === undefined ? null : callBlockUsage(block);
         return {
           ...thread,
           ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
+          latest: block === undefined ? null : callBlockLatest(block),
+          spentTokens: usage?.tokens ?? null,
+          spentUsd: usage?.costUsd ?? null,
         };
       });
     };
@@ -5558,6 +5588,7 @@ export function Chats({
     activeRunStatus,
     activity,
     awaitingAnswer,
+    durableEntries,
     streaming,
     wfNodes,
     liveText,
@@ -5752,12 +5783,32 @@ export function Chats({
         startedAt >= daemonStartedAt
       );
     };
+    // WORKING is decided per conversation as well as per agent. A node called
+    // several times holds several conversations at once, and a call that has
+    // SETTLED took its foreground commands with it even while its siblings work
+    // on — so the node being busy says nothing about that call's own
+    // unanswered command, which would otherwise stand for the rest of the
+    // session. The same rule the agent-level gate states, one level down.
+    const settledCalls = new Set<string>();
+    for (const agent of agents) {
+      for (const thread of agent.threads) {
+        if (thread.kind === 'call' && isSettledRunStatus(thread.status)) {
+          settledCalls.add(JSON.stringify([agent.id, thread.id]));
+        }
+      }
+    }
     const byAgent = new Map<string, ShellRun[]>();
     for (const [nodeId, shells] of runningShellsByAgent(items)) {
       const key = nodeId ?? CHAT_AGENT_KEY;
-      const live = working.has(key)
-        ? shells.filter((shell) => !shell.background || stillRunning(shell))
-        : shells.filter((shell) => shell.background && stillRunning(shell));
+      const isWorking = (shell: ShellRun): boolean =>
+        working.has(key) &&
+        (shell.callId === null ||
+          !settledCalls.has(JSON.stringify([key, shell.callId])));
+      const live = shells.filter((shell) =>
+        isWorking(shell)
+          ? !shell.background || stillRunning(shell)
+          : shell.background && stillRunning(shell),
+      );
       if (live.length > 0) {
         byAgent.set(key, live);
       }
@@ -5918,15 +5969,26 @@ export function Chats({
         return;
       }
       seenTaskAgents.add(agentId);
-      const rows = tasksByAgent.get(agentId);
-      if (rows === undefined || rows.length === 0) {
-        return;
+      const lists = (tasksByAgent.get(agentId) ?? []).filter(
+        (list) => list.tasks.length > 0,
+      );
+      for (const list of lists) {
+        const progress = taskProgress(list.tasks);
+        done += progress.done;
+        total += progress.total;
+        taskRows.push(...list.tasks);
+        // One block per CONVERSATION, named for it when the agent keeps more
+        // than one — two instances' plans are two plans, the rule this popover
+        // already applies between two agents.
+        const several = lists.length > 1;
+        taskGroups.push({
+          agentId: several ? `${agentId} ${list.threadId}` : agentId,
+          agentName: several
+            ? `${agentName} · ${list.threadId === MAIN_THREAD_ID ? 'main' : list.threadId}`
+            : agentName,
+          tasks: list.tasks,
+        });
       }
-      const progress = taskProgress(rows);
-      done += progress.done;
-      total += progress.total;
-      taskRows.push(...rows);
-      taskGroups.push({ agentId, agentName, tasks: rows });
     };
     for (const agent of agents) {
       takeTasks(agent.id, agent.name);
@@ -5950,7 +6012,14 @@ export function Chats({
       const own = shellsByAgent.get(agent.id) ?? [];
       shells.push(...own);
       for (const shell of own) {
-        shellAgents.set(shell.id, agent.name);
+        // Named for its INSTANCE when a call started it — two Engineers each
+        // running `pnpm test` are otherwise one name printed twice.
+        shellAgents.set(
+          shell.id,
+          shell.callId === null
+            ? agent.name
+            : `${agent.name} · ${shell.callId}`,
+        );
       }
     }
     return {
@@ -5997,6 +6066,10 @@ export function Chats({
         exitCode: null,
         startedAt: new Date(shell.startedAt).toISOString(),
         agentId: shell.nodeId,
+        // The daemon's read names the node and not the call — and these rows
+        // reach the SHELF alone, which lists commands by agent, never the
+        // agents panel's per-instance bands.
+        callId: null,
       });
     }
     // Oldest first, like the transcript they came from: the daemon's rows are

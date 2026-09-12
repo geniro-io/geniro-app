@@ -1,3 +1,4 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,6 +35,7 @@ import { Task } from '../entity/task.entity';
 import type { TaskChangedEvent } from '../tasks.types';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
+import { TaskFilesService } from './task-files.service';
 import { TaskSettleService } from './task-settle.service';
 import { TasksService } from './tasks.service';
 
@@ -47,8 +49,8 @@ import { TasksService } from './tasks.service';
  *
  * Named explicitly rather than left to the service's default, which resolves
  * `environment.userDataDir` — the one shared resource the specs redirect for
- * themselves. Nothing is written here; the service only ever removes
- * `<root>/<task uuid>`, which cannot exist for a freshly minted id.
+ * themselves. Only the report-screenshot case writes here, under its own
+ * freshly minted task id, and it removes what it wrote.
  */
 const ATTACHMENTS_ROOT = join(tmpdir(), 'geniro-task-attachments-spec');
 
@@ -126,6 +128,8 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       projectDao,
       tasks,
       { get: getWorkflow } as unknown as WorkflowStoreService,
+      new TaskAttachmentService(ATTACHMENTS_ROOT),
+      new TaskFilesService(em, taskDao, tasks),
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -242,6 +246,51 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     await settleRun('run-1', 'completed');
 
     expect((await taskDao.getById(task.id))?.reportItemId).toBe(last.id);
+  });
+
+  it('copies the screenshots the report references onto the card', async () => {
+    // The report instructions ask for each picture of the work as a markdown
+    // image with an absolute path; the settle is what makes that ask worth
+    // anything, by bringing those files onto the card before the agent's
+    // scratch directory is reaped.
+    const task = await working();
+    const scratch = mkdtempSync(join(tmpdir(), 'geniro-report-shots-'));
+    const shot = join(scratch, 'panel.png');
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    writeFileSync(shot, bytes);
+    await row(
+      'run-1',
+      'report_findings',
+      null,
+      JSON.stringify({ findings: [] }),
+    );
+    await row(
+      'run-1',
+      'message',
+      'assistant',
+      JSON.stringify({
+        text: `Done.\n\n![the panel](${shot})\n![gone](/nope/missing.png)`,
+      }),
+    );
+
+    await settleRun('run-1', 'completed');
+
+    try {
+      const files = (await tasks.get(task.id)).attachments;
+      // The missing one is skipped, not fatal.
+      expect(files.map((file) => file.name)).toEqual(['panel.png']);
+      // A COPY under the card's own directory, not a reference to the scratch
+      // file the agent wrote.
+      expect(files[0]!.path.startsWith(join(ATTACHMENTS_ROOT, task.id))).toBe(
+        true,
+      );
+      expect(readFileSync(files[0]!.path)).toEqual(bytes);
+      // And the card still settled.
+      expect((await taskDao.getById(task.id))?.status).toBe('in_review');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(join(ATTACHMENTS_ROOT, task.id), { recursive: true, force: true });
+    }
   });
 
   /**

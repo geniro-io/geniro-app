@@ -629,6 +629,8 @@ function setup(
   storeGet: ReturnType<typeof vi.fn>;
   /** Every run-status announcement the real bus carried, in order. */
   statusEvents: { runId: string; status: string | null }[];
+  /** Every AWAITING announce (status null, `awaiting` set), in order. */
+  awaitingEvents: { runId: string; awaiting: string | null }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
 } {
@@ -687,10 +689,20 @@ function setup(
   // every status write, so the spec observes the real stream rather than a stub.
   const bus = new AgentEventBus();
   // `status` is nullable on the wire — an activity announce carries none. The
-  // executor only ever writes real statuses, so a null appearing here would
-  // itself be the defect worth seeing.
+  // executor writes real statuses and, separately, AWAITING announces (status
+  // null, `awaiting` set), which are filed apart below — so a null status
+  // appearing HERE, on an announce saying nothing about waiting, would itself
+  // be the defect worth seeing.
   const statusEvents: { runId: string; status: string | null }[] = [];
+  const awaitingEvents: {
+    runId: string;
+    awaiting: string | null;
+  }[] = [];
   bus.allStatuses().subscribe((event) => {
+    if (event.status === null && event.awaiting !== undefined) {
+      awaitingEvents.push({ runId: event.runId, awaiting: event.awaiting });
+      return;
+    }
     statusEvents.push({ runId: event.runId, status: event.status });
   });
   const deletedRuns: string[] = [];
@@ -839,6 +851,7 @@ function setup(
     mcpHarvest,
     storeGet,
     statusEvents,
+    awaitingEvents,
     deletedRuns,
     removedAttachmentRuns,
   };
@@ -1850,6 +1863,60 @@ describe('GraphExecutorService', () => {
     expect(approvals.resolve(run.id, 'req-9', true)).toBe(false);
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+
+  it('announces what the run is parked on — card up, answered, and swept', async () => {
+    // REPORTED as a "Waiting for your answer" notification that came back
+    // every time another thread was opened, over a workflow run the daemon
+    // itself reported as `awaiting: null`. The runs listing is a snapshot; the
+    // chat path announces every transition and this one announced none, so a
+    // listing taken while the card was open stranded the badge on
+    // `needs more info` for good. Each expectation below fails with the
+    // announces removed.
+    const { service, claude, approvals, awaitingEvents } = setup();
+    const askFlow: Workflow = {
+      name: 'ask',
+      nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'ask' }],
+      edges: [],
+    };
+    const run = await service.startRun({
+      slug: 'ask',
+      workflow: triggered(askFlow),
+      cwd: dir,
+      prompt: 'task',
+    });
+    await drain();
+
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-1',
+      toolName: 'Write',
+      input: { file_path: 'x' },
+    });
+    await drain();
+    expect(awaitingEvents).toEqual([{ runId: run.id, awaiting: 'approval' }]);
+
+    // Answered: the card is gone, and the window must be told so.
+    expect(approvals.resolve(run.id, 'req-1', true)).toBe(true);
+    await drain();
+    expect(awaitingEvents.at(-1)).toEqual({ runId: run.id, awaiting: null });
+
+    // Swept: a turn that settles with a card still open takes it down too.
+    claude.starts[0]!.emit({
+      type: 'approval_request',
+      id: 'req-2',
+      toolName: 'Write',
+      input: { file_path: 'y' },
+    });
+    await drain();
+    expect(awaitingEvents.at(-1)).toEqual({
+      runId: run.id,
+      awaiting: 'approval',
+    });
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(approvals.listByRun(run.id)).toHaveLength(0);
+    expect(awaitingEvents.at(-1)).toEqual({ runId: run.id, awaiting: null });
   });
 
   it('denies the parked node CLI (never hangs) when an approval_request card fails to persist', async () => {

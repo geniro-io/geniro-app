@@ -183,19 +183,45 @@ export function taskProgress(tasks: readonly AgentTaskRow[]): {
 }
 
 /**
- * Each AGENT's own current task list, keyed by node id (`null` for a 1:1 chat's
- * one agent) — what the side panel shows beside that agent's threads.
+ * One CONVERSATION's current task list: which agent keeps it (`nodeId`, `null`
+ * for a 1:1 chat's one agent) and which of that agent's conversations it was
+ * kept in (`callId`, `null` for the node's own).
+ *
+ * The twin of the daemon's `RunTaskGroup`, and keyed the same way.
+ */
+export interface ThreadTaskList {
+  nodeId: string | null;
+  callId: string | null;
+  tasks: AgentTaskRow[];
+}
+
+/**
+ * Each CONVERSATION's own current task list, in first-announcement order —
+ * what the side panel shows under that conversation.
+ *
+ * Per agent AND per call thread: a node called several times holds one
+ * conversation per call, each numbering its tasks from 1, so folding them by
+ * node alone reported two instances' plans as one list belonging to neither.
+ * The call id comes off the payload, where the executor tags every row a
+ * callee sub-turn streams.
  *
  * A DELEGATE's rows are excluded, deliberately: a sub-agent's list belongs to
  * its own block, the way its conversation does, and merging it here would both
  * mix two lists that number their tasks from 1 and report a delegate's progress
  * as the agent's own.
  */
-export function taskListsByAgent(
+export function taskListsByThread(
   items: readonly ChatItem[],
   subagentIdOf: (item: ChatItem) => string | null,
-): Map<string | null, AgentTaskRow[]> {
-  const perAgent = new Map<string | null, TaskAnnouncement[]>();
+): ThreadTaskList[] {
+  const perThread = new Map<
+    string,
+    {
+      nodeId: string | null;
+      callId: string | null;
+      announcements: TaskAnnouncement[];
+    }
+  >();
   for (const item of items) {
     if (item.kind !== 'task_list' || subagentIdOf(item) !== null) {
       continue;
@@ -204,16 +230,27 @@ export function taskListsByAgent(
     if (announcement === null) {
       continue;
     }
-    const list = perAgent.get(item.nodeId);
-    if (list) {
-      list.push(announcement);
+    const payload = item.payload as { callId?: unknown } | null;
+    const callId =
+      typeof payload?.callId === 'string' && payload.callId.length > 0
+        ? payload.callId
+        : null;
+    // A JSON pair: a node id is any non-empty string, so no separator is safe.
+    const key = JSON.stringify([item.nodeId, callId]);
+    const thread = perThread.get(key);
+    if (thread) {
+      thread.announcements.push(announcement);
     } else {
-      perAgent.set(item.nodeId, [announcement]);
+      perThread.set(key, {
+        nodeId: item.nodeId,
+        callId,
+        announcements: [announcement],
+      });
     }
   }
-  const out = new Map<string | null, AgentTaskRow[]>();
-  for (const [agent, announcements] of perAgent) {
-    out.set(agent, foldTaskList(announcements));
-  }
-  return out;
+  return [...perThread.values()].map((thread) => ({
+    nodeId: thread.nodeId,
+    callId: thread.callId,
+    tasks: foldTaskList(thread.announcements),
+  }));
 }

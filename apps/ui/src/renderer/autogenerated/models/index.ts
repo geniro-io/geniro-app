@@ -3658,6 +3658,12 @@ export interface RunTaskGroup {
     nodeId: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof RunTaskGroup
+     */
+    callId: string | null;
+    /**
+     * 
      * @type {Array<RunTaskRow>}
      * @memberof RunTaskGroup
      */

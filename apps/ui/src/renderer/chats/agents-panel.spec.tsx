@@ -2463,10 +2463,57 @@ describe('AgentsPanel — the instances of a called agent', () => {
     expect(latest.textContent).toContain('running Bash');
     expect(latest.textContent).toContain('12.4k tokens');
     expect(latest.textContent).toContain('$0.42');
-    // An instance nothing has measured draws no line, rather than `0 tokens`.
+    // An instance nothing has said or measured still has its second line —
+    // its status in words — and no figure, rather than `0 tokens`.
+    const quiet = block(el, 'call-2')!.querySelector(
+      '[data-slot="agent-instance-latest"]',
+    )!;
+    expect(quiet.textContent).toBe('running');
+  });
+
+  it('draws EVERY instance in one shape: a disclosure, the brief as its title with the call id, and a second line', () => {
+    // REPORTED against a card where two finished calls had a chevron and one
+    // line while two others had no chevron and two lines — "some of them open,
+    // some of them are not".
+    const el = panel({
+      ...engineer,
+      threads: [
+        call('call-8', 'x', 'completed', {
+          label: 'call-8 · Fix it — add the two missing guards',
+          brief: 'Fix it — add the two missing guards\nThen re-run QA.',
+          latest: 'Still paused.',
+        }),
+        call('call-9', 'x', 'completed', { label: 'call-9', brief: null }),
+      ],
+    });
+    for (const id of ['call-8', 'call-9']) {
+      const each = block(el, id)!;
+      expect(each.querySelector('button[aria-expanded]'), id).not.toBeNull();
+      expect(
+        each.querySelector('[data-slot="agent-instance-latest"]'),
+        id,
+      ).not.toBeNull();
+    }
+    const briefed = block(el, 'call-8')!;
     expect(
-      block(el, 'call-2')!.querySelector('[data-slot="agent-instance-latest"]'),
-    ).toBeNull();
+      briefed.querySelector('[data-slot="thread-row-tag"]')?.textContent,
+    ).toBe('call-8');
+    // The title is the brief alone; the id is the tag, not a prefix.
+    expect(briefed.textContent).not.toContain('call-8 · ');
+    // Opening it shows the WHOLE brief, which the heading truncates.
+    click(briefed.querySelector('button[aria-expanded]'));
+    expect(
+      block(el, 'call-8')!.querySelector('[data-slot="agent-instance-brief"]')
+        ?.textContent,
+    ).toBe('Fix it — add the two missing guards\nThen re-run QA.');
+    // A call with no brief is titled by its id, with no tag repeating it.
+    const bare = block(el, 'call-9')!;
+    expect(bare.querySelector('[data-slot="thread-row-tag"]')).toBeNull();
+    expect(bare.textContent).toContain('call-9');
+    // …and with nothing said or measured, its second line still says its state.
+    expect(
+      bare.querySelector('[data-slot="agent-instance-latest"]')?.textContent,
+    ).toBe('completed');
   });
 
   it('folds a finished instance to its heading — terminal kept — and opens it on a press', () => {

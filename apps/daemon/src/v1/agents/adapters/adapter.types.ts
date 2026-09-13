@@ -1255,7 +1255,10 @@ type AgentEventBody =
        * saying "compacted" is housekeeping the user did not ask for in the
        * middle of the conversation they did. What DOES earn a row is the CLI's
        * own summary text and a compaction that FAILED, and both arrive as their
-       * own lines rather than on this arm.
+       * own lines rather than on this arm — except that a FINISHED compaction
+       * no summary follows (every automatic one, on claude 2.1.266) gets a row
+       * of its own from `CompactionRows`, since an agent silently forgetting
+       * most of the conversation is not housekeeping the user can do without.
        */
       type: 'context_compacted';
       /**

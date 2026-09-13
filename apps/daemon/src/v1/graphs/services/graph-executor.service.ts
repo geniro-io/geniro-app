@@ -47,6 +47,7 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
+import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
   mapEventToItem,
   terminalStatus,
@@ -1838,6 +1839,9 @@ export class GraphExecutorService implements OnModuleInit {
         // at startRun if unusable.
         configDir: node.configDir ?? null,
       };
+      // This turn's compaction, until the row recording it is written — the
+      // chat path's `compactions`, for a node's or a callee's own window.
+      const compactions = new CompactionRows();
       const onEvent = (event: AgentEvent): void => {
         enqueue(async () => {
           // Whether THIS event's approval request is the agent asking something
@@ -2128,6 +2132,15 @@ export class GraphExecutorService implements OnModuleInit {
           // chat path, which does the same at its own persist seam.
           this.partials.endThinking(runId, ownerKey, node.id);
           const mapped = mapEventToItem(event);
+          // A compaction the agent finished: stamped onto its summary, or
+          // written on its own ahead of this row — nothing else records one.
+          for (const row of compactions.rowsBefore(event, mapped)) {
+            await persistItem(node.id, row.kind, row.role, {
+              ...row.payload,
+              nodeId: node.id,
+              ...(callContext ? { callId: callContext.callId } : {}),
+            });
+          }
           if (mapped) {
             // A callee sub-turn tags every streamed item with its callId so
             // the renderer can nest the whole sub-turn under its call block —
@@ -2259,12 +2272,20 @@ export class GraphExecutorService implements OnModuleInit {
        * `turn_complete`, and a row after it would claim the workflow was still
        * going when nothing can make it finish again.
        */
+      const offTurnCompactions = new CompactionRows();
       const onOffTurnEvent = (event: AgentEvent): void => {
         enqueue(async () => {
           if (runFinished) {
             return;
           }
           const mapped = mapEventToItem(event);
+          for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
+            await persistItem(node.id, row.kind, row.role, {
+              ...row.payload,
+              nodeId: node.id,
+              ...(callContext ? { callId: callContext.callId } : {}),
+            });
+          }
           if (!mapped) {
             return;
           }

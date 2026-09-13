@@ -398,33 +398,38 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (message === null) {
         return null;
       }
-      // Text the CLI wrote, which geniro is only relaying — its own compaction
-      // summary is the case this exists for. It is informational prose, so it
-      // gets the neutral tone rather than the failure chrome below; dressing
-      // a relayed summary in red told the user geniro was reporting a problem,
-      // and it would also let agent-authored text impersonate an app-level
-      // advisory beside the real ones.
+      // A compaction, whoever wrote the row. A compaction summary is ~10 000
+      // characters of the CLI describing a conversation the user just had, and
+      // it used to land in the transcript in full — several screens of prose
+      // between two of their own messages, with no heading to say what it even
+      // was. COLLAPSED, with the one fact that explains why it appeared at all
+      // on its line: the row states what the compaction did, and the summary is
+      // one click away for the rare moment someone wants to read it.
+      //
+      // Checked BEFORE the author: a compaction the CLI reported no summary for
+      // gets a row the DAEMON writes (`utils/compaction-rows.ts`), and that one
+      // must read as the same event rather than as a daemon notice.
+      const compaction = compactionFacts(item.payload);
+      if (compaction !== null) {
+        return (
+          <DisclosureRow
+            tone="muted"
+            caption={
+              compaction.trigger === 'auto'
+                ? 'conversation compacted automatically'
+                : 'conversation compacted'
+            }
+            detail={compactionDetail(compaction)}
+            message={message}
+          />
+        );
+      }
+      // Text the CLI wrote, which geniro is only relaying. It is informational
+      // prose, so it gets the neutral tone rather than the failure chrome below;
+      // dressing relayed text in red told the user geniro was reporting a
+      // problem, and it would also let agent-authored text impersonate an
+      // app-level advisory beside the real ones.
       if (isCliAuthored(item.payload)) {
-        const compaction = compactionFacts(item.payload);
-        // A compaction summary is ~10 000 characters of the CLI describing a
-        // conversation the user just had, and it used to land in the transcript
-        // in full — several screens of prose between two of their own messages,
-        // with no heading to say what it even was. COLLAPSED, with the one fact
-        // that explains why it appeared at all on its line: the row states what
-        // the compaction did, and the summary is one click away for the rare
-        // moment someone wants to read it.
-        if (compaction !== null) {
-          return (
-            <DisclosureRow
-              tone="muted"
-              caption="conversation compacted"
-              detail={compactionDetail(compaction)}
-              message={message}
-            />
-          );
-        }
-        // A relayed notice with no compaction marker: not a summary, and short
-        // enough to read where it stands. Unchanged.
         return <MessageBubble variant="note">{message}</MessageBubble>;
       }
       // The daemon speaking, but not about a failure: it said so itself

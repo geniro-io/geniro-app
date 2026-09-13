@@ -4909,6 +4909,65 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     });
   });
 
+  it('records a compaction the agent finished with no summary, in its turn and after it', async () => {
+    // claude puts only the boundary on the stream when its window fills, and a
+    // workflow node's transcript used to carry no trace that it had forgotten
+    // most of its conversation.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'start the build',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    completeTurn(callee, 'started it');
+    await call;
+    await drain();
+    callee.emitOffTurn({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 500_000,
+      postTokens: 20_000,
+    });
+    callee.emitOffTurn({ type: 'text', text: 'the build finished' });
+    await drain();
+
+    const compactions = itemDao.items
+      .filter((item) => item.kind === 'system' && item.nodeId === 'callee')
+      .map(
+        (item) => JSON.parse(item.payload as string) as Record<string, unknown>,
+      )
+      .filter((payload) => payload.compaction !== undefined);
+    expect(compactions).toEqual([
+      expect.objectContaining({
+        compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+        callId: 'call-1',
+      }),
+      expect.objectContaining({
+        compaction: { preTokens: 500_000, postTokens: 20_000, trigger: 'auto' },
+        callId: 'call-1',
+      }),
+    ]);
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
   it('answers an off-turn permission the way the in-turn path would', async () => {
     // The continuation a backgrounded unit's report opens is made almost
     // entirely of tool calls, and `spawn-cli`'s own default between turns is to

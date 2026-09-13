@@ -64,6 +64,7 @@ import {
   isUserQuestion,
 } from '../utils/approval-answer';
 import { withCarriedContext } from '../utils/carried-context';
+import { CompactionRows } from '../utils/compaction-rows';
 import {
   mapEventToItem,
   offTurnActivity,
@@ -287,6 +288,12 @@ export class ChatService implements OnModuleInit {
    * run over.
    */
   private readonly offTurnRuns = new Map<string, RunStatus>();
+  /**
+   * A compaction the CLI finished BETWEEN turns, per run, until its row is
+   * written — the off-turn twin of the in-turn `compactions`. Dropped again
+   * the moment nothing is held, so a run leaves no entry behind.
+   */
+  private readonly offTurnCompactions = new Map<string, CompactionRows>();
 
   /**
    * Runs whose off-turn `running` is a LEASE on a delegate that is still
@@ -2027,13 +2034,36 @@ export class ChatService implements OnModuleInit {
     // only ever go down.
     this.recordShellBracket(runId, event);
     const mapped = mapEventToItem(event);
-    if (!mapped) {
+    // Taken synchronously, before any await, so the pairing follows the order
+    // events ARRIVED in rather than the order their writes finish.
+    const compactions =
+      this.offTurnCompactions.get(runId) ?? new CompactionRows();
+    const compactionRows = compactions.rowsBefore(event, mapped);
+    if (compactions.holding) {
+      this.offTurnCompactions.set(runId, compactions);
+    } else {
+      this.offTurnCompactions.delete(runId);
+    }
+    if (!mapped && compactionRows.length === 0) {
       // No row and no live meaning — `background_work` bookkeeping for a turn
       // that no longer exists is the standing example.
       return;
     }
     try {
       const em = this.em.fork();
+      for (const row of compactionRows) {
+        await this.persist(
+          em,
+          runId,
+          await this.seqs.reserve(runId),
+          row.kind,
+          row.role,
+          row.payload,
+        );
+      }
+      if (!mapped) {
+        return;
+      }
       await this.persist(
         em,
         runId,
@@ -3465,37 +3495,25 @@ export class ChatService implements OnModuleInit {
       let workRows = 0;
       let eventHandlingFailed = false;
       /**
-       * The token figures the CLI reported for a compaction that just finished,
-       * held until its summary arrives so the summary's own row can carry them.
+       * The compaction this turn finished, until the row that records it is
+       * written — stamped onto the CLI's summary when one follows, else a row
+       * of its own ahead of the next one (`CompactionRows`).
        *
        * The two are separate lines on the stream and neither can see the other:
        * the boundary has the numbers and no text, the injected summary has the
-       * text and no numbers. Correlating them is what lets the transcript collapse
-       * the summary behind ONE line that says what the compaction actually did
-       * ("Conversation compacted · 200.2k → 34.1k") instead of a wall of relayed
-       * prose with no heading.
-       *
-       * Ordering is MEASURED, not assumed — 2.1.228, this daemon's own debug log:
-       * the boundary landed at 10:36:13.025 and the summary at 10:36:13.026, one
-       * millisecond apart and in that order. A turn-scoped `let` rather than a
-       * service field because a compaction belongs to the turn that asked for it,
-       * and a stale figure must not be able to reach a later turn's summary.
-       *
-       * Null is the honest degrade at every point: an auto-compaction whose
-       * boundary carries no metadata, a summary that arrives without one, or the
-       * graph executor's own event loop (which does not correlate them) all leave
-       * the row rendering as the plain relayed note it was before.
+       * text and no numbers. Ordering is MEASURED, not assumed — 2.1.228, this
+       * daemon's own debug log: the boundary landed at 10:36:13.025 and the
+       * summary at 10:36:13.026. Turn-scoped rather than a service field because
+       * a compaction belongs to the turn it happened in, and a stale figure must
+       * not be able to reach a later turn's summary.
        */
-      let compactedTokens: {
-        preTokens: number | null;
-        postTokens: number | null;
-      } | null = null;
+      const compactions = new CompactionRows();
       /**
        * Tool calls this turn has made on the MAIN thread — counted here because
        * no CLI reports a total, and the durable row is what keeps the figure
        * from describing only the transcript a client happens to hold.
        *
-       * Per TURN, in this closure, like `compactedTokens` above — so it already
+       * Per TURN, in this closure, like `compactions` above — so it already
        * starts at zero and the zeroing below is unobservable, verified by
        * mutation: removing it changes no test. It stays because the durable
        * write ADDS, so the day a closure serves two turns an un-zeroed counter
@@ -3507,7 +3525,7 @@ export class ChatService implements OnModuleInit {
        * How many units of background work this turn is being HELD for — 0
        * whenever the agent is itself still working.
        *
-       * Per TURN, in this closure, like `compactedTokens` above: one turn's
+       * Per TURN, in this closure, like `compactions` above: one turn's
        * hold says nothing about the next.
        *
        * Fed by `turn_held`, which `runCliSession` raises, and NOT by counting
@@ -4656,14 +4674,20 @@ export class ChatService implements OnModuleInit {
               if (event.parentToolUseId !== undefined) {
                 return;
               }
+              // Held for the summary line that may follow (see `compactions`);
+              // what comes back is an EARLIER compaction that none followed.
+              for (const row of compactions.rowsBefore(event, null)) {
+                await this.persist(
+                  em,
+                  runId,
+                  await this.seqs.reserve(runId),
+                  row.kind,
+                  row.role,
+                  row.payload,
+                );
+                compactionRows += 1;
+              }
               if (event.phase === 'finished') {
-                // Kept for the summary line that follows (see `compactedTokens`).
-                // Only the finished phase carries metadata — `started` is a bare
-                // status line and `failed` never got as far as compacting.
-                compactedTokens = {
-                  preTokens: event.preTokens,
-                  postTokens: event.postTokens,
-                };
                 // A compaction that said what it left behind has already
                 // published it (the driver synthesizes a `context_progress`
                 // from `postTokens`, which files itself on the row above). One
@@ -4689,7 +4713,7 @@ export class ChatService implements OnModuleInit {
               // here too: afterwards the run is back to whatever it was doing,
               // and "Working…" is the honest standing phrase for that. Nothing
               // is lost with it — the CLI's own summary lands as a durable row
-              // carrying the figures the phrase never had (`compactedTokens`
+              // carrying the figures the phrase never had (`compactions`
               // below), which is both a better sentence and one that survives a
               // reload. Measured on the author's own database: 14 compactions,
               // 14 summary rows.
@@ -4738,27 +4762,20 @@ export class ChatService implements OnModuleInit {
             if (!mapped) {
               return;
             }
-            if (
-              event.type === 'notice' &&
-              event.origin === 'cli' &&
-              compactedTokens !== null
-            ) {
-              // The relayed text is the compaction's SUMMARY, and this is the one
-              // place that knows it — the mapper sees one line at a time and the
-              // renderer sees only what is persisted.
-              //
-              // TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`
-              // reads this `compaction` key back to title the collapsed row. An
-              // item payload is `z.unknown()` on the wire BY DESIGN, so no
-              // generated type spans the two sides — renaming the key here means
-              // renaming it there.
-              mapped.payload = {
-                ...mapped.payload,
-                compaction: compactedTokens,
-              };
-              // Spent. A second CLI-authored notice in the same turn is not this
-              // compaction's summary, and must not inherit its figures.
-              compactedTokens = null;
+            // The held compaction's row: stamped onto `mapped` when this is the
+            // CLI's summary, else written on its own ahead of it — an automatic
+            // compaction puts no summary on the stream at all, and used to leave
+            // no trace in the transcript.
+            for (const row of compactions.rowsBefore(event, mapped)) {
+              await this.persist(
+                em,
+                runId,
+                await this.seqs.reserve(runId),
+                row.kind,
+                row.role,
+                row.payload,
+              );
+              compactionRows += 1;
             }
             if (
               event.type === 'tool_call' &&

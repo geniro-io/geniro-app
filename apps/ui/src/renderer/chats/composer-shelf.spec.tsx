@@ -96,6 +96,28 @@ describe('RunningShellChips', () => {
     expect(chip.textContent).toContain('1');
   });
 
+  it('does not say "Nothing running" under the note saying a command IS running', async () => {
+    // REPORTED as "I see some strange message": the note read `1 command still
+    // running…` and the list's own empty sentence under it read `Nothing
+    // running — this thread's agents have no shell open`.
+    const el = mount(
+      <RunningShellChips
+        shells={[]}
+        reportedOpen={1}
+        onOpen={() => undefined}
+      />,
+    );
+    await act(async () => {
+      el.querySelector<HTMLElement>(
+        '[data-slot="running-shells"] button',
+      )!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    const panel = document.querySelector<HTMLElement>('[aria-label="Shells"]');
+    expect(panel?.textContent).toContain('1 command still running');
+    expect(panel?.textContent).not.toContain('Nothing running');
+  });
+
   it('never lets the run count REDUCE what the fold found', () => {
     // The fold can only ever be short of the run's count — it cannot invent a
     // command — so the larger of the two is the honest figure. A stale lower

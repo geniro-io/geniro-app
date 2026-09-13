@@ -11027,6 +11027,35 @@ describe('Chats — running shells', () => {
     ).toContain('pnpm build');
   });
 
+  it('follows the run’s LIVE shell count, not the one the chat list was loaded with', async () => {
+    // REPORTED as a Terminals chip reading `1 command still running` over an
+    // empty list, minutes after every command had ended. The announce updated
+    // only a yes/no flag, so `run.shellsOpen` — which the chip counts and the
+    // whole-conversation list refetches on — stayed the load-time snapshot.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'build it')]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+    const readsBefore = api.readChatShells.mock.calls.length;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, shellsOpen: 1 });
+    });
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    // …and the whole-conversation list is asked again, since it keys on the
+    // same count.
+    expect(api.readChatShells.mock.calls.length).toBeGreaterThan(readsBefore);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, shellsOpen: 0 });
+    });
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+  });
+
   it('drops a command as soon as its reply lands', async () => {
     api.listChats.mockResolvedValue([run1]);
     api.listRunItems.mockResolvedValue([

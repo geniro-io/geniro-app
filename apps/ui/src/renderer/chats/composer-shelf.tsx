@@ -354,12 +354,17 @@ export function RunningShellChips({
             : `${unlisted} more started earlier in this conversation than the part loaded here.`}
         </p>
       ) : null}
-      <ShellRows
-        shells={shells}
-        agentNameOf={agentNameOf}
-        onOpen={onOpen}
-        onKill={onKill}
-      />
+      {/* No rows means the note above is the whole answer. The list's own
+          empty sentence ("Nothing running") under a note saying one IS running
+          read as the app contradicting itself. */}
+      {shells.length > 0 ? (
+        <ShellRows
+          shells={shells}
+          agentNameOf={agentNameOf}
+          onOpen={onOpen}
+          onKill={onKill}
+        />
+      ) : null}
     </HoverPopover>
   );
 }

@@ -5452,6 +5452,17 @@ export function Chats({
       nodeActivity: AgentActivity | undefined,
     ): AgentThread[] => {
       return threadsOf(nodeActivity).map((thread) => {
+        if (thread.kind === 'main') {
+          // The node's OWN conversation streams on the node's own key, and that
+          // live reading outranks the one folded from its settled turns.
+          const live = liveText.get(nodeId);
+          return {
+            ...thread,
+            contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
+            contextWindowTokens:
+              live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
+          };
+        }
         if (thread.kind !== 'call') {
           return thread;
         }

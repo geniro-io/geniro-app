@@ -5353,10 +5353,18 @@ export function Chats({
             liveText.get(CHAT_LIVE_KEY)?.contextWindowTokens ??
             chatActivity?.contextWindowTokens ??
             null,
-          spentUsd: chatActivity?.spentUsd ?? null,
-          inputTokens: chatActivity?.inputTokens ?? null,
-          outputTokens: chatActivity?.outputTokens ?? null,
-          cacheTokens: chatActivity?.cacheTokens ?? null,
+          // The DAEMON's totals over every turn, the figures the header and
+          // the context readout state — the transcript fold covers only the
+          // loaded window, so on a long thread it left the oldest turns out and
+          // the card read a smaller spend than the readout beside it. The fold
+          // stays underneath for the moment before the totals read lands.
+          spentUsd: threadTotals.costUsd ?? chatActivity?.spentUsd ?? null,
+          inputTokens:
+            threadTotals.inputTokens ?? chatActivity?.inputTokens ?? null,
+          outputTokens:
+            threadTotals.outputTokens ?? chatActivity?.outputTokens ?? null,
+          cacheTokens:
+            threadTotals.cacheTokens ?? chatActivity?.cacheTokens ?? null,
           threads: [
             {
               id: 'main',
@@ -5566,6 +5574,10 @@ export function Chats({
     liveText,
     nodeReadings,
     subagentThreads,
+    threadTotals.costUsd,
+    threadTotals.inputTokens,
+    threadTotals.outputTokens,
+    threadTotals.cacheTokens,
   ]);
 
   /**

@@ -1674,6 +1674,54 @@ describe('Chats transcript auto-scroll', () => {
     ).toBe('Context 46% full — 462.3k of 1M');
   });
 
+  it('states the agent card’s spend from the DAEMON’s thread totals, not the loaded window', async () => {
+    // REPORTED as a card reading `248.6k tokens · $31.72` beside a context
+    // readout saying `$37.81 · in 2.4k · out 266.2k`. A long thread opens on its
+    // newest 1,000 items, and the card summed only the turns inside that window
+    // — the thread's first turn had scrolled out of it. The window here holds
+    // one small turn; the daemon's totals cover the whole thread, and the two
+    // figures are deliberately far apart so only one source can produce each.
+    const inWindow: ChatItem = {
+      id: 'recent-turn',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: { inputTokens: 100, outputTokens: 900, costUsd: 1.5 },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), inWindow]);
+    api.readChatTotals.mockResolvedValue({
+      totals: {
+        turns: 5,
+        costedTurns: 5,
+        costUsd: 37.81,
+        inputTokens: 2_418,
+        outputTokens: 266_226,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        ownerKey: null,
+        thinkingTokens: null,
+        workedMs: null,
+      },
+    });
+
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector(
+        '[data-slot="agent-cards"] [data-slot="agent-spend"]',
+      )?.textContent,
+    ).toBe('268.6k tokens · $37.81');
+  });
+
   it('moves the ring onto the reading the PANEL just took', async () => {
     // REPORTED as "Context circle wasnt synced, it took 15s to sync": the
     // panel had asked the CLI directly and read 425.4k while the ring beside

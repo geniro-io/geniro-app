@@ -1,10 +1,25 @@
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { defineConfig, UnderscoreNamingStrategy } from '@mikro-orm/sqlite';
 
 import { environment } from '../environments';
 
 const { dbPath } = environment;
+
+/**
+ * The path `require()` accepts for an entity mikro-orm asks to import.
+ *
+ * mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs,
+ * which the swc CJS transform's require() shim does not accept. The URL is
+ * DECODED, not merely stripped: `new URL(id).pathname` keeps `%20` for a space,
+ * so a daemon installed under any path with a space in it — every task
+ * worktree under `~/Library/Application Support/` among them — failed at boot
+ * with `Cannot find module '…/Application%20Support/…/project.entity.js'`.
+ */
+export function entityImportPath(id: string): string {
+  return id.startsWith('file://') ? fileURLToPath(id) : id;
+}
 
 /**
  * mikro-orm config, cloned from Geniro's apps/api and adapted to SQLite
@@ -35,11 +50,5 @@ export default defineConfig({
   // The sibling also carries `Migrator`, which this repo deliberately does not
   // have: the schema is synced additively on launch (`orm.schema.update({ safe:
   // true })`) and the versioned migration workflow stays deferred past v1.
-  //
-  // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
-  // strip the prefix so the swc CJS transform's require() shim accepts the path.
-  dynamicImportProvider: async (id: string) => {
-    const path = id.startsWith('file://') ? new URL(id).pathname : id;
-    return import(path);
-  },
+  dynamicImportProvider: async (id: string) => import(entityImportPath(id)),
 });

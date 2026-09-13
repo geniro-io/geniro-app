@@ -9,10 +9,11 @@ import {
   type UpdateState,
 } from '../shared/contracts';
 import {
+  applyStagedUpdate,
   canWriteBundle,
   type InstallInput,
-  installUpdate,
   resolveBundlePath,
+  stageUpdate,
   sweepUpdateDebris,
 } from './update-installer';
 import {
@@ -137,9 +138,12 @@ export interface UpdateServiceDeps {
   /** Scratch directory for downloads. */
   workDir: () => string;
   fetchLatest: () => Promise<ReleaseLookup>;
+  /** Download, verify and stage the release beside the app — never over it. */
   install: (input: InstallInput) => Promise<void>;
+  /** Put the staged release in place. Only ever called at quit. */
+  apply: (bundlePath: string) => Promise<void>;
   canWrite: (bundlePath: string) => Promise<boolean>;
-  /** Quit and come back up on the freshly-swapped bundle. */
+  /** Quit, and come back up on the release the quit puts in place. */
   relaunch: () => void;
   /** Remove what previous updates left on disk; resolves with what it removed. */
   sweep: (input: { workDir: string; bundlePath: string }) => Promise<string[]>;
@@ -188,6 +192,12 @@ export class UpdateService {
    * the bundle swap would then be a second `ditto` writing the same bundle.
    */
   private aborter: AbortController | null = null;
+  /**
+   * The release this launch downloaded, verified and left beside the app, for
+   * its quit to put in place. Held apart from `state` because the quit needs
+   * the bundle it was staged FOR, and because nothing a check does may drop it.
+   */
+  private staged: { bundlePath: string; version: string } | null = null;
 
   constructor(private readonly deps: UpdateServiceDeps) {
     this.state = {
@@ -436,6 +446,7 @@ export class UpdateService {
       if (this.abandoned(attempt)) {
         return this.state;
       }
+      this.staged = { bundlePath, version: release.version };
     } catch (err) {
       if (this.abandoned(attempt)) {
         // The abort THIS service raised, surfacing as the rejection it was
@@ -461,15 +472,16 @@ export class UpdateService {
     }
     this.deps.log(
       'info',
-      `Geniro ${release.version} is installed — waiting for a restart`,
+      `Geniro ${release.version} is staged — it is put in place when the app quits`,
       { kind: 'update-installed', version: release.version },
     );
-    // The new bundle is on disk. The app does NOT restart itself here, and that
-    // is the user's own ask ("after update there should be a reload button to
-    // relaunch app"): a relaunch quits this process, which takes the daemon and
-    // every turn running under it with it — so choosing the moment belongs to
-    // the person who might be mid-conversation. `ready` is the state that says
-    // "installed, waiting on you"; {@link relaunch} is the button.
+    // The new bundle waits beside the app. The app does NOT restart itself
+    // here, and that is the user's own ask ("after update there should be a
+    // reload button to relaunch app"): a relaunch quits this process, which
+    // takes the daemon and every turn running under it with it — so choosing
+    // the moment belongs to the person who might be mid-conversation. `ready`
+    // is the state that says "waiting on you"; {@link relaunch} is the button,
+    // and any other quit applies it just the same.
     return this.emit({
       phase: 'ready',
       progress: null,
@@ -479,7 +491,8 @@ export class UpdateService {
   }
 
   /**
-   * Restart into the bundle {@link install} swapped in.
+   * Restart into the release {@link install} staged — the quit this starts is
+   * what puts it in place ({@link applyStaged}).
    *
    * Only from `ready`. Anywhere else there is nothing new on disk to come back
    * into, so a stray press would quit the app and change nothing — which is
@@ -491,6 +504,44 @@ export class UpdateService {
     }
     this.deps.relaunch();
     return this.state;
+  }
+
+  /** Whether this launch has a release waiting for its quit. */
+  hasStagedUpdate(): boolean {
+    return this.staged !== null;
+  }
+
+  /**
+   * Put the staged release in place — called from `will-quit`, and nowhere
+   * earlier (`stageUpdate` says why). Resolves whether it was.
+   *
+   * ONE attempt, cleared before it runs: this sits on the quit path, and a
+   * quit that retried a failing swap would never finish. A failure leaves the
+   * old bundle where it was, and the next launch's check offers the release
+   * again. The log line is written for completeness, but the daemon has
+   * stopped by now, so it does not outlive this process.
+   */
+  async applyStaged(): Promise<boolean> {
+    const staged = this.staged;
+    if (staged === null) {
+      return false;
+    }
+    this.staged = null;
+    try {
+      await this.deps.apply(staged.bundlePath);
+      this.deps.log('info', `put Geniro ${staged.version} in place`, {
+        kind: 'update-applied',
+        version: staged.version,
+      });
+      return true;
+    } catch (err) {
+      this.deps.log(
+        'error',
+        `Geniro ${staged.version} could not be put in place: ${err instanceof Error ? err.message : String(err)}`,
+        { kind: 'update-apply-failed', version: staged.version },
+      );
+      return false;
+    }
   }
 
   /**
@@ -667,15 +718,16 @@ export function createUpdateService(log: UpdateLog): UpdateService {
     bundlePath: () => resolveBundlePath(app.getPath('exe')),
     workDir: () => join(app.getPath('userData'), 'updates'),
     fetchLatest: fetchLatestRelease,
-    install: installUpdate,
+    install: stageUpdate,
+    apply: applyStagedUpdate,
     canWrite: canWriteBundle,
     sweep: sweepUpdateDebris,
     log,
     relaunch: () => {
-      // Electron spawns the replacement only after this instance has exited,
-      // which is what makes relaunching into a bundle we just swapped safe:
-      // the single-instance lock is released and `process.execPath` resolves
-      // to the new binary at the same path.
+      // The quit is what puts the staged release in place (`will-quit` in
+      // `index.ts`), and Electron spawns the replacement only after this
+      // instance has exited — so the single-instance lock is released and
+      // `process.execPath` resolves to the new binary at the same path.
       app.relaunch();
       app.quit();
     },

@@ -17,7 +17,7 @@ const DOWNLOADING: FooterUpdate = {
 const READY: FooterUpdate = {
   kind: 'restart',
   label: 'restart',
-  title: 'Geniro 1.48.5 is installed — restart to use it.',
+  title: 'Geniro 1.48.5 is ready — restart to use it.',
 };
 const FAILED: FooterUpdate = {
   kind: 'error',

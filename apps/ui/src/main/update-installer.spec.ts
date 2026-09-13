@@ -30,16 +30,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * filesystem each work on one platform or need privileges), so the fault is
  * injected instead. What is asserted stays real throughout — that the update
  * still completed, and that the undeleted directory is genuinely still on disk.
+ *
+ * `rename` carries the same kind of injector ({@link unrenamable}) for the one
+ * failure the swap at quit has to survive: the second rename of its pair,
+ * landing after the running bundle has already been moved aside.
  */
 type DittoOptions = { signal?: AbortSignal };
 type DittoCallback = (err: Error | null, result?: unknown) => void;
 
 /**
- * Paths whose removal must fail for the test currently running. Registered by
- * the test, cleared between them, and consulted by the `rm` injector below.
+ * Paths whose removal — or, for the second set, whose rename — must fail for
+ * the test currently running. Registered by the test, cleared between them,
+ * and consulted by the injectors below.
  */
-const { unremovable } = vi.hoisted(() => ({
+const { unremovable, unrenamable } = vi.hoisted(() => ({
   unremovable: new Set<string>(),
+  unrenamable: new Set<string>(),
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -60,6 +66,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
             ),
           )
         : actual.rm(path, options),
+    rename: (
+      from: Parameters<typeof actual.rename>[0],
+      to: Parameters<typeof actual.rename>[1],
+    ) =>
+      typeof from === 'string' && unrenamable.has(from)
+        ? Promise.reject(
+            Object.assign(
+              new Error(
+                `EXDEV: cross-device link not permitted, rename '${from}'`,
+              ),
+              { code: 'EXDEV' },
+            ),
+          )
+        : actual.rename(from, to),
   };
 });
 
@@ -94,10 +114,12 @@ vi.mock('node:child_process', () => ({
 }));
 
 import {
+  applyStagedUpdate,
   canWriteBundle,
-  installUpdate,
   parseChecksums,
   resolveBundlePath,
+  stagedBundlePath,
+  stageUpdate,
   sweepUpdateDebris,
 } from './update-installer';
 import type { LatestRelease } from './updater';
@@ -179,6 +201,7 @@ afterEach(async () => {
   // Before the cleanup below, or a path one test made unremovable would still
   // be refused while the next test's temp tree is being torn down.
   unremovable.clear();
+  unrenamable.clear();
   await rm(root, { recursive: true, force: true });
 });
 
@@ -240,21 +263,29 @@ describe('parseChecksums', () => {
   });
 });
 
-describe('installUpdate', () => {
-  it('swaps the bundle and cleans up after itself', async () => {
+describe('stageUpdate', () => {
+  it('stages the release BESIDE the app and leaves the running bundle alone', async () => {
+    // The whole of the fix. Replacing `app.asar` under a running app left the
+    // renderer reading the new archive at the old one's offsets, so the next
+    // screen it loaded threw "Unexpected token ')'" — nothing may reach the
+    // running bundle before the app quits.
     const stages: string[] = [];
 
-    await installUpdate({
+    await stageUpdate({
       release: release(),
       bundlePath,
       workDir,
       onStage: (stage) => stages.push(stage),
     });
 
-    expect(await installedVersion()).toBe('installed-1.4.0');
-    // No `.old-<pid>` bundle left beside it: a 400MB copy of the previous
-    // version in /Applications is not an acceptable souvenir.
-    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    expect(await installedVersion()).toBe('installed-1.3.0');
+    expect(
+      await readFile(join(stagedBundlePath(bundlePath), 'marker'), 'utf8'),
+    ).toBe('installed-1.4.0');
+    // Beside the app, so the swap at quit is a same-volume rename.
+    expect((await readdir(join(root, 'Applications'))).sort()).toEqual(
+      ['Geniro.app', basename(stagedBundlePath(bundlePath))].sort(),
+    );
     // And no scratch directory left in userData.
     expect(await readdir(workDir)).toEqual([]);
     expect(stages).toEqual(['downloading', 'installing']);
@@ -263,12 +294,11 @@ describe('installUpdate', () => {
   it('does NOT fail the update when the scratch cleanup cannot finish', async () => {
     // REPORTED verbatim: "The update could not be installed. ENOTEMPTY:
     // directory not empty, rmdir '…/updates/update-1eJcO3/unpacked/Geniro.app/
-    // Contents/Resources'". That rmdir runs in the `finally`, AFTER the bundle
-    // has already been swapped — so a tidy-up losing a race with Spotlight
-    // reported a completed update as a failed one, and the service then skipped
-    // the relaunch. The scratch is made unremovable here (its parent goes
-    // read-only mid-install), which is the same shape of failure.
-    await installUpdate({
+    // Contents/Resources'". That rmdir runs in the `finally`, AFTER the release
+    // is already staged — so a tidy-up losing a race with Spotlight reported a
+    // finished update as a failed one. The scratch is made unremovable here,
+    // which is the same shape of failure.
+    await stageUpdate({
       release: release(),
       bundlePath,
       workDir,
@@ -276,8 +306,8 @@ describe('installUpdate', () => {
         if (stage === 'installing') {
           // The scratch is named by `mkdtemp`, so it can only be identified
           // once it exists. Registering it HERE is what makes its later
-          // removal fail — the one in the `finally`, after the swap — while
-          // the unpack that is still using it goes through untouched.
+          // removal fail — the one in the `finally` — while the unpack that is
+          // still using it goes through untouched.
           for (const name of readdirSync(workDir)) {
             if (name.startsWith('update-')) {
               unremovable.add(join(workDir, name));
@@ -287,8 +317,10 @@ describe('installUpdate', () => {
       },
     });
 
-    // The update happened, and nothing threw.
-    expect(await installedVersion()).toBe('installed-1.4.0');
+    // The release is staged, and nothing threw.
+    expect(
+      await readFile(join(stagedBundlePath(bundlePath), 'marker'), 'utf8'),
+    ).toBe('installed-1.4.0');
     // …and the cleanup really did fail, so this is not passing by accident.
     expect(
       (await readdir(workDir)).some((name) => name.startsWith('update-')),
@@ -303,7 +335,7 @@ describe('installUpdate', () => {
     await mkdir(stale, { recursive: true });
     await writeFile(join(stale, 'Geniro.zip'), 'a previous download');
 
-    await installUpdate({ release: release(), bundlePath, workDir });
+    await stageUpdate({ release: release(), bundlePath, workDir });
 
     expect(await readdir(workDir)).toEqual([]);
   });
@@ -311,7 +343,7 @@ describe('installUpdate', () => {
   it('reports download progress against the declared length', async () => {
     const fractions: (number | null)[] = [];
 
-    await installUpdate({
+    await stageUpdate({
       release: release(),
       bundlePath,
       workDir,
@@ -324,7 +356,7 @@ describe('installUpdate', () => {
 
   it('refuses a release with no published checksum, without touching the app', async () => {
     await expect(
-      installUpdate({
+      stageUpdate({
         release: release({ checksums: null }),
         bundlePath,
         workDir,
@@ -342,7 +374,7 @@ describe('installUpdate', () => {
     serve(`${digestOf(Buffer.from('some other build'))}  ${ZIP_NAME}\n`);
 
     await expect(
-      installUpdate({ release: release(), bundlePath, workDir }),
+      stageUpdate({ release: release(), bundlePath, workDir }),
     ).rejects.toThrow(/checksum mismatch/);
 
     expect(await installedVersion()).toBe('installed-1.3.0');
@@ -355,21 +387,21 @@ describe('installUpdate', () => {
     serve(`${digestOf(ZIP_BYTES)}  some-other-asset.zip\n`);
 
     await expect(
-      installUpdate({ release: release(), bundlePath, workDir }),
+      stageUpdate({ release: release(), bundlePath, workDir }),
     ).rejects.toThrow(/no entry for/);
 
     expect(await installedVersion()).toBe('installed-1.3.0');
   });
 
-  it('stops before the commit point when the caller has abandoned it', async () => {
+  it('stops before the copy when the caller has abandoned it', async () => {
     // The service's watchdog abandons a wedged install, and the user can retry
     // the moment it does — so abandoning has to CANCEL rather than merely stop
-    // listening, or the retry is a second `ditto` writing the same bundle
-    // underneath the first.
+    // listening, or the retry is a second `ditto` writing the same staged
+    // bundle underneath the first.
     const aborter = new AbortController();
 
     await expect(
-      installUpdate({
+      stageUpdate({
         release: release(),
         bundlePath,
         workDir,
@@ -382,9 +414,9 @@ describe('installUpdate', () => {
       }),
     ).rejects.toThrow(/no progress/);
 
-    // Nothing was renamed aside, so there is nothing to have restored.
-    expect(await installedVersion()).toBe('installed-1.3.0');
+    // Nothing was staged beside the app, and the app itself is untouched.
     expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    expect(await installedVersion()).toBe('installed-1.3.0');
     // And the scratch is gone — the `finally` runs on this path too.
     expect(await readdir(workDir)).toEqual([]);
     // The signal reaches `ditto` itself, so a copy already running is killed
@@ -392,24 +424,66 @@ describe('installUpdate', () => {
     expect(mocks.ditto.mock.calls[0]?.[2]?.signal).toBe(aborter.signal);
   });
 
-  it('puts the original bundle back when the copy fails half-way', async () => {
+  it('leaves nothing half-copied beside the app when the copy fails', async () => {
     const unpack = mocks.ditto.getMockImplementation()!;
     mocks.ditto.mockImplementation(async (file, args, options) => {
       if (args[0] === '-x') {
         return unpack(file, args, options);
       }
+      if (file.endsWith('xattr')) {
+        return;
+      }
+      // A copy that gets part of the way: the directory exists, the bytes do
+      // not.
+      await mkdir(args[1]!, { recursive: true });
       throw new Error('ditto: No space left on device');
     });
 
     await expect(
-      installUpdate({ release: release(), bundlePath, workDir }),
+      stageUpdate({ release: release(), bundlePath, workDir }),
     ).rejects.toThrow(/No space left/);
+
+    // A half-written bundle beside the app is a bundle's worth of disk that
+    // nothing will ever apply — removed here rather than left for the next
+    // launch's sweep.
+    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    expect(await installedVersion()).toBe('installed-1.3.0');
+  });
+});
+
+describe('applyStagedUpdate', () => {
+  it('puts the staged release in place and removes the old bundle', async () => {
+    await stageUpdate({ release: release(), bundlePath, workDir });
+
+    await applyStagedUpdate(bundlePath);
+
+    expect(await installedVersion()).toBe('installed-1.4.0');
+    // No `.old-<pid>` bundle left beside it — a 400MB copy of the previous
+    // version in /Applications is not an acceptable souvenir — and nothing
+    // staged either: the staging IS what moved into place.
+    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+  });
+
+  it('refuses when nothing is staged, and leaves the app where it is', async () => {
+    await expect(applyStagedUpdate(bundlePath)).rejects.toThrow(/ENOENT/);
+
+    expect(await installedVersion()).toBe('installed-1.3.0');
+    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+  });
+
+  it('puts the original bundle back when the staged one cannot be moved into place', async () => {
+    await stageUpdate({ release: release(), bundlePath, workDir });
+    unrenamable.add(stagedBundlePath(bundlePath));
+
+    await expect(applyStagedUpdate(bundlePath)).rejects.toThrow(/EXDEV/);
 
     // The failure lands AFTER the old bundle has been renamed aside, which is
     // the only window in which a user can lose their installed app. Without
     // the restore they would be left with no Geniro at all.
     expect(await installedVersion()).toBe('installed-1.3.0');
-    expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
+    expect((await readdir(join(root, 'Applications'))).sort()).toEqual(
+      ['Geniro.app', basename(stagedBundlePath(bundlePath))].sort(),
+    );
   });
 });
 
@@ -442,6 +516,21 @@ describe('sweepUpdateDebris', () => {
     // `Geniro.app` does not start with `Geniro.app.old-`.
     expect(await readdir(join(root, 'Applications'))).toEqual(['Geniro.app']);
     expect(await installedVersion()).toBe('installed-1.3.0');
+  });
+
+  it("removes a release an earlier launch staged and never applied — never this launch's own", async () => {
+    // A launch that crashed or was force-quit never reaches the quit that
+    // applies its staging, and nothing else would ever remove it. This
+    // process's own staging is a release still waiting for its quit.
+    await mkdir(`${bundlePath}.new-111`, { recursive: true });
+    await mkdir(stagedBundlePath(bundlePath), { recursive: true });
+
+    const removed = await sweepUpdateDebris({ workDir, bundlePath });
+
+    expect(removed).toEqual([`${bundlePath}.new-111`]);
+    expect((await readdir(join(root, 'Applications'))).sort()).toEqual(
+      ['Geniro.app', basename(stagedBundlePath(bundlePath))].sort(),
+    );
   });
 
   it('deletes with asar support switched OFF, and switches it back on at the end', async () => {

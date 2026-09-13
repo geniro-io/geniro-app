@@ -37,7 +37,7 @@ export const Restart: Story = {
     update: {
       kind: 'restart',
       label: 'restart',
-      title: 'Geniro 1.48.5 is installed — restart to use it.',
+      title: 'Geniro 1.48.5 is ready — restart to use it.',
     },
   },
 };

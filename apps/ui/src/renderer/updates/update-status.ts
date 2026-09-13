@@ -131,7 +131,7 @@ export function updateStatusLine(state: UpdateState): string {
       // restart takes the daemon and every running turn with it — so this is a
       // standing state waiting on the Restart button, and an ellipsis would
       // promise something that is never going to happen on its own.
-      return `Geniro ${state.currentVersion} is installed — restart to use it.`;
+      return `Geniro ${state.currentVersion} is ready — restart to use it.`;
     case 'error':
       // WHICH phase failed, from the state rather than assumed. Every failure
       // used to read "The update could not be installed.", which was REPORTED

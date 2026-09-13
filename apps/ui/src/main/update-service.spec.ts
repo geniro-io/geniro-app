@@ -26,6 +26,7 @@ interface LogLine {
 
 let broadcasts: UpdateState[];
 let installed: InstallInput[];
+let applied: string[];
 let relaunched: number;
 let swept: { workDir: string; bundlePath: string }[];
 let logged: LogLine[];
@@ -33,6 +34,7 @@ let logged: LogLine[];
 function build(overrides: Partial<UpdateServiceDeps> = {}): UpdateService {
   broadcasts = [];
   installed = [];
+  applied = [];
   relaunched = 0;
   swept = [];
   logged = [];
@@ -49,6 +51,9 @@ function build(overrides: Partial<UpdateServiceDeps> = {}): UpdateService {
       }),
     install: async (input) => {
       installed.push(input);
+    },
+    apply: async (bundlePath) => {
+      applied.push(bundlePath);
     },
     canWrite: () => Promise.resolve(true),
     sweep: (input) => {
@@ -185,6 +190,55 @@ describe('UpdateService.install', () => {
 
     service.relaunch();
     expect(relaunched).toBe(1);
+  });
+
+  it('puts the staged release in place only when the app QUITS, and only once', async () => {
+    // Replacing the bundle under a running app left the renderer loading its
+    // next screen from the new archive at the old one's offsets — REPORTED as
+    // "Something went wrong. Unexpected token ')'" on opening Workflows after
+    // an update had installed. So an install stages, and the quit applies.
+    const service = build();
+    await service.check();
+    await service.install();
+
+    expect(service.hasStagedUpdate()).toBe(true);
+    expect(applied).toEqual([]);
+
+    expect(await service.applyStaged()).toBe(true);
+    expect(applied).toEqual(['/Applications/Geniro.app']);
+    // One attempt: this runs on the quit path, and a quit that retried a
+    // failing swap would never finish.
+    expect(service.hasStagedUpdate()).toBe(false);
+    expect(await service.applyStaged()).toBe(false);
+    expect(applied).toHaveLength(1);
+  });
+
+  it('has nothing to put in place when the install did not finish', async () => {
+    const service = build({
+      install: () => Promise.reject(new Error('checksum mismatch')),
+    });
+    await service.check();
+    await service.install();
+
+    expect(service.hasStagedUpdate()).toBe(false);
+    expect(await service.applyStaged()).toBe(false);
+    expect(applied).toEqual([]);
+  });
+
+  it('logs a swap that failed at quit, and does not try it again', async () => {
+    const service = build({
+      apply: () => Promise.reject(new Error('EXDEV: cross-device link')),
+    });
+    await service.check();
+    await service.install();
+
+    expect(await service.applyStaged()).toBe(false);
+    expect(service.hasStagedUpdate()).toBe(false);
+    const failure = logged.find(
+      (l) => l.context.kind === 'update-apply-failed',
+    );
+    expect(failure?.level).toBe('error');
+    expect(failure?.message).toContain('EXDEV');
   });
 
   it('does not re-offer a release it has already installed and is waiting to restart into', async () => {
@@ -581,6 +635,8 @@ describe('UpdateService deadlines', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(service.getState().phase).toBe('error');
     expect(relaunched).toBe(0);
+    // …and it staged nothing a quit would then put in place.
+    expect(service.hasStagedUpdate()).toBe(false);
   });
 });
 

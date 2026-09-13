@@ -1196,6 +1196,15 @@ export const CLAUDE_COMPACT_FAILED_NOTICE =
  * idempotent, so mapping both costs nothing.
  */
 export const CLAUDE_TASK_STARTED_SUBTYPE = 'task_started';
+
+/**
+ * The `origin.kind` a `result` line carries when it ends a turn the CLI ran by
+ * itself because background work reported back — never on a turn answering a
+ * prompt geniro wrote. Probed on 2.1.266: `{"type":"result",…,
+ * "origin":{"kind":"task-notification"},"result":"Background task completed…"}`,
+ * followed by an origin-less result answering the message sent during it.
+ */
+export const CLAUDE_CONTINUATION_ORIGIN_KIND = 'task-notification';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */
 export const CLAUDE_TASK_UPDATED_SUBTYPE = 'task_updated';
 /** @see CLAUDE_TASK_STARTED_SUBTYPE */

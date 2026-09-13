@@ -57,7 +57,6 @@ import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
 import { ProcessRegistry } from './services/process-registry';
 import { PullRequestCaptureService } from './services/pull-request-capture.service';
-import { PullRequestRecaptureService } from './services/pull-request-recapture.service';
 import { RunContextRegistry } from './services/run-context.registry';
 import { RunGroupsService } from './services/run-groups.service';
 import { RunTeardownService } from './services/run-teardown.service';
@@ -98,7 +97,6 @@ import { defaultSpawn } from './utils/spawn-cli';
     ChatSearchService,
     ChatTimelineService,
     PullRequestCaptureService,
-    PullRequestRecaptureService,
     SearchTextBackfillService,
     TaskListCaptureService,
     CursorUsageService,

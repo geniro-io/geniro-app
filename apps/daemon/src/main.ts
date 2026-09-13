@@ -29,7 +29,6 @@ import { ClaudeAdapter } from './v1/agents/adapters/claude/claude.adapter';
 import { CursorAcpAdapter } from './v1/agents/adapters/cursor-acp/cursor-acp.adapter';
 import { MAX_REQUEST_BODY_BYTES } from './v1/agents/chat.types';
 import { ChatService } from './v1/agents/services/chat.service';
-import { PullRequestRecaptureService } from './v1/agents/services/pull-request-recapture.service';
 import { SearchTextBackfillService } from './v1/agents/services/search-text-backfill.service';
 import { StrandedChildReaper } from './v1/agents/services/stranded-child-reaper.service';
 import {
@@ -111,9 +110,6 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let searchTextBackfill: SearchTextBackfillService | null = null;
-/** Resolved and reset before the listen, re-captured after it — see its doc. */
-let pullRequestRecapture: PullRequestRecaptureService | null = null;
-
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {
@@ -164,11 +160,6 @@ bootstrapper.addExtension(
         // The app would look hung on the first launch after an update; search
         // being incomplete for a minute is the cheaper failure.
         void searchTextBackfill?.backfillQuietly();
-        // The runs the pull-request reset cleared before the listen, captured
-        // again now rather than whenever a listing happens to show them — an
-        // archived run no default listing shows, and the merge automation reads
-        // the column directly. Not awaited, for the backfill's reason above.
-        void pullRequestRecapture?.recaptureResetRunsQuietly();
       },
     },
     async (app: INestApplication) => {
@@ -216,15 +207,6 @@ bootstrapper.addExtension(
       // board the user has actually been working. Boot is the only moment: a
       // card is not re-saved when it is looked at.
       await app.get(TaskNumberBackfillService).backfillQuietly();
-
-      // The pull-request capture rule was tightened — a tool call that merely
-      // CONTAINED `gh pr create` (a grep for it) counted as having run it — and
-      // what the old rule had already filed stays on the run rows: forget those
-      // lists once, BEFORE the listen so no listing can merge a stale one back,
-      // and capture them again once the server is up (`onListening`).
-      const recapture = app.get(PullRequestRecaptureService);
-      pullRequestRecapture = recapture;
-      await recapture.recaptureQuietly();
 
       // Resolved here, STARTED from `onListening` — see that comment. This is
       // the only line of it that may run before the server is up, and it only

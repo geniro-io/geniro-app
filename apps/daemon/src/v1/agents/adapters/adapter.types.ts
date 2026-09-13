@@ -706,6 +706,19 @@ type AgentEventBody =
        * the turn's `text` events).
        */
       finalText: string | null;
+      /**
+       * True when this ends a turn the CLI opened BY ITSELF — a continuation it
+       * ran because background work reported back — rather than a turn geniro
+       * started with a prompt. Absent otherwise.
+       *
+       * A turn geniro starts must not settle on one. PROBED on claude 2.1.266:
+       * a message written while the CLI was mid-continuation was answered only
+       * AFTER the continuation's own `result` line (which carries
+       * `origin:{kind:"task-notification"}`), so settling on the first result
+       * handed the new turn the continuation's text and ended it before its
+       * real answer arrived.
+       */
+      continuation?: boolean;
     }
   | { type: 'turn_cancelled' }
   | {

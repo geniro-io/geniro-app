@@ -1844,6 +1844,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (turn.terminalEmitted) {
         return;
       }
+      // A continuation the CLI ran BY ITSELF has ended — not this turn. Probed
+      // on claude 2.1.266: a prompt written while the CLI was mid-continuation
+      // is answered only after the continuation's own result, so settling here
+      // handed this turn the continuation's text and ended it before its real
+      // answer arrived. The result goes the between-turn way instead (its row
+      // and usage are real), and this turn waits for its own.
+      if (
+        normalized.type === 'turn_complete' &&
+        normalized.continuation === true
+      ) {
+        opts.logger?.debug?.(
+          `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
+        );
+        armSilenceDeadline(turn);
+        handleOrphanEvent(normalized);
+        return;
+      }
       // A completion for a prompt that has not been sent is not this turn's.
       // See {@link TurnState.promptHeld} for the traced run this comes from:
       // dropping it here is what keeps the gate's own release — which writes

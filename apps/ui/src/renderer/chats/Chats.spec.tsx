@@ -752,6 +752,9 @@ beforeEach(() => {
   workflowApi.listWorkflowRuns.mockReset().mockResolvedValue([]);
   workflowApi.listWorkflowRunNodes.mockReset().mockResolvedValue([]);
   workflowApi.startWorkflowRun.mockReset();
+  // Reset like its neighbours: a test asserting a workflow send has NOT gone
+  // out would otherwise read the call an earlier test made.
+  workflowApi.sendWorkflowRunMessage.mockReset();
   workflowApi.cancelWorkflowRun
     .mockReset()
     .mockResolvedValue({ cancelled: true });
@@ -7723,6 +7726,95 @@ describe('Chats run composer chips', () => {
       sendMessageDto: { text: 'and the tests too' },
     });
     expect(api.sendChatMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('Chats queued messages — a workflow run', () => {
+  async function type(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function clickButton(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector(`button[aria-label="${label}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('sends a queued message into a RUNNING workflow on press, through its trigger’s agents', async () => {
+    // REPORTED as "queued messages doesn't work in workflow — I can't send
+    // them from queue". A workflow run has no agent kind of its own, and the
+    // send-now control asked the run's kind whether its CLI takes a message
+    // mid-turn — so every workflow run answered "no agent", and the control
+    // stayed inert over a running Manager whose CLI (claude) takes one fine.
+    // The question is about the agents the daemon hands a follow-up to: the
+    // ones the trigger feeds.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'start', to: 'manager' }],
+      },
+    });
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'collect my feedback first'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await type(container, 'collect my feedback first');
+    await clickButton(container, 'Queue');
+    expect(workflowApi.sendWorkflowRunMessage).not.toHaveBeenCalled();
+
+    const send = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send queued message 1 now"]',
+    );
+    expect(send?.getAttribute('aria-disabled')).toBe('false');
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
+      runId: 'w1',
+      sendMessageDto: { text: 'collect my feedback first' },
+    });
   });
 });
 

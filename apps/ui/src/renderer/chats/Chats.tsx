@@ -261,7 +261,7 @@ import {
 import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
-import { rootAgentOf } from './workflow-root';
+import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -4088,48 +4088,6 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
-  /**
-   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
-   * can — what decides whether the strip offers "send now".
-   *
-   * Derived from the daemon's report for the same reason as the two sets
-   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
-   * decides it by agent name, a CLI that gains the channel keeps a dead
-   * control. Undefined-safe by construction — while capabilities are loading
-   * there is no row, and the honest answer is "not right now", which reads as
-   * a disabled button rather than one that queues without saying so.
-   */
-  const steerUnavailableReason = useMemo((): string | null => {
-    const agent = activeRun?.agentKind;
-    if (!agent) {
-      return 'This run has no agent that could take a message mid-turn';
-    }
-    const row = (capabilities?.followUps ?? []).find((f) => f.agent === agent);
-    return row
-      ? row.unavailableReason
-      : `Checking whether ${agent} can take a message mid-turn…`;
-  }, [capabilities, activeRun]);
-
-  /**
-   * Whether sending one of those messages now STOPS what the agent is doing.
-   *
-   * From the daemon for the same reason the sentence above is, and it is a
-   * separate question rather than more of that sentence: both shipped CLIs take
-   * a message mid-turn, and only one of them keeps working on what it was
-   * doing. Cursor's channel is a second `session/prompt`, which cancels the
-   * first — so on that CLI a press costs the tool call in flight, and the
-   * control has to say so BEFORE it is pressed. False while the answer is
-   * loading: the milder claim is the safe one to make about a control the user
-   * cannot successfully press yet anyway.
-   */
-  const steerInterrupts = useMemo((): boolean => {
-    const agent = activeRun?.agentKind;
-    return agent
-      ? ((capabilities?.followUps ?? []).find((f) => f.agent === agent)
-          ?.interrupts ?? false)
-      : false;
-  }, [capabilities, activeRun]);
-
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
   // folder. A new-run workflow target resolves through its SELECTED trigger
@@ -4620,7 +4578,15 @@ export function Chats({
      * has none or more than one.
      */
     rootId: string | null;
-  }>({ agents: [], triggers: [], allIds: new Set(), rootId: null });
+    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
+    feedIds: string[];
+  }>({
+    agents: [],
+    triggers: [],
+    allIds: new Set(),
+    rootId: null,
+    feedIds: [],
+  });
   /**
    * Set when the active run's workflow is GONE from the library (a 404, not a
    * failed request) — the run's own history survives it, so the transcript
@@ -4640,6 +4606,7 @@ export function Chats({
         triggers: [],
         allIds: new Set(),
         rootId: null,
+        feedIds: [],
       });
       return;
     }
@@ -4661,6 +4628,7 @@ export function Chats({
           ),
           allIds: new Set(workflow.nodes.map((node) => node.id)),
           rootId: rootAgentOf(workflow),
+          feedIds: triggerFedAgentIds(workflow),
         });
       })
       .catch((err: unknown) => {
@@ -4672,6 +4640,7 @@ export function Chats({
           triggers: [],
           allIds: new Set(),
           rootId: null,
+          feedIds: [],
         });
         // A deleted workflow is not a failure to report as one: the request
         // worked, the graph is simply gone. Say that in the user's terms and
@@ -4692,6 +4661,86 @@ export function Chats({
       cancelled = true;
     };
   }, [activeRun?.id, activeRun?.workflowId, workflowApi]);
+
+  /**
+   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
+   * can — what decides whether the strip offers "send now".
+   *
+   * Derived from the daemon's report for the same reason as the two sets
+   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
+   * decides it by agent name, a CLI that gains the channel keeps a dead
+   * control. Undefined-safe by construction — while capabilities are loading
+   * there is no row, and the honest answer is "not right now", which reads as
+   * a disabled button rather than one that queues without saying so.
+   */
+  /**
+   * The CLIs a message sent into this run lands in. A chat has its one agent;
+   * a WORKFLOW run has no agent kind of its own, and the daemon hands a
+   * follow-up to every agent the trigger feeds — so those are the agents the
+   * question is about. Reading `activeRun.agentKind` alone answered "no agent"
+   * for every workflow run, leaving the queue's send control inert over a
+   * running Manager whose CLI takes a message mid-turn perfectly well:
+   * REPORTED as "queued messages doesn't work in workflow — I can't send them
+   * from queue".
+   */
+  const steerAgents = useMemo((): string[] => {
+    if (!activeRun) {
+      return [];
+    }
+    if (!activeRun.workflowId) {
+      return activeRun.agentKind ? [activeRun.agentKind] : [];
+    }
+    const fed = new Set(wfNodes.feedIds);
+    return [
+      ...new Set(
+        wfNodes.agents
+          .filter((node) => fed.has(node.id))
+          .map((node) => node.agent),
+      ),
+    ];
+  }, [activeRun, wfNodes]);
+
+  const steerUnavailableReason = useMemo((): string | null => {
+    if (steerAgents.length === 0) {
+      return 'This run has no agent that could take a message mid-turn';
+    }
+    // EVERY agent must have the channel: the daemon refuses the whole delivery
+    // when any one of them cannot take it, so the first refusal is the answer.
+    for (const agent of steerAgents) {
+      const row = (capabilities?.followUps ?? []).find(
+        (f) => f.agent === agent,
+      );
+      if (!row) {
+        return `Checking whether ${agent} can take a message mid-turn…`;
+      }
+      if (row.unavailableReason !== null) {
+        return row.unavailableReason;
+      }
+    }
+    return null;
+  }, [capabilities, steerAgents]);
+
+  /**
+   * Whether sending one of those messages now STOPS what the agent is doing.
+   *
+   * From the daemon for the same reason the sentence above is, and it is a
+   * separate question rather than more of that sentence: both shipped CLIs take
+   * a message mid-turn, and only one of them keeps working on what it was
+   * doing. Cursor's channel is a second `session/prompt`, which cancels the
+   * first — so on that CLI a press costs the tool call in flight, and the
+   * control has to say so BEFORE it is pressed. False while the answer is
+   * loading: the milder claim is the safe one to make about a control the user
+   * cannot successfully press yet anyway.
+   */
+  const steerInterrupts = useMemo(
+    (): boolean =>
+      steerAgents.some(
+        (agent) =>
+          (capabilities?.followUps ?? []).find((f) => f.agent === agent)
+            ?.interrupts ?? false,
+      ),
+    [capabilities, steerAgents],
+  );
   // Node display metadata for the transcript (names + kinds), and the
   // transcript folded into render entries — consecutive tool calls collapse
   // into expandable groups.

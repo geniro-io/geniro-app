@@ -1634,7 +1634,21 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // clearing on a settle would take the badge down at the moment it becomes
       // the only thing saying the work is not over.
       if (event.shellsOpen !== undefined) {
-        const out = event.shellsOpen > 0;
+        // The COUNT onto the row as well as the flag below. Only the flag was
+        // kept, so `run.shellsOpen` stayed whatever the listing said when the
+        // window loaded — and the Terminals chip counts off it, and the
+        // whole-conversation shell list refetches when it moves. REPORTED as a
+        // chip reading `1 command still running` over an empty list, minutes
+        // after every command had ended: the count was the load-time snapshot.
+        const count = event.shellsOpen;
+        setRuns((prev) =>
+          prev.some((row) => row.id === event.runId && row.shellsOpen !== count)
+            ? prev.map((row) =>
+                row.id === event.runId ? { ...row, shellsOpen: count } : row,
+              )
+            : prev,
+        );
+        const out = count > 0;
         setShellsOut((prev) => {
           if (out === prev.has(event.runId)) {
             return prev;

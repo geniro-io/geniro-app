@@ -110,7 +110,6 @@ const bootstrapper = buildBootstrapper({
  * so this is always assigned by the time the listen callback fires.
  */
 let searchTextBackfill: SearchTextBackfillService | null = null;
-
 bootstrapper.addExtension(
   buildHttpServerExtension(
     {

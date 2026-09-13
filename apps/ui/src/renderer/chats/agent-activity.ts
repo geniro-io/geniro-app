@@ -205,6 +205,13 @@ export interface AgentThread {
    */
   callId?: string | null;
   /**
+   * For a CALL thread: what the caller ASKED it, verbatim — or null when the
+   * call carried no message. `label` is this with the call id in front, for
+   * the surfaces that name a thread in one string; the instance block states
+   * the two apart.
+   */
+  brief?: string | null;
+  /**
    * For a CALL thread: where it has got to — what it last SAID, else the
    * newest tool it ran — or null when it has done neither yet. The same two
    * readings its call block's summary band draws in the transcript.
@@ -240,6 +247,7 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
     label: thread.message
       ? `${thread.callId} · ${thread.message}`
       : thread.callId,
+    brief: thread.message || null,
     status: thread.status,
     sessionId: thread.sessionId,
   }));

@@ -706,6 +706,19 @@ type AgentEventBody =
        * the turn's `text` events).
        */
       finalText: string | null;
+      /**
+       * True when this ends a turn the CLI opened BY ITSELF — a continuation it
+       * ran because background work reported back — rather than a turn geniro
+       * started with a prompt. Absent otherwise.
+       *
+       * A turn geniro starts must not settle on one. PROBED on claude 2.1.266:
+       * a message written while the CLI was mid-continuation was answered only
+       * AFTER the continuation's own `result` line (which carries
+       * `origin:{kind:"task-notification"}`), so settling on the first result
+       * handed the new turn the continuation's text and ended it before its
+       * real answer arrived.
+       */
+      continuation?: boolean;
     }
   | { type: 'turn_cancelled' }
   | {
@@ -1255,7 +1268,10 @@ type AgentEventBody =
        * saying "compacted" is housekeeping the user did not ask for in the
        * middle of the conversation they did. What DOES earn a row is the CLI's
        * own summary text and a compaction that FAILED, and both arrive as their
-       * own lines rather than on this arm.
+       * own lines rather than on this arm — except that a FINISHED compaction
+       * no summary follows (every automatic one, on claude 2.1.266) gets a row
+       * of its own from `CompactionRows`, since an agent silently forgetting
+       * most of the conversation is not housekeeping the user can do without.
        */
       type: 'context_compacted';
       /**
@@ -2621,6 +2637,13 @@ export interface AgentSession {
    * retired session on sight, the way it closes a dead one.
    */
   readonly retired: boolean;
+  /**
+   * How many detached commands this process has started and not yet ended —
+   * see `CliSession.shellsRunning`. A holder must not reap a process holding
+   * them for going quiet, or evict it to make room: a dev server writes nothing
+   * for as long as it works, and it dies with this process.
+   */
+  readonly shellsRunning: number;
   /**
    * Alive and idle, and yet not free: the CLI is standing still on a verdict
    * only the user can give, raised (or held) between turns.

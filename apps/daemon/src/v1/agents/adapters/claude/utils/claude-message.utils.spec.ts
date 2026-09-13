@@ -448,6 +448,36 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('marks the result of a turn the CLI ran BY ITSELF as a continuation, and only that one', () => {
+    // Probed on 2.1.266: a message sent mid-continuation got the continuation's
+    // own result first — with this origin — and its real answer after, with none.
+    const line = (origin?: unknown) =>
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'Background task completed (exit code 0).',
+          stop_reason: 'end_turn',
+          ...(origin === undefined ? {} : { origin }),
+        },
+        new ClaudeSessionCostLedger(),
+      );
+    expect(line({ kind: 'task-notification' })).toEqual([
+      expect.objectContaining({
+        type: 'turn_complete',
+        finalText: 'Background task completed (exit code 0).',
+        continuation: true,
+      }),
+    ]);
+    expect(line()).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+    expect(line({ kind: 'human' })).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage(

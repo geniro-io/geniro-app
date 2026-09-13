@@ -26,6 +26,8 @@ const COMPLETE: AgentEvent = {
 const resultOnDone = (obj: unknown): AgentEvent[] => {
   const row = obj as {
     done?: boolean;
+    /** A result the CLI marked as ending a continuation it ran by itself. */
+    continuationDone?: boolean;
     failed?: boolean;
     tool?: string;
     work?: string;
@@ -71,6 +73,17 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         toolName: 'AskUserQuestion',
         input: { questions: [] },
         requiresUserInteraction: true,
+      },
+    ];
+  }
+  if (row.continuationDone === true) {
+    // The result of a turn the CLI ran by itself (claude's
+    // `origin:{kind:"task-notification"}`), as the adapter's mapper marks it.
+    return [
+      {
+        ...COMPLETE,
+        finalText: typeof row.finalText === 'string' ? row.finalText : null,
+        continuation: true,
       },
     ];
   }
@@ -666,6 +679,63 @@ describe('cancelling a session turn', () => {
         isError: false,
       },
       COMPLETE,
+    ]);
+  });
+
+  it('counts the detached commands a process is still running — a delegate is not one', () => {
+    // What the session registry reads to keep a process serving a dev server
+    // from being reaped as unused.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    expect(session.shellsRunning).toBe(0);
+
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    // A command whose launching call the CLI never named is still running.
+    line(child, { work: 'b2', phase: 'started', unit: 'other' });
+    line(child, { work: 'd1', phase: 'started', unit: 'agent', call: 't3' });
+    expect(session.shellsRunning).toBe(2);
+
+    line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
+    expect(session.shellsRunning).toBe(1);
+  });
+
+  it('does NOT settle a turn on the result of a continuation the CLI ran by itself', async () => {
+    // Probed on claude 2.1.266: a message written while the CLI was running a
+    // continuation of its own was answered only AFTER that continuation's
+    // result — so settling on the first result handed this turn the
+    // continuation's text and ended it before its real answer arrived.
+    const betweenTurns: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      onEvent: (event) => events.push(event),
+    });
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, {
+      continuationDone: true,
+      finalText: 'Background task completed (exit code 0).',
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(events.some((event) => event.type === 'turn_complete')).toBe(false);
+    // Not lost: the continuation's ending goes the between-turn way.
+    expect(betweenTurns).toEqual([
+      expect.objectContaining({ type: 'turn_complete', continuation: true }),
+    ]);
+
+    line(child, { done: true, finalText: 'BANANA-9' });
+    await handle?.done;
+
+    expect(events.filter((event) => event.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'BANANA-9' }),
     ]);
   });
 

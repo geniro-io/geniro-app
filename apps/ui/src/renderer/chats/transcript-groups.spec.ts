@@ -2157,6 +2157,56 @@ describe('withLiveText', () => {
     ).toBe(false);
   });
 
+  /** The same open call, with the caller carrying on BELOW it. */
+  const buriedCall = (): TranscriptEntry[] =>
+    buildTurnBlocks(
+      groupTranscript([
+        item('message', { text: 'Routing this to the Poet.' }, 'orch'),
+        item(
+          'call_started',
+          { callId: 'call-1', calleeNodeId: 'poet', message: 'Write a haiku.' },
+          'orch',
+        ),
+        item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+        item('message', { text: 'It is running; I will report back.' }, 'orch'),
+      ]),
+    );
+
+  it('puts a working row at the END for a callee whose open call the conversation moved past', () => {
+    // REPORTED as "subagent is still working but I don't see status in the
+    // chat": an async call stays open while its caller keeps talking, so the
+    // card narrating the callee sat screens above the end of the transcript and
+    // nothing at the bottom said anything was still running.
+    const entries = withLiveText(buriedCall(), new Map(), new Set(['poet']));
+
+    const tail = entries.at(-1) as TurnBlockEntry;
+    expect(tail.type).toBe('turn-block');
+    expect(tail.nodeId).toBe('poet');
+    expect(
+      (tail.entries.at(-1) as { item: ChatItem }).item.payload,
+    ).toMatchObject({
+      live: 'working',
+      workingInCallId: 'call-1',
+      workingInNodeId: 'poet',
+    });
+  });
+
+  it('keeps that end row while the buried callee streams words into its own card', () => {
+    // The words land INSIDE the buried card, so they are just as out of view —
+    // streaming must not take the end row away.
+    const entries = withLiveText(
+      buriedCall(),
+      new Map([['poet', live({ text: 'Waves rise and' })]]),
+      new Set(['poet']),
+    );
+
+    const tail = entries.at(-1) as TurnBlockEntry;
+    expect(tail.nodeId).toBe('poet');
+    expect(
+      liveRowKind((tail.entries.at(-1) as { item: ChatItem }).item.payload),
+    ).toBe('working');
+  });
+
   it('still draws the CALLER’s own working row while it waits', () => {
     // The caller is genuinely silent — it is holding its turn open for the
     // callee — so the fallback above must not have been narrowed to "any agent

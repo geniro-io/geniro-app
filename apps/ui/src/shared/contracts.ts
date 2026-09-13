@@ -931,6 +931,22 @@ export interface GitChanges {
    * every file the two branches disagree on.
    */
   movedOffStart: boolean;
+  /**
+   * What `changes` is measured against INSTEAD of the start, when the checkout
+   * shares newer history with the remote than the start — upstream work pulled
+   * in, or the chat's own commits merged: the newest commit HEAD shares with
+   * the default remote branch, so everything already there is left out. Null
+   * when the start itself is the base — nothing newer shared, no remote to ask,
+   * or `movedOffStart`.
+   */
+  upstreamBase: GitUpstreamBase | null;
+}
+
+/** The commit a changes list is measured against, and the ref it came from. */
+export interface GitUpstreamBase {
+  sha: string;
+  /** Short and as git names it — `origin/main`, `origin/master`. */
+  ref: string;
 }
 
 /**

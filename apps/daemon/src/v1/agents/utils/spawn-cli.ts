@@ -393,6 +393,18 @@ export interface CliSession {
    * the question, and the run was marked failed for it.
    */
   readonly parked: boolean;
+  /**
+   * How many detached commands this process has started and not yet ended —
+   * a `pnpm dev`, a watcher, a server the agent ran in the background.
+   *
+   * They are this process's own children and die with its group, so whoever
+   * REAPS an unused process must not reap one holding them: a dev server is
+   * quiet by design, and a session that has said nothing for the idle window
+   * while serving `localhost:3000` is not a session going unused. Reported as
+   * servers an agent started in a workflow run being unreachable after its
+   * next reply.
+   */
+  readonly shellsRunning: number;
   /** Terminate the process group (the CLI plus every grandchild). */
   close(): void;
   /** Resolves once the process is gone. Never rejects. */
@@ -773,6 +785,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * late second report writes the row again.
    */
   const settledShells = new Set<string>();
+  /**
+   * Every detached command this process has started and not yet ended — what
+   * {@link CliSession.shellsRunning} counts.
+   *
+   * Its own set rather than a reading of {@link shellWork}, which records only
+   * a unit whose launching call is known: a command is running whether or not
+   * the CLI said which call started it, and a count that missed it would let
+   * the process holding a `pnpm dev` be reaped.
+   */
+  const runningShells = new Set<string>();
   /**
    * The commands this session's CLI has RUN, by the id of the call that ran
    * each — the raw material for {@link sweepDetachedShells}, and gathered only
@@ -1502,6 +1524,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // one begin. `unit !== 'agent'` is the same carve-out the settle below
       // makes — a delegate's liveness is `announceDelegateWork`'s business.
       if (event.unit !== 'agent') {
+        runningShells.add(event.id);
         const opened: AgentEvent = {
           type: 'shell_open',
           toolCallId: event.toolCallId ?? null,
@@ -1521,6 +1544,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     if (delegateWork.has(event.id)) {
       return;
     }
+    runningShells.delete(event.id);
     // ONCE per unit. A CLI is free to report one unit's end on both of its
     // terminal channels, and claude does: measured on a real background `sleep`
     // (2026-08-24, 2.1.237), `task_updated` and `task_notification` both landed
@@ -1844,6 +1868,23 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       if (turn.terminalEmitted) {
         return;
       }
+      // A continuation the CLI ran BY ITSELF has ended — not this turn. Probed
+      // on claude 2.1.266: a prompt written while the CLI was mid-continuation
+      // is answered only after the continuation's own result, so settling here
+      // handed this turn the continuation's text and ended it before its real
+      // answer arrived. The result goes the between-turn way instead (its row
+      // and usage are real), and this turn waits for its own.
+      if (
+        normalized.type === 'turn_complete' &&
+        normalized.continuation === true
+      ) {
+        opts.logger?.debug?.(
+          `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
+        );
+        armSilenceDeadline(turn);
+        handleOrphanEvent(normalized);
+        return;
+      }
       // A completion for a prompt that has not been sent is not this turn's.
       // See {@link TurnState.promptHeld} for the traced run this comes from:
       // dropping it here is what keeps the gate's own release — which writes
@@ -2074,6 +2115,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // Nothing can report now, so nothing is being waited for: whatever was held
     // for background work is handed over rather than dying with the process,
     // which would leave the run reading `running` with no process behind it.
+    // A command whose launching call was never known is not in `shellWork`,
+    // so the loop above did not settle it — but it died with the group too.
+    runningShells.clear();
     openWork.clear();
     cancelHeldRelease();
     releaseOffTurnHold();
@@ -2699,6 +2743,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     get parked() {
       return ownedApprovals.size > 0 || pendingApprovals.length > 0;
     },
+    get shellsRunning() {
+      return runningShells.size;
+    },
     close: () => {
       if (processGone) {
         return;
@@ -2747,6 +2794,7 @@ function deadSession(message: string): CliSession {
     retired: false,
     // No process, so nothing is blocked on anyone.
     parked: false,
+    shellsRunning: 0,
     close: () => {},
     closed: Promise.resolve(),
   };

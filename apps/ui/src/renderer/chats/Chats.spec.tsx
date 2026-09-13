@@ -87,6 +87,9 @@ const agentsApi = vi.hoisted(() => ({
 const workflowApi = vi.hoisted(() => ({
   listWorkflows: vi.fn(),
   getWorkflow: vi.fn(),
+  // The graph an OPEN workflow run draws its agents from — the run's own copy,
+  // not the library's (`GET /v1/workflows/runs/:runId/workflow`).
+  getWorkflowRunSnapshot: vi.fn(),
   listWorkflowRuns: vi.fn(),
   // The per-node context readings a workflow run's rings fall back to
   // (`use-node-context.ts`). Every workflow case reaches it, so it is reset to
@@ -733,9 +736,25 @@ beforeEach(() => {
     slug: 'review-team',
     workflow: { name: 'Review team', nodes: [], edges: [] },
   });
+  // By default a run's copy IS the library copy a test stubbed, which is what
+  // every run started before the library changed holds — so the cases that
+  // stub `getWorkflow` for an open run keep drawing the same agents. The test
+  // that pins the switch gives the two different graphs.
+  workflowApi.getWorkflowRunSnapshot
+    .mockReset()
+    .mockImplementation(async () => ({
+      workflow: (
+        (await workflowApi.getWorkflow({ slug: '' })) as {
+          workflow: unknown;
+        }
+      ).workflow,
+    }));
   workflowApi.listWorkflowRuns.mockReset().mockResolvedValue([]);
   workflowApi.listWorkflowRunNodes.mockReset().mockResolvedValue([]);
   workflowApi.startWorkflowRun.mockReset();
+  // Reset like its neighbours: a test asserting a workflow send has NOT gone
+  // out would otherwise read the call an earlier test made.
+  workflowApi.sendWorkflowRunMessage.mockReset();
   workflowApi.cancelWorkflowRun
     .mockReset()
     .mockResolvedValue({ cancelled: true });
@@ -1656,6 +1675,54 @@ describe('Chats transcript auto-scroll', () => {
         .querySelector('[data-slot="context-meter"] button[aria-expanded]')
         ?.getAttribute('aria-label'),
     ).toBe('Context 46% full — 462.3k of 1M');
+  });
+
+  it('states the agent card’s spend from the DAEMON’s thread totals, not the loaded window', async () => {
+    // REPORTED as a card reading `248.6k tokens · $31.72` beside a context
+    // readout saying `$37.81 · in 2.4k · out 266.2k`. A long thread opens on its
+    // newest 1,000 items, and the card summed only the turns inside that window
+    // — the thread's first turn had scrolled out of it. The window here holds
+    // one small turn; the daemon's totals cover the whole thread, and the two
+    // figures are deliberately far apart so only one source can produce each.
+    const inWindow: ChatItem = {
+      id: 'recent-turn',
+      runId: 'r1',
+      nodeId: null,
+      seq: 1,
+      kind: 'turn_complete',
+      role: null,
+      payload: {
+        usage: { inputTokens: 100, outputTokens: 900, costUsd: 1.5 },
+        stopReason: null,
+      },
+      createdAt: 'now',
+    };
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi'), inWindow]);
+    api.readChatTotals.mockResolvedValue({
+      totals: {
+        turns: 5,
+        costedTurns: 5,
+        costUsd: 37.81,
+        inputTokens: 2_418,
+        outputTokens: 266_226,
+        cacheReadTokens: null,
+        cacheCreationTokens: null,
+        ownerKey: null,
+        thinkingTokens: null,
+        workedMs: null,
+      },
+    });
+
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+
+    expect(
+      container.querySelector(
+        '[data-slot="agent-cards"] [data-slot="agent-spend"]',
+      )?.textContent,
+    ).toBe('268.6k tokens · $37.81');
   });
 
   it('moves the ring onto the reading the PANEL just took', async () => {
@@ -7662,6 +7729,95 @@ describe('Chats run composer chips', () => {
   });
 });
 
+describe('Chats queued messages — a workflow run', () => {
+  async function type(container: HTMLElement, text: string): Promise<void> {
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  async function clickButton(
+    container: HTMLElement,
+    label: string,
+  ): Promise<void> {
+    await act(async () => {
+      container
+        .querySelector(`button[aria-label="${label}"]`)
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+  }
+
+  it('sends a queued message into a RUNNING workflow on press, through its trigger’s agents', async () => {
+    // REPORTED as "queued messages doesn't work in workflow — I can't send
+    // them from queue". A workflow run has no agent kind of its own, and the
+    // send-now control asked the run's kind whether its CLI takes a message
+    // mid-turn — so every workflow run answered "no agent", and the control
+    // stayed inert over a running Manager whose CLI (claude) takes one fine.
+    // The question is about the agents the daemon hands a follow-up to: the
+    // ones the trigger feeds.
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'running',
+        title: null,
+        agentKind: null,
+        workflowId: 'review-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'review-team',
+      workflow: {
+        name: 'Review team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual', name: 'Start' },
+          { id: 'manager', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'start', to: 'manager' }],
+      },
+    });
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'collect my feedback first'),
+    );
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await type(container, 'collect my feedback first');
+    await clickButton(container, 'Queue');
+    expect(workflowApi.sendWorkflowRunMessage).not.toHaveBeenCalled();
+
+    const send = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Send queued message 1 now"]',
+    );
+    expect(send?.getAttribute('aria-disabled')).toBe('false');
+    await clickButton(container, 'Send queued message 1 now');
+
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
+      runId: 'w1',
+      sendMessageDto: { text: 'collect my feedback first' },
+    });
+  });
+});
+
 describe('Chats sidebar list', () => {
   const wfSummary = {
     slug: 'review-team',
@@ -8678,6 +8834,61 @@ describe('Chats sidebar list', () => {
       ...container.querySelectorAll<HTMLElement>('aside li[draggable="true"]'),
     ].find((el) => el.textContent?.includes('My chat'));
     expect(row!.textContent).toContain('Deploy finished cleanly.');
+  });
+
+  it('reads a workflow run’s agents from the RUN’s own copy, not the library as edited since', async () => {
+    // "old workflows chats should not be changed if i change current workflow.
+    // They should use snapshots."
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Old run',
+        agentKind: null,
+        workflowId: 'dev-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    const graphWith = (name: string) => ({
+      name: 'Dev team',
+      nodes: [
+        { id: 'start', kind: 'trigger', trigger: 'manual' },
+        { id: 'eng', kind: 'agent', name, agent: 'claude', approval: 'auto' },
+      ],
+      edges: [],
+    });
+    // The library has since been edited; the run kept what it started with.
+    workflowApi.getWorkflow.mockResolvedValue({
+      slug: 'dev-team',
+      workflow: graphWith('Renamed in the library'),
+    });
+    workflowApi.getWorkflowRunSnapshot.mockResolvedValue({
+      workflow: graphWith('Engineer as the run started'),
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Old run');
+
+    const cards = [
+      ...container.querySelectorAll('[data-slot="agent-cards"] li'),
+    ].map((card) => card.textContent ?? '');
+    expect(
+      cards.some((text) => text.includes('Engineer as the run started')),
+    ).toBe(true);
+    expect(cards.some((text) => text.includes('Renamed in the library'))).toBe(
+      false,
+    );
+    expect(workflowApi.getWorkflowRunSnapshot).toHaveBeenCalledWith({
+      runId: 'w1',
+    });
   });
 
   it('the side panel tracks live agent state — at-work status, context ring, spend', async () => {
@@ -10814,6 +11025,35 @@ describe('Chats — running shells', () => {
     expect(
       container.querySelector('[data-slot="agent-shell-list"]')?.textContent,
     ).toContain('pnpm build');
+  });
+
+  it('follows the run’s LIVE shell count, not the one the chat list was loaded with', async () => {
+    // REPORTED as a Terminals chip reading `1 command still running` over an
+    // empty list, minutes after every command had ended. The announce updated
+    // only a yes/no flag, so `run.shellsOpen` — which the chip counts and the
+    // whole-conversation list refetches on — stayed the load-time snapshot.
+    api.listChats.mockResolvedValue([run1]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'build it')]);
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
+    const readsBefore = api.readChatShells.mock.calls.length;
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, shellsOpen: 1 });
+    });
+    expect(
+      container.querySelector('[data-slot="running-shells"]')?.textContent,
+    ).toContain('1');
+    // …and the whole-conversation list is asked again, since it keys on the
+    // same count.
+    expect(api.readChatShells.mock.calls.length).toBeGreaterThan(readsBefore);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, shellsOpen: 0 });
+    });
+    expect(container.querySelector('[data-slot="running-shells"]')).toBeNull();
   });
 
   it('drops a command as soon as its reply lands', async () => {

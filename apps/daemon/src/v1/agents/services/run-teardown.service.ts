@@ -92,8 +92,10 @@ export class RunTeardownService {
     // above stops the WORK but deliberately leaves the process running — that
     // is the whole point of a run-scoped session — so a delete that skipped
     // this would strand a CLI, and every MCP server it started, belonging to a
-    // run that no longer exists and that nothing can ever reach again.
-    this.sessions.close(runId);
+    // run that no longer exists and that nothing can ever reach again. EVERY
+    // process of it: a workflow run keeps one per node and per conversation
+    // under `<runId>::…`, and they outlive each of its passes.
+    this.sessions.closeRun(runId);
 
     // The in-memory planes. Cleared next — pure bookkeeping, and a failure
     // here must not leave the durable rows half-deleted.

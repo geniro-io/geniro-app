@@ -318,6 +318,8 @@ function ThreadRow({
   as = 'li',
   leading = null,
   hideTerminal = false,
+  title,
+  tag = null,
   agent,
   thread,
   terminal,
@@ -339,6 +341,13 @@ function ThreadRow({
    * two buttons for one handoff.
    */
   hideTerminal?: boolean;
+  /**
+   * What the row says in place of `thread.label` — an instance heading states
+   * the brief, with the call id as its {@link tag}.
+   */
+  title?: string;
+  /** A short muted identifier after the title — an instance's call id. */
+  tag?: string | null;
   agent: AgentDisplay;
   thread: AgentThread;
   /**
@@ -394,9 +403,16 @@ function ThreadRow({
         </button>
       ) : (
         <span className="min-w-0 flex-1 truncate" title={thread.label}>
-          {thread.label}
+          {title ?? thread.label}
         </span>
       )}
+      {tag ? (
+        <span
+          data-slot="thread-row-tag"
+          className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          {tag}
+        </span>
+      ) : null}
       {/*
         This CONVERSATION's own window. On the row rather than on the card
         because a node can hold several calls at once and each has its own
@@ -612,14 +628,18 @@ function instanceKey(agentId: string, threadId: string): string {
  * its heading, indented to its label.
  *
  * The heading names what the instance was ASKED (the call's brief), which does
- * not change while it works; this is what moves. Drawn only when something
- * answers it, on the rule every figure in this panel follows.
+ * not change while it works; this is what moves. ALWAYS drawn, so every block
+ * has the same two-line shape — a block with words and one without used to be
+ * one and two lines tall beside each other, which read as some calls being
+ * open and some not. With nothing said yet the line states the status in
+ * words; the spend stays omit-when-unmeasured, the rule every figure here
+ * follows.
  */
 function InstanceSummary({
   thread,
 }: {
   thread: AgentThread;
-}): React.JSX.Element | null {
+}): React.JSX.Element {
   const tokens = measured(thread.spentTokens);
   const usd = measured(thread.spentUsd);
   const spend = [
@@ -627,15 +647,12 @@ function InstanceSummary({
     usd === null ? null : formatUsd(usd),
   ].filter((part): part is string => part !== null);
   const latest = thread.latest ?? null;
-  if (latest === null && spend.length === 0) {
-    return null;
-  }
   return (
     <p
       data-slot="agent-instance-latest"
       className="m-0 flex items-baseline gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
       <span className="min-w-0 flex-1 truncate" title={latest ?? undefined}>
-        {latest}
+        {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
       {spend.length > 0 ? (
         <span className="shrink-0 tabular-nums">{spend.join(' · ')}</span>
@@ -695,6 +712,9 @@ function InstanceBlock({
 }): React.JSX.Element {
   const { thread } = instance;
   const content = hasInstanceContent(instance);
+  // A call with a brief is titled BY it, with its id as a tag; one without is
+  // titled by what it is called, which for a call is the id itself.
+  const brief = thread.kind === 'call' ? (thread.brief ?? null) : null;
   return (
     <li
       data-slot="agent-instance"
@@ -703,28 +723,25 @@ function InstanceBlock({
       <ThreadRow
         as="div"
         leading={
-          content ? (
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} what ${thread.label} holds`}
-              title={open ? 'Hide its details' : 'Show its details'}
-              onClick={onToggle}
-              className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
-              <ChevronRight
-                aria-hidden="true"
-                className={cn(
-                  'size-3 transition-transform',
-                  open && 'rotate-90',
-                )}
-              />
-            </button>
-          ) : (
-            // Holds the disclosure's width, so every heading's glyph and label
-            // start at the same x whether or not it has anything to open.
-            <span aria-hidden="true" className="size-4 shrink-0" />
-          )
+          // EVERY block opens, whatever it holds: its body always has the
+          // whole brief to show, which the heading truncates. A disclosure on
+          // only the blocks holding delegates read as some calls being open
+          // and others not.
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-label={`${open ? 'Hide' : 'Show'} what ${thread.label} holds`}
+            title={open ? 'Hide its details' : 'Show its details'}
+            onClick={onToggle}
+            className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronRight
+              aria-hidden="true"
+              className={cn('size-3 transition-transform', open && 'rotate-90')}
+            />
+          </button>
         }
+        title={brief ?? undefined}
+        tag={brief === null ? null : thread.id}
         // The node's own conversation carries its terminal in the card header.
         hideTerminal={thread.kind === 'main'}
         agent={agent}
@@ -734,10 +751,22 @@ function InstanceBlock({
         onResolveHandoff={onResolveHandoff}
       />
       <InstanceSummary thread={thread} />
-      {open && content ? (
+      {open ? (
         <div
           data-slot="agent-instance-body"
           className="flex flex-col gap-1.5 border-t border-border px-1.5 py-1.5">
+          {brief !== null ? (
+            <p
+              data-slot="agent-instance-brief"
+              className="m-0 line-clamp-6 px-1 text-[11px] whitespace-pre-wrap text-muted-foreground">
+              {brief}
+            </p>
+          ) : null}
+          {brief === null && !content ? (
+            <p className="m-0 px-1 text-[11px] text-muted-foreground">
+              Nothing else happened in this conversation.
+            </p>
+          ) : null}
           {instance.subagents.length > 0 ? (
             <SubagentRows
               agent={agent}

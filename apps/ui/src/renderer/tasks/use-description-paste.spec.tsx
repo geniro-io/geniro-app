@@ -402,13 +402,19 @@ describe('useStagedDescriptionPaste', () => {
     expect(harness.state().error).toContain('paste again');
   });
 
-  it('never re-uses a number, even across a reset', () => {
+  it('never re-uses a number, even across a reset', async () => {
     // A reference left in the text from before a reset must not come to mean
     // a different picture.
     const exec = stubExecCommand(true);
     const harness = mountStaged();
 
     harness.paste(clipboard(png()));
+    // Held before the reset drops it: every paste starts a `FileReader`, and a
+    // read left running past the end of the test finishes after this file's
+    // jsdom is torn down, where jsdom's own base64 step throws `Expected an
+    // Uint8Array`. Vitest reports that as an unhandled error and fails the run
+    // with every test green — which is how CI failed twice on this file.
+    const dropped = harness.state().staged[0]!.data;
     act(() => {
       harness.state().reset();
     });
@@ -422,6 +428,8 @@ describe('useStagedDescriptionPaste', () => {
       false,
       '![again.png](staged-image:2)',
     );
+    await expect(dropped).resolves.toBe('AQID');
+    await expect(harness.state().staged[0]!.data).resolves.toBe('AQID');
   });
 
   it('still writes a NON-image file as its own path', () => {

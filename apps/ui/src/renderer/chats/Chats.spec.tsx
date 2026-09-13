@@ -3983,6 +3983,48 @@ describe('Chats workflow runs', () => {
     ).toContain('33.3k of 200k');
   });
 
+  it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {
+    // REPORTED as "strange researcher card with some context but without
+    // calls": the Researcher's calls were a day older than the newest page of
+    // items, so no `call_started` row named them and the card had a ring and
+    // no instance. The daemon still holds each call's reading.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: 201_788,
+        contextWindowTokens: 256_000,
+        calls: [
+          {
+            callId: 'call-4',
+            contextTokens: 201_788,
+            contextWindowTokens: 256_000,
+          },
+        ],
+        workedMs: null,
+        toolCalls: 106,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(instance).not.toBeNull();
+    expect(
+      instance!
+        .querySelector('button[aria-label*="of 256k"]')
+        ?.getAttribute('aria-label'),
+    ).toContain('201.8k of 256k');
+  });
+
   it('keeps a callee’s ring after the live plane is gone, from the durable call row', async () => {
     // The RANK ABOVE the node row, and the one with no live delta anywhere: a
     // window that reloaded, or a run that settled, has no live plane at all —

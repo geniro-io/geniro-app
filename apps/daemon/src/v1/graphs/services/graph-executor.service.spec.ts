@@ -2505,6 +2505,33 @@ describe('GraphExecutorService — agent calls', () => {
     edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
   };
 
+  it('keeps a call-only node’s last status on a follow-up pass instead of resetting it to pending', async () => {
+    // REPORTED as a Researcher card reading `pending` beside `106 tools` and a
+    // context ring, a day after its calls completed. Every pass reset every
+    // node to pending — right for a node the DAG schedules, wrong for one only
+    // a call ever runs, which no pass will schedule.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // As a call the pass gave it would have left it.
+    nodeDao.rows.get(`${run.id}:helper`)!.status = 'completed';
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    expect(nodeDao.rows.get(`${run.id}:helper`)?.status).toBe('completed');
+    // The node the DAG schedules still starts the pass over, and is running.
+    expect(nodeDao.rows.get(`${run.id}:orch`)?.status).toBe('running');
+  });
+
   it('gives every node the run’s custom instructions WITHOUT displacing its role', async () => {
     // The compose-don't-overwrite contract. `systemPrompt` was the only
     // instruction channel a node had, so folding the global text into it would

@@ -1,5 +1,5 @@
 import { EntityManager } from '@mikro-orm/sqlite';
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { BadRequestException, ConflictException } from '@packages/common';
 
 import { CallTokenRegistry } from '../../../auth/call-token.registry';
@@ -53,6 +53,15 @@ import {
 } from '../../agents/utils/event-to-item';
 import { hostMcpServerName } from '../../agents/utils/host-question';
 import { sanitizeModelParameters } from '../../agents/utils/model-parameters';
+import {
+  delegateCloseEvent,
+  ownerFields,
+  strandedDelegates,
+} from '../../agents/utils/open-delegates';
+import {
+  shellCloseEvent,
+  strandedShells,
+} from '../../agents/utils/open-shells';
 import { persistItemAndEmit, runToWire } from '../../agents/utils/persist-item';
 import { resolveValidConfigDir } from '../../agents/utils/resolve-config-dir';
 import { resolveValidCwd } from '../../agents/utils/resolve-cwd';
@@ -383,7 +392,7 @@ function withResolvedNodeSettings(
  * completed / failed / cancelled once every node settles.
  */
 @Injectable()
-export class GraphExecutorService {
+export class GraphExecutorService implements OnModuleInit {
   private readonly logger = new Logger(GraphExecutorService.name);
 
   /**
@@ -427,6 +436,31 @@ export class GraphExecutorService {
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
   ) {}
+
+  /**
+   * What to do when one of a LIVE run's sessions is closed by something other
+   * than that run's own teardown — keyed by the session key it was opened
+   * under, and consumed by the first close.
+   *
+   * The registry closes a kept process on its own account (it went unused,
+   * the ceiling needed its slot, it went stale), and every delegate running
+   * inside that process dies with it. `ChatService` states that ending for a
+   * chat, but it cannot for a workflow run: the key it is handed is this
+   * executor's composite one, and it must not write into a run whose rows are
+   * numbered by this executor's own counter. So the executor listens for its
+   * own keys.
+   */
+  private readonly sessionClosers = new Map<string, () => void>();
+
+  onModuleInit(): void {
+    this.sessions.onClosed((key) => {
+      const closer = this.sessionClosers.get(key);
+      if (closer) {
+        this.sessionClosers.delete(key);
+        closer();
+      }
+    });
+  }
 
   /**
    * The adapter driving one agent kind — the single kind→adapter dispatch in
@@ -1268,6 +1302,68 @@ export class GraphExecutorService {
       };
     };
 
+    /**
+     * State the ending of the work this run's transcript still declares out:
+     * every delegate and — with `withShells` — every detached command, or only
+     * what ONE session's process was running when `scope` names it.
+     *
+     * The process that owed each ending is gone or about to be: a delegate
+     * lives inside the CLI process that launched it, and a detached command is
+     * that process's own child. Neither of the other writers can say so for a
+     * workflow run — `ChatService`'s session-close hook keys by RUN and is
+     * handed this executor's per-turn session key, and the shell closes a dying
+     * process announces arrive after `runFinished`, where `onOffTurnEvent`
+     * drops them.
+     *
+     * Read from the transcript, so one fold answers both callers, and written
+     * through `persistItem`, so the rows take this run's own seq.
+     */
+    const closeStrandedWork = async (
+      scope: { callId: string } | { nodeId: string } | null,
+      withShells: boolean,
+    ): Promise<void> => {
+      const inScope = (unit: {
+        nodeId: string | null;
+        callId: string | null;
+      }): boolean =>
+        scope === null ||
+        ('callId' in scope
+          ? unit.callId === scope.callId
+          : unit.callId === null && unit.nodeId === scope.nodeId);
+      const closes: {
+        event: AgentEvent;
+        owner: { nodeId: string | null; callId: string | null };
+      }[] = [];
+      for (const delegate of strandedDelegates(
+        await this.itemDao.subagentInfoRows(runId, em),
+      )) {
+        if (inScope(delegate)) {
+          closes.push({
+            event: delegateCloseEvent(delegate.id),
+            owner: delegate,
+          });
+        }
+      }
+      if (withShells) {
+        for (const shell of strandedShells(
+          await this.itemDao.shellRows(runId, em),
+        )) {
+          if (inScope(shell)) {
+            closes.push({ event: shellCloseEvent(shell), owner: shell });
+          }
+        }
+      }
+      for (const { event, owner } of closes) {
+        const mapped = mapEventToItem(event);
+        if (mapped) {
+          await persistItem(owner.nodeId, mapped.kind, mapped.role, {
+            ...(mapped.payload as Record<string, unknown>),
+            ...ownerFields(owner),
+          });
+        }
+      }
+    };
+
     let resolveAllDone!: () => void;
     const allDone = new Promise<void>((resolve) => {
       resolveAllDone = resolve;
@@ -1348,6 +1444,16 @@ export class GraphExecutorService {
             em,
           );
         }
+        // Every delegate and detached command still out dies with the processes
+        // the `finally` closes. Said here, while the run can still write and
+        // AHEAD of its terminal row, rather than left running on screen for
+        // good. Failing to say so must not fail the run: the work it describes
+        // is over either way.
+        await closeStrandedWork(null, true).catch((err: unknown) => {
+          this.logger.error(
+            `workflow run ${runId} could not close its stranded work: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
         // A user cancel rolls up cancelled; any other non-completed node (a
         // failure, or a CLI killed externally without cancel()) is a failure —
         // downstream nodes were skipped, so the run must never read as success.
@@ -1403,6 +1509,12 @@ export class GraphExecutorService {
         // settles is terminated here. That is the right way round — the run is
         // the user's unit of work, and keeping processes alive past it would
         // mean a finished workflow that never actually stops.
+        // The closers go FIRST: these closes are the run's own teardown, whose
+        // endings were already written above, and a closer left armed here
+        // would only queue a second pass over the same rows.
+        for (const key of sessionKeys) {
+          this.sessionClosers.delete(key);
+        }
         for (const key of sessionKeys) {
           this.sessions.close(key);
         }
@@ -2171,6 +2283,22 @@ export class GraphExecutorService {
         callContext ? `call:${callContext.callId}` : `node:${node.id}`
       }`;
       sessionKeys.add(sessionKey);
+      // The registry may close this process before the run ends — reaped as
+      // unused, evicted, or replaced as stale — and every delegate inside it
+      // dies with it. Its detached commands need nothing from here: while the
+      // run is live the process exit announces their closes through
+      // `onOffTurnEvent` itself.
+      this.sessionClosers.set(sessionKey, () => {
+        enqueue(async () => {
+          if (runFinished) {
+            return;
+          }
+          await closeStrandedWork(
+            callContext ? { callId: callContext.callId } : { nodeId: node.id },
+            false,
+          );
+        });
+      });
       const handle: AgentTurnHandle = this.sessions.startTurn(
         sessionKey,
         adapter,

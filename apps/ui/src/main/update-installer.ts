@@ -124,17 +124,19 @@ function removeTree(path: string): Promise<void> {
 }
 
 /**
- * The two names an update writes beside the things it is replacing.
+ * The three names an update writes beside the things it is replacing.
  *
  * Declared once because they are read by two parties that must agree: the code
- * that CREATES them ({@link installUpdate}'s `mkdtemp`, {@link swapBundle}'s
- * backup) and the code that later finds them again to remove them
- * ({@link sweepUpdateDebris}). A prefix that drifts on one side is a sweeper
- * that silently stops matching anything — which is exactly how four dead trees
- * came to sit in a user's Application Support and beside their app.
+ * that CREATES them ({@link stageUpdate}'s `mkdtemp` and staged bundle,
+ * {@link applyStagedUpdate}'s backup) and the code that later finds them again
+ * to remove them ({@link sweepUpdateDebris}). A prefix that drifts on one side
+ * is a sweeper that silently stops matching anything — which is exactly how
+ * four dead trees came to sit in a user's Application Support and beside their
+ * app.
  */
 const SCRATCH_PREFIX = 'update-';
 const BACKUP_SUFFIX = '.old-';
+const STAGED_SUFFIX = '.new-';
 
 /**
  * The caller's abandon signal and this step's own budget, as one signal.
@@ -340,33 +342,42 @@ async function staleScratch(workDir: string): Promise<string[]> {
 }
 
 /**
- * Bundle backups a previous swap left beside the app.
+ * What previous updates left beside the app: bundle backups a swap never got
+ * to remove, and staged releases a launch never got to put in place.
  *
- * Matched on `<the app's own name>.old-`, so it can only ever name something
- * this file wrote: `Geniro.app` does not start with `Geniro.app.old-`, and
- * neither does anything else a user keeps in /Applications.
+ * Matched on `<the app's own name>.old-` / `.new-`, so it can only ever name
+ * something this file wrote: `Geniro.app` starts with neither, and nor does
+ * anything else a user keeps in /Applications. This process's own staging is
+ * excluded by name, since it is a release waiting for this launch to quit.
  */
-async function staleBackups(bundlePath: string): Promise<string[]> {
+async function staleSiblings(bundlePath: string): Promise<string[]> {
   const parent = dirname(bundlePath);
-  const prefix = `${basename(bundlePath)}${BACKUP_SUFFIX}`;
+  const prefixes = [BACKUP_SUFFIX, STAGED_SUFFIX].map(
+    (suffix) => `${basename(bundlePath)}${suffix}`,
+  );
+  const mine = basename(stagedBundlePath(bundlePath));
   const entries = await readdir(parent).catch(() => [] as string[]);
   return entries
-    .filter((name) => name.startsWith(prefix))
+    .filter(
+      (name) =>
+        name !== mine && prefixes.some((prefix) => name.startsWith(prefix)),
+    )
     .map((name) => join(parent, name));
 }
 
 /**
  * Remove everything a previous update left on disk, and say what was removed.
  *
- * Both halves of the mess, because a user had all four kinds at once: two
- * scratch trees under `updates/` and two `Geniro.app.old-*` backups beside the
- * app, ~224MB of it, from updates that had SUCCEEDED days earlier. Neither is a
- * leak in the install sequence — the scratch is discarded in a `finally` and
- * the backup on the way out of {@link swapBundle} — but both removals are
- * deliberately best-effort ({@link discard} swallows), and macOS holding a
- * freshly-written bundle open is exactly the case that makes them fail. So the
- * guarantee cannot live inside the install at all: it is a sweep at LAUNCH,
- * which is the one moment nothing here is running.
+ * Every kind of the mess, because a user had four trees at once: two scratch
+ * trees under `updates/` and two `Geniro.app.old-*` backups beside the app,
+ * ~224MB of it, from updates that had SUCCEEDED days earlier. None is a leak
+ * in the sequence — the scratch is discarded in a `finally`, the backup on the
+ * way out of {@link applyStagedUpdate}, and a staged release is consumed by the
+ * quit that applies it — but every removal is deliberately best-effort
+ * ({@link discard} swallows), macOS holding a freshly-written bundle open is
+ * exactly the case that makes one fail, and a launch that crashed never
+ * reaches its quit at all. So the guarantee cannot live inside the install: it
+ * is a sweep at LAUNCH, which is the one moment nothing here is running.
  *
  * The returned paths are what the caller logs. A sweep that removes nothing is
  * the normal case and returns an empty array.
@@ -376,14 +387,14 @@ export async function sweepUpdateDebris({
   bundlePath,
 }: {
   workDir: string;
-  /** The `.app` being updated — its backups live beside it. */
+  /** The `.app` being updated — its backups and stagings live beside it. */
   bundlePath: string;
 }): Promise<string[]> {
-  const [scratch, backups] = await Promise.all([
+  const [scratch, siblings] = await Promise.all([
     staleScratch(workDir),
-    staleBackups(bundlePath),
+    staleSiblings(bundlePath),
   ]);
-  const paths = [...scratch, ...backups];
+  const paths = [...scratch, ...siblings];
   const gone = await Promise.all(paths.map(discard));
   // What was REMOVED, not what was attempted. The caller logs this line, and it
   // is the only record a user has of the sweep — a path it names while the
@@ -393,13 +404,35 @@ export async function sweepUpdateDebris({
 }
 
 /**
- * Download, verify and swap in `release`.
- *
- * Resolves once the new bundle is in place; the caller relaunches. Everything
- * it wrote is cleaned up on both paths — a failed update must not leave a
- * gigabyte of half-downloaded release in the user's Application Support.
+ * Where a verified release waits for this app to stop: beside the running
+ * bundle, on the same volume, so putting it in place is a `rename` rather than
+ * a copy. Keyed by this process, so a leftover from an earlier launch is never
+ * taken for this launch's staging and is swept at the next start instead.
  */
-export async function installUpdate({
+export function stagedBundlePath(bundlePath: string): string {
+  return `${bundlePath}${STAGED_SUFFIX}${process.pid}`;
+}
+
+/**
+ * Download, verify and unpack `release`, and leave it BESIDE the app.
+ *
+ * It never touches the running bundle, and that is the point. MEASURED on
+ * electron 42.5.1: with `app.asar` replaced under a running app, the renderer
+ * reads the NEW archive at the OLD archive's offsets — the page's next
+ * lazily-imported chunk threw `SyntaxError: Unexpected identifier 'pad'` and a
+ * `fetch` of a file returned a slice of a different one, while main's own reads
+ * stayed correct (main holds the archive through an fd; the renderer's loader
+ * re-opens it by path). Every screen but the chats is a lazy chunk, so the
+ * first one opened after a swap fails to parse (`Unexpected token ')'` on
+ * Workflows), and the daemon has the same exposure through anything it
+ * requires lazily from `Resources/daemon`. So the swap waits for
+ * {@link applyStagedUpdate}, at quit.
+ *
+ * Everything else it wrote is cleaned up on both paths — a failed update must
+ * not leave a gigabyte of half-downloaded release in Application Support or a
+ * half-copied bundle beside the app.
+ */
+export async function stageUpdate({
   release,
   bundlePath,
   workDir,
@@ -452,60 +485,66 @@ export async function installUpdate({
     // resource forks and permissions intact; `unzip` flattens some of them.
     const unpacked = join(scratch, 'unpacked');
     await execFileAsync(DITTO, ['-x', '-k', archive, unpacked], { signal });
-    const staged = join(unpacked, basename(bundlePath));
-    await access(staged, constants.F_OK);
+    const unpackedBundle = join(unpacked, basename(bundlePath));
+    await access(unpackedBundle, constants.F_OK);
 
-    // The last cheap place to stop. Past this line the app is briefly absent
-    // from its own path, so an abandoned attempt costs a rollback rather than
-    // nothing.
+    // Copied beside the app rather than left in the scratch: userData need not
+    // be the app's volume, and only a same-volume rename can put the bundle in
+    // place at quit without a copy. A leftover of this process's own staging
+    // (an earlier attempt the watchdog gave up on) is cleared first, under
+    // {@link withoutAsar} — it is a bundle, with an archive to walk into.
     signal?.throwIfAborted();
-    await swapBundle(staged, bundlePath, signal);
+    const staged = stagedBundlePath(bundlePath);
+    await removeTree(staged);
+    try {
+      await execFileAsync(DITTO, [unpackedBundle, staged], { signal });
+      // The archive was fetched by this process rather than by a browser, so
+      // it carries no quarantine bit — but a future download path might, and
+      // the app has no notarization ticket to clear one with. Failure is
+      // swallowed for the same reason install.sh's is: nothing to strip is the
+      // normal case.
+      await execFileAsync(XATTR, ['-dr', 'com.apple.quarantine', staged]).catch(
+        () => undefined,
+      );
+      signal?.throwIfAborted();
+    } catch (err) {
+      await discard(staged);
+      throw err;
+    }
   } finally {
     await discard(scratch);
   }
 }
 
 /**
- * Put `staged` where `bundlePath` is, keeping the old one until the new one is
- * fully in place.
+ * Put the release {@link stageUpdate} left beside the app where the app is.
  *
- * The rename is the commit point. Before it, nothing has changed; after it, the
- * app is briefly absent from its own path, so the copy that follows is the one
- * failure worth undoing — and it is undone by renaming the original back, which
- * cannot itself fail for any reason the rename out did not already catch.
+ * Called at QUIT, once the windows and the daemon are gone, so nothing is
+ * reading either bundle while it happens. It is two renames and no copy — the
+ * expensive half ran at install time, under a progress readout and a watchdog —
+ * so a quit that is cut short (a logout, a force-quit) cannot catch it half way
+ * through a bundle's worth of writes.
  *
- * Removing the old bundle LAST, and only on success, is deliberate: the running
- * process keeps its open handles (the asar archive is read through an fd that
- * an unlink does not close), so this is safe while the app is still up, but it
- * is also the step with nothing left to protect.
+ * The first rename is the commit point, and the old bundle is moved aside
+ * rather than deleted, so a failure of the second puts it back. Removing the
+ * old bundle LAST, and only on success, is the step with nothing left to
+ * protect.
  */
-async function swapBundle(
-  staged: string,
-  bundlePath: string,
-  signal?: AbortSignal,
-): Promise<void> {
+export async function applyStagedUpdate(bundlePath: string): Promise<void> {
+  const staged = stagedBundlePath(bundlePath);
+  await access(staged, constants.F_OK);
   const backup = `${bundlePath}${BACKUP_SUFFIX}${process.pid}`;
-  // This one is BEFORE the commit point, so a failure here is a genuine refusal
-  // to start — renaming onto a leftover would be the destructive kind of
-  // surprise. It still retries, for the reason `discard` documents, and it
-  // still runs under {@link withoutAsar}: a leftover backup is a bundle, so
-  // this is the same walk-into-the-archive hang, one step earlier.
+  // BEFORE the commit point, so a failure here is a genuine refusal to start —
+  // renaming onto a leftover would be the destructive kind of surprise. Under
+  // {@link withoutAsar}, like every removal here: a leftover backup is a bundle.
   await removeTree(backup);
   await rename(bundlePath, backup);
   try {
-    await execFileAsync(DITTO, [staged, bundlePath], { signal });
+    await rename(staged, bundlePath);
   } catch (err) {
     await rename(backup, bundlePath);
     throw err;
   }
-  // The archive was fetched by this process rather than by a browser, so it
-  // carries no quarantine bit — but a future download path might, and the app
-  // has no notarization ticket to clear one with. Failure is
-  // swallowed for the same reason install.sh's is: nothing to strip is the
-  // normal case.
-  await execFileAsync(XATTR, ['-dr', 'com.apple.quarantine', bundlePath]).catch(
-    () => undefined,
-  );
   // AFTER the commit point: the new bundle is already in place, so failing to
   // remove the old one cannot be allowed to report the update as failed.
   await discard(backup);

@@ -1,4 +1,5 @@
-import { asRecord, asString } from './json-util';
+import type { AgentEvent } from '../adapters/adapter.types';
+import { asRecord, asString, parseJsonColumn } from './json-util';
 
 /**
  * The delegates a run's transcript still declares OUT, folded from its own
@@ -45,6 +46,96 @@ export function delegateIdOf(payload: unknown): string | null {
   }
   const id = asString(record.id);
   return id === null || id === '' ? null : id;
+}
+
+/** A `subagent_info` row as it is read back to be folded. */
+export interface DelegateRow {
+  /** The column as stored — JSON text. */
+  payload: unknown;
+  nodeId: string | null;
+}
+
+/**
+ * A delegate still declared out, and where its close has to be filed to reach
+ * it: under the NODE whose rows carry it and, for one a callee sub-turn
+ * launched, carrying that CALL's id — the renderer nests a call's rows under
+ * its call block by the payload's `callId`, so a close without it lands
+ * outside the block holding the delegate it is about.
+ */
+export interface StrandedDelegate {
+  id: string;
+  nodeId: string | null;
+  callId: string | null;
+}
+
+/**
+ * {@link openDelegateIds}, with each id paired to where its OWN rows were
+ * filed — read off the first row naming it, which is the launch.
+ */
+export function strandedDelegates(
+  rows: readonly DelegateRow[],
+): StrandedDelegate[] {
+  const payloads = rows.map((row) => parseJsonColumn(row.payload));
+  const placed = new Map<
+    string,
+    { nodeId: string | null; callId: string | null }
+  >();
+  payloads.forEach((payload, index) => {
+    const id = delegateIdOf(payload);
+    if (id !== null && !placed.has(id)) {
+      placed.set(id, {
+        nodeId: rows[index]!.nodeId,
+        callId: asString(asRecord(payload)?.callId),
+      });
+    }
+  });
+  return openDelegateIds(payloads).map((id) => ({
+    id,
+    ...(placed.get(id) ?? { nodeId: null, callId: null }),
+  }));
+}
+
+/**
+ * The close written for a delegate whose process is gone: `stopped`, because
+ * it never reported back and claiming it finished would be an outcome nothing
+ * measured. Built here so every writer of one produces the same row.
+ */
+export function delegateCloseEvent(id: string): AgentEvent {
+  return {
+    type: 'subagent_info',
+    id,
+    label: null,
+    kind: null,
+    prompt: null,
+    model: null,
+    durationMs: null,
+    tokens: null,
+    toolUses: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
+    costUsd: null,
+    stepsUnavailableReason: null,
+    backgroundOpen: false,
+    backgroundOutcome: 'stopped',
+  };
+}
+
+/**
+ * The owner fields every row a workflow node persists carries in its payload,
+ * for a close written on that node's behalf — without them the renderer files
+ * the close outside the call block holding the unit it closes. Empty for a
+ * chat, whose rows carry neither.
+ */
+export function ownerFields(owner: {
+  nodeId: string | null;
+  callId: string | null;
+}): { nodeId?: string; callId?: string } {
+  return {
+    ...(owner.nodeId !== null ? { nodeId: owner.nodeId } : {}),
+    ...(owner.callId !== null ? { callId: owner.callId } : {}),
+  };
 }
 
 export function openDelegateIds(payloads: readonly unknown[]): string[] {

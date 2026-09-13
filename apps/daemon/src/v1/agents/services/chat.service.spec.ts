@@ -395,6 +395,19 @@ class FakeItemDao {
       .sort((a, b) => a.runId.localeCompare(b.runId) || a.seq - b.seq)
       .map((i) => ({ runId: i.runId, payload: i.payload }));
   }
+  async allShellRows(): Promise<
+    Pick<Item, 'runId' | 'kind' | 'payload' | 'nodeId'>[]
+  > {
+    return this.items
+      .filter((i) => i.kind === 'shell_open' || i.kind === 'shell_info')
+      .sort((a, b) => a.runId.localeCompare(b.runId) || a.seq - b.seq)
+      .map((i) => ({
+        runId: i.runId,
+        kind: i.kind,
+        payload: i.payload,
+        nodeId: i.nodeId,
+      }));
+  }
   // Mirrors the real DAO (pinned by item.dao.spec.ts): per run, ONLY the
   // highest-seq `message` item is consulted — a text-less or malformed head
   // yields no preview (no fallback to earlier messages, no throw).
@@ -4188,6 +4201,86 @@ describe('ChatService', () => {
     expect(closes).toHaveLength(1);
     // The whole of the fix: the close has to land where the opens are.
     expect(closes[0]!.nodeId).toBe('qa');
+  });
+
+  it('stamps a stranded delegate close with the CALL its launch was made in', async () => {
+    // The same defect one level down. A callee's rows are nested under its
+    // call block by the payload's `callId`, so a close filed with the node and
+    // no call landed in the main flow while the delegate sat in the block —
+    // measured on the reporter's run, whose two boot closes carried `engineer`
+    // and nothing else, under a finished workflow still showing both at work.
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+    });
+    await itemDao.create({
+      runId: run.id,
+      nodeId: 'engineer',
+      seq: 0,
+      kind: 'subagent_info',
+      payload: JSON.stringify({
+        id: 'toolu_review',
+        backgroundOpen: true,
+        nodeId: 'engineer',
+        callId: 'call-7',
+      }),
+    });
+
+    await service.reconcileStrandedDelegates();
+
+    const close = (await itemDao.getByRun(run.id)).find(
+      (i) =>
+        i.kind === 'subagent_info' &&
+        JSON.parse(i.payload).backgroundOutcome === 'stopped',
+    );
+    expect(JSON.parse(close!.payload)).toMatchObject({
+      id: 'toolu_review',
+      nodeId: 'engineer',
+      callId: 'call-7',
+    });
+  });
+
+  it('boot reconcile closes a detached command a dead process left running, where its open row is', async () => {
+    // A command's close is announced by the CLI process's own exit, which a
+    // daemon that died never heard — and which a finished workflow's sink
+    // dropped. REPORTED as a finished workflow still listing `Terminals 1`
+    // under its manager, whose last `shell_open` had no close after it.
+    const { service, runDao, itemDao } = setup();
+    const run = await runDao.create({
+      workflowId: 'wf-1',
+      status: 'completed',
+    });
+    const rows = [
+      ['shell_open', { id: 'toolu_left', workId: 'b-left', nodeId: 'manager' }],
+      ['shell_open', { id: 'toolu_done', workId: 'b-done', nodeId: 'manager' }],
+      ['shell_info', { id: 'toolu_done', workId: 'b-done', nodeId: 'manager' }],
+      // A close naming only the work id still closes its shell.
+      ['shell_open', { id: 'toolu_byid', workId: 'b-byid', nodeId: 'manager' }],
+      ['shell_info', { id: null, workId: 'b-byid', nodeId: 'manager' }],
+    ] as const;
+    for (const [seq, [kind, payload]] of rows.entries()) {
+      await itemDao.create({
+        runId: run.id,
+        nodeId: 'manager',
+        seq,
+        kind,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    await service.reconcileStrandedShells();
+
+    const closes = (await itemDao.getByRun(run.id)).filter(
+      (i) => i.kind === 'shell_info' && i.seq >= rows.length,
+    );
+    expect(closes).toHaveLength(1);
+    expect(closes[0]!.nodeId).toBe('manager');
+    expect(JSON.parse(closes[0]!.payload)).toEqual({
+      id: 'toolu_left',
+      workId: 'b-left',
+      nodeId: 'manager',
+    });
   });
 
   it('reconcile SKIPS a running run whose turn is legitimately in flight', async () => {

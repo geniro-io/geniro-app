@@ -2225,13 +2225,34 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     }
     stalledCalls.delete(callId);
   }
+  // The call each delegate was LAUNCHED in, for a later row about it that names
+  // none. A close the daemon wrote on a delegate's behalf can carry the node
+  // and no call id (every one written before it stamped the call), and would
+  // otherwise be claimed into the main flow while the delegate sits in the call
+  // block, never hearing its own ending. The launch always names its call; a
+  // row about the same delegate belongs with it.
+  const delegateCalls = new Map<string, string>();
+  for (const item of items) {
+    if (item.kind !== 'subagent_info') {
+      continue;
+    }
+    const id = payloadString(item.payload, 'id');
+    const callId = payloadString(item.payload, 'callId');
+    if (id && callId && !delegateCalls.has(id)) {
+      delegateCalls.set(id, callId);
+    }
+  }
   const claimed = new Set<string>();
   if (shells.size > 0) {
     for (const item of items) {
       if (UNCLAIMABLE_KINDS.has(item.kind)) {
         continue;
       }
-      const callId = payloadString(item.payload, 'callId');
+      const callId =
+        payloadString(item.payload, 'callId') ??
+        (item.kind === 'subagent_info'
+          ? (delegateCalls.get(payloadString(item.payload, 'id') ?? '') ?? null)
+          : null);
       const shell = callId ? shells.get(callId) : undefined;
       if (!shell) {
         continue;

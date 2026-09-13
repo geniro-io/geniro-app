@@ -579,6 +579,20 @@ function main(): void {
       app.quit();
     });
   });
+
+  // Put a downloaded update in place — HERE, and nowhere earlier. By now every
+  // window is closed and the daemon has stopped, so nothing is reading the
+  // bundle while it is replaced; replacing it under a live window left the
+  // renderer loading its next screen from the new archive at the old one's
+  // offsets (see `stageUpdate`). The Restart button quits through this same
+  // path, so its relaunch comes up on the new bundle.
+  app.on('will-quit', (event) => {
+    if (!updates.hasStagedUpdate()) {
+      return;
+    }
+    event.preventDefault();
+    void updates.applyStaged().finally(() => app.quit());
+  });
 }
 
 if (app.requestSingleInstanceLock()) {

@@ -770,6 +770,44 @@ export class ItemDao extends BaseDao<Item> {
     );
   }
 
+  /**
+   * One run's `shell_open` / `shell_info` rows in seq order — which detached
+   * commands it started and which it has since seen end. The shell twin of
+   * {@link subagentInfoRows}, and durable for the same reason: the question is
+   * asked after the process that knew the answer is gone (see
+   * `utils/open-shells.ts`).
+   */
+  async shellRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'kind' | 'payload' | 'nodeId'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: { $in: ['shell_open', 'shell_info'] } },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['kind', 'payload', 'nodeId'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
+   * EVERY run's shell rows, grouped by run and in seq order — the boot sweep's
+   * one read, served by the `kind` index like {@link allSubagentInfoRows}.
+   */
+  async allShellRows(
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'runId' | 'kind' | 'payload' | 'nodeId'>[]> {
+    return this.getRepo(txEm).find(
+      { kind: { $in: ['shell_open', 'shell_info'] } },
+      {
+        orderBy: { runId: 'asc', seq: 'asc' },
+        fields: ['runId', 'kind', 'payload', 'nodeId'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
   async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full

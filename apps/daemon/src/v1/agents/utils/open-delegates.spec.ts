@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { openDelegateIds } from './open-delegates';
+import { openDelegateIds, strandedDelegates } from './open-delegates';
 
 /** One `subagent_info` payload, as `event-to-item.ts` writes it. */
 function info(
@@ -108,5 +108,41 @@ describe('openDelegateIds', () => {
         info('task-a', { backgroundOpen: true }),
       ]),
     ).toEqual(['task-a']);
+  });
+});
+
+describe('strandedDelegates', () => {
+  it('pairs each open delegate with the node and CALL its launch was filed under', () => {
+    // A callee's rows are nested under its call block by the payload's
+    // `callId`, so a close written without it never reaches the delegate —
+    // the pairing is read off the LAUNCH, the first row naming the id.
+    const rows = [
+      {
+        payload: JSON.stringify({
+          ...(info('in-call', { backgroundOpen: true }) as object),
+          callId: 'call-7',
+        }),
+        nodeId: 'engineer',
+      },
+      {
+        payload: JSON.stringify(info('own-turn', { backgroundOpen: true })),
+        nodeId: 'manager',
+      },
+      {
+        payload: JSON.stringify(info('done', { backgroundOpen: true })),
+        nodeId: 'manager',
+      },
+      {
+        payload: JSON.stringify(
+          info('done', { backgroundOutcome: 'completed' }),
+        ),
+        nodeId: 'manager',
+      },
+    ];
+
+    expect(strandedDelegates(rows)).toEqual([
+      { id: 'in-call', nodeId: 'engineer', callId: 'call-7' },
+      { id: 'own-turn', nodeId: 'manager', callId: null },
+    ]);
   });
 });

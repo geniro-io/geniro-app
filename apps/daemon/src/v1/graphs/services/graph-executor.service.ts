@@ -79,10 +79,12 @@ import type { AgentKind, ItemKind, RunStatus } from '../../runs/runs.types';
 import type {
   CalleeTurnOutcome,
   NodeStateWire,
+  RunCallSeed,
   Workflow,
   WorkflowAgentNode,
   WorkflowNode,
 } from '../graphs.types';
+import { readCallSeed } from '../utils/call-seed';
 import { CALLEE_DESCRIPTION_MAX, calleeSummary } from '../utils/callee-text';
 import {
   buildEdgeMaps,
@@ -237,6 +239,12 @@ interface RunContext {
    * on a run's first pass.
    */
   resumeSessions: ReadonlyMap<string, string>;
+  /**
+   * The calls an earlier pass of this run made, read back off the transcript
+   * so this pass's call ids continue past them and their conversations can be
+   * continued — see `RunCallSeed`. Null on a run's first pass.
+   */
+  callSeed: RunCallSeed | null;
   /** The seq this pass writes first — past everything an earlier pass wrote. */
   firstSeq: number;
   /**
@@ -623,6 +631,7 @@ export class GraphExecutorService implements OnModuleInit {
         customInstructions: run.customInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions: new Map(),
+        callSeed: null,
         firstSeq: 0,
         seedPersisted: false,
         seedImages: [],
@@ -765,6 +774,13 @@ export class GraphExecutorService implements OnModuleInit {
         resumeSessions.set(state.nodeId, state.agentSessionId);
       }
     }
+    // The broker's call state is in memory and died with whichever daemon ran
+    // the earlier pass; the transcript is what survived. Without this the
+    // pass started over at `call-1` — colliding with the rows already there —
+    // and every conversation the earlier pass had built was unreachable.
+    const callSeed = readCallSeed(
+      await this.itemDao.callRecordRows(run.id, em),
+    );
     // Every node that runs starts the pass pending again, as it did the first —
     // one added to the workflow since included, which has no row yet.
     for (const node of workflow.nodes) {
@@ -802,6 +818,7 @@ export class GraphExecutorService implements OnModuleInit {
         customInstructions: run.customInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions,
+        callSeed,
         firstSeq: seq + 1,
         seedPersisted: true,
         seedImages: turnImages,
@@ -1697,7 +1714,16 @@ export class GraphExecutorService implements OnModuleInit {
     const beginAgentTurn = (
       node: WorkflowAgentNode,
       prompt: string,
-      callContext?: { callId: string; resumeSessionId?: string | null },
+      /**
+       * A callee turn's identity: its call, the session it resumes when no
+       * kept process holds the conversation, and the CONVERSATION it belongs
+       * to — the call id its kept process is keyed by (see `sessionKey`).
+       */
+      callContext?: {
+        callId: string;
+        resumeSessionId?: string | null;
+        conversationId: string;
+      },
       /**
        * What a node's OWN turn carries beyond its prompt: the session to resume
        * when no kept process holds the conversation, and the pictures a seed
@@ -2124,9 +2150,14 @@ export class GraphExecutorService implements OnModuleInit {
           if (event.type === 'approval_request') {
             // A CALLEE parked on a card is waiting on a person, not wedged —
             // stand its silence window down until the verdict lands, the same
-            // carve-out `spawn-cli.ts` makes for its own deadline.
+            // carve-out `spawn-cli.ts` makes for its own deadline. A CALLER
+            // parked on one cannot answer its callees until the verdict lands
+            // either, so the questions they park wait with it rather than
+            // expiring against a caller that cannot see them.
             if (callContext) {
               this.callBroker.noteCalleeBlocked(runId, callContext.callId);
+            } else {
+              this.callBroker.noteCallerBlocked(runId, node.id);
             }
             this.approvals.track({
               runId,
@@ -2146,6 +2177,8 @@ export class GraphExecutorService implements OnModuleInit {
                     runId,
                     callContext.callId,
                   );
+                } else {
+                  this.callBroker.noteCallerUnblocked(runId, node.id);
                 }
                 const delivered = handle.respondApproval(
                   event.id,
@@ -2265,13 +2298,25 @@ export class GraphExecutorService implements OnModuleInit {
         !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)
           ? true
           : null;
-      // One registry key per TURN, never per node: a callable DAG node can hold
-      // its own turn and several callee turns at once, and a key serving two
-      // concurrent turns would have the second refused — which the registry
-      // reads as "replace it", killing the first turn's process mid-work. A
-      // call id is unique per call and a DAG node runs once, so both are
-      // single-turn keys; the `call:`/`node:` prefixes keep a callable node's
-      // two kinds of turn from colliding on its own id.
+      // One registry key per CONVERSATION, never per node: a callable DAG node
+      // can hold its own turn and several callee turns at once, and a key
+      // serving two concurrent turns would have the second refused — which the
+      // registry reads as "replace it", killing the first turn's process
+      // mid-work. A DAG node runs one conversation, so `node:<id>` is its key;
+      // a callee's is the FIRST call of its conversation, which a `thread:`
+      // continuation shares with every call before it. It was the call's own
+      // id for a while, and that spawned a second `--resume <session>` process
+      // for every continuation while the previous call's process was still
+      // kept under the previous id — two live CLIs on one session, both
+      // answering one message and editing one worktree (measured: an Engineer
+      // found two, then three, `claude -p --resume 43bb7bb7…` children of the
+      // daemon in its worktree). Keyed by the conversation, the continuation
+      // is handed to the kept process, and the session is resumed in a fresh
+      // one only once that process is gone. The broker refuses a continuation
+      // while a call on that conversation is live, which is what keeps the
+      // "one turn per key" premise of the registry true. The `call:`/`node:`
+      // prefixes keep a callable node's two kinds of turn from colliding on
+      // its own id.
       // The live plane's key for THIS turn. Per CALL rather than per node,
       // because a node can hold several at once — a caller running two of the
       // same callee had both write to one key, so the panel showed one ring
@@ -2280,7 +2325,7 @@ export class GraphExecutorService implements OnModuleInit {
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
       const sessionKey = `${runId}::${
-        callContext ? `call:${callContext.callId}` : `node:${node.id}`
+        callContext ? `call:${callContext.conversationId}` : `node:${node.id}`
       }`;
       sessionKeys.add(sessionKey);
       // The registry may close this process before the run ends — reaped as
@@ -2491,6 +2536,7 @@ export class GraphExecutorService implements OnModuleInit {
       callId: string,
       depth: number,
       resumeSessionId: string | null,
+      conversationId: string,
     ): Promise<CalleeTurnOutcome> => {
       liveSubTurns += 1;
       try {
@@ -2533,6 +2579,7 @@ export class GraphExecutorService implements OnModuleInit {
             ({ handle, finish } = beginAgentTurn(callee, message, {
               callId,
               resumeSessionId,
+              conversationId,
             }));
           } catch (err) {
             let recordSwept: (() => Promise<void>) | null = null;
@@ -2907,48 +2954,55 @@ export class GraphExecutorService implements OnModuleInit {
           this.callTokens.issue(runId, callerId, mintToken());
         }
       }
-      this.callBroker.registerRun(runId, {
-        calleesOf,
-        launchCalleeTurn,
-        persistItem: (nodeId, kind, role, payload) => {
-          enqueue(async () => {
-            await persistItem(nodeId, kind, role, payload);
-          });
-        },
-        isCancelled: () => cancelRequested,
-        isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
-        wakeNode: (nodeId, prompt) => {
-          const node = nodesById.get(nodeId);
-          if (node?.kind !== 'agent' || cancelRequested || runFinished) {
-            return false;
-          }
-          // Counted as live from NOW rather than from when the turn begins:
-          // the turn starts on the write chain, and a finalizer queued ahead
-          // of it would otherwise see nothing live and close the run under
-          // the wake.
-          liveSubTurns += 1;
-          enqueue(async () => {
-            liveSubTurns -= 1;
-            if (cancelRequested || runFinished) {
-              // Cancelled meanwhile — every callee dies with the run, so there
-              // is nothing left for this turn to answer or collect.
-              await finishRunIfSettled();
-              return;
+      this.callBroker.registerRun(
+        runId,
+        {
+          calleesOf,
+          launchCalleeTurn,
+          persistItem: (nodeId, kind, role, payload) => {
+            enqueue(async () => {
+              await persistItem(nodeId, kind, role, payload);
+            });
+          },
+          isCancelled: () => cancelRequested,
+          isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+          wakeNode: (nodeId, prompt) => {
+            const node = nodesById.get(nodeId);
+            if (node?.kind !== 'agent' || cancelRequested || runFinished) {
+              return false;
             }
-            if (liveTurnsByNode.has(nodeId)) {
-              // A follow-up raced the wake and the node is working again:
-              // hand it the message inside that turn rather than opening a
-              // second one on the same conversation.
-              (
-                continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
-              )?.sendUserMessage({ text: prompt, images: [] });
-              return;
-            }
-            continueNode(node, prompt, []);
-          });
-          return true;
+            // Counted as live from NOW rather than from when the turn begins:
+            // the turn starts on the write chain, and a finalizer queued ahead
+            // of it would otherwise see nothing live and close the run under
+            // the wake.
+            liveSubTurns += 1;
+            enqueue(async () => {
+              liveSubTurns -= 1;
+              if (cancelRequested || runFinished) {
+                // Cancelled meanwhile — every callee dies with the run, so there
+                // is nothing left for this turn to answer or collect.
+                await finishRunIfSettled();
+                return;
+              }
+              if (liveTurnsByNode.has(nodeId)) {
+                // A follow-up raced the wake and the node is working again:
+                // hand it the message inside that turn rather than opening a
+                // second one on the same conversation.
+                (
+                  continuationHandles.get(nodeId) ?? runningHandles.get(nodeId)
+                )?.sendUserMessage({ text: prompt, images: [] });
+                return;
+              }
+              continueNode(node, prompt, []);
+            });
+            return true;
+          },
         },
-      });
+        // What an earlier pass of this run left in the transcript — null on the
+        // first pass. Read at follow-up time, where the transcript is read for
+        // the node sessions too.
+        run.callSeed,
+      );
       // Daemon-side self-check: a dead endpoint degrades SILENTLY child-side
       // (claude exits 0 with an unreachable server), so probe our own route
       // once at run start and leave a system item when it fails. Advisory —

@@ -749,6 +749,30 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /**
+   * One run's `call_started` / `call_result` rows in seq order — every
+   * agent-to-agent call it has made, with the session each callee recorded.
+   *
+   * Durable for {@link subagentInfoRows}'s reason: the broker's call state is
+   * in memory and dies with the daemon, and a follow-up on a run that made
+   * calls under an earlier daemon has only these rows to continue them from
+   * (see `graphs/utils/call-seed.ts`). Bounded by the per-run turn cap per
+   * daemon lifetime, so it stays a handful of rows next to a transcript.
+   */
+  async callRecordRows(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+    return this.getRepo(txEm).find(
+      { runId, kind: { $in: ['call_started', 'call_result'] } },
+      {
+        orderBy: { seq: 'asc' },
+        fields: ['kind', 'payload'],
+        disableIdentityMap: true,
+      },
+    );
+  }
+
+  /**
    * EVERY run's `subagent_info` rows, grouped by run and in seq order — the
    * boot sweep's one read.
    *

@@ -206,6 +206,15 @@ class FakeItemDao {
       nodeId: i.nodeId,
     }));
   }
+  /** The call-seed read a follow-up folds — same shape rule as the two above. */
+  async callRecordRows(
+    runId: string,
+  ): Promise<Pick<Item, 'kind' | 'payload'>[]> {
+    return this.ofKinds(runId, ['call_started', 'call_result']).map((i) => ({
+      kind: i.kind,
+      payload: i.payload,
+    }));
+  }
   private ofKinds(runId: string, kinds: string[]): Item[] {
     return this.items
       .filter((i) => i.runId === runId && kinds.includes(i.kind))
@@ -377,6 +386,8 @@ interface FakeTurn {
   /** The mid-turn channel a follow-up message rides into a running turn. */
   sendUserMessage: ReturnType<typeof vi.fn>;
   cancelled: boolean;
+  /** Finished or cancelled — the session it ran on may take another turn. */
+  settled: boolean;
   /**
    * The sink the executor gave this turn's SESSION for events arriving after
    * the turn settles, and the answer it supplied for an approval request that
@@ -391,6 +402,13 @@ interface FakeTurn {
 
 class FakeAdapter {
   readonly starts: FakeTurn[] = [];
+  /**
+   * How many PROCESSES this double has opened — `starts` counts turns, and
+   * the two differ exactly where a kept process takes a later turn. That
+   * difference is what a callee conversation's continuation is measured by:
+   * one more turn, and not one more process.
+   */
+  sessionsOpened = 0;
   /** When set, the NEXT start() throws synchronously (prepareTurn-fs failure). */
   throwNextStart: Error | null = null;
   /**
@@ -469,22 +487,28 @@ class FakeAdapter {
       this.throwNextStart = null;
       throw err;
     }
+    this.sessionsOpened += 1;
     let live: FakeTurn | null = null;
     let closed = false;
     let resolveClosed!: () => void;
     const closedPromise = new Promise<void>((resolve) => {
       resolveClosed = resolve;
     });
+    const canTakeTurn = (): boolean =>
+      !closed && (live === null || live.cancelled || live.settled);
     return {
       ask: () => Promise.resolve(null),
       startTurn: (
         turnInput: AgentTurnInput,
         onEvent: (event: AgentEvent) => void,
       ) => {
-        // One turn per fake session, which is what the executor asks of it: it
-        // opens a key per TURN. A second would mean the key collided, and
-        // returning a handle for it would hide that.
-        if (closed || (live !== null && !live.cancelled)) {
+        // One LIVE turn per fake session, which is what the executor asks of
+        // it: a key serves one conversation, and a later turn of that
+        // conversation is taken only once the earlier one settled — a node's
+        // follow-up, a callee conversation's continuation. A second turn while
+        // one is live would mean the key collided, and returning a handle for
+        // it would hide that.
+        if (!canTakeTurn()) {
           return null;
         }
         const turn = this.start(turnInput, onEvent);
@@ -495,7 +519,7 @@ class FakeAdapter {
         return turn;
       },
       get idle(): boolean {
-        return live === null;
+        return canTakeTurn();
       },
       get alive(): boolean {
         return !closed;
@@ -533,10 +557,14 @@ class FakeAdapter {
     const turn: FakeTurn = {
       input,
       emit: onEvent,
-      finish: resolveDone,
+      finish: () => {
+        turn.settled = true;
+        resolveDone();
+      },
       respondApproval,
       sendUserMessage,
       cancelled: false,
+      settled: false,
       // Replaced by `startSession` the moment it hands this turn back; the
       // no-op stands only for the window before that.
       emitOffTurn: () => undefined,
@@ -549,6 +577,7 @@ class FakeAdapter {
       cancel: () => {
         // Mirror the real handle: a cancel emits turn_cancelled then settles.
         turn.cancelled = true;
+        turn.settled = true;
         onEvent({ type: 'turn_cancelled' });
         resolveDone();
       },
@@ -4461,6 +4490,238 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
     expect(callee.sessionClosed).toBe(true);
+  });
+
+  it('continues a callee conversation in the process it kept, not in a second --resume of the same session', async () => {
+    // Measured on a real run: a `thread:` continuation spawned a fresh
+    // `claude -p --resume <session>` while the previous call's process was
+    // still kept under the previous call id — two live CLIs holding one
+    // conversation, both answering the Manager's next message and editing one
+    // worktree, then three. A continuation now rides the FIRST call's key, so
+    // the kept process takes it: one more turn, not one more process.
+    const { service, claude, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    const opened = claude.sessionsOpened;
+
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'now build it',
+      thread: 'call-1',
+    });
+    await drain();
+    expect(claude.starts).toHaveLength(3);
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(callee.sessionClosed).toBe(false);
+    expect(claude.starts[2]!.input.prompt).toContain('now build it');
+    // Under the conversation's key — the first call's — and under no key of
+    // its own, which is what a third continuation will find as well.
+    expect(sessions.peek(`${run.id}::call:call-1`)).not.toBeNull();
+    expect(sessions.peek(`${run.id}::call:call-2`)).toBeNull();
+
+    completeTurn(claude.starts[2]!, 'built');
+    expect(await second).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2' },
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('resumes a callee conversation in a fresh process only once the kept one is gone', async () => {
+    const { service, claude, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    // Reaped as unused, evicted, replaced — the registry closes a kept process
+    // on its own account, and the conversation then lives on disk alone.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(callee.sessionClosed).toBe(true);
+    const opened = claude.sessionsOpened;
+
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'carry on',
+      thread: 'call-1',
+    });
+    await drain();
+    expect(claude.sessionsOpened).toBe(opened + 1);
+    expect(claude.starts[2]!.input.resumeSessionId).toBe('sess-callee');
+    // And it is kept under the conversation's key again, so the NEXT
+    // continuation finds this process rather than resuming beside it.
+    expect(sessions.peek(`${run.id}::call:call-1`)).not.toBeNull();
+
+    completeTurn(claude.starts[2]!, 'carried on');
+    expect(await second).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it("a caller parked on its own question card suspends its callees' question clocks until the card is answered", async () => {
+    // Both QUESTION_TIMEOUTs on a real run fired while the Manager sat inside
+    // its own AskUserQuestion — answered after 33 minutes, then after 12
+    // hours — the one moment it cannot call answer_agent. The clock is the
+    // broker's; what this pins is the SEAM: the executor tells it when a
+    // caller's card goes up and when the verdict lands.
+    const askInput = {
+      questions: [
+        {
+          question: 'Which color?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, callBroker, approvals } = setup();
+      const run = await service.startRun({
+        slug: 'qa',
+        workflow: triggered(CALL_WORKFLOW),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      const caller = claude.starts[0]!;
+      const started = await callBroker.callAgent(run.id, 'a', {
+        agent: 'callee',
+        message: 'work',
+        mode: 'async',
+      });
+      expect(started.status).toBe('ok');
+      await drain();
+      const callee = claude.starts[1]!;
+
+      // The caller asks the USER something — a card only a person answers.
+      caller.emit({
+        type: 'approval_request',
+        id: 'ask-user',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+      // Its callee asks IT something meanwhile.
+      callee.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+
+      // Far past the question window, the callee is still parked, not failed.
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await drain();
+      expect(callee.cancelled).toBe(false);
+
+      // The person answers the caller's card: the callee's window starts NOW,
+      // in full.
+      expect(approvals.resolve(run.id, 'ask-user', true, 'Red')).toBe(true);
+      await drain();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await drain();
+      expect(callee.cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await drain();
+      expect(callee.cancelled).toBe(true);
+
+      completeTurn(caller, 'done');
+      await drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a follow-up continues the call ids and the conversations an earlier pass left in the transcript', async () => {
+    // The broker's state is in memory and died with whichever daemon ran the
+    // earlier pass. Without the seed the follow-up minted `call-1` again —
+    // colliding with the rows already there — and `thread: call-1` answered
+    // UNKNOWN_THREAD over a conversation the transcript plainly holds.
+    const { service, claude, callBroker, storeGet } = setup();
+    const workflow = triggered(CALL_WORKFLOW);
+    // A follow-up re-reads the workflow from the library.
+    storeGet.mockResolvedValue({ slug: 'bg', workflow });
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow,
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'draft the plan',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(callee, 'plan drafted');
+    expect(await first).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    // The run has settled and its call state is gone with it — as it is after
+    // a restart, where only the transcript survives.
+    expect(callBroker.hasRun(run.id)).toBe(false);
+
+    await service.sendMessage(run.id, 'carry on with the plan');
+    await drain();
+    const continued = await callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'build it',
+      thread: 'call-1',
+      mode: 'async',
+    });
+    // Accepted, and numbered past the earlier pass's call.
+    expect(continued).toMatchObject({
+      status: 'ok',
+      result: { call_id: 'call-2', state: 'started' },
+    });
+    await drain();
+    const resumed = claude.starts[claude.starts.length - 1]!;
+    expect(resumed.input.resumeSessionId).toBe('sess-callee');
+    completeTurn(resumed, 'built');
+    expect(
+      await callBroker.awaitAgent(run.id, 'a', { call_id: 'call-2' }),
+    ).toMatchObject({ status: 'ok' });
+    await drain();
+    completeTurn(claude.starts[2]!, 'done again');
+    await drain();
   });
 
   it('files what the callee does AFTER its turn under that callee and its call', async () => {

@@ -7,8 +7,10 @@ import type {
   CallMode,
   ParkQuestionInput,
   RunCallCapability,
+  RunCallSeed,
   WorkflowAgentNode,
 } from '../graphs.types';
+import { callNumber } from '../utils/call-seed';
 
 /** The run has no live call surface — reused by call_agent and await_agent. */
 const RUN_NOT_ACTIVE: CallEnvelope = {
@@ -100,7 +102,17 @@ interface AsyncCallEntry {
 interface ParkedQuestion {
   question: string;
   options: string[];
-  timer: NodeJS.Timeout;
+  /**
+   * The TTL clock — or null while it is SUSPENDED because the caller that
+   * has to answer is itself blocked on a card of its own
+   * ({@link RunCallState.blockedOwners}). A caller inside its own
+   * AskUserQuestion cannot call answer_agent, so a window that kept running
+   * timed the person reading the caller's card and failed the callee for it:
+   * measured on a real run, both QUESTION_TIMEOUTs fired inside the Manager's
+   * own question to the user (answered after 33 minutes, and after 12 hours).
+   * Re-armed, with its full window, the moment that card is answered.
+   */
+  timer: NodeJS.Timeout | null;
   /**
    * The window this question was parked with, kept so a re-arm uses the SAME
    * one — the executor's capture seam may name its own, and re-arming with the
@@ -163,6 +175,12 @@ interface ActiveCall {
    * and the wait is over only when the last of them is answered.
    */
   blockedOnVerdicts: number;
+  /**
+   * The conversation this call runs in — see {@link ThreadRecord.conversationId}.
+   * What a thread continuation is checked against: one conversation serves one
+   * call at a time.
+   */
+  conversationId: string;
 }
 
 /**
@@ -178,6 +196,20 @@ interface ThreadRecord {
   calleeId: string;
   /** The resumable CLI session; null = the turn recorded none. */
   sessionId: string | null;
+  /**
+   * The FIRST call of this conversation — the id every continuation of it
+   * is keyed by, however many calls deep it is.
+   *
+   * A continuation used to be keyed by its OWN call id, so the executor spawned
+   * a fresh `--resume <session>` process for it while the previous call's
+   * process was still kept alive under the previous id: two live CLI processes
+   * on one session, each holding the conversation, each free to act. Measured
+   * on a real run — an Engineer found two `claude -p --resume 43bb7bb7…`
+   * children of the daemon editing its worktree at once, then three. Keyed by
+   * the conversation, a continuation reaches the kept process (or resumes the
+   * session in a fresh one only once that process is gone).
+   */
+  conversationId: string;
 }
 
 interface RunCallState {
@@ -190,6 +222,19 @@ interface RunCallState {
   pendingAsync: Map<string, AsyncCallEntry>;
   /** Settled calls' resume handles keyed by call id (thread continuation). */
   threads: Map<string, ThreadRecord>;
+  /**
+   * The highest call number an EARLIER daemon gave this run — what
+   * {@link RunCallSeed} carried in. An id at or below it that no map holds is
+   * a call whose result died with that daemon, and the refusal says so.
+   */
+  seededCallSeq: number;
+  /**
+   * How many cards each CALLER node is blocked on right now (node id → open
+   * cards) — the owner-side twin of {@link ActiveCall.blockedOnVerdicts}.
+   * While an owner is counted here, every question its callees park has its
+   * TTL suspended: see {@link ParkedQuestion.timer}.
+   */
+  blockedOwners: Map<string, number>;
 }
 
 /** A question a woken caller is being told about. */
@@ -292,15 +337,43 @@ export class CallBroker implements OnModuleInit {
     });
   }
 
-  /** The executor announces a run whose workflow carries call edges. */
-  registerRun(runId: string, capability: RunCallCapability): void {
+  /**
+   * The executor announces a run whose workflow carries call edges.
+   *
+   * `seed` is what an earlier pass of this run left in the transcript — see
+   * {@link RunCallSeed}. Call ids continue past it, and every settled call it
+   * names is a thread again, so a conversation built before a daemon restart
+   * can be continued after it. A continuation's conversation is rebuilt
+   * through the parent chain, in transcript order, so two points of one old
+   * conversation still share a key rather than each resuming the session in a
+   * process of its own.
+   */
+  registerRun(
+    runId: string,
+    capability: RunCallCapability,
+    seed: RunCallSeed | null = null,
+  ): void {
+    const threads = new Map<string, ThreadRecord>();
+    for (const record of seed?.records ?? []) {
+      threads.set(record.callId, {
+        owner: record.callerNodeId,
+        calleeId: record.calleeNodeId,
+        sessionId: record.sessionId,
+        conversationId:
+          (record.thread === null
+            ? null
+            : threads.get(record.thread)?.conversationId) ?? record.callId,
+      });
+    }
     this.runs.set(runId, {
       capability,
-      callSeq: 0,
+      callSeq: seed?.callSeq ?? 0,
+      seededCallSeq: seed?.callSeq ?? 0,
       turnsStarted: 0,
       activeCalls: new Map(),
       pendingAsync: new Map(),
-      threads: new Map(),
+      threads,
+      blockedOwners: new Map(),
     });
   }
 
@@ -315,7 +388,7 @@ export class CallBroker implements OnModuleInit {
       // own settle wait time out, so it is the likeliest to still be here.
       for (const call of state.activeCalls.values()) {
         if (call.parked) {
-          clearTimeout(call.parked.timer);
+          stopQuestionTimer(call.parked);
           call.parked = null;
         }
         if (call.silence !== null) {
@@ -389,6 +462,7 @@ export class CallBroker implements OnModuleInit {
     // caller recorded. Ownership gates the lookup like await/answer do — one
     // caller can never continue (and thus read) another caller's conversation.
     let resumeSessionId: string | null = null;
+    let conversationId: string | null = null;
     if (args.thread !== undefined) {
       const thread = state.threads.get(args.thread);
       if (!thread || thread.owner !== callerNodeId) {
@@ -409,7 +483,23 @@ export class CallBroker implements OnModuleInit {
           error: `THREAD_UNAVAILABLE: call '${args.thread}' recorded no resumable session`,
         };
       }
+      // One conversation serves one call at a time. A second continuation
+      // while the first still runs would either resume the session in a
+      // second process (the fork this keying exists to end) or, keyed
+      // together, have the registry replace the running process — killing the
+      // first call mid-work. Refusing is the only reading under which the
+      // conversation stays one conversation; the caller awaits and continues
+      // from the call that is running.
+      for (const [liveId, live] of state.activeCalls) {
+        if (live.conversationId === thread.conversationId) {
+          return {
+            status: 'error',
+            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — await it, then continue with thread: '${liveId}'`,
+          };
+        }
+      }
       resumeSessionId = thread.sessionId;
+      conversationId = thread.conversationId;
     }
     state.turnsStarted += 1;
     state.callSeq += 1;
@@ -427,6 +517,8 @@ export class CallBroker implements OnModuleInit {
       silence: null,
       saidStalled: false,
       blockedOnVerdicts: 0,
+      // A fresh call opens a conversation of its own, named after itself.
+      conversationId: conversationId ?? callId,
     };
     state.activeCalls.set(callId, call);
     this.armSilenceWatch(runId, callId, call);
@@ -443,7 +535,14 @@ export class CallBroker implements OnModuleInit {
     // the UI can open a terminal on (or reason about) that specific thread.
     let threadSessionId: string | null = null;
     call.settled = state.capability
-      .launchCalleeTurn(callee, args.message, callId, depth, resumeSessionId)
+      .launchCalleeTurn(
+        callee,
+        args.message,
+        callId,
+        depth,
+        resumeSessionId,
+        call.conversationId,
+      )
       .then((outcome) => {
         // Every settled turn leaves a resume handle so the conversation can
         // be continued from THIS point with `thread: <this call_id>`.
@@ -451,6 +550,7 @@ export class CallBroker implements OnModuleInit {
           owner: callerNodeId,
           calleeId: callee.id,
           sessionId: outcome.sessionId,
+          conversationId: call.conversationId,
         });
         threadSessionId = outcome.sessionId;
         return toEnvelope(callId, callee.id, outcome);
@@ -468,7 +568,7 @@ export class CallBroker implements OnModuleInit {
         if (call.parked) {
           // The turn died with a question still parked (external cancel,
           // crash) — the timer must not fire into a settled call.
-          clearTimeout(call.parked.timer);
+          stopQuestionTimer(call.parked);
           call.parked = null;
         }
         // Same rule for the silence watchdog, and the same reason: a settled
@@ -549,10 +649,7 @@ export class CallBroker implements OnModuleInit {
     }
     const entry = state.pendingAsync.get(args.call_id);
     if (!entry || entry.owner !== callerNodeId) {
-      return {
-        status: 'error',
-        error: `UNKNOWN_CALL: no un-collected async call '${args.call_id}' started by you`,
-      };
+      return this.unknownCall(state, args.call_id, 'un-collected async call');
     }
     const envelope = await this.untilAbandoned(
       signal,
@@ -629,10 +726,7 @@ export class CallBroker implements OnModuleInit {
     }
     const call = state.activeCalls.get(args.call_id);
     if (!call || call.owner !== callerNodeId) {
-      return {
-        status: 'error',
-        error: `UNKNOWN_CALL: no live call '${args.call_id}' started by you`,
-      };
+      return this.unknownCall(state, args.call_id, 'live call');
     }
     const parked = call.parked;
     if (!parked) {
@@ -642,7 +736,10 @@ export class CallBroker implements OnModuleInit {
       };
     }
     call.parked = null;
-    clearTimeout(parked.timer);
+    stopQuestionTimer(parked);
+    // The callee is working again — its silence window, stood down while it
+    // waited on this answer, starts over from here.
+    this.armSilenceWatch(runId, args.call_id, call);
     if (!parked.deliver(args.answer)) {
       // The question row must not dangle unresolved in the transcript even
       // when the callee died under it.
@@ -688,17 +785,26 @@ export class CallBroker implements OnModuleInit {
       return false;
     }
     const ttlMs = input.ttlMs ?? QUESTION_TTL_MS;
-    const timer = setTimeout(() => this.expireQuestion(runId, callId), ttlMs);
-    timer.unref?.();
     call.parked = {
       question: input.question,
       options: input.options,
-      timer,
+      // Armed below, so a question parked while its owner is blocked on a
+      // card of its own starts suspended rather than counting down toward a
+      // caller that cannot answer.
+      timer: null,
       ttlMs,
       deliver: input.deliver,
       fail: input.fail,
       ownerTold: false,
     };
+    this.rearmQuestionTtl(runId, callId);
+    // A parked callee emits nothing by construction — it is waiting on its
+    // caller — so its silence window stands down exactly as it does behind an
+    // approval card, and restarts when the answer lands.
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
     state.capability.persistItem(call.owner, 'call_question', null, {
       callId,
       callerNodeId: call.owner,
@@ -772,6 +878,10 @@ export class CallBroker implements OnModuleInit {
     if (!state) {
       return;
     }
+    // Its cards went with its turn (the executor sweeps them beside this
+    // call), so nothing blocks it any more — and a count left over here would
+    // keep every question it is woken with suspended for good.
+    state.blockedOwners.delete(callerNodeId);
     const questions: string[] = [];
     for (const [callId, call] of state.activeCalls) {
       if (call.owner !== callerNodeId || !call.parked) {
@@ -960,7 +1070,7 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     call.parked = null;
-    clearTimeout(parked.timer);
+    stopQuestionTimer(parked);
     call.failReason = reason;
     state.capability.persistItem(call.owner, 'call_answer', null, {
       callId,
@@ -1067,6 +1177,61 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * A card went up for a CALLER node — its own AskUserQuestion to the user, or
+   * a permission it holds in ask mode — so it cannot answer anything until a
+   * person does. Suspend the TTL of every question its callees have parked,
+   * and of any they park meanwhile ({@link ParkedQuestion.timer}).
+   *
+   * The owner-side twin of {@link noteCalleeBlocked}, called from the same
+   * seam: the executor raises the card and receives its verdict, so it knows
+   * both moments without a cross-module read.
+   */
+  noteCallerBlocked(runId: string, ownerNodeId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return;
+    }
+    state.blockedOwners.set(
+      ownerNodeId,
+      (state.blockedOwners.get(ownerNodeId) ?? 0) + 1,
+    );
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === ownerNodeId && call.parked) {
+        this.rearmQuestionTtl(runId, callId);
+      }
+    }
+  }
+
+  /**
+   * A card this caller was blocked on has been answered (or has gone away) —
+   * once the LAST of them is, every question its callees have parked gets its
+   * full window again, counted from now: the caller has only now been able to
+   * read it.
+   *
+   * Floors at zero on {@link noteCalleeUnblocked}'s reasoning: a settle sweeps
+   * cards that were never answered, so an unmatched call here must not drive
+   * the count negative and suspend the caller's questions for the rest of the
+   * run.
+   */
+  noteCallerUnblocked(runId: string, ownerNodeId: string): void {
+    const state = this.runs.get(runId);
+    if (!state) {
+      return;
+    }
+    const left = Math.max(0, (state.blockedOwners.get(ownerNodeId) ?? 0) - 1);
+    if (left > 0) {
+      state.blockedOwners.set(ownerNodeId, left);
+      return;
+    }
+    state.blockedOwners.delete(ownerNodeId);
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === ownerNodeId && call.parked) {
+        this.rearmQuestionTtl(runId, callId);
+      }
+    }
+  }
+
+  /**
    * (Re)arm one call's silence watchdog. Clearing first is what makes this
    * idempotent under the callee's every row.
    */
@@ -1081,8 +1246,9 @@ export class CallBroker implements OnModuleInit {
     }
     // A blocked callee stays suspended however many rows arrive: an approval
     // card is itself persisted as a row, so without this the very event that
-    // suspends the window would immediately re-arm it.
-    if (call.blockedOnVerdicts > 0) {
+    // suspends the window would immediately re-arm it. A PARKED one too —
+    // waiting on its caller's answer is the same silence.
+    if (call.blockedOnVerdicts > 0 || call.parked !== null) {
       return;
     }
     call.silence = setTimeout(() => {
@@ -1138,22 +1304,59 @@ export class CallBroker implements OnModuleInit {
 
   /**
    * Restart a parked question's TTL, because the caller has only NOW been
-   * handed it.
+   * handed it — or SUSPEND it, when the caller is blocked on a card of its
+   * own and so could not be handed anything ({@link ParkedQuestion.timer}).
    *
    * A no-op for a call that is no longer parked (answered, failed, gone), so a
    * late collection cannot resurrect a clock on a question that is over.
    */
   private rearmQuestionTtl(runId: string, callId: string): void {
-    const parked = this.runs.get(runId)?.activeCalls.get(callId)?.parked;
-    if (!parked) {
+    const state = this.runs.get(runId);
+    const call = state?.activeCalls.get(callId);
+    const parked = call?.parked;
+    if (!state || !call || !parked) {
       return;
     }
-    clearTimeout(parked.timer);
+    stopQuestionTimer(parked);
+    if ((state.blockedOwners.get(call.owner) ?? 0) > 0) {
+      return;
+    }
     parked.timer = setTimeout(
       () => this.expireQuestion(runId, callId),
       parked.ttlMs,
     );
     parked.timer.unref?.();
+  }
+
+  /**
+   * The UNKNOWN_CALL refusal — and, for an id from BEFORE the daemon
+   * restarted, the reason it is unknown, since "no such call" is exactly what
+   * a caller reading its own transcript cannot square: the call is right
+   * there. Its result died with that daemon; what survives is the thread,
+   * when the callee recorded a session, and the sentence says so.
+   */
+  private unknownCall(
+    state: RunCallState,
+    callId: string,
+    what: string,
+  ): CallEnvelope {
+    const number = callNumber(callId);
+    if (
+      number !== null &&
+      number <= state.seededCallSeq &&
+      !state.activeCalls.has(callId) &&
+      !state.pendingAsync.has(callId)
+    ) {
+      const resumable = (state.threads.get(callId)?.sessionId ?? null) !== null;
+      return {
+        status: 'error',
+        error: `UNKNOWN_CALL: '${callId}' was made before the daemon restarted and its result did not survive — call the agent again${resumable ? ` (thread: '${callId}' continues that conversation)` : ''}`,
+      };
+    }
+    return {
+      status: 'error',
+      error: `UNKNOWN_CALL: no ${what} '${callId}' started by you`,
+    };
   }
 
   /**
@@ -1267,6 +1470,14 @@ export class CallBroker implements OnModuleInit {
       }
     }
     return depth;
+  }
+}
+
+/** Stop a parked question's clock, whether or not one is running. */
+function stopQuestionTimer(parked: ParkedQuestion): void {
+  if (parked.timer !== null) {
+    clearTimeout(parked.timer);
+    parked.timer = null;
   }
 }
 

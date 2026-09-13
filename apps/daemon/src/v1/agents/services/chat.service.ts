@@ -84,7 +84,17 @@ import {
   readModelParameters,
   writeModelParameters,
 } from '../utils/model-parameters';
-import { delegateIdOf, openDelegateIds } from '../utils/open-delegates';
+import {
+  delegateCloseEvent,
+  openDelegateIds,
+  ownerFields,
+  strandedDelegates,
+} from '../utils/open-delegates';
+import {
+  shellCloseEvent,
+  type ShellRow,
+  strandedShells,
+} from '../utils/open-shells';
 import { persistItemAndEmit, runToWire } from '../utils/persist-item';
 import { resolveValidConfigDir } from '../utils/resolve-config-dir';
 import { resolveValidCwd } from '../utils/resolve-cwd';
@@ -2462,6 +2472,14 @@ export class ChatService implements OnModuleInit {
     interrupted = false,
   ): Promise<void> {
     this.clearDelegateLease(runId);
+    // A WORKFLOW's sessions reach this listener too, under the executor's
+    // composite key (`<runId>::node:…` / `<runId>::call:…`), which names no run
+    // and so matches nothing below. That is the right outcome rather than a
+    // lucky one: the executor numbers its run's rows with its own counter, so a
+    // close written from here with this service's allocator could collide with
+    // them. The executor states those endings itself
+    // (`GraphExecutorService.sessionClosers`).
+    //
     // AHEAD of the early return below, which is about the off-turn BADGE and
     // asks a question this does not share: a run that never took an off-turn
     // stretch has no badge to hand back and returns here, and that is the very
@@ -2547,11 +2565,8 @@ export class ChatService implements OnModuleInit {
   private async closeStrandedDelegates(runId: string): Promise<void> {
     try {
       const em = this.em.fork();
-      const rows = await this.itemDao.subagentInfoRows(runId, em);
-      const stranded = openDelegateIds(
-        rows.map((row) => parsePayload(row.payload)),
-      );
-      // WHICH NODE each delegate belongs to, taken from its own rows.
+      // WHERE each delegate belongs, taken from its own rows — the node, and the
+      // call when a callee sub-turn launched it.
       //
       // A delegate is launched BY a node and every row it produces carries that
       // node's id; the closes written here used to carry null, because this
@@ -2564,36 +2579,14 @@ export class ChatService implements OnModuleInit {
       // REPORTED as "он пишет, что один из app-агентов активен, хотя он же
       // должен быть закончен", and measured on that very run — 22 opens under
       // `qa`, 11 closes under NULL, `11 active · 14 threads` on a card whose
-      // run had finished an hour earlier.
-      const nodeOf = new Map<string, string | null>();
-      for (const row of rows) {
-        // `parsePayload` first, exactly as the fold above does — the column is
-        // a JSON string, and reading it raw yields no id and so no node.
-        const id = delegateIdOf(parsePayload(row.payload));
-        if (id !== null && !nodeOf.has(id)) {
-          nodeOf.set(id, row.nodeId);
-        }
-      }
-      for (const id of stranded) {
-        const mapped = mapEventToItem({
-          type: 'subagent_info',
-          id,
-          label: null,
-          kind: null,
-          prompt: null,
-          model: null,
-          durationMs: null,
-          tokens: null,
-          toolUses: null,
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheCreationTokens: null,
-          costUsd: null,
-          stepsUnavailableReason: null,
-          backgroundOpen: false,
-          backgroundOutcome: 'stopped',
-        });
+      // run had finished an hour earlier. The call id is the same defect one
+      // level down: a callee's rows are nested under its call block by the
+      // payload's `callId`, so a close without one never reached the delegate.
+      const stranded = strandedDelegates(
+        await this.itemDao.subagentInfoRows(runId, em),
+      );
+      for (const delegate of stranded) {
+        const mapped = mapEventToItem(delegateCloseEvent(delegate.id));
         if (mapped === null) {
           continue;
         }
@@ -2603,8 +2596,11 @@ export class ChatService implements OnModuleInit {
           await this.seqs.reserve(runId),
           mapped.kind,
           mapped.role,
-          mapped.payload,
-          nodeOf.get(id) ?? null,
+          {
+            ...(mapped.payload as Record<string, unknown>),
+            ...ownerFields(delegate),
+          },
+          delegate.nodeId,
         );
       }
       if (stranded.length > 0) {
@@ -2673,6 +2669,66 @@ export class ChatService implements OnModuleInit {
       // the table yet has nothing to reconcile.
       this.logger.error(
         `boot reconcile of stranded sub-agents failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * The shell twin of {@link reconcileStrandedDelegates}: close every detached
+   * command a prior daemon left declared running.
+   *
+   * A command's close is announced by the CLI process's own exit (`spawn-cli`),
+   * so a daemon killed before that exit was heard leaves the command listed as
+   * running for the life of the transcript — and before the executor wrote its
+   * own closes at a workflow's end, every finished workflow did the same to
+   * whatever its nodes still had out. No process can exist this early, so every
+   * open command on disk is stranded by construction.
+   */
+  async reconcileStrandedShells(): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const byRun = new Map<string, ShellRow[]>();
+      for (const row of await this.itemDao.allShellRows(em)) {
+        const rows = byRun.get(row.runId);
+        if (rows) {
+          rows.push(row);
+        } else {
+          byRun.set(row.runId, [row]);
+        }
+      }
+      let repaired = 0;
+      for (const [runId, rows] of byRun) {
+        const stranded = strandedShells(rows);
+        for (const shell of stranded) {
+          const mapped = mapEventToItem(shellCloseEvent(shell));
+          if (mapped === null) {
+            continue;
+          }
+          await this.persist(
+            em,
+            runId,
+            await this.seqs.reserve(runId),
+            mapped.kind,
+            mapped.role,
+            {
+              ...(mapped.payload as Record<string, unknown>),
+              ...ownerFields(shell),
+            },
+            shell.nodeId,
+          );
+        }
+        if (stranded.length > 0) {
+          repaired += 1;
+        }
+      }
+      if (repaired > 0) {
+        this.logger.warn(
+          `closed the stranded background commands of ${repaired} run(s) on boot`,
+        );
+      }
+    } catch (err: unknown) {
+      this.logger.error(
+        `boot reconcile of stranded background commands failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

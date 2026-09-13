@@ -1119,6 +1119,54 @@ describe('groupTranscript — call blocks', () => {
     expect(turn.entries[0]?.type).toBe('tools');
   });
 
+  it('claims a delegate close that names no call into the call its launch was made in', () => {
+    // The daemon's stranded-delegate repair filed its closes with the node and
+    // no call id for a release, so a callee's delegate sat in the call block
+    // while its close landed in the main flow — and the finished workflow went
+    // on showing it at work.
+    const entries = groupTranscript([
+      startCall('call-7', 'engineer'),
+      tagged('status', { status: 'running' }, 'engineer', 'call-7'),
+      tagged(
+        'tool_call',
+        {
+          id: 'task-bg',
+          name: 'Task',
+          input: { description: 'Self-review round 2: tests' },
+        },
+        'engineer',
+        'call-7',
+      ),
+      tagged(
+        'tool_result',
+        { id: 'task-bg', name: null, result: 'Task started in the background' },
+        'engineer',
+        'call-7',
+      ),
+      tagged(
+        'subagent_info',
+        { id: 'task-bg', backgroundOpen: true },
+        'engineer',
+        'call-7',
+      ),
+      tagged('status', { status: 'completed' }, 'engineer', 'call-7'),
+      item(
+        'subagent_info',
+        { id: 'task-bg', backgroundOpen: false, backgroundOutcome: 'stopped' },
+        'engineer',
+      ),
+    ]);
+
+    // Nothing left in the main flow but the block itself…
+    expect(entries).toHaveLength(1);
+    const delegate = collectSubagentBlocks(
+      (entries[0] as CallBlockEntry).entries,
+    ).find((block) => block.id === 'task-bg');
+    // …and the delegate inside it has heard its own ending.
+    expect(delegate).toBeDefined();
+    expect(subagentBlockStatus(delegate!)).toBe('stopped');
+  });
+
   it('UNTAGGED (legacy) callee items stay in the main flow with the flat call row', () => {
     const entries = groupTranscript([
       startCall('call-1', 'poet'),

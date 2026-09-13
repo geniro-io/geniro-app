@@ -186,6 +186,30 @@ class FakeItemDao {
     const seqs = this.items.filter((i) => i.runId === runId).map((i) => i.seq);
     return seqs.length ? Math.max(...seqs) : -1;
   }
+  // The two reads the stranded-work repair folds — one run's rows of those
+  // kinds, in seq order; the real queries are pinned in `item.dao.spec.ts`.
+  async subagentInfoRows(
+    runId: string,
+  ): Promise<Pick<Item, 'payload' | 'nodeId'>[]> {
+    return this.ofKinds(runId, ['subagent_info']).map((i) => ({
+      payload: i.payload,
+      nodeId: i.nodeId,
+    }));
+  }
+  async shellRows(
+    runId: string,
+  ): Promise<Pick<Item, 'kind' | 'payload' | 'nodeId'>[]> {
+    return this.ofKinds(runId, ['shell_open', 'shell_info']).map((i) => ({
+      kind: i.kind,
+      payload: i.payload,
+      nodeId: i.nodeId,
+    }));
+  }
+  private ofKinds(runId: string, kinds: string[]): Item[] {
+    return this.items
+      .filter((i) => i.runId === runId && kinds.includes(i.kind))
+      .sort((a, b) => a.seq - b.seq);
+  }
 }
 
 interface FakeNodeRow {
@@ -620,6 +644,8 @@ function setup(
   statusEvents: { runId: string; status: string | null }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
+  /** The real registry the executor opens its processes on. */
+  sessions: AgentSessionRegistry;
 } {
   const claude = new FakeAdapter('claude');
   const cursor = new FakeAdapter('cursor-agent');
@@ -799,9 +825,12 @@ function setup(
     },
     partials,
   );
+  // What Nest does at boot, done by hand: the executor's session-close hook.
+  service.onModuleInit();
   return {
     deltas,
     service,
+    sessions,
     claude,
     cursor,
     runDao,
@@ -4571,5 +4600,150 @@ describe('GraphExecutorService — a node’s context reading', () => {
     await drain();
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+});
+
+describe('GraphExecutorService — work still out when a process ends', () => {
+  const ONE: Workflow = {
+    name: 'one',
+    nodes: [{ id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' }],
+    edges: [],
+  };
+  const CALL_WORKFLOW: Workflow = {
+    name: 'bg',
+    nodes: [
+      { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+      { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+    ],
+    edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+  };
+
+  /** One delegate announcement, every figure absent. */
+  const delegate = (
+    id: string,
+    backgroundOpen: boolean | null,
+    backgroundOutcome: 'completed' | null = null,
+  ): AgentEvent => ({
+    type: 'subagent_info',
+    id,
+    label: null,
+    kind: null,
+    prompt: null,
+    model: null,
+    durationMs: null,
+    tokens: null,
+    toolUses: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheReadTokens: null,
+    cacheCreationTokens: null,
+    costUsd: null,
+    stepsUnavailableReason: null,
+    backgroundOpen,
+    backgroundOutcome,
+  });
+
+  const rowsOf = (itemDao: FakeItemDao, runId: string): Item[] =>
+    itemDao.items
+      .filter((i) => i.runId === runId)
+      .sort((a, b) => a.seq - b.seq);
+  const payloadOf = (row: Item): Record<string, unknown> =>
+    JSON.parse(row.payload as string) as Record<string, unknown>;
+  const stoppedDelegates = (itemDao: FakeItemDao, runId: string): Item[] =>
+    rowsOf(itemDao, runId).filter(
+      (i) =>
+        i.kind === 'subagent_info' &&
+        payloadOf(i).backgroundOutcome === 'stopped',
+    );
+
+  it('closes the delegates and detached commands still out when the run finishes, under the node that owns them', async () => {
+    // REPORTED as a finished workflow still showing two sub-agents at work and
+    // a terminal running under its manager. The processes die with the run, so
+    // nothing else is ever going to report those endings.
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    turn.emit(delegate('task-back', true));
+    turn.emit(delegate('task-back', false, 'completed'));
+    turn.emit({ type: 'shell_open', toolCallId: 'toolu_left', workId: 'b1' });
+    turn.emit({ type: 'shell_open', toolCallId: 'toolu_done', workId: 'b2' });
+    turn.emit({ type: 'shell_info', toolCallId: 'toolu_done', workId: 'b2' });
+    completeTurn(turn, 'done');
+    await drain();
+
+    const rows = rowsOf(itemDao, run.id);
+    const stopped = stoppedDelegates(itemDao, run.id);
+    // Only what was still out: the delegate that reported back and the command
+    // that ended are left alone.
+    expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
+    expect(stopped[0]!.nodeId).toBe('a');
+    expect(payloadOf(stopped[0]!)).toMatchObject({ nodeId: 'a' });
+    const shellCloses = rows.filter((row) => row.kind === 'shell_info');
+    expect(shellCloses.map((row) => payloadOf(row).id)).toEqual([
+      'toolu_done',
+      'toolu_left',
+    ]);
+    expect(shellCloses[1]!.nodeId).toBe('a');
+    // Written while the run could still write — ahead of its terminal row.
+    const terminal = rows.findIndex(
+      (row) => row.kind === 'turn_complete' && row.nodeId === null,
+    );
+    expect(terminal).toBeGreaterThan(-1);
+    expect(rows.indexOf(stopped[0]!)).toBeLessThan(terminal);
+    expect(rows.indexOf(shellCloses[1]!)).toBeLessThan(terminal);
+  });
+
+  it("closes a reaped callee session's delegates while the run goes on — and only that session's", async () => {
+    // The registry closes a kept process on its own account (unused, evicted,
+    // stale), and every delegate inside it dies with it. Its key is this
+    // executor's per-turn one, which the chat path's repair cannot place.
+    const { service, claude, itemDao, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const caller = claude.starts[0]!;
+    caller.emit(delegate('task-caller', true));
+    const call = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+    callee.emit(delegate('task-callee', true));
+    completeTurn(callee, 'started the review');
+    await call;
+    await drain();
+
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+
+    const stopped = stoppedDelegates(itemDao, run.id);
+    expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-callee']);
+    // Filed where the callee's rows are, call id and all — the renderer nests
+    // a call's rows under its block by that id.
+    expect(stopped[0]!.nodeId).toBe('callee');
+    expect(payloadOf(stopped[0]!)).toMatchObject({
+      nodeId: 'callee',
+      callId: 'call-1',
+    });
+
+    // The caller's own delegate is untouched until ITS process ends — with the
+    // run — and the callee's is not closed a second time.
+    completeTurn(caller, 'done');
+    await drain();
+    expect(
+      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+    ).toEqual(['task-callee', 'task-caller']);
   });
 });

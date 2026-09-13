@@ -685,4 +685,45 @@ describe('ItemDao (in-memory sqlite)', () => {
       ).toEqual([1, 2, 3, 4]);
     });
   });
+
+  it("reads a run's shell rows in seq order, with the node each was filed under", async () => {
+    // What the stranded-command repair folds: the open and the close are both
+    // needed, in the order they happened, and the node is where the close has
+    // to be filed. Inserted out of order so the ordering has to be the query's.
+    await dao.create({
+      runId: 'run-a',
+      seq: 2,
+      kind: 'shell_info',
+      nodeId: 'manager',
+      payload: JSON.stringify({ id: 't1', workId: 'b1' }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 0,
+      kind: 'shell_open',
+      nodeId: 'manager',
+      payload: JSON.stringify({ id: 't1', workId: 'b1' }),
+    });
+    await insert('run-a', 1);
+    await dao.create({
+      runId: 'run-b',
+      seq: 0,
+      kind: 'shell_open',
+      payload: JSON.stringify({ id: 't9', workId: 'b9' }),
+    });
+
+    expect(
+      (await dao.shellRows('run-a')).map((row) => [row.kind, row.nodeId]),
+    ).toEqual([
+      ['shell_open', 'manager'],
+      ['shell_info', 'manager'],
+    ]);
+    expect(
+      (await dao.allShellRows()).map((row) => [row.runId, row.kind]),
+    ).toEqual([
+      ['run-a', 'shell_open'],
+      ['run-a', 'shell_info'],
+      ['run-b', 'shell_open'],
+    ]);
+  });
 });

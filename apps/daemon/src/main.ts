@@ -191,6 +191,9 @@ bootstrapper.addExtension(
       // reporting delegates at work. No session can exist this early, so every
       // open delegate on disk is stranded by construction.
       await app.get(ChatService).reconcileStrandedDelegates();
+      // The same for detached commands: their close is announced by the CLI
+      // process's own exit, which a SIGKILLed daemon never heard.
+      await app.get(ChatService).reconcileStrandedShells();
 
       // Forget the titles the executor used to stamp from the workflow's own
       // name: the derivation that replaced it reads any title as "already

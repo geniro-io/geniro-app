@@ -28,6 +28,22 @@ export function asArray(value: unknown): unknown[] {
 }
 
 /**
+ * An item's `payload` column read back as the value it was written from — the
+ * column holds JSON text, and a row that does not parse is handed back as-is
+ * so a reader degrades on it instead of throwing.
+ */
+export function parseJsonColumn(raw: unknown): unknown {
+  if (typeof raw !== 'string') {
+    return raw;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Return the first string value among the given keys of a record. Used to read
  * a session id from CLIs that name the field differently across versions
  * (`session_id` vs `chatId` vs `chat_id`).

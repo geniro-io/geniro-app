@@ -215,6 +215,21 @@ describe('WorkingRow', () => {
     expect(container.textContent).not.toContain('Working…');
   });
 
+  it('names the call a callee is working in, over the run activity', () => {
+    // The row that stands at the END of the transcript for a callee whose call
+    // card the conversation has moved past: the card is out of view, so the row
+    // has to say which call is still running.
+    vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
+    const container = render(
+      <RunActivityContext.Provider value="running Bash">
+        <WorkingRow workingIn={{ callId: 'call-3', callee: 'Poet' }} />
+      </RunActivityContext.Provider>,
+    );
+
+    expect(container.textContent).toContain('Poet is working · call-3');
+    expect(container.textContent).not.toContain('running Bash');
+  });
+
   it('names a callee it has no name for rather than dropping the line', () => {
     vi.setSystemTime(new Date('2026-08-04T00:00:00Z'));
     const container = render(

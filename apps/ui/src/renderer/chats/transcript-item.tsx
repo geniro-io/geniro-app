@@ -199,10 +199,23 @@ export const TranscriptItem = memo(function TranscriptItem({
         // poorer label than a name and a better one than silence.
         const waitingNode = payloadString(item.payload, 'waitingOnNodeId');
         const waitingCall = payloadString(item.payload, 'waitingCallId');
+        const inCallNode = payloadString(item.payload, 'workingInNodeId');
+        const inCall = payloadString(item.payload, 'workingInCallId');
         return (
           <WorkingRow
             since={payloadNumber(item.payload, 'workingSince')}
             spend={payloadString(item.payload, 'spend')}
+            workingIn={
+              inCall === null
+                ? null
+                : {
+                    callId: inCall,
+                    callee:
+                      inCallNode === null
+                        ? null
+                        : (nodes?.get(inCallNode)?.name ?? inCallNode),
+                  }
+            }
             waitingOn={
               waitingCall === null
                 ? null

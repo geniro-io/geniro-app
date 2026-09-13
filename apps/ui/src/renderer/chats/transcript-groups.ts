@@ -3405,16 +3405,42 @@ export function withLiveText(
     attach(out, entry, openCallees);
   }
   for (const key of workingAgents) {
-    if (spokenFor.has(key)) {
-      continue;
-    }
     // A callee working inside an open call block is NOT silent: the block says
     // `<callee> is thinking...` and wears a running mark, one line further down
     // the same card. The fallback row here would be a SECOND place that agent
     // appears — an empty block at the root of the transcript, outside the call
     // that is the only reason it is running — which is what was reported.
+    //
+    // …UNLESS the conversation has moved on past that card. An async call stays
+    // open while its caller keeps talking, so on a long run the block — and
+    // every live word the callee streams into it — sits screens above the end
+    // of the transcript, and the bottom said nothing at all while the callee
+    // worked for an hour. REPORTED as "subagent is still working but I don't
+    // see status in the chat". Then the end of the transcript gets one row
+    // naming the call, whatever the callee is streaming, because those words
+    // land in the buried block too.
     const workingNode = nodeIdOf(key);
     if (workingNode !== null && openCallees.has(workingNode)) {
+      const buried = buriedOpenCallOf(blocks, workingNode);
+      if (buried !== null) {
+        const since = lastMainThreadRowAt(buried.entries, workingNode);
+        attach(
+          out,
+          liveEntry(key, {
+            id: `${LIVE_TEXT_ITEM_PREFIX}${key}:working-in-call`,
+            kind: 'reasoning',
+            payload: {
+              live: 'working',
+              ...(since === null ? {} : { workingSince: since }),
+              workingInCallId: buried.callId,
+              workingInNodeId: workingNode,
+            },
+          }),
+        );
+      }
+      continue;
+    }
+    if (spokenFor.has(key)) {
       continue;
     }
     // Measured from the last row this agent put on screen, NEVER from the row's
@@ -3579,6 +3605,55 @@ function openCallCallees(
     }
   }
   return found;
+}
+
+/**
+ * The newest open call this node is the callee of, when something has been
+ * written BELOW it — null when there is no such call, or when the call block is
+ * still the last thing in the transcript (there it narrates its callee itself).
+ */
+function buriedOpenCallOf(
+  entries: readonly TranscriptEntry[],
+  calleeNodeId: string,
+): CallBlockEntry | null {
+  const open: CallBlockEntry[] = [];
+  const walk = (list: readonly TranscriptEntry[]): void => {
+    for (const entry of list) {
+      if (entry.type === 'call-block') {
+        if (
+          entry.calleeNodeId === calleeNodeId &&
+          OPEN_CALL_STATUSES.has(entry.status)
+        ) {
+          open.push(entry);
+        }
+        continue;
+      }
+      if (entry.type === 'turn-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(entries);
+  const newest = open.at(-1);
+  if (newest === undefined) {
+    return null;
+  }
+  return endsWith(entries, newest) ? null : newest;
+}
+
+/** Whether `target` is the transcript's last entry, at any nesting depth. */
+function endsWith(
+  entries: readonly TranscriptEntry[],
+  target: TranscriptEntry,
+): boolean {
+  const last = entries.at(-1);
+  if (last === undefined) {
+    return false;
+  }
+  if (last === target) {
+    return true;
+  }
+  return last.type === 'turn-block' && endsWith(last.entries, target);
 }
 
 /**

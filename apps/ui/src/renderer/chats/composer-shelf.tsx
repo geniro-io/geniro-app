@@ -24,7 +24,11 @@ import {
 } from './shelf-chip';
 import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
-import { SubagentRows } from './subagent-list';
+import {
+  type AgentSubagentGroup,
+  SubagentGroupRows,
+  SubagentRows,
+} from './subagent-list';
 import {
   type AgentTaskGroup,
   TaskCount,
@@ -396,6 +400,7 @@ export function RunningSubagentChips({
   running,
   reportedOut = 0,
   threads,
+  groups,
   onOpen,
 }: {
   /**
@@ -421,6 +426,13 @@ export function RunningSubagentChips({
   reportedOut?: number;
   /** Every delegate the thread has launched, for the list behind the count. */
   threads: readonly AgentThread[];
+  /**
+   * The same delegates split per agent, drawn as one block each. Absent leaves
+   * the flat list — the caller decides, on {@link TaskListChip}'s rule: a 1:1
+   * chat has one agent, so a heading over its only list names nothing the
+   * reader could have doubted.
+   */
+  groups?: readonly AgentSubagentGroup[];
   onOpen?: (subagentId: string) => void;
 }): React.JSX.Element | null {
   // The fold can only ever be SHORT of the run's own count, never over it.
@@ -439,8 +451,12 @@ export function RunningSubagentChips({
       triggerClassName={SHELF_CHIP_TRIGGER_CLASS}
       // Bounded and scrolling, as it was in the header: a delegating turn can
       // hold a dozen live and forty finished, and a panel that grows with them
-      // runs off the top of the window.
-      panelClassName="max-h-64 w-[20rem] overflow-y-auto"
+      // runs off the top of the window. Grouped, it holds a block per agent and
+      // gets the task chip's taller bound.
+      panelClassName={cn(
+        'w-[20rem] overflow-y-auto',
+        groups ? 'max-h-[26rem]' : 'max-h-64',
+      )}
       trigger={
         <>
           {/* A SPINNER, like the terminals chip beside it — asked for by name
@@ -456,7 +472,11 @@ export function RunningSubagentChips({
           <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
-      <SubagentRows threads={threads} onOpen={onOpen} />
+      {groups === undefined ? (
+        <SubagentRows threads={threads} onOpen={onOpen} />
+      ) : (
+        <SubagentGroupRows groups={groups} onOpen={onOpen} />
+      )}
     </HoverPopover>
   );
 }

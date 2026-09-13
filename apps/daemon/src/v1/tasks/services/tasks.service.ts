@@ -2,15 +2,15 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger } from '@nestjs/common';
 import { BadRequestException, NotFoundException } from '@packages/common';
 
-import type { ChatApprovalMode } from '../../agents/chat.types';
+import type { ChatApprovalMode, RunPullRequest } from '../../agents/chat.types';
+import { RunDao } from '../../agents/dao/run.dao';
 import { resolveValidDirectory } from '../../agents/utils/resolve-directory';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
-import type { AgentKind } from '../../runs/runs.types';
+import type { AgentKind, RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import {
-  type TaskChangeReason,
   type TaskPriority,
   type TaskSource,
   type TaskStatus,
@@ -18,6 +18,7 @@ import {
   type TaskWire,
 } from '../tasks.types';
 import { parseTaskFiles } from '../utils/task-files';
+import { isWorkFinished } from '../utils/work-finished';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 
@@ -41,17 +42,88 @@ export class TasksService {
     private readonly projectDao: ProjectDao,
     private readonly events: TaskEventBus,
     private readonly attachments: TaskAttachmentService,
+    private readonly runDao: RunDao,
   ) {}
+
+  /**
+   * Which of these cards' work is FINISHED (`isWorkFinished`). A card that is
+   * no longer there counts: nothing will ever run in its worktree again.
+   *
+   * Asked by the Electron main process about the worktrees its registry still
+   * holds — the one reader that knows which directories exist and nothing
+   * about what became of their cards — which is why it answers for a list.
+   */
+  async finishedAmong(
+    taskIds: readonly string[],
+  ): Promise<{ taskIds: string[] }> {
+    const em = this.em.fork();
+    const finished: string[] = [];
+    for (const taskId of new Set(taskIds)) {
+      const task = await this.taskDao.getById(taskId, em);
+      if (
+        task === null ||
+        isWorkFinished(task.status, await this.runStatusOf(task.runId, em))
+      ) {
+        finished.push(taskId);
+      }
+    }
+    return { taskIds: finished };
+  }
+
+  /**
+   * Tell every board a card's work has just become finished, without moving
+   * the card — its run has settled under a card the user had already called
+   * Done. See `TaskChangedEvent.reason`.
+   */
+  announceWorkFinished(task: Pick<Task, 'id' | 'projectId' | 'status'>): void {
+    this.events.publishTaskChanged({
+      taskId: task.id,
+      projectId: task.projectId,
+      status: task.status,
+      reason: 'work-finished',
+    });
+  }
 
   async listForProject(projectId: string): Promise<TaskWire[]> {
     const em = this.em.fork();
     await this.requireProject(projectId, em);
-    return (await this.taskDao.listForProject(projectId, em)).map(toWire);
+    const tasks = await this.taskDao.listForProject(projectId, em);
+    // ONE query for the whole board rather than one per card — the per-card
+    // read below is for the paths that hold a single task.
+    const byRun = await this.runDao.pullRequestsOf(
+      tasks
+        .map((task) => task.runId)
+        .filter((runId): runId is string => runId !== null),
+      em,
+    );
+    return tasks.map((task) =>
+      toWire(task, task.runId === null ? [] : (byRun.get(task.runId) ?? [])),
+    );
   }
 
   async get(taskId: string): Promise<TaskWire> {
     const em = this.em.fork();
-    return toWire(await this.require(taskId, em));
+    return this.wireOf(await this.require(taskId, em), em);
+  }
+
+  /**
+   * One card as the wire has it, its run's pull requests included.
+   *
+   * Every single-task path goes through here rather than through {@link toWire}
+   * directly, and that is what keeps the field honest on the paths that are NOT
+   * the listing: a rename answers with the card the client then writes into its
+   * board state, so a `toWire` that could not reach the run would have a saved
+   * title silently take the card's pull requests off screen until the next
+   * refetch.
+   *
+   * A card with no run costs no query at all.
+   */
+  private async wireOf(task: Task, em: EntityManager): Promise<TaskWire> {
+    if (task.runId === null) {
+      return toWire(task, []);
+    }
+    const byRun = await this.runDao.pullRequestsOf([task.runId], em);
+    return toWire(task, byRun.get(task.runId) ?? []);
   }
 
   async create(input: {
@@ -143,7 +215,7 @@ export class TasksService {
       projectId: created.projectId,
       status: created.status,
     });
-    return toWire(created);
+    return this.wireOf(created, em);
   }
 
   /**
@@ -253,7 +325,7 @@ export class TasksService {
       projectId: task.projectId,
       status: task.status,
     });
-    return toWire(task);
+    return this.wireOf(task, em);
   }
 
   /**
@@ -276,11 +348,7 @@ export class TasksService {
    * re-sending it is not a conflict, and failing it would make a retried
    * request look like a lost race.
    */
-  async moveStatus(
-    taskId: string,
-    move: TaskStatusMove,
-    reason?: TaskChangeReason,
-  ): Promise<TaskWire> {
+  async moveStatus(taskId: string, move: TaskStatusMove): Promise<TaskWire> {
     const em = this.em.fork();
     const task = await this.require(taskId, em);
 
@@ -291,7 +359,7 @@ export class TasksService {
       );
     }
     if (move.from === move.to) {
-      return toWire(task);
+      return this.wireOf(task, em);
     }
 
     const position = await this.taskDao.nextPositionIn(
@@ -321,13 +389,31 @@ export class TasksService {
     task.status = move.to;
     task.position = position;
     task.updatedAt = at;
+    // A card called Done whose run has already stopped is FINISHED now, and
+    // the board may collect its worktree. One called Done while its agent is
+    // still working finishes when that run settles, and `TaskSettleService`
+    // says so then — the column alone is written the moment a card is dragged.
+    const finished =
+      move.to === 'done' &&
+      isWorkFinished(move.to, await this.runStatusOf(task.runId, em));
     this.events.publishTaskChanged({
       taskId: task.id,
       projectId: task.projectId,
       status: task.status,
-      reason,
+      ...(finished ? { reason: 'work-finished' as const } : {}),
     });
-    return toWire(task);
+    return this.wireOf(task, em);
+  }
+
+  /** The status of the run working a card, or null when it has none left. */
+  private async runStatusOf(
+    runId: string | null,
+    em: EntityManager,
+  ): Promise<RunStatus | null> {
+    if (runId === null) {
+      return null;
+    }
+    return (await this.runDao.getById(runId, em))?.status ?? null;
   }
 
   async remove(taskId: string): Promise<{ deleted: boolean }> {
@@ -393,7 +479,16 @@ export class TasksService {
   }
 }
 
-function toWire(task: Task): TaskWire {
+function toWire(
+  task: Task,
+  /**
+   * What its run opened, which the task row does not hold and cannot answer
+   * for itself — see {@link TaskWireSchema.shape.pullRequests}. Passed in
+   * rather than read here so the board's listing can answer for every card in
+   * one query.
+   */
+  pullRequests: readonly RunPullRequest[],
+): TaskWire {
   return {
     id: task.id,
     projectId: task.projectId,
@@ -416,6 +511,7 @@ function toWire(task: Task): TaskWire {
     worktreePath: task.worktreePath,
     runId: task.runId,
     reportItemId: task.reportItemId,
+    pullRequests: [...pullRequests],
     position: task.position,
     priority: task.priority,
     dueDate: task.dueDate,

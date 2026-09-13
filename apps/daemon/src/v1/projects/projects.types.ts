@@ -225,6 +225,13 @@ export interface ProjectQueueRaw {
    * fields under a new name.
    */
   waitingTasks: Task[];
+  /**
+   * The cards whose run the USER stopped — a cancelled run is one somebody
+   * pressed Stop on. The splitter leaves these to the user while armed: the
+   * settle returns a stopped card to the intake column, and the autopilot
+   * would otherwise restart it at once.
+   */
+  stoppedTaskIds: string[];
   /** How many of the project's autopilot slots are free right now. */
   freeSlots: number;
   /**

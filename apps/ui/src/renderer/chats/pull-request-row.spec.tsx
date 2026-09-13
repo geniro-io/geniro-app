@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { PullRequestInfo, PullRequestState } from '../../shared/contracts';
-import { PullRequestBadge, PullRequestRow } from './pull-request-row';
+import { PullRequestBadge, ThreadPullRequestRow } from './pull-request-row';
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -51,9 +51,26 @@ async function mount(ui: ReactNode): Promise<void> {
   });
 }
 
-describe('PullRequestRow', () => {
+/** The panel row for a pull request the thread opened and GitHub resolved. */
+function ResolvedThreadRow({
+  pullRequest,
+}: {
+  pullRequest: PullRequestInfo;
+}): React.JSX.Element {
+  return (
+    <ThreadPullRequestRow
+      result={{
+        ref: { owner: 'o', repo: 'r', number: 70, url: pullRequest.url },
+        pullRequest,
+      }}
+      showRepo={false}
+    />
+  );
+}
+
+describe('ThreadPullRequestRow — a resolved pull request', () => {
   it('links to the pull request and names its number', async () => {
-    await mount(<PullRequestRow pullRequest={pr('merged')} />);
+    await mount(<ResolvedThreadRow pullRequest={pr('merged')} />);
 
     const link = container.querySelector('a');
     expect(link?.getAttribute('href')).toBe('https://github.com/o/r/pull/70');
@@ -69,7 +86,7 @@ describe('PullRequestRow', () => {
     // Asked for directly: every row carried a trailing `· merged` that said
     // what the glyph already said. The word has to stay reachable — the tooltip
     // and the icon's screen-reader text — since colour alone is not a label.
-    await mount(<PullRequestRow pullRequest={pr('merged')} />);
+    await mount(<ResolvedThreadRow pullRequest={pr('merged')} />);
 
     expect(
       container.querySelector('[data-slot="panel-link-meta"]')?.textContent,
@@ -87,7 +104,7 @@ describe('PullRequestRow', () => {
       state: PullRequestState,
       isDraft = false,
     ): Promise<string> => {
-      await mount(<PullRequestRow pullRequest={pr(state, isDraft)} />);
+      await mount(<ResolvedThreadRow pullRequest={pr(state, isDraft)} />);
       return container.querySelector('svg')?.getAttribute('class') ?? '';
     };
 
@@ -100,7 +117,7 @@ describe('PullRequestRow', () => {
   it('calls a draft a draft rather than open', async () => {
     // A draft listed as plain `open` would say it is asking for review when it
     // is not.
-    await mount(<PullRequestRow pullRequest={pr('open', true)} />);
+    await mount(<ResolvedThreadRow pullRequest={pr('open', true)} />);
 
     expect(container.textContent).toContain('draft');
     expect(container.textContent).not.toContain('open');

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   type ChatApprovalMode,
   ChatApprovalModeSchema,
+  RunPullRequestSchema,
 } from '../agents/chat.types';
 import { type AgentKind, AgentKindSchema } from '../runs/runs.types';
 
@@ -202,6 +203,29 @@ export const TaskWireSchema = z.object({
     .describe(
       "The transcript item holding the agent's report, so the card can show it without replaying the run",
     ),
+  /**
+   * The pull requests this card's RUN opened — the result of the work, drawn on
+   * the card rather than left in the conversation that produced it.
+   *
+   * Read from the run on every projection instead of stored on the task, and
+   * that is the whole design: `PullRequestCaptureService` already keeps this
+   * for every run there is, out of the transcript's own `gh pr create` calls,
+   * and a second copy on the card would be a stale answer beside a live one
+   * the moment a follow-up turn opened another. So a card OWNS no pull request
+   * — it owns the run, and the run owns these.
+   *
+   * Empty when the card has never been run, when its run opened none, and when
+   * the run it named has since been deleted. None of the three is worth telling
+   * apart here: each of them is a card with nothing to show.
+   *
+   * Oldest first, as the run stores them; the renderer reverses for display,
+   * where the last thing a run did is what its reader is looking for.
+   */
+  pullRequests: z
+    .array(RunPullRequestSchema)
+    .describe(
+      "Pull requests the task's run opened, oldest first, as captured from the agent output",
+    ),
   position: z
     .number()
     .int()
@@ -235,6 +259,41 @@ export interface TaskStatusMove {
   from: TaskStatus;
   to: TaskStatus;
 }
+
+/**
+ * One card sitting in review with pull requests that could end it.
+ *
+ * The daemon's half of the merge watch, and the split is the same one
+ * `RunPullRequestSchema` already states: this process knows WHICH pull requests
+ * belong to a card (its run captured them out of the agent's own output) and
+ * can never know what they currently ARE, because that is a live question for
+ * GitHub. The Electron main process holds the `gh` login and asks it, then
+ * reports a merge back — so neither side stores a state that goes stale.
+ *
+ * `pullRequests` is never empty: a card with nothing to watch is not awaiting a
+ * merge, and listing it would cost the watcher a pass that can decide nothing.
+ */
+export const TaskAwaitingMergeSchema = z.object({
+  taskId: z.string(),
+  projectId: z.string(),
+  title: z.string().describe('For the watcher’s own log lines'),
+  pullRequests: z
+    .array(RunPullRequestSchema)
+    .describe('Every pull request this card’s run opened, oldest first'),
+});
+export type TaskAwaitingMergeWire = z.infer<typeof TaskAwaitingMergeSchema>;
+
+/**
+ * How many cards one merge sweep may name.
+ *
+ * A bound rather than a tuning: every card handed out costs the watcher at
+ * least a lookup against GitHub, so an unattended tick must not be able to
+ * grow with a board somebody left in review for a year. Cards are handed out
+ * least-recently-changed first, so a capped sweep still reaches every one of
+ * them — each pass moves the ones it settles out of the column, and the next
+ * takes the next oldest.
+ */
+export const TASKS_AWAITING_MERGE_MAX = 100;
 
 /**
  * What starting a run for one task needs to know.
@@ -378,18 +437,23 @@ export interface TaskChangedEvent {
   projectId: string;
   status: TaskStatus;
   /**
-   * Present only when the DAEMON moved this card because the run working it
-   * reached a terminal status — `TaskSettleService`, and nothing else, sets it.
+   * Present only when the DAEMON has decided this card's work is FINISHED —
+   * the card is Done and no run is working in it (`isWorkFinished`).
+   * `TasksService` sets it on a move to Done whose run has already stopped,
+   * `TaskSettleService` when a run settles under a card already in Done, and
+   * nothing else does.
    *
-   * It exists because the card's COLUMN cannot answer "has the agent stopped".
-   * The board writes a status optimistically the moment a card is dragged, so
-   * a client keying a destructive act on the column alone acts on a card whose
-   * agent may still be working — which is what an earlier cut of the worktree
-   * collection did. This says the daemon OBSERVED the run settle, which is the
-   * claim a client cannot make for itself.
+   * It exists because neither half can be read by a client on its own. The
+   * COLUMN cannot say the agent has stopped: the board writes a status
+   * optimistically the moment a card is dragged, so keying a destructive act
+   * on it removes a live agent's checkout — which an earlier cut of the
+   * worktree collection did. And the run SETTLING cannot say the work is over:
+   * the run is a chat the user continues after review — the mistake of the
+   * `run-settled` reason this replaced, which collected a conversation's cwd
+   * the moment its first answer ended.
    */
   reason?: TaskChangeReason;
 }
 
-/** Why a card moved, where the reason is one a client has to act on. */
-export type TaskChangeReason = 'run-settled';
+/** Why a card changed, where the reason is one a client has to act on. */
+export type TaskChangeReason = 'work-finished';

@@ -55,6 +55,7 @@ export function HoverPopover({
   triggerClassName,
   panelClassName,
   onOpenChange,
+  onPress,
   children,
 }: {
   /** What the trigger button draws — a ring, a glyph and a count, … */
@@ -86,6 +87,16 @@ export function HoverPopover({
    * effect that reports the change.
    */
   onOpenChange?: (open: boolean) => void;
+  /**
+   * What a PRESS does, for a trigger that is a control of its own — the task
+   * panel's Folder row, whose press opens the folder picker while its hover
+   * shows the whole path.
+   *
+   * Given, a press runs it and closes the panel instead of pinning it, so the
+   * panel belongs to the hover and to keyboard focus alone. Absent, a press
+   * pins, as it always has.
+   */
+  onPress?: () => void;
   children: React.ReactNode;
 }): React.JSX.Element {
   const [pinned, setPinned] = useState(false);
@@ -186,6 +197,14 @@ export function HoverPopover({
         onClick={() => {
           cancelHoverOpen();
           cancelHoverClose();
+          if (onPress !== undefined) {
+            // The press is the trigger's own act, so the panel steps aside
+            // rather than standing over whatever that act opens.
+            setPinned(false);
+            setHovered(false);
+            onPress();
+            return;
+          }
           if (pinned) {
             setPinned(false);
             setHovered(false);

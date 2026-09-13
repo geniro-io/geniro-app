@@ -608,16 +608,14 @@ describe('cancelling a session turn', () => {
     expect(session.alive).toBe(true);
   });
 
-  it('refuses the NEXT turn, because the cancelled one may still be talking', async () => {
-    // The defect this pins: a stream-json line carries no turn id, so `emit`
-    // can only ask which turn is open NOW. After a Stop the CLI keeps printing
-    // the rest of the cancelled turn, and every one of those lines was read as
-    // the next turn's output — a trailing `result` settled that turn the
-    // instant it opened, so the user's next message got no answer at all.
-    //
-    // Refusing here is what the registry turns into "replace this session", and
-    // it costs the process nothing: the assertions above still hold, so Stop
-    // has not killed anyone's MCP servers.
+  it('SERVES the next turn once the stopped one ended on its own line — Stop costs no respawn', async () => {
+    // REPORTED as "я его остановил. У него был открыт браузер Playwright.
+    // Потом он написал новое сообщение, и Playwright сразу закрылся": every
+    // Stop retired the session, so the next message had the registry replace
+    // the process, and its MCP servers — the browser among them — went with
+    // it. Measured on claude 2.1.266, the CLI's own `result` line is the LAST
+    // thing a stopped turn prints, so a turn settled on it leaves no tail to
+    // mistake for the next turn's output.
     const { session, child } = openSession();
     const first = session.startTurn({
       onEvent: () => {},
@@ -628,20 +626,19 @@ describe('cancelling a session turn', () => {
     line(child, { failed: true });
     await first?.done;
 
-    expect(session.startTurn({ onEvent: () => {} })).toBeNull();
-    // Retired from REUSE only — the process is untouched and still reapable by
-    // the idle window rather than by a kill.
+    expect(session.retired).toBe(false);
+    expect(session.startTurn({ onEvent: () => {} })).not.toBeNull();
     expect(child.kills).toBe(0);
     expect(session.alive).toBe(true);
   });
 
   it('sends the cancelled turn’s STRAGGLERS to the between-turn path, not to a turn', async () => {
-    // The defect itself, rather than the guard that prevents it. Retiring the
-    // session is only half the fix: the tail still arrives, and where it lands
-    // is what the user saw — a terminal line settling their next message
-    // instantly, and text rendering under a message sent after it. With no turn
+    // Where anything printed AFTER a stopped turn settled lands. With no turn
     // open it must reach `onBetweenTurnEvent`, which is where the run persists
-    // it as its own late row.
+    // it as its own late row — never a turn, where a terminal line would settle
+    // the user's next message instantly and its text would render under a
+    // message sent after it. (Measured, claude prints nothing after a stopped
+    // turn's own `result`; this pins where it would go if a CLI did.)
     const betweenTurns: AgentEvent[] = [];
     const { session, child } = openSession(undefined, undefined, (event) =>
       betweenTurns.push(event),

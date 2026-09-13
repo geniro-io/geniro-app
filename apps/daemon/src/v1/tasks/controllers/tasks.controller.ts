@@ -20,19 +20,31 @@ import {
   CreateTaskDto,
   ListTasksQueryDto,
   MoveTaskStatusDto,
+  ReportPullRequestMergedDto,
   TaskAttachmentDto,
+  TaskAwaitingMergeDto,
   TaskDeletedDto,
   TaskDto,
   TaskImageQueryDto,
   UpdateTaskDto,
 } from '../dto/task.dto';
-import { ReconcileTasksDto, StartTaskRunDto } from '../dto/task-run.dto';
+import {
+  FindFinishedTasksDto,
+  FinishedTasksDto,
+  ReconcileTasksDto,
+  StartTaskRunDto,
+} from '../dto/task-run.dto';
 import { TaskAttachmentService } from '../services/task-attachment.service';
 import { TaskFilesService } from '../services/task-files.service';
+import { TaskMergeService } from '../services/task-merge.service';
 import { TaskRunsService } from '../services/task-runs.service';
 import { TaskSettleService } from '../services/task-settle.service';
 import { TasksService } from '../services/tasks.service';
-import type { TaskAttachmentWire, TaskWire } from '../tasks.types';
+import type {
+  TaskAttachmentWire,
+  TaskAwaitingMergeWire,
+  TaskWire,
+} from '../tasks.types';
 
 /**
  * Tasks — the cards on a project's board (token-gated by the global
@@ -49,6 +61,7 @@ export class TasksController {
     private readonly localImages: LocalImageService,
     private readonly taskRuns: TaskRunsService,
     private readonly settle: TaskSettleService,
+    private readonly merges: TaskMergeService,
   ) {}
 
   /**
@@ -84,6 +97,34 @@ export class TasksController {
     return this.settle.reconcileProject(dto.projectId);
   }
 
+  /**
+   * Which of these tasks' work is finished — asked by the Electron main
+   * process's worktree reaper, which knows which worktrees exist and nothing
+   * about what became of their cards. Declared before the `:taskId` routes,
+   * beside `reconcile`.
+   */
+  @Post('finished')
+  @ApiOperation({ operationId: 'findFinishedTasks' })
+  @ZodResponse({ status: 200, type: FinishedTasksDto })
+  finished(@Body() dto: FindFinishedTasksDto): Promise<{ taskIds: string[] }> {
+    return this.tasks.finishedAmong(dto.taskIds);
+  }
+
+  /**
+   * The cards a merge could end, for the watcher in the Electron main process.
+   *
+   * Declared BEFORE the `:taskId` routes, like `reconcile` above, so the path
+   * is never read as a task id. It is unscoped by project on purpose: a pull
+   * request is merged whether or not the board holding its card is the one on
+   * screen, and the watcher is a timer with no board at all.
+   */
+  @Get('awaiting-merge')
+  @ApiOperation({ operationId: 'listTasksAwaitingMerge' })
+  @ZodResponse({ status: 200, type: [TaskAwaitingMergeDto] })
+  listAwaitingMerge(): Promise<TaskAwaitingMergeWire[]> {
+    return this.merges.listAwaitingMerge();
+  }
+
   @Get(':taskId')
   @ApiOperation({ operationId: 'readTask' })
   @ZodResponse({ status: 200, type: TaskDto })
@@ -113,6 +154,25 @@ export class TasksController {
     @Body() dto: MoveTaskStatusDto,
   ): Promise<TaskWire> {
     return this.tasks.moveStatus(taskId, dto);
+  }
+
+  /**
+   * Report that one of this card's pull requests has been merged.
+   *
+   * The caller states a FACT it is the only one able to observe — it holds the
+   * user's `gh` login — and this daemon decides what the fact means for the
+   * card. Hence a route of its own rather than the plain status move the board
+   * drags with: the rule that a merge ends a card in review, and ends nothing
+   * else, belongs here where the run's captured pull requests can be checked.
+   */
+  @Post(':taskId/pull-request-merged')
+  @ApiOperation({ operationId: 'reportTaskPullRequestMerged' })
+  @ZodResponse({ status: 200, type: TaskDto })
+  reportPullRequestMerged(
+    @Param('taskId') taskId: string,
+    @Body() dto: ReportPullRequestMergedDto,
+  ): Promise<TaskWire> {
+    return this.merges.settleMerged(taskId, dto.url);
   }
 
   @Delete(':taskId')

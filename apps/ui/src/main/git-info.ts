@@ -52,6 +52,7 @@ const NOT_A_REPO: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 /**
@@ -74,7 +75,8 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /**
- * Which branches OTHER worktrees of this repo hold, and where.
+ * Which branches OTHER worktrees of this repo hold, and where — plus the MAIN
+ * checkout, which git always lists first.
  *
  * The porcelain form is parsed rather than the human one for the reason every
  * other git read here gives: `--porcelain` is a documented, locale-independent
@@ -90,16 +92,18 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
 async function readWorktrees(
   dir: string,
   self: string | null,
-): Promise<BranchWorktree[]> {
+): Promise<{ held: BranchWorktree[]; main: string | null }> {
   const listing = await git(dir, ['worktree', 'list', '--porcelain']);
   if (listing === null) {
-    return [];
+    return { held: [], main: null };
   }
   const found: BranchWorktree[] = [];
+  let main: string | null = null;
   let path: string | null = null;
   for (const line of listing.split('\n')) {
     if (line.startsWith('worktree ')) {
       path = line.slice('worktree '.length).trim();
+      main ??= path;
       continue;
     }
     if (line.startsWith('branch ') && path !== null) {
@@ -112,7 +116,7 @@ async function readWorktrees(
       }
     }
   }
-  return found;
+  return { held: found, main };
 }
 
 /**
@@ -136,6 +140,7 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
     // as held somewhere else, and unswitchable-to for good.
     git(dir, ['rev-parse', '--show-toplevel']),
   ]);
+  const listed = await readWorktrees(dir, root);
   return {
     isRepo: true,
     branch: head === null || head === 'HEAD' ? null : head,
@@ -143,7 +148,14 @@ export async function readGitInfo(dir: string): Promise<GitInfo> {
     // `null` = the status call itself failed; treating that as clean would let
     // a checkout run without the guard ever having looked.
     dirty: status === null || status !== '',
-    worktrees: await readWorktrees(dir, root),
+    worktrees: listed.held,
+    // Compared against the ROOT for the reason `readWorktrees` is handed it: a
+    // run's folder is routinely a subdirectory, and the listing prints roots.
+    // The main checkout is nobody's worktree, so it names nothing.
+    worktreeOf:
+      listed.main !== null && root !== null && listed.main !== root
+        ? listed.main
+        : null,
   };
 }
 
@@ -405,20 +417,6 @@ async function runGit(dir: string, args: string[]): Promise<true | string> {
   }
 }
 
-/**
- * The folder's checked-out branch, or null for a non-repo and for a detached
- * HEAD — neither of which names one.
- *
- * Its own read rather than a field off {@link readGitInfo}: `github-prs.ts`
- * wants the branch and nothing else, and that function spends five git
- * subprocesses collecting the branch list, the dirty flag and every sibling
- * worktree.
- */
-export async function readHeadBranch(dir: string): Promise<string | null> {
-  const head = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
-  return head === null || head === 'HEAD' ? null : head;
-}
-
 /** A commit id as `rev-parse` prints one — never abbreviated. */
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
@@ -427,9 +425,7 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
  * it already carries uncommitted work. Stamped onto a chat when it is created,
  * so the diff view has a fixed point to measure against.
  *
- * Its own read rather than a field on {@link GitInfo}, which is the house
- * pattern {@link readHeadBranch} documents and which matters more here: that
- * type is rendered by the composer's chip on every folder change, and widening
+ * Its own read rather than a field on {@link GitInfo}: that type is rendered by the composer's chip on every folder change, and widening
  * it would put a sha through five files and two `NOT_A_REPO` literals for a
  * reading one caller takes once per chat. Two subprocesses against that
  * function's five, for the same reason.
@@ -457,20 +453,4 @@ export async function readGitStamp(dir: string): Promise<GitStamp> {
     // tree nobody looked at.
     dirty: status === null ? null : status !== '',
   };
-}
-
-/** `owner` out of both URL forms git writes for a GitHub remote. */
-const ORIGIN_OWNER = /[:/]([^/:]+)\/[^/]+?(?:\.git)?$/;
-
-/**
- * The GitHub owner of this folder's `origin` remote, or null.
- *
- * Parsed from the remote URL rather than asked of `gh`, and that is the whole
- * point: `gh` answers for the BASE repo, which on a fork clone carrying an
- * `upstream` remote is the upstream owner — the opposite of what a caller
- * asking "is this pull request mine" needs.
- */
-export async function readOriginOwner(dir: string): Promise<string | null> {
-  const url = await git(dir, ['remote', 'get-url', 'origin']);
-  return url === null ? null : (ORIGIN_OWNER.exec(url.trim())?.[1] ?? null);
 }

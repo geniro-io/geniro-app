@@ -9,6 +9,7 @@ import { CodeBlock } from '../components/ui/code-block';
 import { languageForFence } from '../components/ui/code-language';
 import { cn } from '../components/ui/utils';
 import { MarkdownImage } from './markdown-image';
+import { wrapSpacedImagePaths } from './markdown-paths';
 
 /** The shape of a hast element, as far as the fence reader needs it. */
 interface HastNode {
@@ -330,7 +331,7 @@ export const MarkdownContent = memo(function MarkdownContent({
         remarkPlugins={[remarkGfm]}
         components={COMPONENTS}
         urlTransform={urlTransform}>
-        {content}
+        {wrapSpacedImagePaths(content)}
       </ReactMarkdown>
     </div>
   );

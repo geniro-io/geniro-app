@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { Users } from 'lucide-react';
-import { userEvent, within } from 'storybook/test';
+import { fn, userEvent, within } from 'storybook/test';
 
 import { HoverPopover } from './hover-popover';
 
@@ -65,4 +65,25 @@ export const Empty: Story = {
     ),
   },
   play: openPanel('Terminals'),
+};
+
+// A trigger that is a control of its own: hovering shows the panel, a press
+// runs `onPress` instead of pinning it — the task panel's Folder row, which
+// opens the folder picker and shows the whole path on hover.
+export const PressActs: Story = {
+  args: {
+    label: 'Folder: /Users/you/Projects/Geniro/geniro-app',
+    panelLabel: 'Folder',
+    onPress: fn(),
+    trigger: (
+      <span className="px-1.5 font-mono text-xs text-muted-foreground">
+        …/Projects/Geniro/geniro-app
+      </span>
+    ),
+    children: (
+      <p className="break-all font-mono text-xs">
+        /Users/you/Projects/Geniro/geniro-app
+      </p>
+    ),
+  },
 };

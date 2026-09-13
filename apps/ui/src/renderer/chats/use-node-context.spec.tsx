@@ -129,7 +129,9 @@ describe('useNodeDurableReadings', () => {
 
   it('reads the daemon’s per-node rows when a workflow run opens', async () => {
     const listWorkflowRunNodes = vi.fn(async () => [
-      node('reviewer', 42_000, 200_000),
+      // The running turn's start is carried too: it is what the live clocks
+      // count from when the turn opened above the loaded page.
+      { ...node('reviewer', 42_000, 200_000), startedAt: 1_000 },
       node('poet', null, null),
     ]);
     const { seen } = drive(
@@ -147,6 +149,8 @@ describe('useNodeDurableReadings', () => {
       contextTokens: 42_000,
       contextWindowTokens: 200_000,
       calls: [],
+      status: 'running',
+      startedAt: 1_000,
     });
     // A node that has never reported is carried as nulls rather than dropped —
     // the caller's own chain is what decides to fall through it.
@@ -154,6 +158,8 @@ describe('useNodeDurableReadings', () => {
       contextTokens: null,
       contextWindowTokens: null,
       calls: [],
+      status: 'running',
+      startedAt: null,
     });
   });
 

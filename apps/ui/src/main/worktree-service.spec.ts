@@ -24,7 +24,7 @@ import {
   prepareWorktree,
   pruneWorktreeForTask,
   readRegistry,
-  reapOrphanedWorktrees,
+  reapFinishedWorktrees,
   settleWorktreeForTask,
   taskBranchName,
 } from './worktree-service';
@@ -71,6 +71,14 @@ const registerRow = (path: string): void => {
   );
 };
 
+/** The daemon's answer for a reaper pass: every card named is finished. */
+const allFinished = (taskIds: string[]): Promise<ReadonlySet<string>> =>
+  Promise.resolve(new Set(taskIds));
+
+/** The daemon's answer for a reaper pass: no card named is finished. */
+const noneFinished = (): Promise<ReadonlySet<string>> =>
+  Promise.resolve(new Set<string>());
+
 beforeEach(() => {
   mocks.userData = realpathSync(
     mkdtempSync(join(tmpdir(), 'geniro-worktree-ud-')),
@@ -96,6 +104,7 @@ describe('prepareWorktree', () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
 
       expect(made.branch).toBe('geniro/task-t1');
+      expect(made.reused).toBe(false);
       expect(existsSync(made.path)).toBe(true);
       // git's own view, not ours: the path is a worktree of THIS repository.
       expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
@@ -114,36 +123,98 @@ describe('prepareWorktree', () => {
   );
 
   it(
-    're-runs over a CLEAN leftover the previous session left behind',
+    'hands back the task’s OWN worktree, still standing, rather than cutting a new one',
     async () => {
       const first = await prepareWorktree({ taskId: 't1', folder: repo });
-      // The app died here: the worktree and its registry row survive, and the
-      // reaper has not run. A second press must still get a worktree, which it
-      // does by clearing the leftover — it holds nothing — and cutting a new
-      // one in its place.
+      git(first.path, 'config', 'user.email', 'spec@example.com');
+      writeFileSync(join(first.path, 'committed.txt'), 'kept\n');
+      git(first.path, 'add', '.');
+      git(first.path, 'commit', '-m', 'the first run’s work');
+      const head = git(first.path, 'rev-parse', 'HEAD').trim();
+
+      // A worktree lives until its card is Done, so a second press — Stop sent
+      // the card back, or its run failed, or it is pressed again from review —
+      // routinely finds the first run's worktree here.
       const again = await prepareWorktree({ taskId: 't1', folder: repo });
 
-      expect(again.path).toBe(first.path);
-      expect(existsSync(again.path)).toBe(true);
+      expect(again).toEqual({
+        path: first.path,
+        branch: 'geniro/task-t1',
+        reused: true,
+      });
+      // The SAME checkout, not a fresh one cut in its place.
+      expect(git(again.path, 'rev-parse', 'HEAD').trim()).toBe(head);
       expect(readRegistry()).toHaveLength(1);
     },
     TIMEOUT_MS,
   );
 
   it(
-    'REFUSES a re-run over a worktree holding uncommitted work',
+    'CONTINUES in its own worktree with the uncommitted work still in it',
     async () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
       writeFileSync(join(made.path, 'in-progress.txt'), 'not committed\n');
 
-      // Same rule the reaper states, and it has to hold here too: from this side
-      // of the boundary a checkout an agent is working in right now looks exactly
-      // like a leftover, since the claim that knows otherwise is in the daemon
-      // and is consulted after.
+      // That work is this task's, and the run being started is its next step.
+      // Refusing here turned every re-run of a card whose agent had not
+      // committed into "commit or clear them" before it could go on.
+      const again = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(again.reused).toBe(true);
+      expect(existsSync(join(made.path, 'in-progress.txt'))).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'does NOT hand back a checkout in its slot that is on another branch',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      // Still a worktree of this repository, at this very path — but no longer
+      // this task's branch, so continuing in it would run the task on work
+      // that is not its own.
+      git(made.path, 'switch', '-c', 'somebody-elses');
+
+      const again = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(again.reused).toBe(false);
+      expect(git(again.path, 'rev-parse', '--abbrev-ref', 'HEAD').trim()).toBe(
+        'geniro/task-t1',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'clears an EMPTY directory in its slot and cuts the worktree there',
+    async () => {
+      // What a user makes by hand to get a chat whose cwd vanished to answer
+      // again — nothing in it to lose, and git has nothing to say about it.
+      mkdirSync(join(mocks.userData, 'worktrees', 't1'), { recursive: true });
+
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      expect(made.reused).toBe(false);
+      expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(
+        `worktree ${made.path}`,
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'REFUSES a directory in its slot holding things git cannot account for',
+    async () => {
+      const slot = join(mocks.userData, 'worktrees', 't1');
+      mkdirSync(slot, { recursive: true });
+      writeFileSync(join(slot, 'notes.txt'), 'somebody’s\n');
+
+      // Not this task's worktree, and not empty: nothing here can say whether
+      // it is the only copy of something.
       await expect(
         prepareWorktree({ taskId: 't1', folder: repo }),
-      ).rejects.toThrow(/uncommitted changes/);
-      expect(existsSync(join(made.path, 'in-progress.txt'))).toBe(true);
+      ).rejects.toThrow(/git cannot say what is in it/);
+      expect(existsSync(join(slot, 'notes.txt'))).toBe(true);
     },
     TIMEOUT_MS,
   );
@@ -153,8 +224,9 @@ describe('prepareWorktree', () => {
     async () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
       // Removing a worktree deliberately keeps its branch, so this is the state
-      // after any failed start and after every boot reap. `-b` refuses a branch
-      // that exists, so without the re-use the card could never run again.
+      // after any failed start and after every collection. `-b` refuses a
+      // branch that exists, so without the re-use the card could never run
+      // again.
       await pruneWorktreeForTask('t1');
       expect(git(repo, 'branch', '--list', 'geniro/task-t1')).toContain(
         'geniro/task-t1',
@@ -164,6 +236,7 @@ describe('prepareWorktree', () => {
 
       expect(again.branch).toBe('geniro/task-t1');
       expect(again.path).toBe(made.path);
+      expect(again.reused).toBe(false);
       expect(existsSync(again.path)).toBe(true);
     },
     TIMEOUT_MS,
@@ -312,7 +385,7 @@ describe('settleWorktreeForTask', () => {
         committed: false,
       });
 
-      // A rescue commit on every settled task would say nothing happened, on
+      // A rescue commit on every finished task would say nothing happened, on
       // every branch where nothing did.
       expect(git(repo, 'rev-parse', 'geniro/task-t1').trim()).toBe(before);
     },
@@ -373,13 +446,13 @@ describe('settleWorktreeForTask', () => {
   });
 });
 
-describe('reapOrphanedWorktrees', () => {
+describe('reapFinishedWorktrees', () => {
   it(
-    'clears a clean worktree a previous launch left behind',
+    'collects the worktree of a card whose work is finished',
     async () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
 
-      const { removed, kept } = await reapOrphanedWorktrees();
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
 
       expect(removed).toEqual([made.path]);
       expect(kept).toEqual([]);
@@ -390,19 +463,90 @@ describe('reapOrphanedWorktrees', () => {
   );
 
   it(
-    'LEAVES a worktree holding uncommitted work',
+    'LEAVES the worktree of a card that is not finished, however clean it is',
+    async () => {
+      // The regression this pins: the reaper used to remove every clean
+      // worktree at launch, which now means every reviewed conversation's cwd.
+      // The worktree is clean on purpose — clean was the one thing that
+      // condemned it before.
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      const { removed, kept } = await reapFinishedWorktrees(noneFinished);
+
+      expect(removed).toEqual([]);
+      expect(kept).toEqual([made.path]);
+      expect(existsSync(made.path)).toBe(true);
+      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'COMMITS a finished card’s unsaved work onto its branch before collecting it',
     async () => {
       const made = await prepareWorktree({ taskId: 't1', folder: repo });
       writeFileSync(join(made.path, 'half-done.txt'), 'not committed\n');
 
-      const { removed, kept } = await reapOrphanedWorktrees();
+      const { removed } = await reapFinishedWorktrees(allFinished);
 
-      // A stray costs disk; a mistaken removal costs the user their agent's
-      // unsaved work. The registry row stays too, so a later launch can try.
+      expect(removed).toEqual([made.path]);
+      expect(git(repo, 'show', 'geniro/task-t1:half-done.txt')).toBe(
+        'not committed\n',
+      );
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'KEEPS a finished card’s worktree when its work cannot be committed',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+      writeFileSync(join(made.path, 'half-done.txt'), 'the only copy\n');
+      const hook = join(repo, '.git', 'hooks', 'pre-commit');
+      writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+      chmodSync(hook, 0o755);
+
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
+
       expect(removed).toEqual([]);
       expect(kept).toEqual([made.path]);
       expect(existsSync(join(made.path, 'half-done.txt'))).toBe(true);
-      expect(readRegistry()).toHaveLength(1);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'collects NOTHING when the daemon cannot say which cards are finished',
+    async () => {
+      const made = await prepareWorktree({ taskId: 't1', folder: repo });
+
+      const unanswered = await reapFinishedWorktrees(() =>
+        Promise.resolve(null),
+      );
+      // A question that THROWS is the same absence of an answer, not a reason
+      // to fail the pass.
+      const failed = await reapFinishedWorktrees(() =>
+        Promise.reject(new Error('daemon unreachable')),
+      );
+
+      expect(unanswered).toEqual({ removed: [], kept: [made.path] });
+      expect(failed).toEqual({ removed: [], kept: [made.path] });
+      expect(existsSync(made.path)).toBe(true);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    'asks only about the worktrees still standing',
+    async () => {
+      await prepareWorktree({ taskId: 't1', folder: repo });
+      const gone = await prepareWorktree({ taskId: 't2', folder: repo });
+      rmSync(gone.path, { recursive: true, force: true });
+      const isFinished = vi.fn(noneFinished);
+
+      await reapFinishedWorktrees(isFinished);
+
+      expect(isFinished).toHaveBeenCalledWith(['t1']);
     },
     TIMEOUT_MS,
   );
@@ -414,7 +558,7 @@ describe('reapOrphanedWorktrees', () => {
       // The project folder is gone, so git can answer nothing about the path.
       rmSync(repo, { recursive: true, force: true });
 
-      const { removed, kept } = await reapOrphanedWorktrees();
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
 
       expect(removed).toEqual([]);
       expect(kept).toEqual([made.path]);
@@ -430,7 +574,7 @@ describe('reapOrphanedWorktrees', () => {
       mkdirSync(stranger, { recursive: true });
       writeFileSync(join(stranger, 'keep.txt'), 'mine\n');
 
-      const { removed, kept } = await reapOrphanedWorktrees();
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
 
       expect(removed).toEqual([]);
       expect(kept).toEqual([]);
@@ -450,7 +594,7 @@ describe('reapOrphanedWorktrees', () => {
       mkdirSync(stranger, { recursive: true });
       writeFileSync(join(stranger, 'keep.txt'), 'mine\n');
 
-      const { removed } = await reapOrphanedWorktrees();
+      const { removed } = await reapFinishedWorktrees(allFinished);
 
       expect(removed).toEqual([made.path]);
       expect(existsSync(join(stranger, 'keep.txt'))).toBe(true);
@@ -461,24 +605,22 @@ describe('reapOrphanedWorktrees', () => {
   it(
     'never deletes a registry path that sits OUTSIDE the worktrees directory',
     async () => {
-      // The reaper reads the same untrusted file the prune path does, and it
-      // runs at boot with nobody watching. The fixture is a REAL worktree of
-      // this repository cut somewhere else — the shape an older build with a
-      // different layout would leave behind — because that is the only one the
-      // reaper would otherwise act on: an unregistered path is already kept by
-      // the `registered` arm, so a stranger directory here would pass with the
-      // bound deleted and pin nothing.
+      // The reaper reads the same untrusted file the prune path does, with
+      // nobody watching. The fixture is a REAL worktree of this repository cut
+      // somewhere else — the shape an older build with a different layout
+      // would leave behind — and its card is reported finished, so the bound
+      // is the only thing left standing between it and the delete.
       const outside = join(mocks.userData, 'outside-worktree');
       git(repo, 'worktree', 'add', '-b', 'stray', outside);
       registerRow(outside);
 
-      const { removed, kept } = await reapOrphanedWorktrees();
+      const { removed, kept } = await reapFinishedWorktrees(allFinished);
 
       expect(removed).toEqual([]);
       expect(kept).toEqual([outside]);
       expect(existsSync(join(outside, 'README.md'))).toBe(true);
-      // The row is dropped rather than retried at every launch — it names a
-      // path this app will never act on.
+      // The row is dropped rather than retried on every pass — it names a path
+      // this app will never act on.
       expect(readRegistry()).toEqual([]);
     },
     TIMEOUT_MS,
@@ -487,17 +629,20 @@ describe('reapOrphanedWorktrees', () => {
   it('drops a row whose directory is already gone, deleting nothing', async () => {
     const made = await prepareWorktree({ taskId: 't1', folder: repo });
     rmSync(made.path, { recursive: true, force: true });
+    const isFinished = vi.fn(noneFinished);
 
-    const { removed } = await reapOrphanedWorktrees();
+    const { removed } = await reapFinishedWorktrees(isFinished);
 
     expect(removed).toEqual([made.path]);
     expect(readRegistry()).toEqual([]);
+    // Nothing is standing, so there is nothing to ask the daemon about.
+    expect(isFinished).not.toHaveBeenCalled();
   });
 
   it('reads an unreadable registry as empty, so it can authorize no delete', async () => {
     writeFileSync(join(mocks.userData, 'worktrees.json'), 'not json at all');
 
-    await expect(reapOrphanedWorktrees()).resolves.toEqual({
+    await expect(reapFinishedWorktrees(allFinished)).resolves.toEqual({
       removed: [],
       kept: [],
     });

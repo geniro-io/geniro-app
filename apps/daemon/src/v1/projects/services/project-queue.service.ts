@@ -41,7 +41,7 @@ export class ProjectQueueService {
     const project = await this.require(projectId, em);
     const tasks = await this.taskDao.listForProject(projectId, em);
 
-    const active = await this.readActive(tasks, em);
+    const { active, stopped } = await this.readRuns(tasks, em);
     const running = active.length;
     const breakerOpen = isBreakerOpen(project);
     const freeSlots = Math.max(0, project.autopilotMaxConcurrent - running);
@@ -70,6 +70,7 @@ export class ProjectQueueService {
       configDir: project.configDir,
       workflowSlug: project.workflowSlug,
       waitingTasks,
+      stoppedTaskIds: stopped,
       freeSlots,
       handOutWork,
     };
@@ -90,18 +91,22 @@ export class ProjectQueueService {
    *
    * One query for every run at once — the alternative is a read per card, on a
    * path a timer walks for every armed project.
+   *
+   * The same read also names the cards whose run the user STOPPED (`stopped`),
+   * because the answer is on the very rows it already has: a cancelled run is
+   * one somebody pressed Stop on, and the splitter needs to know that.
    */
-  private async readActive(
+  private async readRuns(
     tasks: readonly { id: string; runId: string | null }[],
     em: EntityManager,
-  ): Promise<ActiveTask[]> {
+  ): Promise<{ active: ActiveTask[]; stopped: string[] }> {
     const byRunId = new Map(
       tasks
         .filter((task) => task.runId !== null)
         .map((task) => [task.runId as string, task.id]),
     );
     if (byRunId.size === 0) {
-      return [];
+      return { active: [], stopped: [] };
     }
     const runs = await this.runDao.getAll(
       { id: { $in: [...byRunId.keys()] } },
@@ -109,16 +114,23 @@ export class ProjectQueueService {
       em,
     );
     const active: ActiveTask[] = [];
+    const stopped: string[] = [];
     for (const run of runs) {
       const taskId = byRunId.get(run.id);
-      if (taskId === undefined || isTerminalRunStatus(run.status)) {
+      if (taskId === undefined) {
+        continue;
+      }
+      if (run.status === 'cancelled') {
+        stopped.push(taskId);
+      }
+      if (isTerminalRunStatus(run.status)) {
         continue;
       }
       // The RUN's own kind, not the card's: the card may have been re-pointed
       // at another agent since, and what is on screen is what is working.
       active.push({ id: taskId, runId: run.id, agentKind: run.agentKind });
     }
-    return active;
+    return { active, stopped };
   }
 
   private async require(

@@ -18,11 +18,15 @@ import type {
   AddTaskAttachmentDto,
   AttachTaskFileDto,
   CreateTaskDto,
+  FindFinishedTasksDto,
+  FinishedTasksDto,
   LocalImageDto,
   MoveTaskStatusDto,
   ReconcileTasksDto,
+  ReportPullRequestMergedDto,
   StartTaskRunDto,
   TaskAttachment,
+  TaskAwaitingMergeDto,
   TaskDeletedDto,
   TaskDto,
   UpdateTaskDto,
@@ -51,6 +55,10 @@ export interface TasksApiDetachTaskFileRequest {
     attachmentId: string;
 }
 
+export interface TasksApiFindFinishedTasksRequest {
+    findFinishedTasksDto: FindFinishedTasksDto;
+}
+
 export interface TasksApiListTasksRequest {
     projectId: string;
 }
@@ -71,6 +79,11 @@ export interface TasksApiReadTaskImageRequest {
 
 export interface TasksApiReconcileTasksRequest {
     reconcileTasksDto: ReconcileTasksDto;
+}
+
+export interface TasksApiReportTaskPullRequestMergedRequest {
+    taskId: string;
+    reportPullRequestMergedDto: ReportPullRequestMergedDto;
 }
 
 export interface TasksApiStartTaskRunRequest {
@@ -346,6 +359,53 @@ export class TasksApi extends runtime.BaseAPI {
     /**
      * 
      */
+    async findFinishedTasksRaw(requestParameters: TasksApiFindFinishedTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<FinishedTasksDto>> {
+        if (requestParameters['findFinishedTasksDto'] == null) {
+            throw new runtime.RequiredError(
+                'findFinishedTasksDto',
+                'Required parameter "findFinishedTasksDto" was null or undefined when calling findFinishedTasks().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/finished`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['findFinishedTasksDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async findFinishedTasks(requestParameters: TasksApiFindFinishedTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<FinishedTasksDto> {
+        const response = await this.findFinishedTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
     async listTasksRaw(requestParameters: TasksApiListTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<TaskDto>>> {
         if (requestParameters['projectId'] == null) {
             throw new runtime.RequiredError(
@@ -388,6 +448,43 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async listTasks(requestParameters: TasksApiListTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
         const response = await this.listTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async listTasksAwaitingMergeRaw(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<Array<TaskAwaitingMergeDto>>> {
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/awaiting-merge`;
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'GET',
+            headers: headerParameters,
+            query: queryParameters,
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async listTasksAwaitingMerge(initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskAwaitingMergeDto>> {
+        const response = await this.listTasksAwaitingMergeRaw(initOverrides);
         return await response.value();
     }
 
@@ -591,6 +688,61 @@ export class TasksApi extends runtime.BaseAPI {
      */
     async reconcileTasks(requestParameters: TasksApiReconcileTasksRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<Array<TaskDto>> {
         const response = await this.reconcileTasksRaw(requestParameters, initOverrides);
+        return await response.value();
+    }
+
+    /**
+     * 
+     */
+    async reportTaskPullRequestMergedRaw(requestParameters: TasksApiReportTaskPullRequestMergedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<runtime.ApiResponse<TaskDto>> {
+        if (requestParameters['taskId'] == null) {
+            throw new runtime.RequiredError(
+                'taskId',
+                'Required parameter "taskId" was null or undefined when calling reportTaskPullRequestMerged().'
+            );
+        }
+
+        if (requestParameters['reportPullRequestMergedDto'] == null) {
+            throw new runtime.RequiredError(
+                'reportPullRequestMergedDto',
+                'Required parameter "reportPullRequestMergedDto" was null or undefined when calling reportTaskPullRequestMerged().'
+            );
+        }
+
+        const queryParameters: any = {};
+
+        const headerParameters: runtime.HTTPHeaders = {};
+
+        headerParameters['Content-Type'] = 'application/json';
+
+        if (this.configuration && this.configuration.accessToken) {
+            const token = this.configuration.accessToken;
+            const tokenString = await token("bearer", []);
+
+            if (tokenString) {
+                headerParameters["Authorization"] = `Bearer ${tokenString}`;
+            }
+        }
+
+        let urlPath = `/v1/tasks/{taskId}/pull-request-merged`;
+        urlPath = urlPath.replace(`{${"taskId"}}`, encodeURIComponent(String(requestParameters['taskId'])));
+
+        const response = await this.request({
+            path: urlPath,
+            method: 'POST',
+            headers: headerParameters,
+            query: queryParameters,
+            body: requestParameters['reportPullRequestMergedDto'],
+        }, initOverrides);
+
+        return new runtime.JSONApiResponse(response);
+    }
+
+    /**
+     * 
+     */
+    async reportTaskPullRequestMerged(requestParameters: TasksApiReportTaskPullRequestMergedRequest, initOverrides?: RequestInit | runtime.InitOverrideFunction): Promise<TaskDto> {
+        const response = await this.reportTaskPullRequestMergedRaw(requestParameters, initOverrides);
         return await response.value();
     }
 

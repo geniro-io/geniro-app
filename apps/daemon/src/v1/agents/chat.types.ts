@@ -2657,13 +2657,21 @@ export const RunTaskRowSchema = z
 export type RunTaskRow = z.infer<typeof RunTaskRowSchema>;
 
 /**
- * One AGENT's own task list — keyed by node id, `null` for a 1:1 chat's one
- * agent. A delegate's rows are excluded upstream: its list belongs to its own
- * block, and both CLIs number tasks from 1.
+ * One CONVERSATION's own task list — keyed by node id (`null` for a 1:1 chat's
+ * one agent) and, within a node, by the call thread it was kept in. A
+ * delegate's rows are excluded upstream: its list belongs to its own block, and
+ * both CLIs number tasks from 1.
  */
 export const RunTaskGroupSchema = z
   .object({
     nodeId: z.string().nullable(),
+    /**
+     * The `call_agent` thread this list was kept in, or null for the node's own
+     * conversation. A node called several times runs one conversation per call,
+     * each numbering its tasks from 1 — so without this two instances of one
+     * agent would share one list.
+     */
+    callId: z.string().nullable(),
     tasks: z.array(RunTaskRowSchema),
   })
   .meta({ id: 'RunTaskGroup' });

@@ -33,6 +33,7 @@ const shell = (over: Partial<ShellRun> = {}): ShellRun =>
     exitCode: null,
     startedAt: new Date(Date.now() - 5_000).toISOString(),
     agentId: null,
+    callId: null,
     ...over,
   }) as ShellRun;
 
@@ -317,6 +318,71 @@ describe('RunningSubagentChips', () => {
     });
 
     expect(opened).toEqual(['call_9']);
+  });
+
+  it('splits a workflow run into one BLOCK per agent, each under its name', async () => {
+    // REPORTED: "in workflow we should see subagents list in chip divided by
+    // block by agent, same as for todo". Flattened, a Reviewer's delegates and
+    // an Engineer's arrive as one run of rows that says nothing about whose
+    // each one is.
+    const el = mount(
+      <RunningSubagentChips
+        running={2}
+        threads={[]}
+        groups={[
+          {
+            agentId: 'reviewer',
+            agentName: 'Reviewer',
+            threads: [
+              thread({ id: 'r1', label: 'review: bugs' }),
+              thread({ id: 'r2', label: 'review: tests' }),
+            ],
+          },
+          {
+            agentId: 'engineer',
+            agentName: 'Engineer',
+            threads: [
+              thread({
+                id: 'e1',
+                label: 'explore the adapters',
+                status: 'completed',
+              }),
+            ],
+          },
+        ]}
+      />,
+    );
+    await press(el, 'running-subagents');
+
+    const blocks = document.querySelectorAll('[data-slot="subagent-group"]');
+    expect(blocks).toHaveLength(2);
+    // In the order given — the panel's own agent order.
+    expect(
+      [...blocks].map(
+        (block) =>
+          block.querySelector('[data-slot="subagent-group-agent"]')!
+            .textContent,
+      ),
+    ).toEqual(['Reviewer', 'Engineer']);
+    // Each heading counts its OWN running delegates — together they are the
+    // chip's figure — and an agent with none running states no count at all.
+    expect(blocks[0]!.textContent).toContain('2 working');
+    expect(blocks[1]!.textContent).not.toContain('working');
+    // A block holds only its own agent's delegates, fold included.
+    expect(blocks[0]!.textContent).toContain('review: bugs');
+    expect(blocks[0]!.textContent).not.toContain('finished');
+    expect(blocks[1]!.textContent).toContain('1 finished');
+  });
+
+  it('leaves a 1:1 chat its one flat list, with no agent heading', async () => {
+    // The gate is the caller's (a workflow, never a 1:1 chat) — this pins that
+    // the chip honours an ABSENT `groups` rather than grouping regardless.
+    const el = mount(<RunningSubagentChips running={1} threads={[thread()]} />);
+    await press(el, 'running-subagents');
+
+    const panel = document.querySelector('[aria-label="Sub-agents"]')!;
+    expect(panel.textContent).toContain('explore the adapters');
+    expect(panel.querySelector('[data-slot="subagent-group"]')).toBeNull();
   });
 });
 

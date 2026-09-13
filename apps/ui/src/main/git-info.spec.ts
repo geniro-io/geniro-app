@@ -17,7 +17,6 @@ import {
   pullStashIsOurs,
   readGitInfo,
   readGitStamp,
-  readOriginOwner,
   switchBranch,
 } from './git-info';
 
@@ -95,6 +94,7 @@ describe('readGitInfo', () => {
       branches: [],
       dirty: false,
       worktrees: [],
+      worktreeOf: null,
     });
   });
 
@@ -108,6 +108,7 @@ describe('readGitInfo', () => {
       branches: ['feat/chips', 'main'],
       dirty: false,
       worktrees: [],
+      worktreeOf: null,
     });
   });
 
@@ -182,6 +183,25 @@ describe('readGitInfo', () => {
     expect(info.worktrees).toEqual([
       { branch: 'feat/elsewhere', path: realpathSync(other) },
     ]);
+  });
+
+  it('names the checkout a LINKED worktree was cut from, and nothing for the checkout itself', async () => {
+    // A task's agent works in a worktree named by the task's id, so the
+    // folder's own name says nothing about the repository — REPORTED as a chat
+    // header reading `794addc7-273d-4924-8…`, which looked like the wrong
+    // directory. This is what lets the header name the repository instead.
+    initRepo();
+    const other = join(dir, '..', `${basename(dir)}-wt`);
+    run(['worktree', 'add', '-q', '-b', 'feat/elsewhere', other]);
+    worktrees.push(other);
+    mkdirSync(join(other, 'apps'), { recursive: true });
+
+    expect((await readGitInfo(other)).worktreeOf).toBe(realpathSync(dir));
+    // From a subdirectory too: the comparison is against the worktree ROOT.
+    expect((await readGitInfo(join(other, 'apps'))).worktreeOf).toBe(
+      realpathSync(dir),
+    );
+    expect((await readGitInfo(dir)).worktreeOf).toBeNull();
   });
 });
 
@@ -276,9 +296,8 @@ describe('readGitStamp', () => {
   });
 
   it('stamps a detached HEAD, which has a commit even with no branch', async () => {
-    // `readHeadBranch` answers null here and is right to — there is no branch
-    // to name. A commit there certainly is, and it is the whole of what this
-    // reads.
+    // There is no branch to name here. A commit there certainly is, and it is
+    // the whole of what this reads.
     initRepo();
     run(['checkout', '-q', '--detach']);
 
@@ -292,42 +311,6 @@ describe('readGitStamp', () => {
     run(['init', '-b', 'main', '-q', dir], tmpdir());
 
     expect(await readGitStamp(dir)).toEqual({ sha: null, dirty: false });
-  });
-});
-
-describe('readOriginOwner', () => {
-  // Both URL forms git writes, because which one a checkout carries is the
-  // user's clone choice — and the owner is what tells THEIR fork's pull request
-  // apart from a stranger's.
-  it('reads the owner from an ssh remote', async () => {
-    initRepo();
-    run(['remote', 'add', 'origin', 'git@github.com:acme/widgets.git']);
-
-    expect(await readOriginOwner(dir)).toBe('acme');
-  });
-
-  it('reads the owner from an https remote', async () => {
-    initRepo();
-    run(['remote', 'add', 'origin', 'https://github.com/acme/widgets.git']);
-
-    expect(await readOriginOwner(dir)).toBe('acme');
-  });
-
-  it('reads the owner from a url with no .git suffix', async () => {
-    initRepo();
-    run(['remote', 'add', 'origin', 'https://github.com/acme/widgets']);
-
-    expect(await readOriginOwner(dir)).toBe('acme');
-  });
-
-  it('answers null when the folder has no origin', async () => {
-    initRepo();
-
-    expect(await readOriginOwner(dir)).toBeNull();
-  });
-
-  it('answers null for a plain folder', async () => {
-    expect(await readOriginOwner(dir)).toBeNull();
   });
 });
 

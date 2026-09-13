@@ -28,7 +28,11 @@ import { Run } from '../../runs/entity/run.entity';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
 import { RUN_TARGET_PROBLEM_REASON } from '../utils/run-target';
-import { missingWorkflowReason, TaskQueueService } from './task-queue.service';
+import {
+  missingWorkflowReason,
+  STOPPED_BY_USER_REASON,
+  TaskQueueService,
+} from './task-queue.service';
 
 /** A minimal, valid single-node workflow — content is irrelevant to this spec. */
 const DEV_TEAM_WORKFLOW: Workflow = {
@@ -169,6 +173,36 @@ describe('TaskQueueService (in-memory sqlite)', () => {
   // another process with only this reply in hand — so the inheritance is
   // resolved HERE. A card that names no folder takes the project's; one that
   // names its own keeps it, which is the whole point of the column.
+  it('leaves a task whose run the user STOPPED to the user — the armed autopilot never restarts it', async () => {
+    // REPORTED as "i stopped thread - and i seee my messae was sent second
+    // time": the settle returns a stopped card to the intake column so a press
+    // can start it again, and the armed autopilot read that as waiting work,
+    // restarting the card within seconds and re-sending its brief.
+    const stoppedRun = await addRun('cancelled');
+    await addTask('stopped by me', 'todo', 0, stoppedRun.id);
+    await addTask('waiting', 'todo', 1);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.eligible.map((task) => task.title)).toEqual(['waiting']);
+    expect(queue.blocked).toEqual([
+      expect.objectContaining({
+        title: 'stopped by me',
+        reason: STOPPED_BY_USER_REASON,
+      }),
+    ]);
+  });
+
+  it('does not flag a stopped task on a DISARMED board — nothing unattended would restart it', async () => {
+    await arm({ autopilotEnabled: false });
+    const stoppedRun = await addRun('cancelled');
+    await addTask('stopped by me', 'todo', 0, stoppedRun.id);
+
+    const queue = await service.read(projectId);
+
+    expect(queue.blocked).toEqual([]);
+  });
+
   it('hands out the folder each CARD names, else the project one', async () => {
     const own = mkdtempSync(join(tmpdir(), 'geniro-card-'));
     try {

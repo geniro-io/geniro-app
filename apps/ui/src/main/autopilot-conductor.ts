@@ -74,7 +74,7 @@ export interface ConductorDeps {
   prepareWorktree: (input: {
     taskId: string;
     folder: string;
-  }) => Promise<{ path: string; branch: string }>;
+  }) => Promise<{ path: string; branch: string; reused: boolean }>;
   /** Give a worktree back when the run could not be started. */
   discardWorktree: (taskId: string) => Promise<unknown>;
   log: (message: string) => void;
@@ -181,7 +181,7 @@ export class AutopilotConductor {
     handle: DaemonHandle,
     task: QueuedTask,
   ): Promise<void> {
-    let worktree: { path: string; branch: string };
+    let worktree: { path: string; branch: string; reused: boolean };
     try {
       worktree = await this.deps.prepareWorktree({
         taskId: task.id,
@@ -211,10 +211,15 @@ export class AutopilotConductor {
     } catch (error) {
       // The daemon refusing is the ordinary case, not an incident: another
       // window's conductor got there first, or the card moved. Give the
-      // worktree back so it is not left behind for a run that never began.
+      // worktree back so it is not left behind for a run that never began —
+      // unless it was this task's OWN, already standing: then the run that
+      // made it may be the reason for the refusal, and be working in it.
       this.deps.log(
         `autopilot did not start "${task.title}": ${reason(error)}`,
       );
+      if (worktree.reused) {
+        return;
+      }
       await this.deps
         .discardWorktree(task.id)
         .catch((cleanupError: unknown) => {

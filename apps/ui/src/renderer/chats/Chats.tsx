@@ -76,9 +76,13 @@ import {
   CHAT_AGENT_KEY,
   computeAgentActivity,
   displayStatus,
+  MAIN_THREAD_ID,
   subagentThreadsByAgent,
   threadsOf,
+  windowHoldsStatus,
+  withDurableNodeStatus,
 } from './agent-activity';
+import { type InstanceTaskList, threadIdOfCall } from './agent-instances';
 import { AgentsPanel } from './agents-panel';
 import { ApprovalCard } from './approval-card';
 import { artifactsFrom } from './artifact-payload';
@@ -131,7 +135,6 @@ import { withModelParameter } from './model-parameter-select';
 import { ModelSettingsSelect } from './model-settings-select';
 import { NewChatButton } from './new-chat-button';
 import { insertPastedFilePaths } from './paste-file-paths';
-import { threadPullRequests } from './pull-request';
 import { QueuedStrip } from './queued-strip';
 import { formatClockTime } from './relative-time';
 import type { RunConfigDraft } from './run-config';
@@ -188,20 +191,25 @@ import {
 import { SkillMenu } from './skill-menu';
 import { SubagentDetail } from './subagent-block';
 import { SubagentDetailContext } from './subagent-context';
+import type { AgentSubagentGroup } from './subagent-list';
 import { subagentIdOf } from './subagent-payload';
 import { TargetSelect } from './target-select';
 import type { AgentTaskGroup } from './task-list';
 import {
   type AgentTaskRow,
-  taskListsByAgent,
+  taskListsByThread,
   taskProgress,
 } from './task-payload';
+import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
 import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
   buildWorkflowCards,
+  callBlockLatest,
+  callBlockUsage,
+  collectCallBlocks,
   collectSubagentBlocks,
   entryStartSeq,
   groupTranscript,
@@ -212,6 +220,7 @@ import {
   subagentNamed,
   subagentSpokeSince,
   subagentTitle,
+  withDurableTaskLists,
   withLiveText,
   workflowCardsOf,
 } from './transcript-groups';
@@ -228,6 +237,7 @@ import {
   scanTurns,
   threadWorkedMs,
   TurnDurationContext,
+  withDurableOpenTurns,
 } from './turn-duration';
 import { useAgentContextWindows } from './use-agent-context-windows';
 import { useAgentEfforts } from './use-agent-efforts';
@@ -243,7 +253,6 @@ import { useChatTimeline } from './use-chat-timeline';
 import { useChatTotals } from './use-chat-totals';
 import { type GitNotice, useGitInfo } from './use-git-info';
 import { useNodeDurableReadings } from './use-node-context';
-import { pullRequestsIn, usePullRequests } from './use-pull-requests';
 import { useRunShells } from './use-run-shells';
 import {
   threadPullRequestsOf,
@@ -251,6 +260,7 @@ import {
 } from './use-thread-pull-requests';
 import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
+import { useWorktreeOrigin } from './use-worktree-origin';
 import { rootAgentOf } from './workflow-root';
 
 /**
@@ -269,7 +279,6 @@ import { rootAgentOf } from './workflow-root';
  * Module scope so its identity is stable — a fresh `[]` per render would be a
  * changed prop on every keystroke in the composer.
  */
-const EMPTY_PULL_REQUESTS: readonly PullRequestInfo[] = [];
 
 interface QueuedMessage {
   id: string;
@@ -3078,6 +3087,16 @@ export function Chats({
   );
 
   /**
+   * Put a task's worktree back when its chat outlived it — see
+   * `task-worktree.ts`. Every send path goes through `startTurn`, and Retry
+   * through its own call, so those are the two places that use it.
+   */
+  const restoreWorktree = useCallback(
+    (taskId: string) => restoreTaskWorktree(apis, taskId),
+    [apis],
+  );
+
+  /**
    * Start one turn: mark the run working, send, render the user message
    * (addItem de-dupes when the WS copy arrives).
    *
@@ -3138,10 +3157,21 @@ export function Chats({
         ),
       );
       try {
-        const userItem = await chatApi.sendChatMessage({
-          runId,
-          sendMessageDto: { text, ...(images?.length ? { images } : {}) },
-        });
+        const sendMessageDto = { text, ...(images?.length ? { images } : {}) };
+        const run = runsRef.current.find((row) => row.id === runId);
+        // A TASK's chat outlives its worktree — the board collects that once
+        // the card is Done — so a refusal naming the missing folder puts the
+        // worktree back and sends once more (`sendRestoringWorktree`).
+        const userItem = await sendRestoringWorktree(
+          () =>
+            // A workflow run's message goes to the agents its trigger feeds,
+            // which only the executor knows — the chat route refuses one.
+            run?.workflowId != null
+              ? workflowApi.sendWorkflowRunMessage({ runId, sendMessageDto })
+              : chatApi.sendChatMessage({ runId, sendMessageDto }),
+          run?.taskId ?? null,
+          restoreWorktree,
+        );
         addItem(userItem, true);
       } catch (err) {
         if (before !== null) {
@@ -3156,7 +3186,7 @@ export function Chats({
         throw err;
       }
     },
-    [chatApi, addItem],
+    [chatApi, workflowApi, addItem, restoreWorktree],
   );
 
   /**
@@ -3492,9 +3522,6 @@ export function Chats({
     // frame later, and the tail-follow effect takes it from there.
     followingRef.current = true;
     setAboveTail(false);
-    // Queueing is a chat-run concept — the workflow composer is disabled.
-    const queueable =
-      runsRef.current.find((r) => r.id === runId)?.workflowId == null;
     // A HELD turn is not a working agent. Its CLI printed its turn-end line
     // some time ago and the process is alive only so the delegates it launched
     // have somewhere to report; it is sitting on an idle stdin. Holding a
@@ -3519,10 +3546,7 @@ export function Chats({
     // ones, which is the reported "первым будет доставлено то, которое я написал
     // последним, но должно быть фифа".
     const queued = (queuesRef.current[runId]?.length ?? 0) > 0;
-    if (working || (queueable && queued)) {
-      if (!queueable) {
-        return;
-      }
+    if (working || queued) {
       setInput('');
       enqueueMessage(runId, { text, images });
       attachments.clear();
@@ -3543,7 +3567,7 @@ export function Chats({
       // so a retry needs no re-paste, exactly as it keeps the text.
       attachments.clear();
     } catch (err) {
-      if (queueable && isRunBusyError(err)) {
+      if (isRunBusyError(err)) {
         // The CLI cannot be told anything mid-turn (or the turn settled as
         // this was in flight). Queue it — the composer shows it pending and
         // the drain sends it the moment the turn ends. Not an error: this is
@@ -3944,6 +3968,11 @@ export function Chats({
   );
 
   const activeRun = runs.find((run) => run.id === activeRunId) ?? null;
+  // The repository a TASK run's worktree was cut from, for the header chip —
+  // asked only for a task's run, whose folder geniro named by the task's id.
+  const taskWorktreeOf = useWorktreeOrigin(
+    activeRun?.taskId != null ? activeRun.cwd : null,
+  );
   /**
    * The daemon's own per-node context readings for a WORKFLOW run — the source
    * that made `NodeState.contextTokens` reach a client at all.
@@ -4008,55 +4037,14 @@ export function Chats({
   }, [streaming, refreshChatChanges]);
 
   /**
-   * Every distinct folder the chat list names, so pull requests are read once
-   * per CHECKOUT rather than once per thread — threads share folders, and each
-   * read is a `gh` process talking to GitHub.
+   * What each thread OPENED, as GitHub currently has it — the only pull
+   * requests any chat surface draws.
    *
-   * Sorted, because the hook keys its work on the content of this list and the
-   * sidebar reorders itself as runs report activity: unsorted, that reordering
-   * alone would look like a new set of folders.
-   */
-  const pullRequestFolders = useMemo(
-    () =>
-      [
-        ...new Set(
-          runs
-            .map((run) => run.cwd)
-            .filter(
-              (cwd): cwd is string => typeof cwd === 'string' && cwd !== '',
-            ),
-        ),
-      ].sort(),
-    [runs],
-  );
-  const { byDir: pullRequestsByDir, refresh: refreshPullRequests } =
-    usePullRequests(pullRequestFolders);
-  /**
-   * Each folder's own pull requests — the ones on the branch it has checked
-   * out, which is the whole of what any surface here shows. Resolved once per
-   * read rather than once per row per render: the composer's text lives in this
-   * component, so the sidebar's row map re-runs on every keystroke.
-   */
-  const threadPullRequestsByDir = useMemo(
-    () =>
-      new Map(
-        pullRequestFolders.map((dir) => [
-          dir,
-          threadPullRequests(pullRequestsIn(pullRequestsByDir, dir)),
-        ]),
-      ),
-    [pullRequestFolders, pullRequestsByDir],
-  );
-  const activePullRequests =
-    activeRun?.cwd == null
-      ? EMPTY_PULL_REQUESTS
-      : (threadPullRequestsByDir.get(activeRun.cwd) ?? EMPTY_PULL_REQUESTS);
-  /**
-   * What each thread OPENED, as GitHub currently has it.
-   *
-   * The other source, and the primary one: these are addressed by URL off the
-   * run row the daemon captured them onto, so they survive a branch switch and
-   * span repositories — neither of which the branch query above can do.
+   * Addressed by URL off the run row the daemon captured them onto, so they
+   * survive a branch switch and span repositories. What is merely open on the
+   * branch a folder sits on is NOT listed: it is not this conversation's work,
+   * and listing it beside these put the thread's own pull request on the panel
+   * twice.
    */
   const { byKey: resolvedThreadPullRequests } = useThreadPullRequests(runs);
   const openedByActiveThread = useMemo(
@@ -4066,11 +4054,9 @@ export function Chats({
   /**
    * The ONE pull request each sidebar row names.
    *
-   * The thread's own newest outranks whatever is open on its folder's branch:
-   * a row is about the conversation, and the branch answer is routinely a
-   * stranger's work that merely shares a checkout. Only a RESOLVED one is
-   * offered — the row draws a title and a state, which an unresolved ref does
-   * not have — so a machine with no `gh` falls back exactly as before.
+   * The thread's own newest, and only a RESOLVED one — the row draws a title
+   * and a state, which an unresolved ref does not have — so a machine with no
+   * `gh` names none.
    */
   const rowPullRequestByRun = useMemo(() => {
     const byRun = new Map<string, PullRequestInfo>();
@@ -4083,19 +4069,6 @@ export function Chats({
     }
     return byRun;
   }, [runs, resolvedThreadPullRequests]);
-  /**
-   * A branch move changes which pull request is that folder's. Nothing else
-   * re-reads it — the hook's own refresh is on window focus, and an in-app
-   * switch never loses focus.
-   */
-  const refreshPullRequestsFor = useCallback(
-    (target: string | null): void => {
-      if (target !== null && target !== '') {
-        refreshPullRequests(target);
-      }
-    },
-    [refreshPullRequests],
-  );
 
   // Push the open thread's name up to the shell's title bar. An effect rather
   // than a render-time call because it writes to a parent's state, and it runs
@@ -4505,7 +4478,6 @@ export function Chats({
       // re-reading the PREVIOUS folder — `chooseFolder` above set React state
       // this callback cannot see.
       await git.refresh(applied.cwd);
-      refreshPullRequestsFor(applied.cwd);
     },
     [
       newChat,
@@ -4517,7 +4489,6 @@ export function Chats({
       changeEffort,
       changeContextWindow,
       git,
-      refreshPullRequestsFor,
       setError,
     ],
   );
@@ -4740,7 +4711,17 @@ export function Chats({
   // Live per-agent state for the agents panel, derived purely from the
   // transcript (status items count parallel turns; call items list threads;
   // turn_complete usage carries context/spend).
-  const activity = useMemo(() => computeAgentActivity(items), [items]);
+  const windowActivity = useMemo(() => computeAgentActivity(items), [items]);
+  // A node whose status rows are above the loaded page takes its status from
+  // the daemon's own `node_state` — see `withDurableNodeStatus`. The run ROW
+  // gates a `running` reading, so a daemon that died mid-turn cannot leave a
+  // `Working…` row under a finished run.
+  const runRowSettled =
+    activeRun !== null && isSettledRunStatus(activeRun.status);
+  const activity = useMemo(
+    () => withDurableNodeStatus(windowActivity, nodeReadings, runRowSettled),
+    [windowActivity, nodeReadings, runRowSettled],
+  );
   /**
    * Each agent's OWN task list as it stands now, for the side panel.
    *
@@ -4758,7 +4739,21 @@ export function Chats({
     // chat's rows carry `nodeId: null` while its agent card is keyed by
     // `CHAT_AGENT_KEY`, and that mapping is this screen's own — the fold has no
     // business knowing it.
-    const byAgent = new Map<string, AgentTaskRow[]>();
+    //
+    // A LIST per agent, one entry per CONVERSATION it kept a checklist in: a
+    // node called several times runs one conversation per call, each numbering
+    // its tasks from 1, so the panel draws each under its own instance.
+    const byAgent = new Map<string, InstanceTaskList[]>();
+    const add = (
+      nodeId: string | null,
+      callId: string | null,
+      tasks: InstanceTaskList['tasks'],
+    ): void => {
+      const key = nodeId ?? CHAT_AGENT_KEY;
+      const lists = byAgent.get(key) ?? [];
+      lists.push({ threadId: threadIdOfCall(callId), tasks });
+      byAgent.set(key, lists);
+    };
     // The DAEMON's fold wins, and that is the whole of the fix: it folded every
     // announcement the run has ever written, while the fold below can only see
     // the transcript WINDOW this client loaded. Neither shipped CLI re-states
@@ -4772,12 +4767,12 @@ export function Chats({
     const folded = activeRun?.taskList ?? [];
     if (folded.length > 0) {
       for (const group of folded) {
-        byAgent.set(group.nodeId ?? CHAT_AGENT_KEY, group.tasks);
+        add(group.nodeId, group.callId, group.tasks);
       }
       return byAgent;
     }
-    for (const [nodeId, tasks] of taskListsByAgent(items, subagentIdOf)) {
-      byAgent.set(nodeId ?? CHAT_AGENT_KEY, tasks);
+    for (const list of taskListsByThread(items, subagentIdOf)) {
+      add(list.nodeId, list.callId, list.tasks);
     }
     return byAgent;
   }, [items, activeRun?.taskList]);
@@ -4855,12 +4850,22 @@ export function Chats({
     // always a top-level `item` entry (`ownerOf` gives it NO_OWNER), so
     // filtering here reaches every one of them.
     const redundant = compactionOnlyTurnEnds(items);
-    const folded =
+    // The task cards take what the loaded window cannot know — a task's words,
+    // stated only in the announcement that created it — from the daemon's fold
+    // of the whole run; see `withDurableTaskLists`. Only while `items` belong to
+    // the run that fold describes: a switch replaces the two a render apart, and
+    // two runs of one workflow share node ids, so a mismatched pair would title
+    // one run's cards with the other's tasks.
+    const durableTasks =
+      items[0]?.runId === activeRun?.id ? (activeRun?.taskList ?? []) : [];
+    const folded = withDurableTaskLists(
       redundant.size === 0
         ? groupTranscript(items)
         : groupTranscript(items).filter(
             (entry) => entry.type !== 'item' || !redundant.has(entry.item.id),
-          );
+          ),
+      durableTasks,
+    );
     // File changes come OUT of their group — see
     // `pullFileChangesOutOfGroups`. Here rather than inside the fold for the
     // reason that function records: an ACP agent reports its change on the
@@ -5236,10 +5241,15 @@ export function Chats({
   const openTurnForHeader = useMemo(
     () =>
       parkWhileHeld(
-        turnScan.open,
+        // A node working one turn for longer than the loaded page has its
+        // opening row above it — `withDurableOpenTurns` reads the start off the
+        // node's own row, or every clock built on this froze.
+        withDurableOpenTurns(turnScan.open, nodeReadings, (nodeId) =>
+          windowHoldsStatus(windowActivity, nodeId),
+        ),
         activeRunId === null ? undefined : holding.get(activeRunId),
       ),
-    [turnScan.open, holding, activeRunId],
+    [turnScan.open, nodeReadings, windowActivity, holding, activeRunId],
   );
   /**
    * The open turns any LIVE readout may count — the header's total and each
@@ -5370,6 +5380,12 @@ export function Chats({
      * block's own ring on the very rule `cardContextOf` states below — an order
      * written down twice is an order two surfaces eventually disagree on.
      */
+    // Each call's own block, which is where an INSTANCE's latest words and its
+    // spend are already folded — read rather than re-derived, so the panel's
+    // instance row and the transcript's block cannot disagree about one call.
+    const callBlocks = new Map(
+      collectCallBlocks(durableEntries).map((block) => [block.callId, block]),
+    );
     const callThreadsOf = (
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
@@ -5378,9 +5394,14 @@ export function Chats({
         if (thread.kind !== 'call') {
           return thread;
         }
+        const block = callBlocks.get(thread.id);
+        const usage = block === undefined ? null : callBlockUsage(block);
         return {
           ...thread,
           ...resolveCalleeContext(liveText, nodeReadings, nodeId, thread.id),
+          latest: block === undefined ? null : callBlockLatest(block),
+          spentTokens: usage?.tokens ?? null,
+          spentUsd: usage?.costUsd ?? null,
         };
       });
     };
@@ -5535,6 +5556,7 @@ export function Chats({
     activeRunStatus,
     activity,
     awaitingAnswer,
+    durableEntries,
     streaming,
     wfNodes,
     liveText,
@@ -5729,12 +5751,32 @@ export function Chats({
         startedAt >= daemonStartedAt
       );
     };
+    // WORKING is decided per conversation as well as per agent. A node called
+    // several times holds several conversations at once, and a call that has
+    // SETTLED took its foreground commands with it even while its siblings work
+    // on — so the node being busy says nothing about that call's own
+    // unanswered command, which would otherwise stand for the rest of the
+    // session. The same rule the agent-level gate states, one level down.
+    const settledCalls = new Set<string>();
+    for (const agent of agents) {
+      for (const thread of agent.threads) {
+        if (thread.kind === 'call' && isSettledRunStatus(thread.status)) {
+          settledCalls.add(JSON.stringify([agent.id, thread.id]));
+        }
+      }
+    }
     const byAgent = new Map<string, ShellRun[]>();
     for (const [nodeId, shells] of runningShellsByAgent(items)) {
       const key = nodeId ?? CHAT_AGENT_KEY;
-      const live = working.has(key)
-        ? shells.filter((shell) => !shell.background || stillRunning(shell))
-        : shells.filter((shell) => shell.background && stillRunning(shell));
+      const isWorking = (shell: ShellRun): boolean =>
+        working.has(key) &&
+        (shell.callId === null ||
+          !settledCalls.has(JSON.stringify([key, shell.callId])));
+      const live = shells.filter((shell) =>
+        isWorking(shell)
+          ? !shell.background || stillRunning(shell)
+          : shell.background && stillRunning(shell),
+      );
       if (live.length > 0) {
         byAgent.set(key, live);
       }
@@ -5856,16 +5898,28 @@ export function Chats({
     // counter holds the list behind it now, and re-deriving that list wherever
     // it is drawn would be a second reading of the same threads.
     const subagentThreads: AgentThread[] = [];
+    // Kept per agent BESIDE that flat run, off the same walk: a workflow's
+    // popover draws one block per agent, exactly as its task chip does.
+    const subagentGroups: AgentSubagentGroup[] = [];
     let subagents = 0;
     for (const agent of agents) {
+      const own: AgentThread[] = [];
       for (const thread of agent.threads) {
         if (thread.kind !== 'subagent') {
           continue;
         }
-        subagentThreads.push(thread);
+        own.push(thread);
         if (thread.status === 'running') {
           subagents += 1;
         }
+      }
+      subagentThreads.push(...own);
+      if (own.length > 0) {
+        subagentGroups.push({
+          agentId: agent.id,
+          agentName: agent.name,
+          threads: own,
+        });
       }
     }
     let done = 0;
@@ -5883,15 +5937,26 @@ export function Chats({
         return;
       }
       seenTaskAgents.add(agentId);
-      const rows = tasksByAgent.get(agentId);
-      if (rows === undefined || rows.length === 0) {
-        return;
+      const lists = (tasksByAgent.get(agentId) ?? []).filter(
+        (list) => list.tasks.length > 0,
+      );
+      for (const list of lists) {
+        const progress = taskProgress(list.tasks);
+        done += progress.done;
+        total += progress.total;
+        taskRows.push(...list.tasks);
+        // One block per CONVERSATION, named for it when the agent keeps more
+        // than one — two instances' plans are two plans, the rule this popover
+        // already applies between two agents.
+        const several = lists.length > 1;
+        taskGroups.push({
+          agentId: several ? `${agentId} ${list.threadId}` : agentId,
+          agentName: several
+            ? `${agentName} · ${list.threadId === MAIN_THREAD_ID ? 'main' : list.threadId}`
+            : agentName,
+          tasks: list.tasks,
+        });
       }
-      const progress = taskProgress(rows);
-      done += progress.done;
-      total += progress.total;
-      taskRows.push(...rows);
-      taskGroups.push({ agentId, agentName, tasks: rows });
     };
     for (const agent of agents) {
       takeTasks(agent.id, agent.name);
@@ -5915,12 +5980,20 @@ export function Chats({
       const own = shellsByAgent.get(agent.id) ?? [];
       shells.push(...own);
       for (const shell of own) {
-        shellAgents.set(shell.id, agent.name);
+        // Named for its INSTANCE when a call started it — two Engineers each
+        // running `pnpm test` are otherwise one name printed twice.
+        shellAgents.set(
+          shell.id,
+          shell.callId === null
+            ? agent.name
+            : `${agent.name} · ${shell.callId}`,
+        );
       }
     }
     return {
       subagents,
       subagentThreads,
+      subagentGroups,
       tasks: { done, total },
       taskRows,
       taskGroups,
@@ -5961,6 +6034,10 @@ export function Chats({
         exitCode: null,
         startedAt: new Date(shell.startedAt).toISOString(),
         agentId: shell.nodeId,
+        // The daemon's read names the node and not the call — and these rows
+        // reach the SHELF alone, which lists commands by agent, never the
+        // agents panel's per-instance bands.
+        callId: null,
       });
     }
     // Oldest first, like the transcript they came from: the daemon's rows are
@@ -6443,12 +6520,19 @@ export function Chats({
     if (runId === undefined || !chatApi || activeRun?.workflowId) {
       return null;
     }
+    const taskId = activeRun?.taskId ?? null;
     return () => {
-      void chatApi.retryChat({ runId }).catch((err: unknown) => {
+      // Retry after a task's worktree was collected is the reported case
+      // itself — the transcript's failure row offers exactly this press.
+      void sendRestoringWorktree(
+        () => chatApi.retryChat({ runId }),
+        taskId,
+        restoreWorktree,
+      ).catch((err: unknown) => {
         setError(daemonErrorDetail(err) ?? String(err));
       });
     };
-  }, [activeRun?.id, chatApi]);
+  }, [activeRun?.id, activeRun?.taskId, chatApi, restoreWorktree]);
 
   /**
    * The badge a sidebar row shows for a run — the ONE reading, so a group
@@ -7143,9 +7227,7 @@ export function Chats({
                                 info={git.info}
                                 switching={git.switching}
                                 onSwitch={(branch) => {
-                                  void git
-                                    .switchTo(branch)
-                                    .then(() => refreshPullRequestsFor(folder));
+                                  void git.switchTo(branch);
                                 }}
                               />
                               {!workflowSlug ? (
@@ -7386,11 +7468,7 @@ export function Chats({
                                     disabled={git.pulling}
                                     title="Stash your changes, fast-forward this branch, then put the changes back"
                                     onClick={() => {
-                                      void git
-                                        .pull()
-                                        .then(() =>
-                                          refreshPullRequestsFor(folder),
-                                        );
+                                      void git.pull();
                                     }}>
                                     {git.pulling ? 'Pulling…' : 'Pull latest'}
                                   </Button>
@@ -7415,6 +7493,7 @@ export function Chats({
                         // run's life — and after three rejected positions in the
                         // composer below.
                         cwd={activeRun.cwd}
+                        worktreeOf={taskWorktreeOf}
                         // Which profile/account this conversation belongs to, when
                         // it is not the CLI's default.
                         configDir={activeRun.configDir}
@@ -7939,6 +8018,14 @@ export function Chats({
                             // loaded page has no thread here to count.
                             reportedOut={activeRun?.subagentsOut ?? 0}
                             threads={sidePanelLive.subagentThreads}
+                            // Split into a block per agent in a WORKFLOW only
+                            // — the task chip's gate, for the task chip's
+                            // reason.
+                            groups={
+                              activeRun?.workflowId
+                                ? sidePanelLive.subagentGroups
+                                : undefined
+                            }
                             // The same detail panel the agents panel's own
                             // delegate rows open — the shelf is the readier
                             // way to a delegate now, and a list that only
@@ -8013,9 +8100,7 @@ export function Chats({
                             value={input}
                             rows={2}
                             aria-label="Message the agent"
-                            disabled={
-                              activeRun?.workflowId != null || activeRunArchived
-                            }
+                            disabled={activeRunArchived}
                             className={cn(
                               COMPOSER_TEXTAREA_GROWTH,
                               'min-h-16 rounded-2xl border-0 bg-transparent px-4 pt-3.5 shadow-none focus-visible:border-0 focus-visible:ring-0',
@@ -8023,10 +8108,12 @@ export function Chats({
                             placeholder={
                               activeRunArchived
                                 ? 'This chat is archived — unarchive it to continue.'
-                                : activeRun?.workflowId
-                                  ? 'Workflow runs take one task — press + to start another.'
-                                  : streaming && !activeRunHeld
-                                    ? 'Agent is working — your message will queue…'
+                                : streaming && !activeRunHeld
+                                  ? activeRun?.workflowId
+                                    ? 'The workflow is working — your message will queue…'
+                                    : 'Agent is working — your message will queue…'
+                                  : activeRun?.workflowId
+                                    ? 'Message the workflow — it goes to the same trigger…'
                                     : 'Message the agent…'
                             }
                             onChange={(event) => setInput(event.target.value)}
@@ -8072,8 +8159,7 @@ export function Chats({
                           to disagree. */}
                                 {streaming ? (
                                   <>
-                                    {hasContent &&
-                                    activeRun?.workflowId == null ? (
+                                    {hasContent ? (
                                       <Button
                                         type="button"
                                         size="icon"
@@ -8138,10 +8224,7 @@ export function Chats({
                                     className="size-8 rounded-full"
                                     aria-label="Send"
                                     title="Send"
-                                    disabled={
-                                      !hasContent ||
-                                      activeRun?.workflowId != null
-                                    }
+                                    disabled={!hasContent}
                                     onClick={() => void sendFollowUp()}>
                                     <ArrowUp className="size-4 shrink-0" />
                                   </Button>
@@ -8395,7 +8478,6 @@ export function Chats({
                       onSearch={openChatSearch}
                       timeline={timelinePanel}
                       artifacts={artifacts}
-                      pullRequests={activePullRequests}
                       threadPullRequests={openedByActiveThread}
                       workflows={runWorkflows}
                       onRevealWorkflow={revealWorkflow}
@@ -8700,6 +8782,7 @@ export function Chats({
                     changes={chatChanges.changes}
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
+                    movedOffStart={chatChanges.movedOffStart}
                     error={chatChanges.error}
                     loading={chatChanges.loading}
                     onRefresh={readChangesNow}

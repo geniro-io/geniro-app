@@ -10,7 +10,6 @@ import {
   type GeniroApi,
   type GitInfo,
   type PullRequestRefResult,
-  type PullRequestsResult,
   type Settings,
   type TaskWorktreeResult,
   type TaskWorktreeSettleResult,
@@ -73,12 +72,7 @@ const NO_GIT: GitInfo = {
   branches: [],
   dirty: false,
   worktrees: [],
-};
-
-const NO_PULL_REQUESTS: PullRequestsResult = {
-  branch: null,
-  originOwner: null,
-  pullRequests: [],
+  worktreeOf: null,
 };
 
 export function createPreloadStub(
@@ -208,6 +202,7 @@ export function createPreloadStub(
         changes: [],
         truncated: false,
         unavailableReason: 'Not a git repository.',
+        movedOffStart: false,
       });
     },
     prepareTaskWorktree: (input: {
@@ -219,6 +214,7 @@ export function createPreloadStub(
         ok: true,
         path: `/tmp/geniro-worktrees/${input.taskId}`,
         branch: `geniro/task-${input.taskId}`,
+        reused: false,
         error: null,
       });
     },
@@ -251,10 +247,6 @@ export function createPreloadStub(
         error: null,
         stashLeft: null,
       });
-    },
-    getPullRequests: () => {
-      note('getPullRequests');
-      return Promise.resolve(NO_PULL_REQUESTS);
     },
     getPullRequestsByRef: (refs): Promise<PullRequestRefResult[]> => {
       note('getPullRequestsByRef');

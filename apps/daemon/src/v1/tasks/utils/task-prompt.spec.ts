@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
-import { composeTaskPrompt } from './task-prompt';
+import { reportImagePaths } from './report-images';
+import {
+  composeTaskPrompt,
+  TASK_REPORT_INSTRUCTIONS,
+  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+} from './task-prompt';
+
+describe('the report instructions — screenshots', () => {
+  it('ask both engines for them in the ONE shape the settle collects', () => {
+    // The example the instruction gives must itself be something the settle
+    // would attach, or the agent is taught a form that is silently dropped.
+    for (const text of [
+      TASK_REPORT_INSTRUCTIONS,
+      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+    ]) {
+      expect(text).toMatch(/screenshot/i);
+      expect(reportImagePaths(text)).toEqual(['/absolute/path/to/image.png']);
+    }
+  });
+});
 
 /**
  * The half that makes attaching mean anything.

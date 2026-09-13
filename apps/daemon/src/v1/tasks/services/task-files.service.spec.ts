@@ -10,6 +10,7 @@ import {
 } from '@mikro-orm/sqlite';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { RunDao } from '../../agents/dao/run.dao';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
 import { TaskDao } from '../dao/task.dao';
@@ -77,6 +78,7 @@ describe('TaskFilesService (in-memory sqlite)', () => {
       projectDao,
       new TaskEventBus(),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
+      new RunDao(em),
     );
     service = new TaskFilesService(em, taskDao, tasks);
     const project = await projectDao.create({ name: 'B', folder: dir });

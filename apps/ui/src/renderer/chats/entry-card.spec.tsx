@@ -55,6 +55,7 @@ describe('EntryCard', () => {
       draw({
         ...base,
         type: 'task-list',
+        callId: null,
         tasks: [
           {
             id: 't1',

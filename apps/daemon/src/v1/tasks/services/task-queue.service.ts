@@ -34,6 +34,10 @@ export function missingWorkflowReason(slug: string): string {
   return `its workflow "${slug}" no longer exists in the library — point this task at a different workflow, or an agent`;
 }
 
+/** Why the armed autopilot leaves a card alone after its run was stopped. */
+export const STOPPED_BY_USER_REASON =
+  'you stopped its last run — the autopilot leaves a stopped task alone; press Run to start it again';
+
 /**
  * Splits a project's waiting cards into what the autopilot may start now and
  * what it cannot, joining `ProjectQueueService`'s raw read against the
@@ -71,7 +75,23 @@ export class TaskQueueService {
     // every runnable card behind it, which is the loop from the other side.
     const startable: typeof raw.waitingTasks = [];
     const blocked: BlockedTask[] = [];
+    const stopped = new Set(raw.stoppedTaskIds);
     for (const task of raw.waitingTasks) {
+      // A card whose last run the USER stopped is theirs to restart. The
+      // settle moves a cancelled card back to the intake column so a press can
+      // start it again — which is also exactly what the armed autopilot reads
+      // as waiting work, so it restarted the card within seconds and re-sent
+      // its brief into the same thread: REPORTED as "i stopped thread - and i
+      // seee my messae was sent second time". Only while armed, since nothing
+      // else would restart it; pressing Run moves its run on and clears it.
+      if (raw.enabled && stopped.has(task.id)) {
+        blocked.push({
+          id: task.id,
+          title: task.title,
+          reason: STOPPED_BY_USER_REASON,
+        });
+        continue;
+      }
       // The same resolution the start route performs, asked here so the
       // conductor never cuts a worktree for a run that will be refused. It
       // reads the two rows the route reads and nothing else, which is what

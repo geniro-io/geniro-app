@@ -885,54 +885,51 @@ describe('AgentSessionRegistry — the ceiling', () => {
     expect(registry.liveCount).toBe(0);
   });
 
-  it('reclaims a stopped chat’s idle process before a warm one the user is still using', async () => {
-    // Driven through the REAL session state machine rather than the double
-    // above, because the state under test only exists inside `spawn-cli`: a
-    // turn that was asked to stop retires its session from reuse WITHOUT
-    // killing the process, so the entry goes on reporting itself alive and idle
-    // while refusing every turn it is offered.
-    //
-    // The registry cannot see that, so the retired process is the LAST thing
-    // its eviction scan considers giving up — it was used most recently. With
-    // three slots, one Stop therefore costs a different chat its warm CLI:
-    // that run respawns and re-boots every MCP server the user's CLI loads,
-    // which is the exact harm `drops a dead session rather than evicting a
-    // live one` was written to remove, reached through a new door.
+  it('reuses a stopped chat’s process for its next message — Stop costs no respawn', async () => {
+    // REPORTED as "я его остановил. У него был открыт браузер Playwright.
+    // Потом он написал новое сообщение, и Playwright сразу закрылся". Driven
+    // through the REAL session state machine, because whether a stopped turn
+    // leaves its process usable is decided inside `spawn-cli`: the CLI ends a
+    // stopped turn on its own line, which leaves no tail (measured on claude
+    // 2.1.266), so the chat's next message is answered by the SAME process.
     const registry = new AgentSessionRegistry(CEILING);
     const { spawn, children } = recordingSpawn();
     const adapter = new SessionfulAdapter(spawn);
 
-    // Two chats whose turns ended on their own, so both hold a healthy process.
-    for (const runId of ['run-warm', 'run-other']) {
-      const handle = registry.startTurn(runId, adapter, INPUT, noop);
-      feed(at(children, children.length - 1), { done: true });
-      await handle.done;
-      await settleRegistry();
-    }
-    // A third chat where the user pressed Stop. The CLI acknowledges the
-    // interrupt and the turn ends on it; the process is deliberately left
-    // running, so nothing about this entry looks unusable from outside.
     const stopped = registry.startTurn('run-stopped', adapter, INPUT, noop);
     stopped.cancel();
-    feed(at(children, 2), { failed: true });
+    feed(at(children, 0), { failed: true });
     await stopped.done;
     await settleRegistry();
-    expect(at(children, 2).kills).toBe(0);
-    expect(registry.liveCount).toBe(CEILING);
+
+    registry.startTurn('run-stopped', adapter, INPUT, noop);
+
+    // Nothing was signalled and nothing new was spawned, so the MCP servers
+    // that CLI holds up — a logged-in browser included — are still there.
+    expect(at(children, 0).kills).toBe(0);
+    expect(children).toHaveLength(1);
+  });
+
+  it('reclaims a session that reports itself RETIRED before a warm one the user is still using', async () => {
+    // The contract state `retired` names — alive and idle, yet refusing every
+    // turn — is invisible to the eviction scan unless the session reports it,
+    // and such an entry is the LAST thing a least-recently-used scan gives up,
+    // having been used most recently. Closing it on sight is what keeps a
+    // different chat's warm CLI, and the MCP servers it holds up, off the block.
+    const registry = new AgentSessionRegistry(CEILING);
+    const { adapter, sessions } = fakeAdapter();
+    for (const runId of ['run-warm', 'run-other', 'run-retired']) {
+      registry.startTurn(runId, adapter, INPUT, noop);
+      await at(sessions, sessions.length - 1).endTurn();
+    }
+    at(sessions, 2).retired = true;
 
     // A fourth chat's first message: one slot has to be given back.
     registry.startTurn('run-new', adapter, INPUT, noop);
-    // …and then the user carries on in the first chat.
-    registry.startTurn('run-warm', adapter, INPUT, noop);
 
-    // The warm chat's CLI was never signalled, so the MCP servers it is holding
-    // up — and anything one of them owns, a logged-in browser included —
-    // survived a Stop pressed in a different chat.
-    expect(at(children, 0).kills).toBe(0);
-    // And the consequence of that, stated where a reader meets it: one spawn per
-    // chat, because the stopped chat's useless process is what paid for the
-    // fourth slot and the warm chat answered on the CLI it already had.
-    expect(children).toHaveLength(4);
+    expect(at(sessions, 2).closes).toBe(1);
+    expect(at(sessions, 0).closes).toBe(0);
+    expect(at(sessions, 1).closes).toBe(0);
   });
 
   it('goes over the ceiling rather than killing a running turn', () => {

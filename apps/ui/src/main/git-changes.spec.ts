@@ -53,6 +53,7 @@ describe('readChangesSince', () => {
       changes: [],
       truncated: false,
       unavailableReason: null,
+      movedOffStart: false,
     });
   });
 
@@ -375,6 +376,27 @@ describe('readChangesSince', () => {
     expect(changes).toHaveLength(30);
     expect(truncated).toBe(false);
     expect(changes.filter((change) => change.diff !== null)).toHaveLength(25);
+  });
+
+  it('lists only what is uncommitted once the checkout LEFT the start commit', async () => {
+    // REPORTED as "500 files that were not changed at all": a review chat that
+    // checked out the pull request it was reviewing. Its start commit was then
+    // on another branch, so the tree against it differed in every file the two
+    // branches disagree on — none of them this chat's work.
+    initRepo();
+    run(['checkout', '-q', '-b', 'side']);
+    writeFileSync(join(dir, 'side-only.txt'), 'on the side branch\n');
+    run(['add', '.']);
+    run(['commit', '-q', '-m', 'side work']);
+    const started = run(['rev-parse', 'HEAD']);
+    run(['checkout', '-q', 'main']);
+    writeFileSync(join(dir, 'README.md'), 'edited after the move\n');
+
+    const result = await readChangesSince(dir, started);
+
+    expect(result.movedOffStart).toBe(true);
+    // The branch difference is NOT listed; the uncommitted edit is.
+    expect(result.changes.map((change) => change.path)).toEqual(['README.md']);
   });
 
   it('says the commit is gone rather than reporting no changes', async () => {

@@ -969,19 +969,14 @@ class InterruptibleSessionAdapter extends SessionWithoutModeChangeAdapter {
   }
 }
 
-describe('AgentAdapter reports a session that will serve no further turn', () => {
-  it('passes the retirement of a stopped turn out to the session’s owner', async () => {
-    // A cancelled turn leaves the process RUNNING — pressing Stop must not take
-    // the user's MCP servers down with the turn — but unable to serve another,
-    // because it may still be printing the tail of the one that was stopped and
-    // a stream-json line carries no turn id to tell that tail apart.
-    //
-    // Whoever holds the session is the only thing that can reclaim it, and it
-    // has nothing else to go on: the process is alive and no turn is in flight,
-    // so `alive` and `idle` both read exactly as a healthy reusable session's
-    // do. A retirement the wrapper does not pass on is a retirement the owner
-    // cannot act on — it counts the process against its ceiling and gives up a
-    // genuinely warm session elsewhere to stay under it.
+describe('AgentAdapter keeps a stopped session serving turns', () => {
+  it('does not retire a session whose stopped turn the CLI ended itself', async () => {
+    // Stop leaves the process RUNNING — pressing it must not take the user's
+    // MCP servers down with the turn — and, once the CLI has ended the stopped
+    // turn on its own line, able to serve the next one: nothing of the stopped
+    // turn trails that line (measured on claude 2.1.266). Retiring it had the
+    // registry replace the process on the next message, which is what closed a
+    // Playwright browser the agent had open.
     const { spawn, child } = fakeSpawn();
     const input: AgentTurnInput = { prompt: 'first', cwd: '/proj' };
     const session = new InterruptibleSessionAdapter(spawn).startSession(input, {
@@ -996,12 +991,10 @@ describe('AgentAdapter reports a session that will serve no further turn', () =>
     await turn?.done;
 
     expect(session.alive).toBe(true);
-    expect(session.startTurn(input, () => {})).toBeNull();
     // Read off the declared session contract, deliberately: this is the answer
-    // `AgentSessionRegistry.evictIfFull` acts on, and a session that keeps it to
-    // itself reads `undefined` there — the sweep then never fires and the
-    // ceiling is paid for by a reusable session instead.
-    expect(session.retired).toBe(true);
+    // `AgentSessionRegistry.evictIfFull` acts on, through the wrapper.
+    expect(session.retired).toBe(false);
+    expect(session.startTurn(input, () => {})).not.toBeNull();
   });
 });
 

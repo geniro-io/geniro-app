@@ -8,20 +8,6 @@ import { environment } from '../environments';
 const { dbPath } = environment;
 
 /**
- * The path `require()` accepts for an entity mikro-orm asks to import.
- *
- * mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs,
- * which the swc CJS transform's require() shim does not accept. The URL is
- * DECODED, not merely stripped: `new URL(id).pathname` keeps `%20` for a space,
- * so a daemon installed under any path with a space in it — every task
- * worktree under `~/Library/Application Support/` among them — failed at boot
- * with `Cannot find module '…/Application%20Support/…/project.entity.js'`.
- */
-export function entityImportPath(id: string): string {
-  return id.startsWith('file://') ? fileURLToPath(id) : id;
-}
-
-/**
  * mikro-orm config, cloned from Geniro's apps/api and adapted to SQLite
  * (better-sqlite3-backed `@mikro-orm/sqlite`) for local-first use — the
  * Postgres connection/SSL/schema keys are dropped in favour of a single
@@ -50,5 +36,15 @@ export default defineConfig({
   // The sibling also carries `Migrator`, which this repo deliberately does not
   // have: the schema is synced additively on launch (`orm.schema.update({ safe:
   // true })`) and the versioned migration workflow stays deferred past v1.
-  dynamicImportProvider: async (id: string) => import(entityImportPath(id)),
+  //
+  // mikro-orm v7 discovers entities via dynamic import() and emits file:// URLs;
+  // turn them back into paths so the swc CJS transform's require() shim accepts
+  // them. `fileURLToPath`, never `new URL(id).pathname`: the latter keeps the
+  // URL's percent-encoding, so a checkout under a path with a space in it (every
+  // task worktree, under `~/Library/Application Support/`) asked `require` for
+  // `Application%20Support` and the daemon died before Nest started.
+  dynamicImportProvider: async (id: string) => {
+    const path = id.startsWith('file://') ? fileURLToPath(id) : id;
+    return import(path);
+  },
 });

@@ -194,7 +194,36 @@ export interface AgentThread {
    */
   contextTokens?: number | null;
   contextWindowTokens?: number | null;
+  /**
+   * For a SUB-AGENT: the call thread of its agent it was launched in — which
+   * INSTANCE of the agent it belongs to — or null for the node's own
+   * conversation. Absent on the other two kinds, which ARE instances.
+   *
+   * A node called several times holds one conversation per call at once, and
+   * each launches its own delegates; without this they were listed as one pool
+   * under the node, with nothing saying which conversation had sent which.
+   */
+  callId?: string | null;
+  /**
+   * For a CALL thread: where it has got to — what it last SAID, else the
+   * newest tool it ran — or null when it has done neither yet. The same two
+   * readings its call block's summary band draws in the transcript.
+   */
+  latest?: string | null;
+  /**
+   * For a CALL thread: what that conversation alone has spent — input + output
+   * tokens, and cost — summed over its own settled turns. Null means
+   * UNMEASURED, never zero, on the rule every figure in the panel follows.
+   */
+  spentTokens?: number | null;
+  spentUsd?: number | null;
 }
+
+/**
+ * The id of an agent's OWN conversation among its threads — every other
+ * conversation it holds is a call thread, keyed by its call id.
+ */
+export const MAIN_THREAD_ID = 'main';
 
 /**
  * The display threads an agent's activity implies: its main conversation
@@ -219,7 +248,7 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
   }
   const runningCalls = calls.filter((t) => t.status === 'running').length;
   const main: AgentThread = {
-    id: 'main',
+    id: MAIN_THREAD_ID,
     kind: 'main',
     label: 'Main conversation',
     // The node's live turns beyond its live calls ARE the main turn; once
@@ -275,6 +304,7 @@ export function subagentThreadsByAgent(
               ? 'cancelled'
               : 'running',
       sessionId: null,
+      callId: block.callId,
     });
     byAgent.set(key, threads);
   }
@@ -314,6 +344,89 @@ export function displayStatus(
   return activity.lastStatus ?? 'pending';
 }
 
+function emptyActivity(): AgentActivity {
+  return {
+    activeTurns: 0,
+    turnStarts: 0,
+    lastStatus: null,
+    contextTokens: null,
+    contextWindowTokens: null,
+    contextModel: null,
+    spentUsd: null,
+    inputTokens: null,
+    outputTokens: null,
+    cacheTokens: null,
+    callThreads: [],
+  };
+}
+
+/** A node's status as the DAEMON's own `node_state` row states it. */
+export interface DurableNodeStatus {
+  status: NodeRunStatus;
+}
+
+/**
+ * Whether the loaded transcript window holds a `status` row for this node —
+ * the one test deciding, for the node's status AND for the start of its open
+ * turn, whether the window can answer or the daemon's row must.
+ */
+export function windowHoldsStatus(
+  activity: ReadonlyMap<string, AgentActivity>,
+  nodeId: string,
+): boolean {
+  return (activity.get(nodeId)?.lastStatus ?? null) !== null;
+}
+
+/**
+ * The agents' activity, completed from the DAEMON's node rows where the loaded
+ * window holds none of a node's status history.
+ *
+ * {@link computeAgentActivity} reads a node's liveness off its `status` rows —
+ * `running` when a turn opens, a terminal one when it settles — and a long run
+ * loads only its newest `HISTORY_PAGE` items. A node that has been working ONE
+ * turn for longer than that window has its `running` row above the page, so it
+ * read as having no activity at all: its card said `pending`, the transcript
+ * drew no `Working…` row, and a caller parked in `await_agent` lost its
+ * `waiting on …` line. REPORTED on a resumed workflow whose Manager and Engineer
+ * had been running since 21:03 and 21:04 — seq 908 and 926 of a 2,817-row run —
+ * both drawn `pending` while the daemon's `node_state` said `running`.
+ *
+ * The window still WINS whenever it holds a status row for the node, and that
+ * is what keeps a snapshot fetched once (`useNodeDurableReadings` reads on open
+ * and reconnect) from going stale: the node's next transition arrives as a
+ * status row, and from then on the transcript answers. Two further limits:
+ * - a `running` row is ignored once the RUN row has settled — a daemon that
+ *   died mid-turn leaves exactly that row, and believing it would put a
+ *   `Working…` row under a finished run for good;
+ * - a non-running row only fills in a node the window already knows. A node
+ *   the window has no rows for at all (a trigger, an agent not reached yet)
+ *   gets no entry, since an entry is what the panel draws a card from.
+ */
+export function withDurableNodeStatus(
+  activity: Map<string, AgentActivity>,
+  durable: ReadonlyMap<string, DurableNodeStatus>,
+  runSettled: boolean,
+): Map<string, AgentActivity> {
+  let out: Map<string, AgentActivity> | null = null;
+  for (const [nodeId, row] of durable) {
+    if (windowHoldsStatus(activity, nodeId)) {
+      continue;
+    }
+    const existing = activity.get(nodeId);
+    const running = row.status === 'running';
+    if (running ? runSettled : existing === undefined) {
+      continue;
+    }
+    out ??= new Map(activity);
+    out.set(nodeId, {
+      ...(existing ?? emptyActivity()),
+      lastStatus: row.status,
+      activeTurns: running ? 1 : 0,
+    });
+  }
+  return out ?? activity;
+}
+
 const NODE_STATUSES: ReadonlySet<string> = new Set([
   'pending',
   'running',
@@ -337,19 +450,7 @@ export function computeAgentActivity(
   const entry = (key: string): AgentActivity => {
     let existing = byAgent.get(key);
     if (!existing) {
-      existing = {
-        activeTurns: 0,
-        turnStarts: 0,
-        lastStatus: null,
-        contextTokens: null,
-        contextWindowTokens: null,
-        contextModel: null,
-        spentUsd: null,
-        inputTokens: null,
-        outputTokens: null,
-        cacheTokens: null,
-        callThreads: [],
-      };
+      existing = emptyActivity();
       byAgent.set(key, existing);
     }
     return existing;

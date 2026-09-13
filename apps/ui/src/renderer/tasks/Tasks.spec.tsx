@@ -859,10 +859,33 @@ describe('the column surface', () => {
 
     await runTask(el);
 
-    // Otherwise every failed press leaves a checkout on disk that nothing
-    // collects: the boot reaper only ever sees what a previous SESSION left.
+    // Otherwise every failed press leaves a checkout on disk for a card whose
+    // work may never be finished, which is all the reaper ever collects.
     expect(window.geniro.pruneTaskWorktree).toHaveBeenCalledWith('t1');
     expect(el.textContent).toContain('daemon said no');
+  });
+
+  it('leaves the task’s OWN worktree alone when the run cannot be started', async () => {
+    // A reused worktree was not made by this press — it is the task's own,
+    // standing from an earlier run — and a refused start may mean that run is
+    // still working in it. Giving it back would take its cwd away.
+    window.geniro.prepareTaskWorktree = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        path: '/tmp/geniro-worktrees/t1',
+        branch: 'geniro/task-t1',
+        reused: true,
+        error: null,
+      }),
+    );
+    mocks.startTaskRun.mockRejectedValueOnce(new Error('TASK_ALREADY_RUNNING'));
+    const el = await board();
+    await openDetail(el);
+
+    await runTask(el);
+
+    expect(window.geniro.pruneTaskWorktree).not.toHaveBeenCalled();
+    expect(el.textContent).toContain('TASK_ALREADY_RUNNING');
   });
 
   it('does not start a run when the worktree could not be made', async () => {
@@ -872,6 +895,7 @@ describe('the column surface', () => {
         ok: false,
         path: null,
         branch: null,
+        reused: false,
         error: 'fatal: not a git repository',
       }),
     );

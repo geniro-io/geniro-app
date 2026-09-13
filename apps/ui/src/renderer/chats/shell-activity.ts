@@ -97,6 +97,17 @@ export interface ShellRun {
   startedAt: string;
   /** Which agent card this belongs to: the item's node id (null in a chat). */
   agentId: string | null;
+  /**
+   * The `call_agent` thread whose turn launched it, or null for the node's own
+   * conversation — which INSTANCE of the agent it belongs to. A node called
+   * several times holds several conversations at once, and the panel draws
+   * each one's commands under that conversation rather than pooling them.
+   *
+   * Read off the launching call's payload, where the executor tags every row a
+   * callee sub-turn streams (the same tag the transcript nests a call's rows
+   * by).
+   */
+  callId: string | null;
 }
 
 /** claude's readers over a background shell it already started. */
@@ -460,6 +471,7 @@ export function shellRuns(items: readonly ChatItem[]): ShellRun[] {
         exitCode: null,
         startedAt: item.createdAt,
         agentId: item.nodeId,
+        callId: payloadString(payload, 'callId'),
       };
       if (shell.command === '') {
         continue;

@@ -132,3 +132,34 @@ export const reconcileTasksSchema = z.object({
   projectId: z.string().min(1),
 });
 export class ReconcileTasksDto extends createZodDto(reconcileTasksSchema) {}
+
+/**
+ * Which of these tasks' work is finished — asked by the Electron main process
+ * about the worktrees its registry still holds.
+ *
+ * A list, because that process knows which directories exist and nothing about
+ * what became of their cards; bounded, because it is only ever as long as the
+ * cards whose worktrees are still on disk.
+ */
+export const findFinishedTasksSchema = z.object({
+  taskIds: z.array(z.string().min(1).max(200)).max(1000),
+});
+export class FindFinishedTasksDto extends createZodDto(
+  findFinishedTasksSchema,
+) {}
+
+/**
+ * TWIN PARSER: read by `readFinishedTasks` in
+ * `apps/ui/src/main/finished-tasks.ts`, which takes this reply without the
+ * generated client (that one is the renderer's). Change one and change the
+ * other.
+ */
+export class FinishedTasksDto extends createZodDto(
+  z.object({
+    taskIds: z
+      .array(z.string())
+      .describe(
+        'The subset whose work is finished — Done with no run working in it, or no longer a card at all',
+      ),
+  }),
+) {}

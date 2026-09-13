@@ -865,9 +865,17 @@ export interface RunCallCapability {
   isCancelled(): boolean;
   /**
    * True while the node has at least one live turn — i.e. it could still
-   * call answer_agent. A question parking after its owner settled (or owned
-   * by a fire-and-forget caller) is orphaned immediately instead of waiting
-   * out the TTL.
+   * call answer_agent. A question parking after its owner settled is handed to
+   * {@link wakeNode} rather than waiting out the TTL; one owned by a
+   * fire-and-forget caller is orphaned at once.
    */
   isNodeLive(nodeId: string): boolean;
+  /**
+   * Start another turn for a caller whose turns have ALL ended, carrying
+   * `prompt` — how a question or a result that arrives after the caller
+   * stopped still reaches it. False when the run cannot take a turn
+   * (cancelled, finished, not an agent); the broker then falls back to what it
+   * did before this existed.
+   */
+  wakeNode(nodeId: string, prompt: string): boolean;
 }

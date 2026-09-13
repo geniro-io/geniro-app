@@ -3,7 +3,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { GeniroApi, PullRequestsResult } from '../../shared/contracts';
+import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type {
   ItemDto as ChatItem,
@@ -103,12 +103,19 @@ const workflowApi = vi.hoisted(() => ({
   startWorkflowRun: vi.fn(),
   cancelWorkflowRun: vi.fn(),
   deleteWorkflowRun: vi.fn(),
+  sendWorkflowRunMessage: vi.fn(),
 }));
 const capabilitiesApi = vi.hoisted(() => ({ getCapabilities: vi.fn() }));
 // There is no terminal panel to stub any more: the daemon resolves an
 // invocation and the Electron main process opens it, so the only seams are
 // this client call and window.geniro.openInTerminal.
 const handoffApi = vi.hoisted(() => ({ resolveHandoff: vi.fn() }));
+/**
+ * Read only to put a TASK's worktree back when its chat outlived it — the
+ * card's folder, else its project's (`task-worktree.ts`).
+ */
+const tasksApi = vi.hoisted(() => ({ readTask: vi.fn() }));
+const projectsApi = vi.hoisted(() => ({ readProject: vi.fn() }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   // Only the client factory is faked. `daemonErrorStatus` is the REAL parser,
   // so a test that hands the component a daemon error proves the component
@@ -123,6 +130,8 @@ vi.mock('../daemon-api', async (importOriginal) => ({
     capabilities: capabilitiesApi,
     handoff: handoffApi,
     cliAuth: cliAuthApi,
+    tasks: tasksApi,
+    projects: projectsApi,
   })),
 }));
 // Counts how many times each turn block actually re-rendered, so a test can
@@ -597,12 +606,6 @@ beforeEach(() => {
       branches: [],
       dirty: false,
       worktrees: [],
-    }),
-    // Default to a folder `gh` cannot speak for, matching the non-git default
-    // above: no pull-request surface is drawn unless a test opts into one.
-    getPullRequests: vi.fn().mockResolvedValue({
-      branch: null,
-      pullRequests: [],
     }),
     switchBranch: vi
       .fn()
@@ -1417,6 +1420,62 @@ describe('Chats transcript auto-scroll', () => {
       emitItem(msg(11, 'assistant', 'the answer'));
     });
     expect(Element.prototype.scrollTo).toHaveBeenCalled();
+  });
+
+  it('puts a TASK’s collected worktree back and sends the message after all', async () => {
+    // REPORTED: a task's chat went on after its worktree was collected, and
+    // every message into it was refused `cwd does not exist` with no way
+    // forward. The branch holds the work, so the same path is cut again from
+    // it — from the card's folder — and the refused message is sent once more.
+    api.listChats.mockResolvedValue([
+      { ...run1, taskId: 't1', cwd: '/userData/worktrees/t1' },
+    ]);
+    api.listRunItems.mockResolvedValue([msg(0, 'user', 'hi')]);
+    api.sendChatMessage
+      .mockRejectedValueOnce(
+        new Error(
+          'daemon POST /v1/chats/r1/messages failed (400): {"code":"INVALID_CWD","message":"cwd does not exist: /userData/worktrees/t1"}',
+        ),
+      )
+      .mockResolvedValueOnce(msg(10, 'user', 'and this?'));
+    tasksApi.readTask
+      .mockReset()
+      .mockResolvedValue({ id: 't1', projectId: 'p1', folder: '/repo' });
+    const prepareTaskWorktree = vi.fn().mockResolvedValue({
+      ok: true,
+      path: '/userData/worktrees/t1',
+      branch: 'geniro/task-t1',
+      reused: false,
+      error: null,
+    });
+    window.geniro.prepareTaskWorktree = prepareTaskWorktree;
+    const { client, emitItem } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    await act(async () => {
+      emitItem(terminal(5));
+    });
+
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and this?');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      composerButton(container, 'Send')!.dispatchEvent(
+        new MouseEvent('click', { bubbles: true }),
+      );
+    });
+
+    expect(prepareTaskWorktree).toHaveBeenCalledWith({
+      taskId: 't1',
+      folder: '/repo',
+    });
+    expect(api.sendChatMessage).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('cwd does not exist');
   });
 
   it('jumps to the newest message when a chat with history is OPENED', async () => {
@@ -7502,7 +7561,7 @@ describe('Chats run composer chips', () => {
     expect(modelTrigger(container).title).toContain('next message');
   });
 
-  it('a workflow run shows workflow + folder + trigger chips and a disabled send', async () => {
+  it('a workflow run shows workflow + folder + trigger chips, and its send goes to the workflow', async () => {
     workflowApi.listWorkflowRuns.mockResolvedValue([
       {
         id: 'w1',
@@ -7572,10 +7631,34 @@ describe('Chats run composer chips', () => {
         (b) => b.disabled && b.className.includes('rounded-lg'),
       ),
     ).toEqual([]);
-    // Workflow runs take one task — the round send stays disabled.
-    expect(composerButton(container, 'Send')?.disabled).toBe(true);
-    // No model chip either: each agent node names its own model in the YAML.
+    // No model chip: each agent node names its own model in the YAML.
     expect(modelTrigger(container)).toBeUndefined();
+
+    // A follow-up is a message like any other — REPORTED as "i should be able
+    // to add message for workflow" against a composer that was disabled here.
+    // It goes to the WORKFLOW route, which hands it to the trigger's agents;
+    // the chat route refuses a workflow run outright.
+    expect(composerButton(container, 'Send')?.disabled).toBe(true);
+    workflowApi.sendWorkflowRunMessage.mockResolvedValue(
+      msg(3, 'user', 'and the tests too'),
+    );
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'and the tests too');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(composerButton(container, 'Send')?.disabled).toBe(false);
+    await act(async () => {
+      composerButton(container, 'Send')!.click();
+    });
+
+    expect(workflowApi.sendWorkflowRunMessage).toHaveBeenCalledWith({
+      runId: 'w1',
+      sendMessageDto: { text: 'and the tests too' },
+    });
+    expect(api.sendChatMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -12679,140 +12762,6 @@ describe('Chats — a fast action writes into the composer', () => {
     const field = composer(container);
     expect(document.activeElement).toBe(field);
     expect(field.selectionStart).toBe(field.value.length);
-  });
-});
-
-describe('Chats — the pull request above the composer', () => {
-  const openPullRequest = {
-    number: 70,
-    title: 'builder polish',
-    state: 'open' as const,
-    isDraft: false,
-    headRefName: 'fix/builder',
-    isCrossRepository: false,
-    headRepositoryOwner: 'someone',
-    author: 'someone',
-    url: 'https://github.com/o/r/pull/70',
-    updatedAt: '2026-08-01T00:00:00Z',
-    added: null,
-    removed: null,
-    changedFiles: null,
-  };
-
-  async function openMyChat(result: PullRequestsResult): Promise<HTMLElement> {
-    window.geniro.getPullRequests = vi.fn().mockResolvedValue(result);
-    api.listChats.mockResolvedValue([run1]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    // The read is an effect over the run list; one more flush lets it land
-    // before the assertions rather than racing them.
-    await act(async () => {});
-    return container;
-  }
-
-  it('puts NOTHING above the textarea for a thread that opened none', async () => {
-    // Reported on a chat one message old: it showed a pull request "которого
-    // там не должно быть". The branch's list answers a different question —
-    // a checkout routinely sits on a branch somebody else opened a pull
-    // request for — and the shelf claims the conversation produced what it
-    // holds. The sidebar row still states the branch fact, as plain text.
-    const container = await openMyChat({
-      branch: 'fix/builder',
-      originOwner: null,
-      pullRequests: [openPullRequest],
-    });
-
-    const shelf = container.querySelector('[data-slot="composer-shelf"]');
-    expect(shelf).not.toBeNull();
-    expect(shelf?.children).toHaveLength(0);
-    // Nor on the sidebar row, which made the same claim about every chat that
-    // happened to share the checkout — two unrelated conversations both naming
-    // #70. It is still on screen where it is NAMED as the branch's.
-    expect(
-      container.querySelector('[data-slot="current-pull-request"]'),
-    ).toBeNull();
-    expect(
-      container.querySelector('section[aria-label="Pull requests"]')
-        ?.textContent,
-    ).toContain('builder polish');
-  });
-
-  it('re-reads the folder after an in-app branch switch', async () => {
-    // The window never loses focus during an in-app switch, so the focus
-    // refresh cannot cover it: without the explicit re-read the composer band
-    // and every sidebar row would go on naming the PREVIOUS branch's pull
-    // request. Scope: this drives the composer's branch CHIP, so it pins that
-    // one call site — the saved-configuration and Pull-latest sites are wired
-    // the same way but are not covered here.
-    window.geniro.getGitInfo = vi.fn().mockResolvedValue({
-      isRepo: true,
-      branch: 'main',
-      branches: ['main', 'dev'],
-      dirty: false,
-      worktrees: [],
-    });
-    window.geniro.switchBranch = vi.fn().mockResolvedValue({
-      ok: true,
-      branch: 'dev',
-      error: null,
-      dirty: false,
-      worktree: null,
-    });
-    const reads = vi
-      .fn()
-      .mockResolvedValue({ branch: 'dev', pullRequests: [] });
-    window.geniro.getPullRequests = reads;
-    api.listChats.mockResolvedValue([run1]);
-    const { client } = makeClient();
-    const container = await mount(client);
-    const before = reads.mock.calls.length;
-
-    const branch = [
-      ...container.querySelectorAll<HTMLButtonElement>('[data-menu-trigger]'),
-    ].find((trigger) => trigger.getAttribute('aria-label') === 'Git branch')!;
-    await pickMenuRow(container, branch, 'dev');
-
-    expect(reads.mock.calls.length).toBeGreaterThan(before);
-  });
-
-  it('keeps another branch’s pull request off the panel as well', async () => {
-    // The panel is THIS thread's work, not the repo's. It used to list every
-    // pull request in the repo, which on a busy one buried the branch's own
-    // under fifty of other people's. End-to-end here rather than on the fold
-    // alone: the scoping is wiring in this component, so a panel handed the
-    // unfiltered list would pass every unit test underneath it.
-    const container = await openMyChat({
-      branch: 'fix/builder',
-      originOwner: null,
-      pullRequests: [
-        openPullRequest,
-        {
-          ...openPullRequest,
-          number: 71,
-          title: 'unrelated work',
-          headRefName: 'feat/other',
-        },
-      ],
-    });
-
-    expect(container.textContent).toContain('builder polish');
-    expect(container.textContent).not.toContain('unrelated work');
-  });
-
-  it('draws nothing when no pull request is on the folder’s branch', async () => {
-    // The end-to-end half of the branch match: a repo full of pull requests
-    // none of which is this thread's must not put someone else's on its
-    // composer.
-    const container = await openMyChat({
-      branch: 'main',
-      originOwner: null,
-      pullRequests: [openPullRequest],
-    });
-
-    expect(
-      container.querySelector('[data-slot="current-pull-request"]'),
-    ).toBeNull();
   });
 });
 

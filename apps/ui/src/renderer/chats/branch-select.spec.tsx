@@ -40,6 +40,7 @@ const REPO: GitInfo = {
   branches: ['develop', 'main'],
   dirty: false,
   worktrees: [],
+  worktreeOf: null,
 };
 
 const classes = (el: Element): string[] =>
@@ -178,6 +179,7 @@ describe('BranchValueSelect', () => {
         branches: [],
         dirty: false,
         worktrees: [],
+        worktreeOf: null,
       },
       null,
     );

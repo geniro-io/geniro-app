@@ -548,6 +548,11 @@ export function Tasks({
           onDetachFile={(attachmentId) => {
             void board.detachFile(openTask.id, attachmentId);
           }}
+          onDelete={async () => {
+            if (await board.deleteTask(openTask.id)) {
+              setOpenTaskId(null);
+            }
+          }}
         />
       ) : null}
 
@@ -607,9 +612,9 @@ export function Tasks({
           onClose={() => {
             setNewTaskOpen(false);
           }}
-          onCreate={(input) => {
+          onCreate={(input, staged) => {
             setNewTaskOpen(false);
-            void board.createTask({ projectId, ...input });
+            void board.createTask({ projectId, ...input }, staged);
           }}
         />
       ) : null}

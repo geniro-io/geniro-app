@@ -24,6 +24,7 @@ beforeEach(() => {
       branches: ['main', 'feat/x'],
       dirty: false,
       worktrees: [],
+      worktreeOf: null,
     })),
     pickProjectFolder: vi.fn(async () => null),
   });

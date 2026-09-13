@@ -3,6 +3,7 @@ import { Bot, ChevronRight } from 'lucide-react';
 import { cn } from '../components/ui/utils';
 import { usePersistedFlag } from '../components/use-persisted-flag';
 import type { AgentThread } from './agent-activity';
+import { SectionLabel } from './block-shell';
 import {
   isSettledRunStatus,
   RUN_STATUS_META,
@@ -188,5 +189,67 @@ export function SubagentRows({
         </li>
       ) : null}
     </ul>
+  );
+}
+
+/** One agent's delegates, as a surface that draws several agents' at once. */
+export interface AgentSubagentGroup {
+  /** The agent card's id — the React key, and what the caller grouped by. */
+  agentId: string;
+  /** What to call that agent on screen. */
+  agentName: string;
+  threads: readonly AgentThread[];
+}
+
+/**
+ * Several agents' delegates, one BLOCK each under the name of the agent that
+ * launched them — the shelf's Sub-agents list for a WORKFLOW run.
+ *
+ * REPORTED as "in workflow we should see subagents list in chip divided by
+ * block by agent, same as for todo": the chip flattened every node's delegates
+ * into one run, so a Reviewer's reviewers and an Engineer's explorers arrived
+ * as one list with nothing saying whose each was. This is the task chip's
+ * arrangement (`TaskGroupRows`) applied to the list beside it, so the two
+ * popovers on one shelf read the same way.
+ *
+ * A heading counts that agent's delegates still RUNNING — the same reading the
+ * chip's own figure takes, so the headings add up to the number on the chip.
+ * Each block is an ordinary {@link SubagentRows}, fold included, so an agent
+ * whose delegates have all finished reads as one line under its name.
+ */
+export function SubagentGroupRows({
+  groups,
+  onOpen,
+}: {
+  groups: readonly AgentSubagentGroup[];
+  onOpen?: (subagentId: string) => void;
+}): React.JSX.Element {
+  return (
+    <div data-slot="subagent-groups" className="flex flex-col gap-3">
+      {groups.map((group) => {
+        const running = group.threads.filter(
+          (thread) => thread.status === 'running',
+        ).length;
+        return (
+          <section key={group.agentId} data-slot="subagent-group">
+            <SectionLabel>
+              <span className="flex items-baseline gap-2">
+                <span
+                  data-slot="subagent-group-agent"
+                  className="min-w-0 flex-1 truncate">
+                  {group.agentName}
+                </span>
+                {running === 0 ? null : (
+                  <span className="shrink-0 normal-case tabular-nums">
+                    {running} working
+                  </span>
+                )}
+              </span>
+            </SectionLabel>
+            <SubagentRows threads={group.threads} onOpen={onOpen} />
+          </section>
+        );
+      })}
+    </div>
   );
 }

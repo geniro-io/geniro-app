@@ -14,6 +14,14 @@ import {
 import type { DaemonApis } from '../daemon-api';
 import { daemonErrorDetail } from '../daemon-api';
 import type { DaemonClient } from '../daemon-client';
+import type { NewTaskAttachments } from './new-task-dialog';
+import {
+  referencesStagedImage,
+  resolveStagedImage,
+  stripStagedImages,
+} from './use-description-paste';
+
+const NOTHING_STAGED: NewTaskAttachments = { images: [], files: [] };
 
 /**
  * The board's columns, left to right.
@@ -54,13 +62,25 @@ export interface BoardApi {
   error: string | null;
   selectProject: (projectId: string) => void;
   createProject: (dto: CreateProjectDto) => Promise<ProjectDto | null>;
-  createTask: (dto: CreateTaskDto) => Promise<TaskDto | null>;
+  /**
+   * Create a card, then write what the New task dialog STAGED for it — the
+   * pictures pasted into its description and the files picked for it.
+   */
+  createTask: (
+    dto: CreateTaskDto,
+    staged?: NewTaskAttachments,
+  ) => Promise<TaskDto | null>;
   updateTask: (taskId: string, dto: UpdateTaskDto) => Promise<TaskDto | null>;
   /** Bind files to a card by absolute path — the daemon copies nothing. */
   attachFiles: (taskId: string, paths: readonly string[]) => Promise<void>;
   /** Drop one reference. The FILE on disk is untouched. */
   detachFile: (taskId: string, attachmentId: string) => Promise<void>;
   moveTask: (taskId: string, to: string) => Promise<void>;
+  /**
+   * Delete a card from the board. Answers whether it went, so the panel that
+   * asked closes only when it did.
+   */
+  deleteTask: (taskId: string) => Promise<boolean>;
   /**
    * Work a card: main makes the worktree, the daemon runs the agent inside it.
    *
@@ -262,34 +282,73 @@ export function useBoard(
   reloadRef.current = reload;
   const selectedRef = useRef(selectedProjectId);
   selectedRef.current = selectedProjectId;
+  /**
+   * The runs this board's cards are holding, for the pull-request announce
+   * below — a Set rather than a scan of `tasks`, since that event fires for
+   * every chat in the app and this board is routinely not the subject.
+   */
+  const boardRunsRef = useRef<Set<string>>(new Set());
+  boardRunsRef.current = new Set(
+    tasks
+      .map((task) => task.runId)
+      .filter((runId): runId is string => runId !== null),
+  );
 
   useEffect(() => {
     if (!client) {
       return;
     }
     return client.onTaskChanged((event) => {
-      // The daemon OBSERVED this card's run reach a terminal status, which is
-      // the one moment its worktree is finished with. Main commits whatever
-      // the agent left onto the task's own branch and then removes the
-      // directory — the routine end state of a run, and the only thing that
-      // ever collected it before was a boot reaper that skips a dirty one.
+      // The daemon has decided this card's work is FINISHED — it is Done and
+      // no run is working in it — which is the one moment its worktree may go.
+      // Main commits whatever the agent left onto the task's own branch and
+      // then removes the directory.
+      //
+      // NOT when the card's run settles, which is what this keyed on before: a
+      // task's run is a chat the user continues after review, Retry re-sends
+      // into, and the CLI carries on by itself when a background command
+      // reports — all of it in that directory. Collecting at the settle took a
+      // live conversation's cwd out from under it, and every screenshot the
+      // agent had shown in it.
       //
       // Keyed on the daemon's REASON rather than on the card's column, which
-      // is written optimistically the moment a card is dragged: an earlier cut
-      // read the column and would have collected the worktree of an agent
-      // still working in it.
+      // is written optimistically the moment a card is dragged: a card dropped
+      // in Done while its agent is still working reaches this same broadcast.
       //
       // Deliberately NOT scoped to the open board. A worktree belongs to the
       // task, not to the project being looked at, and main answers with
       // `removed: false` for a task it never made one for — so the unscoped
       // call is a registry lookup, and scoping it would leave every other
       // project's worktrees uncollected for as long as this board is open.
-      if (event.reason === 'run-settled') {
+      if (event.reason === 'work-finished') {
         void window.geniro.settleTaskWorktree(event.taskId);
       }
       // The broadcast is client-wide, so most events belong to a board this
       // one is not showing.
       if (event.projectId === selectedRef.current) {
+        reloadRef.current();
+      }
+    });
+  }, [client]);
+
+  useEffect(() => {
+    if (!client) {
+      return;
+    }
+    // A card's pull requests are the RUN's, captured from its transcript when
+    // a turn ends — which is a different moment from the card settling, and
+    // routinely the later of the two. Without this the result of the work
+    // appears on the card only at the next listing, so a reader watching a
+    // task finish sees the report land and the link not.
+    //
+    // The announce is client-wide and fires for every chat in the app, so it
+    // is narrowed to a run this board is actually holding; the daemon is
+    // already silent when a run's pull requests have not changed.
+    return client.onRunStatus((event) => {
+      if (event.pullRequests === undefined) {
+        return;
+      }
+      if (boardRunsRef.current.has(event.runId)) {
         reloadRef.current();
       }
     });
@@ -315,19 +374,107 @@ export function useBoard(
     [apis],
   );
 
+  /**
+   * Create a card, then write what the dialog staged for it.
+   *
+   * Neither a picture nor a file can ride the create: the daemon keys both by
+   * the card's id, which does not exist until this call returns. So the card
+   * is created first — WITHOUT the staged references, so a card whose uploads
+   * never happen holds no link to a file that does not exist — and each
+   * picture is then written and its reference repointed at the saved path, in
+   * the one description update that follows. A picture the user deleted from
+   * the text before pressing Add is never uploaded.
+   *
+   * After the create, a failure costs one picture or one file, never the card:
+   * it is reported, a picture's reference is taken out whole, and the rest
+   * carries on. Files stop at the first refusal, as `attachFiles` does, since
+   * the daemon's cap is the usual reason for one.
+   */
   const createTask = useCallback(
-    async (dto: CreateTaskDto): Promise<TaskDto | null> => {
+    async (
+      dto: CreateTaskDto,
+      staged: NewTaskAttachments = NOTHING_STAGED,
+    ): Promise<TaskDto | null> => {
       if (!apis) {
         return null;
       }
+      const { description: typed = '', ...fields } = dto;
+      const bare = stripStagedImages(typed).trim();
+      let task: TaskDto;
       try {
-        const task = await apis.tasks.createTask({ createTaskDto: dto });
-        setTasks((current) => [...current, task]);
-        return task;
+        task = await apis.tasks.createTask({
+          createTaskDto: {
+            ...fields,
+            ...(bare === '' ? {} : { description: bare }),
+          },
+        });
       } catch (err: unknown) {
         setError(describe(err));
         return null;
       }
+      const created = task;
+      setTasks((current) => [...current, created]);
+      // Pinned from the create: every call below answers with the whole card,
+      // and none of them may be aimed by whatever the previous one answered.
+      const taskId = created.id;
+
+      const failures: string[] = [];
+      let description = typed;
+      for (const image of staged.images) {
+        if (!referencesStagedImage(description, image.ref)) {
+          continue;
+        }
+        try {
+          const saved = await apis.tasks.addTaskAttachment({
+            taskId,
+            addTaskAttachmentDto: {
+              mediaType: image.mediaType,
+              data: await image.data,
+              ...(image.name === null ? {} : { name: image.name }),
+            },
+          });
+          description = resolveStagedImage(description, image.ref, saved.path);
+        } catch (err: unknown) {
+          description = resolveStagedImage(description, image.ref, null);
+          failures.push(describe(err));
+        }
+      }
+      // Whatever is still staged references a picture nothing holds.
+      description = stripStagedImages(description).trim();
+      if (description !== bare) {
+        try {
+          task = await apis.tasks.updateTask({
+            taskId,
+            updateTaskDto: { description },
+          });
+        } catch (err: unknown) {
+          failures.push(describe(err));
+        }
+      }
+      for (const path of staged.files) {
+        try {
+          task = await apis.tasks.attachTaskFile({
+            taskId,
+            attachTaskFileDto: { path },
+          });
+        } catch (err: unknown) {
+          failures.push(describe(err));
+          break;
+        }
+      }
+
+      const final = task;
+      if (final !== created) {
+        setTasks((current) =>
+          current.map((row) => (row.id === final.id ? final : row)),
+        );
+      }
+      if (failures.length > 0) {
+        setError(
+          `The task was created, but not everything staged for it could be attached: ${failures[0]}`,
+        );
+      }
+      return final;
     },
     [apis],
   );
@@ -449,6 +596,33 @@ export function useBoard(
     [apis, tasks],
   );
 
+  /**
+   * Delete a card — the daemon's delete, then the worktree its runs were cut
+   * from, which nothing else would ever collect once the card is gone.
+   *
+   * The worktree goes through `pruneTaskWorktree`, the path a failed start
+   * already takes: it removes only a directory this app recorded creating and
+   * keeps one holding unsaved work, and it never touches the BRANCH — so the
+   * agent's commits outlive the card that asked for them.
+   */
+  const deleteTask = useCallback(
+    async (taskId: string): Promise<boolean> => {
+      if (!apis) {
+        return false;
+      }
+      try {
+        await apis.tasks.deleteTask({ taskId });
+      } catch (err: unknown) {
+        setError(describe(err));
+        return false;
+      }
+      setTasks((current) => current.filter((row) => row.id !== taskId));
+      await window.geniro.pruneTaskWorktree(taskId).catch(() => false);
+      return true;
+    },
+    [apis],
+  );
+
   const selectProject = useCallback((projectId: string) => {
     setSelectedProjectId(projectId);
   }, []);
@@ -458,10 +632,11 @@ export function useBoard(
    *
    * The ORDER is the whole safety of it. Main creates the worktree first,
    * because the daemon needs a real directory to run in and runs no git
-   * itself; the daemon then starts the chat. If that second half fails, the
-   * worktree is removed in the failure path of the same operation — otherwise
-   * every failed press leaves a checkout on disk that nothing will ever
-   * collect, since the boot reaper only sees what a previous SESSION left.
+   * itself; the daemon then starts the chat. If that second half fails, a
+   * worktree THIS press made is removed in the failure path of the same
+   * operation — otherwise every failed press leaves a checkout on disk for a
+   * card whose work may never be finished, which is all the reaper collects.
+   * One that was the task's own, still standing, is left where it is.
    */
   const runTask = useCallback(
     async (taskId: string, prompt = ''): Promise<boolean> => {
@@ -517,7 +692,12 @@ export function useBoard(
           );
           return true;
         } catch (err: unknown) {
-          await window.geniro.pruneTaskWorktree(taskId);
+          // Given back only when THIS press made it. A worktree that was the
+          // task's own, still standing from an earlier run, stays: a refused
+          // start may mean that run is working in it right now.
+          if (!made.reused) {
+            await window.geniro.pruneTaskWorktree(taskId);
+          }
           setError(describe(err));
           return false;
         }
@@ -628,6 +808,7 @@ export function useBoard(
     attachFiles,
     detachFile,
     moveTask,
+    deleteTask,
     runTask,
     startingTaskId,
     loadReport,

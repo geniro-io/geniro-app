@@ -881,36 +881,33 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
   let processExited = false;
   let stdinEnded = false;
   /**
-   * A cancelled turn ended, and this process may still print the rest of it.
+   * A stopped turn was ended FOR the CLI rather than by it, so this process may
+   * still print the rest of it.
    *
-   * Set when a turn that was asked to stop settles, and never cleared: the
-   * session is retired from REUSE, so a straggler can only ever arrive with no
-   * turn open and reach {@link handleOrphanEvent}.
+   * Set when a turn that was asked to stop settles WITHOUT the CLI's own
+   * terminal line, and never cleared: the session is retired from REUSE, so a
+   * straggler can only ever arrive with no turn open and reach
+   * {@link handleOrphanEvent}. Retiring is what `AgentSessionRegistry` reads as
+   * "close and replace", so the next message pays a full respawn — the user's
+   * MCP servers go down and boot again, a browser they are driving among them.
    *
-   * WHAT THIS COSTS, stated plainly because it is a real regression against the
-   * kept-session feature: `startTurn` refusing is read by
-   * `AgentSessionRegistry` as "close and replace", so the NEXT message after a
-   * Stop pays a full respawn — the user's MCP servers go down and boot again
-   * (measured at 6.5s for ten servers on claude 2.1.223). Stop alone costs
-   * nothing: the process stays alive and idle, and if the chat is never
-   * continued only the idle window reaps it. So this defers the group kill that
-   * `cancel` below refuses to do, rather than avoiding it.
+   * Which is why it is NOT set for a stopped turn the CLI ended itself — the
+   * ordinary Stop. Measured on claude 2.1.266: after a stream-json `interrupt`
+   * the CLI printed its `control_response`, the partial reply, a
+   * `[Request interrupted by user]` line and then its own `result`
+   * (`error_during_execution`, `terminal_reason: aborted_streaming`) — and
+   * NOTHING after it for five seconds, while a second message on the same
+   * process ran to its own `result`. That `result` line is what settles the
+   * turn, so no tail is left to mistake for the next turn's output. It used to
+   * be set for every Stop, REPORTED as "я его остановил. У него был открыт
+   * браузер Playwright. Потом он написал новое сообщение, и Playwright сразу
+   * закрылся" — the respawn taking the browser with the old process.
    *
-   * Why that trade and not the cheaper drain. Routing late events to the orphan
-   * path while KEEPING the session reusable is the version that would cost
-   * nothing, and it needs a way to know the tail has ended. There is none on
-   * this wire: a stream-json line carries no turn id, so once a second turn is
-   * open, `emit` cannot tell that turn's own output from the previous one's
-   * tail — and guessing wrong in that direction is worse than a respawn,
-   * because it silently answers the user's new message with the old turn's
-   * result. Bounding the drain by time instead would need a grace nobody has
-   * measured AND a registry that waits rather than replaces. Both are open
-   * options; neither is free, and correctness came first here.
-   *
-   * The defect this replaced, for the record: after a Stop the cancelled turn's
-   * trailing `result` line settled the NEXT turn the moment it opened (a
-   * message that got no answer at all), and its closing text was persisted with
-   * the new turn's seq, so it rendered underneath a message sent after it.
+   * The defect retiring guards against, for the record: after a Stop, a
+   * cancelled turn's trailing `result` line settled the NEXT turn the moment it
+   * opened (a message that got no answer at all), and its closing text was
+   * persisted with the new turn's seq. Only a turn settled BEFORE its own
+   * terminal line can leave that tail — the case this still covers.
    */
   let cancelledTurnMayStillEmit = false;
   let exitTimer: ReturnType<typeof setTimeout> | null = null;
@@ -951,17 +948,16 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // own ending — and cheap in the ordinary case, where nothing has outlived
     // the turn and the sweep returns before it spawns anything.
     void sweepDetachedShells();
-    // Asked to stop — see {@link cancelledTurnMayStillEmit}.
+    // Asked to stop AND ended some other way than on the CLI's own terminal
+    // line — see {@link cancelledTurnMayStillEmit}. A stopped turn the CLI ended
+    // ITSELF leaves nothing to trail, so the process goes on serving turns and
+    // the user's MCP servers — a browser among them — survive the Stop.
     //
-    // Keyed on the cancel alone, NOT on the broader "did not end by itself".
-    // The silence deadline settles a turn the same way and leaves the same tail
-    // coming, so it shares this defect — but the deadline path deliberately
-    // keeps the process reusable ("Only the turn was given up on, so the next
-    // one still reuses it", pinned in `spawn-cli.session.spec.ts`), and
-    // retiring there would reverse that decision and make a >30-minute tool
-    // call cost a respawn. That reversal is a separate call to make with
-    // evidence, not a side effect of this fix.
-    const retiring = turn.cancelRequested;
+    // Keyed on the cancel, NOT on the broader "did not end by itself". The
+    // silence deadline settles a turn the same way, but the deadline path
+    // deliberately keeps the process reusable ("Only the turn was given up on,
+    // so the next one still reuses it", pinned in `spawn-cli.session.spec.ts`).
+    const retiring = turn.cancelRequested && !turn.terminalEmitted;
     if (retiring) {
       cancelledTurnMayStillEmit = true;
     }
@@ -970,15 +966,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // again. The CLI is still blocked on it either way; the only question is
     // whether it can ever be reached again.
     //
-    // Which is exactly why a RETIRING settle must not say that: this session
-    // will serve no next turn, and `pendingApprovals` is drained nowhere else,
-    // so re-holding would park the request where nothing can reach it while the
-    // log claimed it had been re-offered. Say it is abandoned instead — the
-    // process is replaced on the next message, which is what unblocks the CLI.
+    // Which is exactly why a STOPPED turn's must not be: the CLI ends a stopped
+    // turn together with its requests, so nothing is waiting on them any more,
+    // and re-offering one would put a card up on the user's next message for a
+    // question nobody is asking. A retiring settle has the further reason that
+    // the session will serve no next turn at all.
     if (turn.outstanding.size > 0) {
-      if (retiring) {
+      if (turn.cancelRequested) {
         opts.logger?.warn(
-          `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn was ended — abandoned with the session, which will not serve another turn`,
+          `${opts.command}: ${turn.outstanding.size} approval request(s) went unanswered when the turn was stopped — dropped with it`,
         );
       } else {
         pendingApprovals.unshift(...turn.outstanding.values());

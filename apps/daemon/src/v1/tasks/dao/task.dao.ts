@@ -44,6 +44,30 @@ export class TaskDao extends BaseDao<Task> {
   }
 
   /**
+   * Every card in review that a run is still attached to, across EVERY
+   * project — the merge watcher's query, and the second one not scoped by
+   * project.
+   *
+   * Least-recently-changed first, which is what makes {@link limit} safe: a
+   * capped sweep hands out the cards that have been waiting longest, and each
+   * one it settles leaves the column for good. Ordering the other way would
+   * let a busy board's newest cards starve the oldest ones forever.
+   *
+   * `runId` is required because the run is where the pull requests are: a card
+   * moved into review by hand has nothing for a merge to end.
+   */
+  async listAwaitingMerge(
+    limit: number,
+    txEm?: EntityManager,
+  ): Promise<Task[]> {
+    return this.getAll(
+      { status: 'in_review', runId: { $ne: null } } as FilterQuery<Task>,
+      { orderBy: { updatedAt: 'asc' }, limit },
+      txEm,
+    );
+  }
+
+  /**
    * The card holding one run, if any still does.
    *
    * The run<->task edge has an end on each row, and this reads it from the RUN

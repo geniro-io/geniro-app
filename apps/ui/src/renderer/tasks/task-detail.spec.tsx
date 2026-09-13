@@ -35,6 +35,7 @@ const task = (over: Partial<TaskDto> = {}): TaskDto =>
 function detail(
   over: Partial<TaskDto> & {
     onRun?: () => void;
+    onDelete?: () => void;
     onOpenThread?: (runId: string) => void;
     task?: TaskDto;
     report?: ItemDto | null;
@@ -44,6 +45,7 @@ function detail(
 ): HTMLDivElement {
   const {
     onRun,
+    onDelete,
     onOpenThread,
     task: given,
     report,
@@ -61,6 +63,7 @@ function detail(
         onClose={vi.fn()}
         onSave={vi.fn()}
         onRun={onRun}
+        onDelete={onDelete}
         onOpenThread={onOpenThread}
         projectName={projectName ?? null}
         projectTaskKey={projectTaskKey ?? null}
@@ -112,6 +115,14 @@ const buttonNamed = (el: HTMLElement, text: string): HTMLButtonElement =>
     (node.textContent ?? '').includes(text),
   ) as HTMLButtonElement;
 
+/** The trash icon — ICON-ONLY, so it has no text and is found by its name. */
+const DELETE_ICON = 'button[aria-label="Delete task"]';
+const deleteIcon = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector(DELETE_ICON) as HTMLButtonElement;
+/** The confirmation that icon opens, or null while it is shut. */
+const deletePopup = (el: HTMLElement): HTMLElement | null =>
+  el.querySelector('[role="dialog"][aria-label="Delete this task?"]');
+
 describe('TaskDetail', () => {
   // "No folder" is not a state a card can be in — an unset one runs in the
   // project's — so the row SHOWS the inherited path rather than sitting empty.
@@ -145,6 +156,57 @@ describe('TaskDetail', () => {
     expect(onSave).toHaveBeenCalledWith({ folder: null });
   });
 
+  it('lets a long folder path SHRINK, so the panel never scrolls sideways', () => {
+    // REPORTED as "sometimes i may have horizontal scroll for task card": the
+    // path's button inherited `buttonVariants`' `shrink-0`, so a long path
+    // refused to give up width and pushed the whole panel wider than itself.
+    // jsdom lays nothing out, so the pin is the two classes that ARE the fix:
+    // the button may shrink, and its text truncates in a box of its own
+    // (`text-overflow` does not apply to text directly inside a flex box).
+    const long =
+      '/Users/someone/Library/Application Support/Geniro/worktrees/a-very-long-task-worktree';
+    const el = detailWith({ projectFolder: long, task: { folder: null } });
+
+    const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
+    // Both boxes: the row's wrapper and the button inside it, since either one
+    // refusing to shrink holds the whole path's width.
+    for (const box of [folder, folder.querySelector('button')!]) {
+      const classes = box.className.split(/\s+/);
+      expect(classes).toContain('shrink');
+      expect(classes).not.toContain('shrink-0');
+    }
+    expect(folder.querySelector('span.truncate')).not.toBeNull();
+  });
+
+  it('shows the END of a long folder path, which is where the directory is named', () => {
+    // REPORTED against a row reading `/Users/sergeirazumovskij/De…`: CSS
+    // truncation kept the head, which every path on the machine shares, and
+    // cut the one part that says which repository the task works in.
+    const el = detailWith({
+      projectFolder: '/Users/someone/Desktop/Projects/Geniro/geniro-app',
+      task: { folder: null },
+    });
+
+    expect(
+      el.querySelector('[data-slot="task-folder"] button')?.textContent,
+    ).toBe('…/Projects/Geniro/geniro-app');
+  });
+
+  it('shows the WHOLE folder path in its hover panel', () => {
+    // REPORTED as "i wanna see full directory when i hover". Focus opens the
+    // same panel the pointer does, without the pointer's resting delay.
+    const long = '/Users/someone/Desktop/Projects/Geniro/geniro-app';
+    const el = detailWith({ projectFolder: long, task: { folder: null } });
+    const folder = el.querySelector<HTMLElement>('[data-slot="task-folder"]')!;
+    expect(folder.textContent).not.toContain(long);
+
+    act(() => {
+      folder.querySelector('button')!.focus();
+    });
+
+    expect(folder.textContent).toContain(long);
+  });
+
   it('runs the task when there is a handler for it', () => {
     const onRun = vi.fn();
     const el = detail({ onRun });
@@ -175,6 +237,58 @@ describe('TaskDetail', () => {
 
     expect(buttonNamed(el, 'Running').disabled).toBe(true);
     expect(el.textContent).toContain('An agent is working this task');
+  });
+
+  it('deletes the card only once its popup confirms', async () => {
+    // A card cannot be brought back, so the trash icon only ASKS — the popup
+    // it opens is where the delete actually happens.
+    const onDelete = vi.fn();
+    const el = detail({ onDelete });
+
+    act(() => {
+      deleteIcon(el).click();
+    });
+    expect(onDelete).not.toHaveBeenCalled();
+    const popup = deletePopup(el);
+    expect(popup).not.toBeNull();
+
+    await act(async () => {
+      buttonNamed(popup as HTMLElement, 'Delete').click();
+    });
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the popup on Cancel without deleting anything', () => {
+    const onDelete = vi.fn();
+    const el = detail({ onDelete });
+
+    act(() => {
+      deleteIcon(el).click();
+    });
+    act(() => {
+      buttonNamed(deletePopup(el) as HTMLElement, 'Cancel').click();
+    });
+
+    expect(deletePopup(el)).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete a card an agent is working, and says why beside it', () => {
+    // The card's worktree is collected with it — the directory the agent is
+    // writing in — so the icon is disabled, with the reason as visible text:
+    // a disabled button receives no hover, so a tooltip could never be read.
+    const el = detail({
+      onRun: vi.fn(),
+      onDelete: vi.fn(),
+      task: aTask({ status: TaskStatus.InProgress, runId: 'run-1' }),
+    });
+
+    expect(deleteIcon(el).disabled).toBe(true);
+    expect(el.textContent).toContain('can be deleted once it has stopped');
+  });
+
+  it('offers no delete where nothing can delete', () => {
+    expect(detail().querySelector(DELETE_ICON)).toBeNull();
   });
 
   it('names the branch the agent is working on', () => {
@@ -511,6 +625,46 @@ describe('priority and due date', () => {
     // Including the HEADING, which would otherwise promise a report the panel
     // has nothing to put under it.
     expect(el.textContent).not.toContain('Report');
+  });
+});
+
+/**
+ * The work's RESULT on the card.
+ *
+ * The rows are the chat surface's own, so what is pinned here is that the panel
+ * DRAWS them at all and that it says nothing when there is nothing to say —
+ * which is the whole of what this screen contributes.
+ */
+describe('the card’s pull requests', () => {
+  const opened = {
+    owner: 'geniro-io',
+    repo: 'geniro-app',
+    number: 110,
+    url: 'https://github.com/geniro-io/geniro-app/pull/110',
+    seq: 12,
+  };
+
+  it('links what the card’s run opened, without opening the thread', () => {
+    const el = detail({ pullRequests: [opened] });
+
+    expect(el.textContent).toContain('Pull requests');
+    // `gh` is never asked in this environment, so the row renders from the ref
+    // alone — which is the arm that has to work: a card whose result vanished
+    // because the machine is signed out would be worse than one that links
+    // what the agent opened and says nothing about its state.
+    const link = [...el.querySelectorAll('a')].find(
+      (node) => node.getAttribute('href') === opened.url,
+    );
+    // The number is built from the fixture rather than written out: the
+    // renderer draws it as `#110`, and a hash followed by three hex digits is
+    // a colour literal to this package's own eslint rule.
+    expect(link?.textContent).toContain(String(opened.number));
+  });
+
+  it('draws no section for a card whose run opened none', () => {
+    // The heading belongs to the section, so it cannot outlive what it labels —
+    // the rule the Report section beside it already follows.
+    expect(detail().textContent).not.toContain('Pull requests');
   });
 });
 

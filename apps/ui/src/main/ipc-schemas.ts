@@ -270,6 +270,14 @@ function hasFilenameControlCharacters(value: string): boolean {
 export const gitDirSchema = absolutePath;
 
 /**
+ * Where the folder picker OPENS: the folder the field already holds, or
+ * nothing. It only positions a native dialog, so the handler IGNORES a value
+ * that fails this rather than refusing the press — a refusal would leave the
+ * control that opens the picker dead.
+ */
+export const pickFolderStartSchema = absolutePath.optional();
+
+/**
  * A task id on its way into a BRANCH NAME and a directory name.
  *
  * Held to the id alphabet rather than to "a non-blank string", because this

@@ -81,6 +81,35 @@ describe('an image an agent referenced from its own markdown', () => {
     expect(src()).toBe('data:image/png;base64,BBB');
   });
 
+  it('renders a path with a SPACE in it, which used to reach the screen as raw markdown', async () => {
+    // Every task worktree and attachment lives under `~/Library/Application
+    // Support/`, and CommonMark allows no space in a bare destination — so the
+    // whole reference was left as literal text and nothing was ever loaded.
+    const load = vi.fn(async () => 'data:image/png;base64,SPC');
+
+    await render('![shot](/Users/me/Library/Application Support/x.png)', load);
+
+    expect(load).toHaveBeenCalledWith(
+      '/Users/me/Library/Application Support/x.png',
+    );
+    expect(src()).toBe('data:image/png;base64,SPC');
+  });
+
+  it('asks for a percent-encoded path by the name the file really has', async () => {
+    // The pipeline hands `src` over percent-encoded, and the daemon reads the
+    // path it is given literally — `%20` names no file.
+    const load = vi.fn(async () => 'data:image/png;base64,PCT');
+
+    await render(
+      '![shot](/Users/me/Library/Application%20Support/x.png)',
+      load,
+    );
+
+    expect(load).toHaveBeenCalledWith(
+      '/Users/me/Library/Application Support/x.png',
+    );
+  });
+
   it('does NOT fetch a remote image, and says so', async () => {
     // Local-first: this app makes no outbound requests, and an agent-authored
     // `![](https://…)` is exactly the beacon `img-src 'self' data:` exists to

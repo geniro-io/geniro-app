@@ -82,6 +82,7 @@ function deps(over: Partial<ConductorDeps> = {}): ConductorDeps {
     prepareWorktree: vi.fn(async ({ taskId }: { taskId: string }) => ({
       path: `/wt/${taskId}`,
       branch: `geniro/${taskId}`,
+      reused: false,
     })),
     discardWorktree: vi.fn(async () => true),
     log: () => undefined,
@@ -179,6 +180,7 @@ describe('AutopilotConductor', () => {
     const prepareWorktree = vi.fn(async () => ({
       path: '/wt/t1',
       branch: 'geniro/t1',
+      reused: false,
     }));
 
     await new AutopilotConductor(deps({ prepareWorktree })).tick();
@@ -236,6 +238,32 @@ describe('AutopilotConductor', () => {
     await new AutopilotConductor(deps({ discardWorktree })).tick();
 
     expect(discardWorktree).toHaveBeenCalledWith('t1');
+  });
+
+  // Unless it was the task's OWN, already standing: a refusal may then mean
+  // the run that made it is still working in it, and giving it back would take
+  // that run's cwd away.
+  it('keeps a worktree it did not make when the daemon refuses the start', async () => {
+    const { fetchMock, refuse } = daemon({
+      p1: {
+        projectId: 'p1',
+        eligible: [{ id: 't1', title: 'x', status: 'todo' }],
+      },
+    });
+    refuse.add('/v1/tasks/t1/runs');
+    vi.stubGlobal('fetch', fetchMock);
+    const discardWorktree = vi.fn(async () => true);
+    const prepareWorktree = vi.fn(async () => ({
+      path: '/wt/t1',
+      branch: 'geniro/t1',
+      reused: true,
+    }));
+
+    await new AutopilotConductor(
+      deps({ discardWorktree, prepareWorktree }),
+    ).tick();
+
+    expect(discardWorktree).not.toHaveBeenCalled();
   });
 
   it('does not start a task whose worktree could not be made', async () => {

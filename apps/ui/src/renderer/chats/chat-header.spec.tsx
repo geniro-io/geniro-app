@@ -233,6 +233,40 @@ describe('ChatHeader — how long this turn has been running', () => {
     );
   });
 
+  it('names the REPOSITORY a task’s worktree was cut from, not the worktree’s id', async () => {
+    // REPORTED as "seems like it didnt take correct directory": a task's agent
+    // works in a worktree named by the task's id, so the chip read
+    // `794addc7-273d-4924-8…`. The directory was right; the name said nothing.
+    const worktree =
+      '/Users/me/Library/Application Support/Geniro/worktrees/794addc7-273d-4924-81b6-52ed20a63396';
+    const el = render(
+      <ChatHeader
+        {...baseProps}
+        isWorkflow={false}
+        agentKind="claude"
+        cwd={worktree}
+        worktreeOf="/Users/me/Desktop/Projects/Geniro/geniro-app"
+      />,
+    );
+
+    const identity = el.querySelector('[data-slot="thread-identity"]')!;
+    expect(identity.textContent).toContain('geniro-app');
+    expect(identity.textContent).not.toContain('794addc7');
+
+    await act(async () => {
+      identity
+        .querySelector('button')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    // Both, in full: where the agent works, and what that is a checkout of.
+    expect(el.textContent).toContain(worktree);
+    expect(el.textContent).toContain('Repository');
+    expect(el.textContent).toContain(
+      '/Users/me/Desktop/Projects/Geniro/geniro-app',
+    );
+  });
+
   it('keeps a run on the CLI’s own profile off the LINE, and names the default behind it', async () => {
     // The default is not news, so it earns no room on a row the title
     // truncates for. Inside the panel — which is opened deliberately — the

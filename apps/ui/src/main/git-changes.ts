@@ -284,6 +284,7 @@ export async function readChangesSince(
       changes: [],
       truncated: false,
       unavailableReason: 'Not a git repository.',
+      movedOffStart: false,
     };
   }
   // Asked BEFORE the diff, because the sentence differs and the difference
@@ -297,8 +298,19 @@ export async function readChangesSince(
       truncated: false,
       unavailableReason:
         'The commit this chat started at is no longer in this checkout — its history was rewritten or the folder was replaced.',
+      movedOffStart: false,
     };
   }
+  // Whether the checkout still DESCENDS from that commit. When it does not — a
+  // branch switched, a pull request checked out for review — diffing the tree
+  // against the start commit lists every file that differs between two
+  // branches, none of which this chat touched: REPORTED as "500 files that were
+  // not changed at all" on a review chat that had checked out the PR it was
+  // reviewing. Measured against HEAD instead, the list is what is uncommitted
+  // NOW, and `movedOffStart` lets the view say why.
+  const descends =
+    (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'])) !== null;
+  const base = descends ? sha : 'HEAD';
 
   // Both halves must speak the SAME path language over the SAME scope, and by
   // default they do not: `diff` reports repo-root-relative paths for the whole
@@ -310,8 +322,8 @@ export async function readChangesSince(
   // `ls-files` with the diff exists to prevent. `--full-name` fixes the
   // language and the `:/` pathspec fixes the scope.
   const [names, diff, others] = await Promise.all([
-    git(dir, ['diff', ...SAFE_DIFF, '--name-status', sha]),
-    git(dir, ['diff', ...SAFE_DIFF, sha]),
+    git(dir, ['diff', ...SAFE_DIFF, '--name-status', base]),
+    git(dir, ['diff', ...SAFE_DIFF, base]),
     git(dir, [
       'ls-files',
       '--others',
@@ -325,6 +337,7 @@ export async function readChangesSince(
       changes: [],
       truncated: false,
       unavailableReason: 'git could not read this folder’s changes.',
+      movedOffStart: false,
     };
   }
 
@@ -395,5 +408,6 @@ export async function readChangesSince(
     changes: changes.slice(0, MAX_CHANGES),
     truncated: changes.length > MAX_CHANGES,
     unavailableReason: null,
+    movedOffStart: !descends,
   };
 }

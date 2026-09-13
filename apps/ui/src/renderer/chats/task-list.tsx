@@ -215,7 +215,11 @@ export function TaskScrollRows({
 
 /** One agent's task set, as a surface that draws several of them at once. */
 export interface AgentTaskGroup {
-  /** The agent card's id — the React key, and what the caller grouped by. */
+  /**
+   * The React key: the agent card's id, made unique per CONVERSATION by the
+   * caller when one agent keeps several lists — a node called several times
+   * keeps one per call.
+   */
   agentId: string;
   /** What to call that agent on screen. */
   agentName: string;

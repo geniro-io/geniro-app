@@ -54,6 +54,7 @@ describe('readChangesSince', () => {
       truncated: false,
       unavailableReason: null,
       movedOffStart: false,
+      upstreamBase: null,
     });
   });
 
@@ -397,6 +398,88 @@ describe('readChangesSince', () => {
     expect(result.movedOffStart).toBe(true);
     // The branch difference is NOT listed; the uncommitted edit is.
     expect(result.changes.map((change) => change.path)).toEqual(['README.md']);
+  });
+
+  /** A bare repository standing in for GitHub, wired up as `origin`. */
+  function addOrigin(): string {
+    const remote = mkdtempSync(join(tmpdir(), 'geniro-origin-'));
+    execFileSync('git', ['init', '--bare', '-q', remote], { cwd: tmpdir() });
+    run(['remote', 'add', 'origin', remote]);
+    return remote;
+  }
+
+  function commitFile(name: string, text: string, message: string): string {
+    writeFileSync(join(dir, name), text);
+    run(['add', '.']);
+    run(['commit', '-q', '-m', message]);
+    return run(['rev-parse', 'HEAD']);
+  }
+
+  it('leaves out what a PULL brought in, measuring against the newest commit shared with the remote', async () => {
+    // REPORTED as "a lot of strange changes": a chat fast-forwarded `main` by 51
+    // upstream commits and edited ten files of its own, and the dialog listed
+    // 194. The checkout still descends from the start, so the branch-switch
+    // guard cannot help — the newest commit HEAD shares with the remote's
+    // default branch is where the chat's own work begins.
+    const started = initRepo();
+    const remote = addOrigin();
+    try {
+      // Upstream work that reached the remote's main after the chat began.
+      commitFile('upstream.txt', 'someone else\n', 'upstream');
+      run(['push', '-q', 'origin', 'main']);
+      const shared = run(['rev-parse', 'origin/main']);
+      // The chat's own work: a commit the remote does not hold, and an edit.
+      commitFile('mine.txt', 'this chat\n', 'mine');
+      writeFileSync(join(dir, 'README.md'), 'edited\n');
+
+      const result = await readChangesSince(dir, started);
+
+      expect(result.upstreamBase).toBe(shared);
+      expect(result.movedOffStart).toBe(false);
+      // `upstream.txt` is NOT listed; the chat's own commit and edit are.
+      expect(result.changes.map((change) => change.path)).toEqual([
+        'mine.txt',
+        'README.md',
+      ]);
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the start as the base when the remote holds nothing newer than it', async () => {
+    const started = initRepo();
+    const remote = addOrigin();
+    try {
+      run(['push', '-q', 'origin', 'main']);
+      commitFile('mine.txt', 'this chat\n', 'mine');
+
+      const result = await readChangesSince(dir, started);
+
+      expect(result.upstreamBase).toBeNull();
+      expect(result.changes.map((change) => change.path)).toEqual(['mine.txt']);
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the start as the base when the remote is BEHIND it', async () => {
+    // A chat begun on a branch already ahead of the remote: the shared commit
+    // is older than the start, and measuring against it would put the work
+    // from before the chat back into the list.
+    initRepo();
+    const remote = addOrigin();
+    try {
+      run(['push', '-q', 'origin', 'main']);
+      const started = commitFile('before.txt', 'earlier\n', 'before the chat');
+      commitFile('mine.txt', 'this chat\n', 'mine');
+
+      const result = await readChangesSince(dir, started);
+
+      expect(result.upstreamBase).toBeNull();
+      expect(result.changes.map((change) => change.path)).toEqual(['mine.txt']);
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
   });
 
   it('says the commit is gone rather than reporting no changes', async () => {

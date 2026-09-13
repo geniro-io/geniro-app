@@ -144,6 +144,36 @@ export class RunDao extends BaseDao<Run> {
   }
 
   /**
+   * Every run holding captured pull requests — ids only, filtered in SQL.
+   *
+   * What `PullRequestRecaptureService` sweeps: a run holding NONE can carry no
+   * misattributed one, and resetting it too would have the next chat listing
+   * re-read every transcript in the database rather than a handful.
+   */
+  async listWithPullRequests(txEm?: EntityManager): Promise<Pick<Run, 'id'>[]> {
+    return this.getRepo(txEm).find(
+      { pullRequests: { $ne: null } },
+      { fields: ['id'], disableIdentityMap: true },
+    );
+  }
+
+  /**
+   * Forget what the pull-request capture recorded for one run — the list AND
+   * the marker — so the next chat listing reads its transcript again from the
+   * first row under whatever rule holds then.
+   */
+  async forgetPullRequestCapture(
+    runId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.updateById(
+      runId,
+      { pullRequests: null, pullRequestsScannedSeq: null },
+      txEm,
+    );
+  }
+
+  /**
    * The runs carrying spend that was POLLED rather than reported by a turn,
    * whose last activity falls in a period.
    *

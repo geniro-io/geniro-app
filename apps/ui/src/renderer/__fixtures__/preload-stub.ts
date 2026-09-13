@@ -203,6 +203,7 @@ export function createPreloadStub(
         truncated: false,
         unavailableReason: 'Not a git repository.',
         movedOffStart: false,
+        upstreamBase: null,
       });
     },
     prepareTaskWorktree: (input: {

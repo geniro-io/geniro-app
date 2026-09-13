@@ -5950,7 +5950,7 @@ export function Chats({
         // already applies between two agents.
         const several = lists.length > 1;
         taskGroups.push({
-          agentId: several ? `${agentId} ${list.threadId}` : agentId,
+          agentId: several ? `${agentId}\u0000${list.threadId}` : agentId,
           agentName: several
             ? `${agentName} · ${list.threadId === MAIN_THREAD_ID ? 'main' : list.threadId}`
             : agentName,
@@ -8783,6 +8783,7 @@ export function Chats({
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
                     movedOffStart={chatChanges.movedOffStart}
+                    upstreamBase={chatChanges.upstreamBase}
                     error={chatChanges.error}
                     loading={chatChanges.loading}
                     onRefresh={readChangesNow}

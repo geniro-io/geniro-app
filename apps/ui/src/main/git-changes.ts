@@ -258,6 +258,65 @@ export function countDiffLines(diff: string | null): {
 }
 
 /**
+ * The default branch of the `origin` remote, as a ref this checkout holds — or
+ * null for a repository with no such remote.
+ *
+ * `origin/HEAD` is what a clone records; a repository that was `git init`ed
+ * and then given a remote never has it, so the two usual names are tried
+ * behind it rather than treating its absence as "no upstream".
+ */
+async function defaultRemoteBranch(dir: string): Promise<string | null> {
+  for (const ref of [
+    'refs/remotes/origin/HEAD',
+    'refs/remotes/origin/main',
+    'refs/remotes/origin/master',
+  ]) {
+    const found = await git(dir, ['rev-parse', '--verify', '--quiet', ref]);
+    if (found !== null && found.trim() !== '') {
+      return ref;
+    }
+  }
+  return null;
+}
+
+/**
+ * The commit to measure against INSTEAD of the chat's start, once the checkout
+ * has pulled upstream work in after the chat began — or null when the start
+ * is still the right base.
+ *
+ * A pull keeps HEAD descending from the start, so the branch-switch guard in
+ * {@link readChangesSince} never fires, and a diff against the start then
+ * lists every file the pulled commits touched: REPORTED as "a lot of strange
+ * changes" on a chat that had fast-forwarded `main` by 51 upstream commits and
+ * edited ten files of its own — the dialog listed 194. None of the 184 were
+ * this chat's work, and nothing on screen said which ten were.
+ *
+ * The newest commit HEAD shares with the default remote branch is where the
+ * chat's own work begins: everything at or below it is already upstream, so
+ * it was either pulled in or has since been merged. It is used only when it
+ * lies AT OR PAST the start — a stale remote ref, or a chat begun on a branch
+ * already ahead of the remote, answers with an older commit, and measuring
+ * against that would put upstream's own changes back in. A repository with no
+ * remote, or one whose shared commit IS the start, keeps the start.
+ */
+async function upstreamBaseSince(
+  dir: string,
+  sha: string,
+): Promise<string | null> {
+  const remote = await defaultRemoteBranch(dir);
+  if (remote === null) {
+    return null;
+  }
+  const shared = (await git(dir, ['merge-base', 'HEAD', remote]))?.trim();
+  if (shared === undefined || shared === '' || shared === sha) {
+    return null;
+  }
+  const pastStart =
+    (await git(dir, ['merge-base', '--is-ancestor', sha, shared])) !== null;
+  return pastStart ? shared : null;
+}
+
+/**
  * What has changed in a folder since one commit — including files that were
  * created and never `git add`ed.
  *
@@ -285,6 +344,7 @@ export async function readChangesSince(
       truncated: false,
       unavailableReason: 'Not a git repository.',
       movedOffStart: false,
+      upstreamBase: null,
     };
   }
   // Asked BEFORE the diff, because the sentence differs and the difference
@@ -299,6 +359,7 @@ export async function readChangesSince(
       unavailableReason:
         'The commit this chat started at is no longer in this checkout — its history was rewritten or the folder was replaced.',
       movedOffStart: false,
+      upstreamBase: null,
     };
   }
   // Whether the checkout still DESCENDS from that commit. When it does not — a
@@ -310,7 +371,9 @@ export async function readChangesSince(
   // NOW, and `movedOffStart` lets the view say why.
   const descends =
     (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'])) !== null;
-  const base = descends ? sha : 'HEAD';
+  // A checkout that PULLED still descends — see `upstreamBaseSince`.
+  const upstreamBase = descends ? await upstreamBaseSince(dir, sha) : null;
+  const base = descends ? (upstreamBase ?? sha) : 'HEAD';
 
   // Both halves must speak the SAME path language over the SAME scope, and by
   // default they do not: `diff` reports repo-root-relative paths for the whole
@@ -338,6 +401,7 @@ export async function readChangesSince(
       truncated: false,
       unavailableReason: 'git could not read this folder’s changes.',
       movedOffStart: false,
+      upstreamBase: null,
     };
   }
 
@@ -409,5 +473,6 @@ export async function readChangesSince(
     truncated: changes.length > MAX_CHANGES,
     unavailableReason: null,
     movedOffStart: !descends,
+    upstreamBase,
   };
 }

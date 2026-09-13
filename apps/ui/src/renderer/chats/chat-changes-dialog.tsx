@@ -205,6 +205,7 @@ export function ChatChangesDialog({
   truncated,
   unavailableReason: reason,
   movedOffStart = false,
+  upstreamBase = null,
   error,
   loading,
   onRefresh,
@@ -231,6 +232,13 @@ export function ChatChangesDialog({
    * said in the header, since "against <sha>" would then be untrue.
    */
   movedOffStart?: boolean;
+  /**
+   * The checkout pulled upstream work in after the chat began, so the list is
+   * measured against this commit — the newest HEAD shares with the remote's
+   * default branch — and what the pull brought in is left out. Said in the
+   * header for the reason `movedOffStart` is: "against <start>" is then untrue.
+   */
+  upstreamBase?: string | null;
   error: string | null;
   loading: boolean;
   /** Asked for on open — the "I am looking at it now" read. */
@@ -264,7 +272,9 @@ export function ChatChangesDialog({
             ? 'This chat was not stamped with a commit, so there is nothing to compare against.'
             : movedOffStart
               ? `This checkout has moved off ${startSha.slice(0, 12)}, the commit this chat started at, onto another branch — so this lists what is uncommitted on it now, including files that were created and never added. Read-only: undo anything here in your own git.`
-              : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
+              : upstreamBase !== null
+                ? `Working tree against ${upstreamBase.slice(0, 12)}, the newest commit this checkout shares with the remote's main branch — this chat started at ${startSha.slice(0, 12)} and has since pulled upstream work in, which is left out. Includes files that were created and never added. Read-only: undo anything here in your own git.`
+                : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
         </p>
 
         {error ? <ErrorText className="shrink-0">{error}</ErrorText> : null}

@@ -931,6 +931,14 @@ export interface GitChanges {
    * every file the two branches disagree on.
    */
   movedOffStart: boolean;
+  /**
+   * The commit `changes` is measured against INSTEAD of the start, when the
+   * checkout pulled upstream work in after the chat began: the newest commit
+   * HEAD shares with the default remote branch, so what the pull brought in
+   * is left out. Null when the start itself is the base — nothing pulled, no
+   * remote to ask, or `movedOffStart`.
+   */
+  upstreamBase: string | null;
 }
 
 /**

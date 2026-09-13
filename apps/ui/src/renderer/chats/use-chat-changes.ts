@@ -26,6 +26,11 @@ export interface ChatChanges {
    * uncommitted now rather than what changed since that commit.
    */
   movedOffStart: boolean;
+  /**
+   * The commit `changes` is measured against instead of the start, when the
+   * checkout pulled upstream work in after the chat began — null otherwise.
+   */
+  upstreamBase: string | null;
   /** An IPC failure, which is a different thing from git having no answer. */
   error: string | null;
   loading: boolean;
@@ -65,6 +70,7 @@ export function useChatChanges(
   const [truncated, setTruncated] = useState(false);
   const [unavailableReason, setReason] = useState<string | null>(null);
   const [movedOffStart, setMovedOffStart] = useState(false);
+  const [upstreamBase, setUpstreamBase] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [read, setRead] = useState(false);
@@ -99,6 +105,7 @@ export function useChatChanges(
           setTruncated(result.truncated);
           setReason(result.unavailableReason);
           setMovedOffStart(result.movedOffStart);
+          setUpstreamBase(result.upstreamBase);
           setRead(true);
         })
         .catch((err: unknown) => {
@@ -124,6 +131,7 @@ export function useChatChanges(
     setTruncated(false);
     setReason(null);
     setMovedOffStart(false);
+    setUpstreamBase(null);
     setError(null);
     setRead(false);
     lastReadAt.current = 0;
@@ -142,6 +150,7 @@ export function useChatChanges(
     truncated,
     unavailableReason,
     movedOffStart,
+    upstreamBase,
     error,
     loading,
     summary,

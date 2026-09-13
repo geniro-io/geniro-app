@@ -682,6 +682,23 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  it('counts the detached commands a process is still running — a delegate is not one', () => {
+    // What the session registry reads to keep a process serving a dev server
+    // from being reaped as unused.
+    const { session, child } = openSession();
+    session.startTurn({ onEvent: () => {} });
+    expect(session.shellsRunning).toBe(0);
+
+    line(child, { work: 'b1', phase: 'started', unit: 'other', call: 't1' });
+    // A command whose launching call the CLI never named is still running.
+    line(child, { work: 'b2', phase: 'started', unit: 'other' });
+    line(child, { work: 'd1', phase: 'started', unit: 'agent', call: 't3' });
+    expect(session.shellsRunning).toBe(2);
+
+    line(child, { work: 'b1', phase: 'settled', outcome: 'completed' });
+    expect(session.shellsRunning).toBe(1);
+  });
+
   it('does NOT settle a turn on the result of a continuation the CLI ran by itself', async () => {
     // Probed on claude 2.1.266: a message written while the CLI was running a
     // continuation of its own was answered only AFTER that continuation's

@@ -456,6 +456,24 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
   }
 
   /**
+   * Close EVERY process one run holds — its own key, and every per-node and
+   * per-conversation key a workflow run opens under it (`<runId>::…`).
+   *
+   * A workflow run's processes outlive each reply, as a chat's do, so a
+   * teardown that closed only the bare run key (all a chat has) would leave a
+   * deleted or archived workflow's agents — and every server they started —
+   * running with nothing left to end them.
+   */
+  closeRun(runId: string): void {
+    const prefix = `${runId}::`;
+    for (const [key, entry] of [...this.entries]) {
+      if (key === runId || key.startsWith(prefix)) {
+        this.closeEntry(key, entry, 'its run was torn down');
+      }
+    }
+  }
+
+  /**
    * Retire every session of one agent in one folder, from the next turn on.
    *
    * REPORTED against cursor as "usually when I update MCP they are available
@@ -621,6 +639,14 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       if (this.entries.get(runId) !== entry || !entry.session.idle) {
         return;
       }
+      if (entry.session.shellsRunning > 0) {
+        // Quiet is not unused when the process is serving something: a dev
+        // server the agent started writes nothing for as long as it works,
+        // and it dies with this process. Re-armed on the same terms as the
+        // parked case below — the window resumes once the last one ends.
+        this.arm(runId, entry);
+        return;
+      }
       if (entry.session.parked) {
         // The window measures a chat going UNUSED, and this one is not: the CLI
         // is standing still on a question the user has been shown and has not
@@ -690,7 +716,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
         if (
           !candidate[1].session.idle ||
           candidate[1].session.parked ||
-          this.worksOffTurn(candidate[1])
+          this.worksOffTurn(candidate[1]) ||
+          // A process serving a detached command is doing work the user can
+          // see — a server on a port — and evicting it kills that work.
+          candidate[1].session.shellsRunning > 0
         ) {
           continue;
         }

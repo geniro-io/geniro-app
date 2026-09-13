@@ -2638,6 +2638,13 @@ export interface AgentSession {
    */
   readonly retired: boolean;
   /**
+   * How many detached commands this process has started and not yet ended —
+   * see `CliSession.shellsRunning`. A holder must not reap a process holding
+   * them for going quiet, or evict it to make room: a dev server writes nothing
+   * for as long as it works, and it dies with this process.
+   */
+  readonly shellsRunning: number;
+  /**
    * Alive and idle, and yet not free: the CLI is standing still on a verdict
    * only the user can give, raised (or held) between turns.
    *

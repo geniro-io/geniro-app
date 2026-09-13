@@ -32,6 +32,7 @@ import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import { AgentSessionRegistry } from '../../agents/services/agent-session.registry';
 import { ApprovalRegistry } from '../../agents/services/approval-registry';
 import { AttachmentStoreService } from '../../agents/services/attachment-store.service';
+import { ItemSeqAllocator } from '../../agents/services/item-seq.allocator';
 import { McpHarvestStore } from '../../agents/services/mcp-harvest.store';
 import {
   partialOwnerKey,
@@ -248,8 +249,6 @@ interface RunContext {
    * continued — see `RunCallSeed`. Null on a run's first pass.
    */
   callSeed: RunCallSeed | null;
-  /** The seq this pass writes first — past everything an earlier pass wrote. */
-  firstSeq: number;
   /**
    * The seed row is already written: a follow-up persists its message before
    * the walk starts, because the route answers with that row.
@@ -447,6 +446,7 @@ export class GraphExecutorService implements OnModuleInit {
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
     private readonly partials: PartialStreamService,
     private readonly attachments: AttachmentStoreService,
+    private readonly seqs: ItemSeqAllocator,
   ) {}
 
   /**
@@ -639,7 +639,6 @@ export class GraphExecutorService implements OnModuleInit {
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions: new Map(),
         callSeed: null,
-        firstSeq: 0,
         seedPersisted: false,
         seedImages: [],
       },
@@ -807,12 +806,11 @@ export class GraphExecutorService implements OnModuleInit {
       run.id,
       images,
     );
-    const seq = (await this.itemDao.maxSeq(run.id, em)) + 1;
     const item = await this.persist(
       em,
       run.id,
       null,
-      seq,
+      await this.seqs.reserve(run.id),
       'message',
       'user',
       messagePayload(text, storedImages),
@@ -829,7 +827,6 @@ export class GraphExecutorService implements OnModuleInit {
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions,
         callSeed,
-        firstSeq: seq + 1,
         seedPersisted: true,
         seedImages: turnImages,
       },
@@ -1244,16 +1241,6 @@ export class GraphExecutorService implements OnModuleInit {
     /** This pass's `liveRuns` entry — removed only by the pass that set it. */
     let liveControl: LiveRunControl | null = null;
     /**
-     * Every `AgentSessionRegistry` key this run opened, so the run can close
-     * what it opened — nothing else will.
-     *
-     * The registry's own reapers (idle window, LRU eviction, shutdown) bound a
-     * session that goes quiet; this bounds one that does not. A workflow run is
-     * the natural owner because it is the only thing that knows the work is
-     * over: the processes exist to outlive their TURNS, not their run.
-     */
-    const sessionKeys = new Set<string>();
-    /**
      * The calls each callee process has served since it was spawned — what its
      * closer closes the stranded work of. One conversation's process is
      * continued by several calls, and a delegate the first launched is still
@@ -1279,12 +1266,15 @@ export class GraphExecutorService implements OnModuleInit {
       return false;
     };
     let cancelRequested = false;
-    let seq = run.firstSeq;
     let runFinished = false;
     let persistenceFailed = false;
 
-    // One serialized write chain for the whole run: seq allocation and
-    // persist-then-emit ordering stay correct while N nodes stream at once.
+    // One serialized write chain for the whole pass: persist-then-emit ordering
+    // stays correct while N nodes stream at once. The seq itself comes from the
+    // SHARED allocator rather than a counter of this pass's own, because this
+    // pass is no longer the run's only writer: its agents' processes outlive
+    // it, and what they do between passes is written by the sinks of the pass
+    // that spawned them while a later pass may already be writing.
     let chain: Promise<void> = Promise.resolve();
     const enqueue = (work: () => Promise<void> | void): void => {
       chain = chain.then(work).catch((err: unknown) => {
@@ -1295,13 +1285,21 @@ export class GraphExecutorService implements OnModuleInit {
       });
     };
 
-    const persistItem = (
+    const persistItem = async (
       nodeId: string | null,
       kind: ItemKind,
       role: string | null,
       payload: unknown,
     ): Promise<ItemWire> =>
-      this.persist(em, runId, nodeId, seq++, kind, role, payload);
+      this.persist(
+        em,
+        runId,
+        nodeId,
+        await this.seqs.reserve(runId),
+        kind,
+        role,
+        payload,
+      );
 
     /**
      * Drop one node's pending approvals NOW and hand back the work that
@@ -1478,16 +1476,11 @@ export class GraphExecutorService implements OnModuleInit {
             em,
           );
         }
-        // Every delegate and detached command still out dies with the processes
-        // the `finally` closes. Said here, while the run can still write and
-        // AHEAD of its terminal row, rather than left running on screen for
-        // good. Failing to say so must not fail the run: the work it describes
-        // is over either way.
-        await closeStrandedWork(null, true).catch((err: unknown) => {
-          this.logger.error(
-            `workflow run ${runId} could not close its stranded work: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        });
+        // A delegate or detached command still out at the end of a pass is NOT
+        // stranded: its process is kept (see the `finally`), so it is still
+        // running and says its own ending when it has one. What dies with a
+        // process is written when that process goes, by its closer.
+        //
         // A user cancel rolls up cancelled; any other non-completed node (a
         // failure, or a CLI killed externally without cancel()) is a failure —
         // downstream nodes were skipped, so the run must never read as success.
@@ -1532,33 +1525,25 @@ export class GraphExecutorService implements OnModuleInit {
         }
         // The aggregate handle MUST settle even if the final writes fail, or
         // the ProcessRegistry entry leaks and the run can never be re-driven.
-        // The processes die with the run, and this is the ONLY thing that ends
-        // them: a session-scoped CLI is never closed by its own turn ending.
-        // Before the token revoke below, which is the same idea one layer up —
-        // a child that outlives its run must not still be able to act.
         //
-        // A kept session going quiet is the registry's to reap; a run that is
-        // OVER is this method's, because nothing else can know that. Note what
-        // it costs by design: background work still running when the last node
-        // settles is terminated here. That is the right way round — the run is
-        // the user's unit of work, and keeping processes alive past it would
-        // mean a finished workflow that never actually stops.
-        // The closers go FIRST: these closes are the run's own teardown, whose
-        // endings were already written above, and a closer left armed here
-        // would only queue a second pass over the same rows.
-        for (const key of sessionKeys) {
-          this.sessionClosers.delete(key);
-        }
-        for (const key of sessionKeys) {
-          this.sessions.close(key);
-        }
-        sessionKeys.clear();
-        callsBySessionKey.clear();
-        // The call surface dies with the run — broker state dropped, every
-        // caller-node token revoked, so a child that outlived its run can't
-        // reopen its MCP endpoint.
+        // The agents' PROCESSES are deliberately left running, as a chat's are
+        // between its turns: a reply ends a PASS, not the conversation, and what
+        // an agent started in the background — a dev server the user is about
+        // to open — lives inside its process. REPORTED as "This site can't be
+        // reached" right after a Manager started `web` and `api` and handed over
+        // the links: closing every session here killed both the moment its
+        // reply settled. The next message reuses each kept process (same key);
+        // the registry reaps one that goes unused, never while a detached
+        // command is still running; and a delete or archive ends them all
+        // (`AgentSessionRegistry.closeRun`). Their closers stay armed, so the
+        // endings of what dies with a process are still written when it goes.
+        //
+        // The call surface's REGISTRATION ends with the pass — a kept process
+        // calling between passes is answered RUN_NOT_ACTIVE — but the caller
+        // TOKENS do not: a kept process read its token when it spawned and
+        // presents it again on the next pass, so revoking here would lock that
+        // caller out of its own team. The run's teardown revokes them.
         this.callBroker.unregisterRun(runId);
-        this.callTokens.revokeRun(runId);
         // The live plane's per-node state ends with the run, exactly as a
         // chat's ends with its turn. The remembered window survives (it
         // describes the model), so a re-run of the same graph is scaled from
@@ -2276,15 +2261,18 @@ export class GraphExecutorService implements OnModuleInit {
        * `outcome`, `finalText` and `textChunks` describe a turn whose envelope
        * the caller has already been handed, and rewriting any of them would
        * change an answer that has been acted on. So this makes the work VISIBLE
-       * without re-opening a settled call — which is also why it stops at
-       * `runFinished`: past that point the run has written its own
-       * `turn_complete`, and a row after it would claim the workflow was still
-       * going when nothing can make it finish again.
+       * without re-opening a settled call.
+       *
+       * It goes on writing after this PASS has ended: the process is kept
+       * between passes, so a dev server exiting, or the CLI reacting to it,
+       * is real work that happened in this run and must reach its transcript —
+       * dropping it left a finished command listed as running for good. Only a
+       * run being DELETED is refused, since its rows are going.
        */
       const offTurnCompactions = new CompactionRows();
       const onOffTurnEvent = (event: AgentEvent): void => {
         enqueue(async () => {
-          if (runFinished) {
+          if (this.deleting.has(runId)) {
             return;
           }
           const mapped = mapEventToItem(event);
@@ -2323,19 +2311,14 @@ export class GraphExecutorService implements OnModuleInit {
        * inventing a verdict. The request stays parked until the run closes the
        * session, which is the honest end for it.
        *
-       * And it holds EVERYTHING once `runFinished`, on the same boundary
-       * `onOffTurnEvent` stops at — the two hooks have to agree about when the
-       * run stopped accepting work, or the window between `runFinished` and the
-       * `sessions.close(key)` loop in the `finally` is one where a kept process
-       * is granted every permission it asks for while every row describing what
-       * it then did is dropped. That is a RECORDING gap rather than a privilege
-       * one — `auto` already means unattended — and a grant with no transcript
-       * is the half worth refusing.
+       * The same verdict after this PASS has ended as during it: the process is
+       * kept between passes and `onOffTurnEvent` goes on recording what it does,
+       * so the grant is no longer one with no transcript — which was the only
+       * reason it used to hold everything once the pass had finished.
        */
       const onBetweenTurnApproval = (request: {
         toolName: string;
       }): boolean | null =>
-        !runFinished &&
         questionCapable &&
         approval === 'auto' &&
         !isUserQuestion(adapter.getConfig().questionToolName, request.toolName)
@@ -2370,7 +2353,6 @@ export class GraphExecutorService implements OnModuleInit {
       const sessionKey = `${runId}::${
         callContext ? `call:${callContext.conversationId}` : `node:${node.id}`
       }`;
-      sessionKeys.add(sessionKey);
       const handle: AgentTurnHandle = this.sessions.startTurn(
         sessionKey,
         adapter,
@@ -2379,10 +2361,11 @@ export class GraphExecutorService implements OnModuleInit {
         onBetweenTurnApproval,
         onOffTurnEvent,
       );
-      // The registry may close this process before the run ends — reaped as
-      // unused, evicted, or replaced as stale — and every delegate inside it
-      // dies with it. Its detached commands need nothing from here: while the
-      // run is live the process exit announces their closes through
+      // The registry may close this process at any time — reaped as unused,
+      // evicted, replaced as stale, or ended by the run's archive — during this
+      // pass or long after it, since the process is kept between passes. Every
+      // delegate inside it dies with it. Its detached commands need nothing
+      // from here: the process exit announces their closes through
       // `onOffTurnEvent` itself.
       //
       // Installed AFTER `startTurn`, never before it: a kept process that
@@ -2409,7 +2392,8 @@ export class GraphExecutorService implements OnModuleInit {
           : [{ nodeId: node.id }];
         callsBySessionKey.delete(sessionKey);
         enqueue(async () => {
-          if (runFinished) {
+          // A deleted run's rows are going; every other close is written.
+          if (this.deleting.has(runId)) {
             return;
           }
           for (const scope of scopes) {
@@ -3015,7 +2999,14 @@ export class GraphExecutorService implements OnModuleInit {
       // keys on the same callCapable predicate.
       for (const callerId of calleesOf.keys()) {
         const caller = nodesById.get(callerId);
-        if (caller?.kind === 'agent' && callCapable(caller)) {
+        // ONCE per run, not per pass: a caller's process is kept between passes
+        // and presents the token it spawned with, so a fresh one here would
+        // lock a reused Manager out of its own team. Revoked by the teardown.
+        if (
+          caller?.kind === 'agent' &&
+          callCapable(caller) &&
+          this.callTokens.get(runId, callerId) === null
+        ) {
           this.callTokens.issue(runId, callerId, mintToken());
         }
       }

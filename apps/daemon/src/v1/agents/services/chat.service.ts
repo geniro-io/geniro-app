@@ -1630,11 +1630,11 @@ export class ChatService implements OnModuleInit {
       if (run.status === 'running') {
         await this.stopForArchive(run);
       }
-      // Keyed by RUN, so this reaches a chat's kept process and none of a
-      // workflow's, whose sessions are keyed `<runId>::node:<id>` by the
-      // executor and are closed by that engine's own teardown when the cancel
-      // above settles its aggregate handle.
-      this.sessions.close(runId);
+      // EVERY process of the run: a chat's kept one, and each of a workflow's,
+      // which the executor keys `<runId>::node:<id>` and keeps between its
+      // passes — so a shelved workflow does not go on serving the dev servers
+      // its agents started.
+      this.sessions.closeRun(runId);
       const archivedAt = new Date();
       await this.runDao.updateById(runId, { archivedAt }, em);
       // Re-read rather than patch the entity in hand: the cancel above settles

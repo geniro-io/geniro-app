@@ -527,6 +527,7 @@ class FakeAdapter {
       },
       retired: false,
       parked: false,
+      shellsRunning: 0,
       close: () => {
         if (closed) {
           return;
@@ -823,6 +824,7 @@ function setup(
       return 0;
     },
   };
+  const seqs = new ItemSeqAllocator(em, itemDao as unknown as ItemDao);
   const teardown = new RunTeardownService(
     itemDao as unknown as ItemDao,
     nodeDao as unknown as NodeStateDao,
@@ -834,10 +836,9 @@ function setup(
     callTokens,
     partials,
     attachments,
-    // A workflow run allocates its own seq from the executor's single-owner
-    // counter, so nothing here reserves through this — it is present only
-    // because the shared teardown forgets whatever a chat run left behind.
-    new ItemSeqAllocator(em, itemDao as unknown as ItemDao),
+    // The SAME allocator the executor numbers this run's rows with, as DI
+    // hands out: the teardown forgets the tail the executor reserved.
+    seqs,
   );
   const service = new GraphExecutorService(
     em,
@@ -893,6 +894,7 @@ function setup(
     },
     partials,
     attachments,
+    seqs,
   );
   // What Nest does at boot, done by hand: the executor's session-close hook.
   service.onModuleInit();
@@ -2631,11 +2633,13 @@ describe('GraphExecutorService — agent calls', () => {
       status: 'ok',
       result: { call_id: 'call-1', agent: 'helper', text: 'helped' },
     });
-    // The caller's token is live mid-run; it is revoked once the run settles.
+    // The caller's token is live mid-run, and still live once the pass ends:
+    // its process is kept and presents that token again on the next pass. The
+    // run's delete is what revokes it (pinned below, beside the kept process).
     expect(callTokens.get(run.id, 'orch')).not.toBeNull();
     completeTurn(caller, 'done');
     await drain();
-    expect(callTokens.get(run.id, 'orch')).toBeNull();
+    expect(callTokens.get(run.id, 'orch')).not.toBeNull();
 
     // EVERY item of the callee sub-turn — the running/terminal status rows
     // and the streamed items between them — carries the call's id, so the
@@ -4501,14 +4505,15 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
   };
 
-  it('keeps the callee alive after its turn settles, and closes it when the RUN ends', async () => {
-    // The defect this replaces: a workflow turn ran on a process that died two
-    // seconds after its own terminal line (`TURN_END_EXIT_GRACE_MS`), so a
-    // callee that backgrounded a build, said "I started it" and settled had
-    // that build killed underneath it — while the caller carried on believing
-    // the work was running. A chat turn had already been given the kept process
-    // for exactly this reason; a graph turn had not.
-    const { service, claude, callBroker } = setup();
+  it('keeps the callee alive after its turn AND after the pass, and closes it with the RUN', async () => {
+    // The first defect: a workflow turn ran on a process that died two seconds
+    // after its own terminal line (`TURN_END_EXIT_GRACE_MS`), so a callee that
+    // backgrounded a build, said "I started it" and settled had that build
+    // killed underneath it. The second, one level up: every PASS closed every
+    // process of the run the moment its reply settled, so a dev server a
+    // Manager had just started was dead by the time it handed over the link —
+    // reported as "This site can't be reached".
+    const { service, claude, callBroker, sessions } = setup();
     const run = await service.startRun({
       slug: 'bg',
       workflow: triggered(CALL_WORKFLOW),
@@ -4530,10 +4535,70 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
     expect(callee.sessionClosed).toBe(false);
 
-    // The run is what ends them: nothing else can know the work is over.
+    // The pass ends, and the processes do not: the conversation goes on.
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+    expect(callee.sessionClosed).toBe(false);
+    expect(claude.starts[0]!.sessionClosed).toBe(false);
+
+    // The run's own teardown — an archive, a delete — is what ends them.
+    sessions.closeRun(run.id);
     expect(callee.sessionClosed).toBe(true);
+    expect(claude.starts[0]!.sessionClosed).toBe(true);
+  });
+
+  it('hands the next reply to a node’s kept process instead of replacing it', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow: triggered(LINEAR),
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B1');
+    await drain();
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    // The follow-up turn opened on the process the first pass kept: replacing
+    // it would have closed that process, and everything it was running, on the
+    // way.
+    expect(claude.starts[2]!.input.prompt).toBe('again');
+    expect(claude.starts[0]!.sessionClosed).toBe(false);
+    completeTurn(claude.starts[2]!, 'A2');
+    await drain();
+    completeTurn(claude.starts[3]!, 'B2');
+    await drain();
+  });
+
+  it('mints a caller’s token ONCE for the run — a kept process presents it again — and the delete revokes it', async () => {
+    const { service, claude, callTokens } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const token = callTokens.get(run.id, 'a');
+    expect(token).not.toBeNull();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(callTokens.get(run.id, 'a')).toBe(token);
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    // A fresh token here would lock the reused process out of its own team.
+    expect(callTokens.get(run.id, 'a')).toBe(token);
+    completeTurn(claude.starts[claude.starts.length - 1]!, 'done again');
+    await drain();
+
+    await service.deleteRun(run.id);
+    expect(callTokens.get(run.id, 'a')).toBeNull();
   });
 
   it('continues a callee conversation in the process it kept, not in a second --resume of the same session', async () => {
@@ -5046,14 +5111,13 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     );
   });
 
-  it('HOLDS an off-turn permission once the RUN has finished', async () => {
-    // The row sink stops at `runFinished`, so between that flag and the
-    // session-close loop in the `finally` a kept process was granted every
-    // permission it asked for while every row describing what it then did was
-    // dropped. A recording gap rather than a privilege one — `auto` already
-    // means unattended — and the two off-turn hooks have to agree about when
-    // the run stopped accepting work.
-    const { service, claude, callBroker } = setup();
+  it('still grants an unattended off-turn permission once the PASS has finished, and records what follows', async () => {
+    // It used to HOLD everything once the pass had finished: the row sink
+    // stopped there, and a grant with no transcript was the half worth
+    // refusing. The process is kept between passes now and what it does is
+    // written, so the grant and its record both carry on — and holding would
+    // park a dev server's process on a verdict nobody is there to give.
+    const { service, claude, callBroker, itemDao } = setup();
     const run = await service.startRun({
       slug: 'bg',
       workflow: triggered(CALL_WORKFLOW),
@@ -5076,7 +5140,17 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     completeTurn(claude.starts[0]!, 'done');
     await drain();
 
-    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(null);
+    expect(callee.betweenTurnApproval({ toolName: 'Bash' })).toBe(true);
+    callee.emitOffTurn({ type: 'text', text: 'the build passed' });
+    await drain();
+    expect(
+      itemDao.items.some(
+        (item) =>
+          item.kind === 'message' &&
+          item.nodeId === 'callee' &&
+          JSON.stringify(item.payload).includes('the build passed'),
+      ),
+    ).toBe(true);
   });
 });
 
@@ -5536,11 +5610,13 @@ describe('GraphExecutorService — work still out when a process ends', () => {
         payloadOf(i).backgroundOutcome === 'stopped',
     );
 
-  it('closes the delegates and detached commands still out when the run finishes, under the node that owns them', async () => {
-    // REPORTED as a finished workflow still showing two sub-agents at work and
-    // a terminal running under its manager. The processes die with the run, so
-    // nothing else is ever going to report those endings.
-    const { service, claude, itemDao } = setup();
+  it('leaves the delegates and detached commands a pass left running OPEN, and closes them with their process', async () => {
+    // A pass used to end by closing every process of the run and writing
+    // `stopped` for everything still out — which killed the dev server an agent
+    // had just started, reported as "This site can't be reached". The processes
+    // are kept now, so what they run is still running, and its endings are
+    // written only when the process that owns it goes.
+    const { service, claude, itemDao, sessions } = setup();
     const run = await service.startRun({
       slug: 'one',
       workflow: triggered(ONE),
@@ -5553,31 +5629,29 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     turn.emit(delegate('task-back', true));
     turn.emit(delegate('task-back', false, 'completed'));
     turn.emit({ type: 'shell_open', toolCallId: 'toolu_left', workId: 'b1' });
-    turn.emit({ type: 'shell_open', toolCallId: 'toolu_done', workId: 'b2' });
-    turn.emit({ type: 'shell_info', toolCallId: 'toolu_done', workId: 'b2' });
     completeTurn(turn, 'done');
     await drain();
 
-    const rows = rowsOf(itemDao, run.id);
+    // The pass is over, and nothing it left running is claimed to have stopped.
+    expect(stoppedDelegates(itemDao, run.id)).toEqual([]);
+    expect(
+      rowsOf(itemDao, run.id).filter((row) => row.kind === 'shell_info'),
+    ).toEqual([]);
+
+    // The process goes — the run archived here — and the delegate still out
+    // is closed under the node that owns it, after the pass's own ending.
+    sessions.closeRun(run.id);
+    await drain();
     const stopped = stoppedDelegates(itemDao, run.id);
-    // Only what was still out: the delegate that reported back and the command
-    // that ended are left alone.
+    // Only what was still out: the delegate that reported back is left alone.
     expect(stopped.map((row) => payloadOf(row).id)).toEqual(['task-out']);
     expect(stopped[0]!.nodeId).toBe('a');
-    expect(payloadOf(stopped[0]!)).toMatchObject({ nodeId: 'a' });
-    const shellCloses = rows.filter((row) => row.kind === 'shell_info');
-    expect(shellCloses.map((row) => payloadOf(row).id)).toEqual([
-      'toolu_done',
-      'toolu_left',
-    ]);
-    expect(shellCloses[1]!.nodeId).toBe('a');
-    // Written while the run could still write — ahead of its terminal row.
+    const rows = rowsOf(itemDao, run.id);
     const terminal = rows.findIndex(
       (row) => row.kind === 'turn_complete' && row.nodeId === null,
     );
     expect(terminal).toBeGreaterThan(-1);
-    expect(rows.indexOf(stopped[0]!)).toBeLessThan(terminal);
-    expect(rows.indexOf(shellCloses[1]!)).toBeLessThan(terminal);
+    expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
   });
 
   it("closes a reaped callee session's delegates while the run goes on — and only that session's", async () => {
@@ -5618,9 +5692,15 @@ describe('GraphExecutorService — work still out when a process ends', () => {
       callId: 'call-1',
     });
 
-    // The caller's own delegate is untouched until ITS process ends — with the
-    // run — and the callee's is not closed a second time.
+    // The caller's own delegate is untouched when the pass ends — its process
+    // is kept past it — and the callee's is not closed a second time.
     completeTurn(caller, 'done');
+    await drain();
+    expect(
+      stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
+    ).toEqual(['task-callee']);
+    // It is closed when the caller's OWN process goes.
+    sessions.close(`${run.id}::node:a`);
     await drain();
     expect(
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),

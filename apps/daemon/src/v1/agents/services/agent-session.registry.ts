@@ -204,6 +204,18 @@ interface SessionEntry {
    * which never reach a spawn at all — replace it.
    */
   policy: { current: BetweenTurnApproval | undefined };
+  /**
+   * Where events arriving BETWEEN turns go, in a holder the session reads
+   * THROUGH — {@link policy}'s reason, reached from a different direction.
+   *
+   * It was bound once at spawn, on the reading that it carries no turn state
+   * and files under the RUN. That held while a key served one identity turn
+   * after turn. A workflow callee's key is its CONVERSATION, which several
+   * calls continue in turn, and each call files its rows under its own id — so,
+   * bound at spawn, everything the CLI did after call-2's turn was filed under
+   * call-1 and nested in call-1's block. Each turn now installs its own.
+   */
+  offTurn: { current: ((event: AgentEvent) => void) | undefined };
 }
 
 /**
@@ -327,9 +339,10 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     betweenTurnApproval?: BetweenTurnApproval | undefined,
     /**
      * Where a NON-approval event arriving between turns goes — see
-     * `CliSessionOptions.onBetweenTurnEvent`. Bound at spawn and not per turn,
-     * because unlike the posture it carries no turn state: it files the event
-     * under the RUN, which is the same run for every turn on this session.
+     * `CliSessionOptions.onBetweenTurnEvent`. Installed on every call, like the
+     * posture above ({@link SessionEntry.offTurn}): what the CLI does after a
+     * turn belongs to the identity that turn filed under, and one key can serve
+     * several — a callee conversation continued by several calls.
      */
     onBetweenTurnEvent?: (event: AgentEvent) => void,
     /**
@@ -354,6 +367,11 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       // request arriving after it settles must be judged by, and the reuse
       // path is the ONLY path most turns take.
       existing.policy.current = betweenTurnApproval;
+      // A turn that names no sink keeps the last one, rather than dropping
+      // what the CLI does next on the floor.
+      if (onBetweenTurnEvent !== undefined) {
+        existing.offTurn.current = onBetweenTurnEvent;
+      }
       const handle = existing.session.startTurn(input, onEvent);
       if (handle) {
         return this.track(runId, existing, handle);
@@ -370,6 +388,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     this.evictIfFull();
 
     const policy: SessionEntry['policy'] = { current: betweenTurnApproval };
+    const offTurn: SessionEntry['offTurn'] = { current: onBetweenTurnEvent };
     const session = adapter.startSession(input, {
       // A daemon that is shutting down must not keep a process alive past the
       // drain: `close()` would have to arrive from a hook that has already run.
@@ -387,15 +406,17 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
             // cannot grant something unasked is the one to fail toward.
             (request) => policy.current?.(request) ?? null,
       // Wrapped so an off-turn row RESTARTS the idle clock — see
-      // {@link touchOffTurn}. Only when the caller supplied a sink: passing a
-      // function where it passed none would change what `startSession` is told
-      // about this session, and the re-arm has nothing to observe anyway.
+      // {@link touchOffTurn} — and read THROUGH the holder, so it reaches the
+      // sink the most recent turn installed. Only when the caller supplied a
+      // sink: passing a function where it passed none would change what
+      // `startSession` is told about this session, and the re-arm has nothing
+      // to observe anyway.
       onBetweenTurnEvent:
         onBetweenTurnEvent === undefined
           ? undefined
           : (event) => {
               this.touchOffTurn(runId);
-              onBetweenTurnEvent(event);
+              offTurn.current?.(event);
             },
       onHeldApproval,
     });
@@ -416,6 +437,7 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
       offTurnActiveAt: 0,
       timer: null,
       policy,
+      offTurn,
     };
     this.entries.set(runId, entry);
     this.forgetWhenClosed(runId, entry);

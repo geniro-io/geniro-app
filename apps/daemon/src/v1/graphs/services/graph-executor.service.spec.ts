@@ -4667,6 +4667,101 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     }
   });
 
+  it("a callee's own card holds the question clocks of ITS callees — a callee can be a caller too", async () => {
+    // REVIEWED: Manager → Engineer → Researcher. A card raised inside a callee
+    // turn used to stand down only that call's silence window, so the
+    // Researcher's question expired while the Engineer sat on a card nobody had
+    // answered — the defect this seam exists for, one level deeper.
+    const NESTED: Workflow = {
+      name: 'nested',
+      nodes: [
+        { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+        { id: 'b', kind: 'agent', agent: 'claude', approval: 'ask' },
+        { id: 'c', kind: 'agent', agent: 'claude', approval: 'auto' },
+      ],
+      edges: [
+        { from: 'a', to: 'b', kind: 'call' as const },
+        { from: 'b', to: 'c', kind: 'call' as const },
+      ],
+    };
+    const askInput = {
+      questions: [
+        {
+          question: 'Which color?',
+          header: 'Color',
+          options: [{ label: 'Red' }, { label: 'Blue' }],
+          multiSelect: false,
+        },
+      ],
+    };
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { service, claude, callBroker, approvals } = setup();
+      const run = await service.startRun({
+        slug: 'nested',
+        workflow: triggered(NESTED),
+        cwd: dir,
+        prompt: 'go',
+      });
+      await drain();
+      expect(
+        await callBroker.callAgent(run.id, 'a', {
+          agent: 'b',
+          message: 'build',
+          mode: 'async',
+        }),
+      ).toMatchObject({ status: 'ok' });
+      await drain();
+      const b = claude.starts[1]!;
+      expect(
+        await callBroker.callAgent(run.id, 'b', {
+          agent: 'c',
+          message: 'research',
+          mode: 'async',
+        }),
+      ).toMatchObject({ status: 'ok' });
+      await drain();
+      const c = claude.starts[2]!;
+
+      // b — an `ask` node — holds a plain permission card for a person.
+      b.emit({
+        type: 'approval_request',
+        id: 'perm-1',
+        toolName: 'Bash',
+        input: { command: 'pnpm test' },
+        requiresUserInteraction: false,
+      });
+      await drain();
+      // c asks b something meanwhile.
+      c.emit({
+        type: 'approval_request',
+        id: 'q-1',
+        toolName: 'AskUserQuestion',
+        input: askInput,
+        requiresUserInteraction: true,
+      });
+      await drain();
+
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      await drain();
+      expect(c.cancelled).toBe(false);
+
+      expect(approvals.resolve(run.id, 'perm-1', true)).toBe(true);
+      await drain();
+      await vi.advanceTimersByTimeAsync(5 * 60_000 - 1_000);
+      await drain();
+      expect(c.cancelled).toBe(false);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await drain();
+      expect(c.cancelled).toBe(true);
+
+      completeTurn(claude.starts[0]!, 'done');
+      await drain();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a follow-up continues the call ids and the conversations an earlier pass left in the transcript', async () => {
     // The broker's state is in memory and died with whichever daemon ran the
     // earlier pass. Without the seed the follow-up minted `call-1` again —
@@ -4721,6 +4816,56 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     ).toMatchObject({ status: 'ok' });
     await drain();
     completeTurn(claude.starts[2]!, 'done again');
+    await drain();
+  });
+
+  it('files what the CLI does after a continuation under THAT call, not the first call of the conversation', async () => {
+    // REVIEWED: the registry bound the off-turn sink once, at spawn — call-1's
+    // closure — so everything a kept process did after call-2's turn was filed
+    // under call-1 and nested in call-1's block.
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'draft',
+    });
+    await drain();
+    const one = claude.starts[1]!;
+    one.emit({ type: 'session', sessionId: 'sess-callee' });
+    completeTurn(one, 'drafted');
+    await first;
+    await drain();
+    const second = callBroker.callAgent(run.id, 'a', {
+      agent: 'callee',
+      message: 'build',
+      thread: 'call-1',
+    });
+    await drain();
+    const two = claude.starts[2]!;
+    completeTurn(two, 'building in the background');
+    await second;
+    await drain();
+
+    // The same process, carrying on by itself after call-2's turn.
+    two.emitOffTurn({ type: 'text', text: 'the background build passed' });
+    await drain();
+    const row = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' &&
+        JSON.stringify(item.payload).includes('background build passed'),
+    );
+    expect(row).toBeDefined();
+    expect(
+      (JSON.parse(row!.payload as string) as { callId?: string }).callId,
+    ).toBe('call-2');
+
+    completeTurn(claude.starts[0]!, 'done');
     await drain();
   });
 
@@ -5377,5 +5522,65 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     expect(
       stoppedDelegates(itemDao, run.id).map((row) => payloadOf(row).id),
     ).toEqual(['task-callee', 'task-caller']);
+  });
+
+  it("a continued conversation's process closes EVERY call's delegates, and a replaced process still closes its own", async () => {
+    // REVIEWED: the closer was scoped to the latest call alone, and installed
+    // BEFORE `startTurn` — so a process replaced inside that call consumed the
+    // new closer, closing nothing of what the old process left out, and the
+    // replacement then had no closer at all.
+    const { service, claude, itemDao, callBroker, sessions } = setup();
+    const run = await service.startRun({
+      slug: 'bg',
+      workflow: triggered(CALL_WORKFLOW),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const stoppedIds = (): string[] =>
+      stoppedDelegates(itemDao, run.id).map((row) => String(payloadOf(row).id));
+    const continueWith = async (
+      message: string,
+      thread: string | undefined,
+      delegateId: string,
+    ): Promise<void> => {
+      const call = callBroker.callAgent(run.id, 'a', {
+        agent: 'callee',
+        message,
+        ...(thread ? { thread } : {}),
+      });
+      await drain();
+      const turn = claude.starts[claude.starts.length - 1]!;
+      turn.emit({ type: 'session', sessionId: 'sess-callee' });
+      turn.emit(delegate(delegateId, true));
+      completeTurn(turn, `${message} started`);
+      await call;
+      await drain();
+    };
+
+    await continueWith('one', undefined, 'task-one');
+    await continueWith('two', 'call-1', 'task-two');
+    // One process served both calls; reaping it stops call-1's delegate too.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(stoppedIds().sort()).toEqual(['task-one', 'task-two']);
+
+    // A fresh process for the next continuation, then REPLACED on the one
+    // after it: the replacement stops what the old process left out…
+    await continueWith('three', 'call-2', 'task-three');
+    expect(
+      sessions.markStale('claude', dir, 'its MCP servers changed'),
+    ).toBeGreaterThan(0);
+    await continueWith('four', 'call-3', 'task-four');
+    expect(stoppedIds()).toContain('task-three');
+    expect(stoppedIds()).not.toContain('task-four');
+
+    // …and the process that replaced it still stops its own when it is reaped.
+    sessions.close(`${run.id}::call:call-1`);
+    await drain();
+    expect(stoppedIds()).toContain('task-four');
+
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
   });
 });

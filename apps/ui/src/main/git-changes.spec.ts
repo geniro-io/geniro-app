@@ -434,7 +434,9 @@ describe('readChangesSince', () => {
 
       const result = await readChangesSince(dir, started);
 
-      expect(result.upstreamBase).toBe(shared);
+      // Named by the ref it came through — this repository has no
+      // `origin/HEAD`, so the fallback to `origin/main` is what answered.
+      expect(result.upstreamBase).toEqual({ sha: shared, ref: 'origin/main' });
       expect(result.movedOffStart).toBe(false);
       // `upstream.txt` is NOT listed; the chat's own commit and edit are.
       expect(result.changes.map((change) => change.path)).toEqual([

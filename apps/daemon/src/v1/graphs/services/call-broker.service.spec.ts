@@ -1691,13 +1691,13 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
         message: 'm',
         mode: 'async',
       });
-      broker.noteCallerBlocked('run-1', 'orch');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
       const failed = { count: 0 };
       parkOn(broker, 'call-1', 1_000, failed);
       await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(failed.count).toBe(0);
 
-      broker.noteCallerUnblocked('run-1', 'orch');
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
       await vi.advanceTimersByTimeAsync(999);
       expect(failed.count).toBe(0);
       await vi.advanceTimersByTimeAsync(2);
@@ -1719,11 +1719,11 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
       const failed = { count: 0 };
       parkOn(broker, 'call-1', 1_000, failed);
       await vi.advanceTimersByTimeAsync(600);
-      broker.noteCallerBlocked('run-1', 'orch');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
       await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(failed.count).toBe(0);
 
-      broker.noteCallerUnblocked('run-1', 'orch');
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
       // A FULL window from the unblock, not the 400ms that were left.
       await vi.advanceTimersByTimeAsync(999);
       expect(failed.count).toBe(0);
@@ -1743,18 +1743,145 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
         message: 'm',
         mode: 'async',
       });
-      broker.noteCallerBlocked('run-1', 'orch');
-      broker.noteCallerBlocked('run-1', 'orch');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-a');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-b');
       const failed = { count: 0 };
       parkOn(broker, 'call-1', 1_000, failed);
-      broker.noteCallerUnblocked('run-1', 'orch');
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-a');
       await vi.advanceTimersByTimeAsync(60 * 60_000);
       expect(failed.count).toBe(0);
-      broker.noteCallerUnblocked('run-1', 'orch');
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-b');
       await vi.advanceTimersByTimeAsync(1_001);
       expect(failed.count).toBe(1);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('the SAME card offered twice is one blocker — its one answer resumes the questions', async () => {
+    // REVIEWED: spawn-cli re-offers a request its turn settled without an
+    // answer to the next turn of the same process, so one card can reach the
+    // seam twice. Counted, it then needed two answers to that one card.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({ launch: 'defer' });
+      await broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
+      const failed = { count: 0 };
+      parkOn(broker, 'call-1', 1_000, failed);
+      broker.noteCallerUnblocked('run-1', 'orch', 'card-1');
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(failed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a callee waiting on its own caller cannot answer its callees either: their questions wait with it', async () => {
+    // REVIEWED: Manager → Engineer → Researcher. An Engineer parked on a
+    // question to its Manager cannot answer_agent its Researcher, so the
+    // Researcher's clock must not run until the Manager has answered.
+    vi.useFakeTimers();
+    try {
+      const { broker } = harness({
+        launch: 'defer',
+        calleesOf: new Map([
+          ['orch', [HELPER]],
+          ['helper', [WRITER]],
+        ]),
+      });
+      await broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'm',
+        mode: 'async',
+      });
+      await broker.callAgent('run-1', 'helper', {
+        agent: 'writer',
+        message: 'm',
+        mode: 'async',
+      });
+      const helperFailed = { count: 0 };
+      parkOn(broker, 'call-1', 24 * 60 * 60_000, helperFailed);
+      const writerFailed = { count: 0 };
+      parkOn(broker, 'call-2', 1_000, writerFailed);
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(writerFailed.count).toBe(0);
+
+      expect(
+        broker.answerAgent('run-1', 'orch', { call_id: 'call-1', answer: 'A' })
+          .status,
+      ).toBe('ok');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(writerFailed.count).toBe(0);
+      await vi.advanceTimersByTimeAsync(2);
+      expect(writerFailed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("every way out of the callee's own park releases its callees' questions — a timeout, and its turn settling", async () => {
+    // `unpark` is the one exit from a park precisely so no ending can leave a
+    // callee blocked with nothing left to release it; pin the two that are not
+    // an answer.
+    for (const ending of ['timeout', 'settle'] as const) {
+      vi.useFakeTimers();
+      try {
+        const { broker, deferred } = harness({
+          launch: 'defer',
+          calleesOf: new Map([
+            ['orch', [HELPER]],
+            ['helper', [WRITER]],
+          ]),
+        });
+        await broker.callAgent('run-1', 'orch', {
+          agent: 'helper',
+          message: 'm',
+          mode: 'async',
+        });
+        await broker.callAgent('run-1', 'helper', {
+          agent: 'writer',
+          message: 'm',
+          mode: 'async',
+        });
+        const helperFailed = { count: 0 };
+        parkOn(
+          broker,
+          'call-1',
+          ending === 'timeout' ? 10_000 : 24 * 60 * 60_000,
+          helperFailed,
+        );
+        const writerFailed = { count: 0 };
+        parkOn(broker, 'call-2', 5_000, writerFailed);
+
+        // Twice the writer's own window: held while its caller is parked.
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(writerFailed.count, ending).toBe(0);
+        if (ending === 'timeout') {
+          expect(helperFailed.count).toBe(1);
+        } else {
+          expect(helperFailed.count).toBe(0);
+          deferred[0]!.resolve({
+            status: 'cancelled',
+            finalText: null,
+            error: 'run cancelled',
+            sessionId: null,
+          });
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        // A full window from the release, not from the park.
+        await vi.advanceTimersByTimeAsync(4_997);
+        expect(writerFailed.count, ending).toBe(0);
+        await vi.advanceTimersByTimeAsync(3);
+        expect(writerFailed.count, ending).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
@@ -1769,7 +1896,7 @@ describe('CallBroker — a caller blocked on a card of its own', () => {
         message: 'm',
         mode: 'async',
       });
-      broker.noteCallerBlocked('run-1', 'orch');
+      broker.noteCallerBlocked('run-1', 'orch', 'card-1');
       const failed = { count: 0 };
       parkOn(broker, 'call-1', 1_000, failed);
       broker.drainCaller('run-1', 'orch');

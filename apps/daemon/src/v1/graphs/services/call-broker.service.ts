@@ -213,6 +213,8 @@ interface ThreadRecord {
 }
 
 interface RunCallState {
+  /** The run this state belongs to — what a clock re-armed from a helper names. */
+  runId: string;
   capability: RunCallCapability;
   callSeq: number;
   turnsStarted: number;
@@ -229,12 +231,23 @@ interface RunCallState {
    */
   seededCallSeq: number;
   /**
-   * How many cards each CALLER node is blocked on right now (node id → open
-   * cards) — the owner-side twin of {@link ActiveCall.blockedOnVerdicts}.
-   * While an owner is counted here, every question its callees park has its
-   * TTL suspended: see {@link ParkedQuestion.timer}.
+   * What each node is blocked on right now, as a set of names (node id →
+   * blockers) — the owner-side twin of {@link ActiveCall.blockedOnVerdicts}.
+   * While a node holds any, every question ITS callees park has its TTL
+   * suspended: see {@link ParkedQuestion.timer}.
+   *
+   * Two kinds of blocker, because a node can be stuck two ways: a CARD it
+   * raised (its own question to the user, a permission in ask mode), named by
+   * the executor; and a question it PARKED on its own caller, named here
+   * ({@link parkBlocker}). A callee that is itself a caller — Manager →
+   * Engineer → Researcher — cannot answer Researcher while it waits on Manager.
+   *
+   * A SET rather than a count: spawn-cli re-offers a request its turn settled
+   * without an answer to the next turn of the same process, so one card can
+   * arrive twice, and a count then needed two answers to that one card before
+   * the node's callees' questions resumed.
    */
-  blockedOwners: Map<string, number>;
+  blockedOwners: Map<string, Set<string>>;
 }
 
 /** A question a woken caller is being told about. */
@@ -366,6 +379,7 @@ export class CallBroker implements OnModuleInit {
       });
     }
     this.runs.set(runId, {
+      runId,
       capability,
       callSeq: seed?.callSeq ?? 0,
       seededCallSeq: seed?.callSeq ?? 0,
@@ -494,7 +508,7 @@ export class CallBroker implements OnModuleInit {
         if (live.conversationId === thread.conversationId) {
           return {
             status: 'error',
-            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — await it, then continue with thread: '${liveId}'`,
+            error: `THREAD_BUSY: '${liveId}' is still running on that conversation — continue with thread: '${liveId}' once it has finished (await_agent collects it if you started it async)`,
           };
         }
       }
@@ -565,12 +579,10 @@ export class CallBroker implements OnModuleInit {
         const final: CallEnvelope = call.failReason
           ? { status: 'error', error: call.failReason }
           : envelope;
-        if (call.parked) {
-          // The turn died with a question still parked (external cancel,
-          // crash) — the timer must not fire into a settled call.
-          stopQuestionTimer(call.parked);
-          call.parked = null;
-        }
+        // The turn died with a question still parked (external cancel,
+        // crash) — the timer must not fire into a settled call, and the
+        // callee must not stay counted as blocked on it.
+        this.unpark(state, callId, call);
         // Same rule for the silence watchdog, and the same reason: a settled
         // call must not later announce that it went quiet.
         if (call.silence !== null) {
@@ -735,8 +747,7 @@ export class CallBroker implements OnModuleInit {
         error: `NO_QUESTION: call '${args.call_id}' has no outstanding question (already answered, or still running)`,
       };
     }
-    call.parked = null;
-    stopQuestionTimer(parked);
+    this.unpark(state, args.call_id, call);
     // The callee is working again — its silence window, stood down while it
     // waited on this answer, starts over from here.
     this.armSilenceWatch(runId, args.call_id, call);
@@ -798,6 +809,9 @@ export class CallBroker implements OnModuleInit {
       ownerTold: false,
     };
     this.rearmQuestionTtl(runId, callId);
+    // The callee is now waiting on ITS caller, so it cannot answer the
+    // questions its own callees park — theirs wait with it.
+    this.blockOwner(state, call.calleeId, parkBlocker(callId));
     // A parked callee emits nothing by construction — it is waiting on its
     // caller — so its silence window stands down exactly as it does behind an
     // approval card, and restarts when the answer lands.
@@ -879,7 +893,7 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     // Its cards went with its turn (the executor sweeps them beside this
-    // call), so nothing blocks it any more — and a count left over here would
+    // call), so nothing blocks it any more — and a blocker left over here would
     // keep every question it is woken with suspended for good.
     state.blockedOwners.delete(callerNodeId);
     const questions: string[] = [];
@@ -1065,12 +1079,10 @@ export class CallBroker implements OnModuleInit {
     reason: string,
     outcome: 'timeout' | 'orphaned',
   ): void {
-    const parked = call.parked;
+    const parked = this.unpark(state, callId, call);
     if (!parked) {
       return;
     }
-    call.parked = null;
-    stopQuestionTimer(parked);
     call.failReason = reason;
     state.capability.persistItem(call.owner, 'call_answer', null, {
       callId,
@@ -1177,58 +1189,105 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
-   * A card went up for a CALLER node — its own AskUserQuestion to the user, or
-   * a permission it holds in ask mode — so it cannot answer anything until a
+   * A card went up for a node — its own AskUserQuestion to the user, or a
+   * permission it holds in ask mode — so it cannot answer anything until a
    * person does. Suspend the TTL of every question its callees have parked,
    * and of any they park meanwhile ({@link ParkedQuestion.timer}).
    *
+   * Any node, not only a DAG caller: a callee that is itself a caller is
+   * blocked by its cards on the same terms.
+   *
    * The owner-side twin of {@link noteCalleeBlocked}, called from the same
    * seam: the executor raises the card and receives its verdict, so it knows
-   * both moments without a cross-module read.
+   * both moments without a cross-module read. `cardId` names the card, so the
+   * same card offered twice is one blocker ({@link RunCallState.blockedOwners}).
    */
-  noteCallerBlocked(runId: string, ownerNodeId: string): void {
+  noteCallerBlocked(runId: string, ownerNodeId: string, cardId: string): void {
     const state = this.runs.get(runId);
-    if (!state) {
+    if (state) {
+      this.blockOwner(state, ownerNodeId, cardId);
+    }
+  }
+
+  /**
+   * A card this node was blocked on has been answered (or has gone away) —
+   * once the LAST of its blockers is, every question its callees have parked
+   * gets its full window again, counted from now: the node has only now been
+   * able to read it.
+   *
+   * A card it never noted is a no-op rather than an error: a settle sweeps
+   * cards that were never answered, and the card is gone on every `respond`,
+   * delivered or not.
+   */
+  noteCallerUnblocked(
+    runId: string,
+    ownerNodeId: string,
+    cardId: string,
+  ): void {
+    const state = this.runs.get(runId);
+    if (state) {
+      this.unblockOwner(state, ownerNodeId, cardId);
+    }
+  }
+
+  /** Add one blocker to a node, suspending its callees' questions on the first. */
+  private blockOwner(
+    state: RunCallState,
+    owner: string,
+    blocker: string,
+  ): void {
+    const blockers = state.blockedOwners.get(owner) ?? new Set<string>();
+    const wasBlocked = blockers.size > 0;
+    blockers.add(blocker);
+    state.blockedOwners.set(owner, blockers);
+    if (wasBlocked) {
       return;
     }
-    state.blockedOwners.set(
-      ownerNodeId,
-      (state.blockedOwners.get(ownerNodeId) ?? 0) + 1,
-    );
     for (const [callId, call] of state.activeCalls) {
-      if (call.owner === ownerNodeId && call.parked) {
-        this.rearmQuestionTtl(runId, callId);
+      if (call.owner === owner && call.parked) {
+        this.rearmQuestionTtl(state.runId, callId);
+      }
+    }
+  }
+
+  /** Remove one blocker; the last one gives its callees' questions full windows. */
+  private unblockOwner(
+    state: RunCallState,
+    owner: string,
+    blocker: string,
+  ): void {
+    const blockers = state.blockedOwners.get(owner);
+    if (!blockers?.delete(blocker) || blockers.size > 0) {
+      return;
+    }
+    state.blockedOwners.delete(owner);
+    for (const [callId, call] of state.activeCalls) {
+      if (call.owner === owner && call.parked) {
+        this.rearmQuestionTtl(state.runId, callId);
       }
     }
   }
 
   /**
-   * A card this caller was blocked on has been answered (or has gone away) —
-   * once the LAST of them is, every question its callees have parked gets its
-   * full window again, counted from now: the caller has only now been able to
-   * read it.
+   * Take a parked question down — its clock stopped, and its callee no longer
+   * blocked by it — and hand back what was parked, or null when nothing was.
    *
-   * Floors at zero on {@link noteCalleeUnblocked}'s reasoning: a settle sweeps
-   * cards that were never answered, so an unmatched call here must not drive
-   * the count negative and suspend the caller's questions for the rest of the
-   * run.
+   * The ONE way out of a park, so a new way for a question to end cannot leave
+   * the callee blocked with nothing left to release it.
    */
-  noteCallerUnblocked(runId: string, ownerNodeId: string): void {
-    const state = this.runs.get(runId);
-    if (!state) {
-      return;
+  private unpark(
+    state: RunCallState,
+    callId: string,
+    call: ActiveCall,
+  ): ParkedQuestion | null {
+    const parked = call.parked;
+    if (!parked) {
+      return null;
     }
-    const left = Math.max(0, (state.blockedOwners.get(ownerNodeId) ?? 0) - 1);
-    if (left > 0) {
-      state.blockedOwners.set(ownerNodeId, left);
-      return;
-    }
-    state.blockedOwners.delete(ownerNodeId);
-    for (const [callId, call] of state.activeCalls) {
-      if (call.owner === ownerNodeId && call.parked) {
-        this.rearmQuestionTtl(runId, callId);
-      }
-    }
+    call.parked = null;
+    stopQuestionTimer(parked);
+    this.unblockOwner(state, call.calleeId, parkBlocker(callId));
+    return parked;
   }
 
   /**
@@ -1318,7 +1377,7 @@ export class CallBroker implements OnModuleInit {
       return;
     }
     stopQuestionTimer(parked);
-    if ((state.blockedOwners.get(call.owner) ?? 0) > 0) {
+    if ((state.blockedOwners.get(call.owner)?.size ?? 0) > 0) {
       return;
     }
     parked.timer = setTimeout(
@@ -1471,6 +1530,14 @@ export class CallBroker implements OnModuleInit {
     }
     return depth;
   }
+}
+
+/**
+ * The blocker a callee holds while its question in `callId` waits on its
+ * caller — named apart from the executor's card ids, which carry a session key.
+ */
+function parkBlocker(callId: string): string {
+  return `park:${callId}`;
 }
 
 /** Stop a parked question's clock, whether or not one is running. */

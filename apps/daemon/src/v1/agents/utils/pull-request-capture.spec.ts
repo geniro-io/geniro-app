@@ -134,6 +134,41 @@ describe('isPullRequestCreateCall', () => {
     expect(isPullRequestCreateCall({ command: 'gh pr created --help' })).toBe(
       false,
     );
+    // Words that lead up to a command are allowed in front of it; a command
+    // that TAKES the marker as its arguments is not one of them.
+    for (const command of [
+      'echo -n gh pr create',
+      'grep -rn gh pr create .',
+      'mygh pr create --fill',
+      'echo `gh pr create` in backticks',
+      'Step 2 gh pr create',
+    ]) {
+      expect(isPullRequestCreateCall({ command }), command).toBe(false);
+    }
+  });
+
+  it('is true behind the words that only lead up to a command', () => {
+    // REVIEWED: every one of these returned false under the first cut of the
+    // command-position rule, while the substring rule before it caught them —
+    // a loop over repositories would open real pull requests no chip showed.
+    for (const command of [
+      'GH_REPO=o/r gh pr create --fill',
+      'git push && GH_PAGER= gh pr create --fill',
+      'if git push; then gh pr create --fill; fi',
+      'for r in a b; do gh pr create --repo "$r" --fill; done',
+      'URL=`gh pr create --fill`',
+      'time gh pr create --fill',
+      'env GH_REPO=o/r gh pr create --fill',
+      'timeout 60 gh pr create --fill',
+      'nohup gh pr create --fill',
+      '/opt/homebrew/bin/gh pr create --fill',
+      'cd /repo && /usr/local/bin/gh pr create --fill',
+      'echo x | xargs -I{} gh pr create --title {}',
+      'bash -lc "GH_REPO=o/r gh pr create --fill"',
+      '! gh pr create --fill',
+    ]) {
+      expect(isPullRequestCreateCall({ command }), command).toBe(true);
+    }
   });
 
   it('is true wherever a shell would execute the words', () => {

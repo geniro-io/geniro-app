@@ -1,7 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import type { GitChange, GitChanges } from '../shared/contracts';
+import type {
+  GitChange,
+  GitChanges,
+  GitUpstreamBase,
+} from '../shared/contracts';
 
 const execFileAsync = promisify(execFile);
 
@@ -281,8 +285,8 @@ async function defaultRemoteBranch(dir: string): Promise<string | null> {
 
 /**
  * The commit to measure against INSTEAD of the chat's start, once the checkout
- * has pulled upstream work in after the chat began — or null when the start
- * is still the right base.
+ * shares newer history with the remote than the start — and the ref it was
+ * found through — or null when the start is still the right base.
  *
  * A pull keeps HEAD descending from the start, so the branch-switch guard in
  * {@link readChangesSince} never fires, and a diff against the start then
@@ -292,17 +296,20 @@ async function defaultRemoteBranch(dir: string): Promise<string | null> {
  * this chat's work, and nothing on screen said which ten were.
  *
  * The newest commit HEAD shares with the default remote branch is where the
- * chat's own work begins: everything at or below it is already upstream, so
- * it was either pulled in or has since been merged. It is used only when it
- * lies AT OR PAST the start — a stale remote ref, or a chat begun on a branch
- * already ahead of the remote, answers with an older commit, and measuring
- * against that would put upstream's own changes back in. A repository with no
- * remote, or one whose shared commit IS the start, keeps the start.
+ * chat's own work begins: everything at or below it is already upstream. That
+ * is true whether it got there by a pull or by the chat's own commits being
+ * merged, which is why the answer names the REF rather than a cause — the
+ * dialog cannot tell the two apart and must not claim either. It is used only
+ * when it lies AT OR PAST the start — a stale remote ref, or a chat begun on a
+ * branch already ahead of the remote, answers with an older commit, and
+ * measuring against that would put upstream's own changes back in. A
+ * repository with no remote, or one whose shared commit IS the start, keeps
+ * the start.
  */
 async function upstreamBaseSince(
   dir: string,
   sha: string,
-): Promise<string | null> {
+): Promise<GitUpstreamBase | null> {
   const remote = await defaultRemoteBranch(dir);
   if (remote === null) {
     return null;
@@ -313,7 +320,16 @@ async function upstreamBaseSince(
   }
   const pastStart =
     (await git(dir, ['merge-base', '--is-ancestor', sha, shared])) !== null;
-  return pastStart ? shared : null;
+  if (!pastStart) {
+    return null;
+  }
+  // `origin/HEAD` names the branch it points at (`origin/master`), which is the
+  // word a reader recognises; a ref that will not abbreviate keeps its own.
+  const name = (await git(dir, ['rev-parse', '--abbrev-ref', remote]))?.trim();
+  return {
+    sha: shared,
+    ref: name || remote.replace(/^refs\/remotes\//, ''),
+  };
 }
 
 /**
@@ -373,7 +389,7 @@ export async function readChangesSince(
     (await git(dir, ['merge-base', '--is-ancestor', sha, 'HEAD'])) !== null;
   // A checkout that PULLED still descends — see `upstreamBaseSince`.
   const upstreamBase = descends ? await upstreamBaseSince(dir, sha) : null;
-  const base = descends ? (upstreamBase ?? sha) : 'HEAD';
+  const base = descends ? (upstreamBase?.sha ?? sha) : 'HEAD';
 
   // Both halves must speak the SAME path language over the SAME scope, and by
   // default they do not: `diff` reports repo-root-relative paths for the whole

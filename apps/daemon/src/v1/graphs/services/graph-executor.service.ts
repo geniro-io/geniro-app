@@ -1243,6 +1243,13 @@ export class GraphExecutorService implements OnModuleInit {
      * over: the processes exist to outlive their TURNS, not their run.
      */
     const sessionKeys = new Set<string>();
+    /**
+     * The calls each callee process has served since it was spawned — what its
+     * closer closes the stranded work of. One conversation's process is
+     * continued by several calls, and a delegate the first launched is still
+     * running inside it after the second has taken the next turn.
+     */
+    const callsBySessionKey = new Map<string, Set<string>>();
     const subTurnSlots = createTurnSemaphore(MAX_PARALLEL_SUB_TURNS);
     let liveSubTurns = 0;
     const calleeTurnCounts = new Map<string, number>();
@@ -1536,6 +1543,7 @@ export class GraphExecutorService implements OnModuleInit {
           this.sessions.close(key);
         }
         sessionKeys.clear();
+        callsBySessionKey.clear();
         // The call surface dies with the run — broker state dropped, every
         // caller-node token revoked, so a child that outlived its run can't
         // reopen its MCP endpoint.
@@ -2154,11 +2162,17 @@ export class GraphExecutorService implements OnModuleInit {
             // parked on one cannot answer its callees until the verdict lands
             // either, so the questions they park wait with it rather than
             // expiring against a caller that cannot see them.
+            //
+            // Any node, a callee included: one that is itself a caller
+            // (Manager → Engineer → Researcher) is blocked by its cards on the
+            // same terms. The card is named by its session and request id, so
+            // a request re-offered to a later turn of the same process is one
+            // blocker rather than two.
+            const cardId = `${sessionKey}#${event.id}`;
             if (callContext) {
               this.callBroker.noteCalleeBlocked(runId, callContext.callId);
-            } else {
-              this.callBroker.noteCallerBlocked(runId, node.id);
             }
+            this.callBroker.noteCallerBlocked(runId, node.id, cardId);
             this.approvals.track({
               runId,
               nodeId: node.id,
@@ -2177,9 +2191,8 @@ export class GraphExecutorService implements OnModuleInit {
                     runId,
                     callContext.callId,
                   );
-                } else {
-                  this.callBroker.noteCallerUnblocked(runId, node.id);
                 }
+                this.callBroker.noteCallerUnblocked(runId, node.id, cardId);
                 const delivered = handle.respondApproval(
                   event.id,
                   allow,
@@ -2328,22 +2341,6 @@ export class GraphExecutorService implements OnModuleInit {
         callContext ? `call:${callContext.conversationId}` : `node:${node.id}`
       }`;
       sessionKeys.add(sessionKey);
-      // The registry may close this process before the run ends — reaped as
-      // unused, evicted, or replaced as stale — and every delegate inside it
-      // dies with it. Its detached commands need nothing from here: while the
-      // run is live the process exit announces their closes through
-      // `onOffTurnEvent` itself.
-      this.sessionClosers.set(sessionKey, () => {
-        enqueue(async () => {
-          if (runFinished) {
-            return;
-          }
-          await closeStrandedWork(
-            callContext ? { callId: callContext.callId } : { nodeId: node.id },
-            false,
-          );
-        });
-      });
       const handle: AgentTurnHandle = this.sessions.startTurn(
         sessionKey,
         adapter,
@@ -2352,6 +2349,44 @@ export class GraphExecutorService implements OnModuleInit {
         onBetweenTurnApproval,
         onOffTurnEvent,
       );
+      // The registry may close this process before the run ends — reaped as
+      // unused, evicted, or replaced as stale — and every delegate inside it
+      // dies with it. Its detached commands need nothing from here: while the
+      // run is live the process exit announces their closes through
+      // `onOffTurnEvent` itself.
+      //
+      // Installed AFTER `startTurn`, never before it: a kept process that
+      // cannot serve this turn is REPLACED inside that call and its close
+      // fires synchronously, so a closer installed first was consumed by the
+      // replacement of the process before it — closing nothing that process
+      // had left out, and leaving the new process with no closer at all.
+      //
+      // For a callee it covers every CALL the process has served, not this one
+      // alone ({@link callsBySessionKey}).
+      if (callContext) {
+        const calls = callsBySessionKey.get(sessionKey) ?? new Set<string>();
+        calls.add(callContext.callId);
+        callsBySessionKey.set(sessionKey, calls);
+      }
+      this.sessionClosers.set(sessionKey, () => {
+        // Read as the process CLOSES: the calls it served are the ones whose
+        // work died with it, and a process spawned on this key later starts
+        // its own list.
+        const scopes: Parameters<typeof closeStrandedWork>[0][] = callContext
+          ? [...(callsBySessionKey.get(sessionKey) ?? [])].map((callId) => ({
+              callId,
+            }))
+          : [{ nodeId: node.id }];
+        callsBySessionKey.delete(sessionKey);
+        enqueue(async () => {
+          if (runFinished) {
+            return;
+          }
+          for (const scope of scopes) {
+            await closeStrandedWork(scope, false);
+          }
+        });
+      });
 
       const finish = (): {
         outcome: NodeOutcome;

@@ -76,6 +76,40 @@ const CREATE_MARKER = 'gh pr create';
 const COMMAND_OPENERS = new Set([';', '&', '|', '(', '{', '\n']);
 
 /**
+ * Words that may stand IN FRONT of a command in the same simple command
+ * without being the command: a compound keyword that opens a body (`then`,
+ * `do`), negation, and the wrappers that run their argument (`time`, `env`,
+ * `nohup`, `timeout 60`, `xargs -I{}`). Under a rule that knew none of them, a
+ * loop over repositories (`for r in …; do gh pr create …`) would open real pull
+ * requests that no chip ever showed.
+ */
+const COMMAND_PREFIX_WORDS = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'do',
+  'while',
+  'until',
+  '!',
+  'time',
+  'env',
+  'command',
+  'exec',
+  'nohup',
+  'timeout',
+  'xargs',
+  'sudo',
+  'nice',
+]);
+
+/** A variable assignment in front of a command — `GH_REPO=o/r gh pr create`. */
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*=/;
+
+/** An option or a count a prefix command takes before its own — `-I{}`, `60`. */
+const PREFIX_ARGUMENT = /^(?:-\S*|\d+(?:\.\d+)?[smhd]?)$/;
+
+/**
  * A shell run with `-c` (or `-lc`, `-ec`…), whose quoted argument is a script
  * of its own — the one place a command legitimately begins right after a
  * quote. Named shells only: `grep -c 'gh pr create'` also ends in `-c`, and
@@ -92,9 +126,11 @@ const SHELL_WRAPPER = /(?:^|[\s/])(?:sh|bash|zsh|dash|ksh)\s+-[A-Za-z]*c$/;
  * — the words as a search PATTERN — and the grep's output quoted the URL that
  * transcript's own thread had opened. So the marker has to stand where a shell
  * would execute it: at the start of the text, after a separator, inside a
- * shell wrapper's `-c` argument, or after the `--` that ends a wrapper's
- * options. Inside a quoted pattern, after an `echo`, in a sentence of prose or
- * in a backticked span of markdown, it is being talked about.
+ * shell wrapper's `-c` argument, after the `--` that ends a wrapper's options,
+ * or behind words that only lead up to a command — assignments, `then`/`do`,
+ * `time`/`env`/`timeout 60` — with `gh` named bare or by its path. Inside a
+ * quoted pattern, after an `echo`, in a sentence of prose or in a backticked
+ * span of markdown, it is being talked about.
  */
 export function runsPullRequestCreate(text: string): boolean {
   let from = 0;
@@ -115,29 +151,74 @@ export function runsPullRequestCreate(text: string): boolean {
   }
 }
 
+/** Where one shell word ends, reading either way. */
+function isWordBoundary(char: string): boolean {
+  return (
+    char === ' ' ||
+    char === '\t' ||
+    char === '"' ||
+    char === "'" ||
+    char === '`' ||
+    COMMAND_OPENERS.has(char)
+  );
+}
+
 /** Whether a word beginning at `at` is where a shell would read a command. */
 function atCommandPosition(text: string, at: number): boolean {
   let i = at - 1;
-  while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) {
-    i -= 1;
+  if (text[i] === '/') {
+    // `/opt/homebrew/bin/gh pr create`: the binary named by its path is still
+    // the binary, so the word to judge from starts where the path does.
+    while (i >= 0 && !isWordBoundary(text[i]!)) {
+      i -= 1;
+    }
+  } else if (i >= 0 && !isWordBoundary(text[i]!)) {
+    // `mygh pr create`: the marker begins inside some other word.
+    return false;
   }
-  if (i < 0) {
-    return true;
+  for (;;) {
+    while (i >= 0 && (text[i] === ' ' || text[i] === '\t')) {
+      i -= 1;
+    }
+    if (i < 0) {
+      return true;
+    }
+    const before = text[i]!;
+    if (COMMAND_OPENERS.has(before)) {
+      return true;
+    }
+    if (before === '`') {
+      // `URL=`gh pr create`` substitutes the command; a backticked span of
+      // markdown prose has a space in front of it instead.
+      return text[i - 1] === '=';
+    }
+    if (before === '"' || before === "'") {
+      return SHELL_WRAPPER.test(text.slice(0, i).trimEnd());
+    }
+    // A brace opens a group only as a word of its own (`{ gh pr create; }`,
+    // answered above); inside a word it is that word's own text — `-I{}`.
+    let start = i;
+    while (
+      start > 0 &&
+      (text[start - 1] === '{' || !isWordBoundary(text[start - 1]!))
+    ) {
+      start -= 1;
+    }
+    const word = text.slice(start, i + 1);
+    // `zsh … -- gh pr create`: the end of a wrapper's own options, after which
+    // the command it was handed begins.
+    if (word === '--') {
+      return true;
+    }
+    if (
+      !ASSIGNMENT_WORD.test(word) &&
+      !COMMAND_PREFIX_WORDS.has(word) &&
+      !PREFIX_ARGUMENT.test(word)
+    ) {
+      return false;
+    }
+    i = start - 1;
   }
-  const before = text[i]!;
-  if (COMMAND_OPENERS.has(before)) {
-    return true;
-  }
-  if (before === '"' || before === "'") {
-    return SHELL_WRAPPER.test(text.slice(0, i).trimEnd());
-  }
-  // `zsh … -- gh pr create`: the end of a wrapper's own options, after which
-  // the command it was handed begins.
-  if (before === '-' && text[i - 1] === '-') {
-    const beforeDashes = text[i - 2];
-    return beforeDashes === undefined || /\s/.test(beforeDashes);
-  }
-  return false;
 }
 
 /** How deep a tool input is walked for its strings — a cycle bounds itself. */

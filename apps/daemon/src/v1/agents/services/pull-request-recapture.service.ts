@@ -6,6 +6,7 @@ import { Injectable, Logger, Optional } from '@nestjs/common';
 
 import { environment } from '../../../environments';
 import { RunDao } from '../dao/run.dao';
+import { PullRequestCaptureService } from './pull-request-capture.service';
 
 /**
  * The marker that retires this migration, in the userData dir beside the
@@ -16,8 +17,8 @@ import { RunDao } from '../dao/run.dao';
 const MARKER_FILE = 'pull-requests-recaptured';
 
 /**
- * One-time sweep: forget every run's captured pull requests, so the next chat
- * listing reads them again under the capture rule that holds NOW.
+ * One-time sweep: forget every run's captured pull requests and capture them
+ * again under the rule that holds NOW.
  *
  * The rule was tightened (`utils/pull-request-capture.ts`): a tool call
  * merely CONTAINING `gh pr create` used to count as having run it, and a URL
@@ -28,20 +29,30 @@ const MARKER_FILE = 'pull-requests-recaptured';
  *
  * Tightening the rule does not touch what it had already filed: the capture
  * is incremental (`Run.pullRequestsScannedSeq`), so a stale entry stays on the
- * row for the life of the run. Forgetting the list and the marker together is
- * what makes the next listing re-read the transcript from its first row — the
- * capture already does that for a run whose marker is null.
+ * row for the life of the run. So the sweep has two halves.
+ *
+ * **The RESET runs before the server listens** ({@link recapture}): the list
+ * and the marker are forgotten together, which is what makes the next pass
+ * read the transcript from its first row. It is ahead of the listen so no
+ * listing can merge a stale list back in — a pass over a reset row starts from
+ * nothing, whoever runs it.
+ *
+ * **The RE-CAPTURE runs after it, in the background**
+ * ({@link recaptureResetRunsQuietly}). Waiting for the next chat listing was
+ * not enough: a listing captures only the runs in its scope, so an ARCHIVED
+ * run stayed empty until someone opened the archive, and `TaskMergeService`
+ * reads the column directly — a card in review whose chat was archived would
+ * never have moved to done on merge. Not awaited, because re-reading several
+ * dozen transcripts measured ~9s, which is not a reason to delay the app.
  *
  * Only runs HOLDING a captured list are reset. A run with none can carry no
- * misattributed one, and the rule only ever got stricter, so nothing a reset
- * could find is missing from those rows — while resetting every run would
- * have the next listing re-read every transcript in the database (measured at
- * 3.8s for ONE list whose largest run holds 14,068 items).
+ * misattributed one, and resetting every run would re-read every transcript in
+ * the database.
  *
- * **ONCE, ever** — {@link MARKER_FILE} retires it. Run every launch, it would
- * discard the capture's marker each time and re-read every listed run's whole
- * transcript on every first listing, which is the cost the marker exists to
- * avoid. The corruption it repairs cannot recur under the new rule.
+ * **ONCE, ever** — {@link MARKER_FILE} retires it, written once the reset has
+ * landed. Run every launch, it would discard the capture's marker each time.
+ * If the background re-capture dies, the reset rows are simply read by the
+ * next listing that shows them.
  */
 @Injectable()
 export class PullRequestRecaptureService {
@@ -49,8 +60,12 @@ export class PullRequestRecaptureService {
 
   private readonly markerPath: string;
 
+  /** The runs {@link recapture} reset this launch, awaiting their re-capture. */
+  private resetRunIds: string[] = [];
+
   constructor(
     private readonly runDao: RunDao,
+    private readonly capture: PullRequestCaptureService,
     private readonly em: EntityManager,
     /** Test seam only — nothing in the app passes it. */
     @Optional() markerPath?: string,
@@ -71,9 +86,28 @@ export class PullRequestRecaptureService {
     for (const run of runs) {
       await this.runDao.forgetPullRequestCapture(run.id, em);
     }
+    this.resetRunIds = runs.map((run) => run.id);
     // Retired whether or not anything was reset: a fresh install has nothing
     // to repair and must not re-scan for the life of the app.
     await this.markDone();
+    return runs.length;
+  }
+
+  /**
+   * Capture the runs {@link recapture} reset, now, rather than waiting for a
+   * listing that may never show them. Returns how many were captured.
+   */
+  async recaptureResetRuns(): Promise<number> {
+    const ids = this.resetRunIds;
+    this.resetRunIds = [];
+    if (ids.length === 0) {
+      return 0;
+    }
+    const em = this.em.fork();
+    const runs = await this.runDao.getAll({ id: { $in: ids } }, undefined, em);
+    // `sync` reads each run from its marker — null after the reset, so from
+    // the first row — and swallows a failure per run.
+    await this.capture.sync(runs, em);
     return runs.length;
   }
 
@@ -115,12 +149,28 @@ export class PullRequestRecaptureService {
       const reset = await this.recapture();
       if (reset !== null && reset > 0) {
         this.logger.log(
-          `forgot the captured pull requests of ${reset} run(s); the next chat listing reads them again`,
+          `forgot the captured pull requests of ${reset} run(s); capturing them again once the daemon is listening`,
         );
       }
     } catch (err) {
       this.logger.warn(
         `pull-request recapture failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** The post-listen entry point: never throws, and is not awaited. */
+  async recaptureResetRunsQuietly(): Promise<void> {
+    try {
+      const captured = await this.recaptureResetRuns();
+      if (captured > 0) {
+        this.logger.log(
+          `captured the pull requests of ${captured} run(s) again`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `re-capturing pull requests failed — the next listing reads them instead: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }

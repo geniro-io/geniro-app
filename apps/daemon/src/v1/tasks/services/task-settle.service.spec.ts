@@ -22,6 +22,7 @@ import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
 import type { Workflow } from '../../graphs/graphs.types';
+import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import type { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { Project } from '../../projects/entity/project.entity';
@@ -127,7 +128,9 @@ describe('TaskSettleService (in-memory sqlite)', () => {
       taskDao,
       projectDao,
       tasks,
-      { get: getWorkflow } as unknown as WorkflowStoreService,
+      new RunWorkflowService(em, runDao, {
+        get: getWorkflow,
+      } as unknown as WorkflowStoreService),
       new TaskAttachmentService(ATTACHMENTS_ROOT),
       new TaskFilesService(em, taskDao, tasks),
     );

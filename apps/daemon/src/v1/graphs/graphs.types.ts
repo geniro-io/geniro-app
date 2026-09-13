@@ -445,6 +445,18 @@ export const WorkflowWireSchema = z.object({
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 
+/**
+ * The workflow ONE RUN runs — the copy it keeps (`Run.workflowSnapshot`), never
+ * the library's current one, so an edit made after the run started reaches
+ * neither its agents panel nor a follow-up message.
+ */
+export const RunWorkflowSnapshotWireSchema = z.object({
+  workflow: WorkflowSchema,
+});
+export type RunWorkflowSnapshotWire = z.infer<
+  typeof RunWorkflowSnapshotWireSchema
+>;
+
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),

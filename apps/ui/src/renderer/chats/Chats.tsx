@@ -4632,8 +4632,9 @@ export function Chats({
   useEffect(() => {
     let cancelled = false;
     const workflowId = activeRun?.workflowId;
+    const runId = activeRun?.id;
     setMissingWorkflow(null);
-    if (!workflowId) {
+    if (!workflowId || !runId) {
       setWfNodes({
         agents: [],
         triggers: [],
@@ -4642,8 +4643,11 @@ export function Chats({
       });
       return;
     }
+    // The RUN's own copy of its graph, never the library's current one — so
+    // editing a workflow changes no run already made from it ("old workflows
+    // chats should not be changed if i change current workflow").
     void workflowApi
-      .getWorkflow({ slug: workflowId })
+      .getWorkflowRunSnapshot({ runId })
       .then(({ workflow }) => {
         if (cancelled) {
           return;
@@ -4687,7 +4691,7 @@ export function Chats({
     return () => {
       cancelled = true;
     };
-  }, [activeRun?.workflowId, workflowApi]);
+  }, [activeRun?.id, activeRun?.workflowId, workflowApi]);
   // Node display metadata for the transcript (names + kinds), and the
   // transcript folded into render entries — consecutive tool calls collapse
   // into expandable groups.

@@ -8,6 +8,7 @@ import { CallBroker } from './services/call-broker.service';
 import { CapabilitiesService } from './services/capabilities.service';
 import { GraphExecutorService } from './services/graph-executor.service';
 import { McpServerService } from './services/mcp-server.service';
+import { RunWorkflowService } from './services/run-workflow.service';
 import { WorkflowStoreService } from './services/workflow-store.service';
 import { WorkflowTitleBackfillService } from './services/workflow-title-backfill.service';
 
@@ -36,15 +37,21 @@ import { WorkflowTitleBackfillService } from './services/workflow-title-backfill
     CallBroker,
     McpServerService,
     WorkflowTitleBackfillService,
+    RunWorkflowService,
   ],
   // `GraphExecutorService` is exported for `TasksModule`, whose cards may name
   // a workflow instead of an agent — the graph twin of the `ChatService` export
   // that module already borrows, and running the same way: tasks import graphs,
   // graphs never import tasks.
+  // `RunWorkflowService` is exported for every reader of an EXISTING run's
+  // graph outside this module (the handoff, a task's settle): a run's workflow
+  // is its snapshot, and reading the library there is how an edit would reach
+  // a run it must not.
   exports: [
     WorkflowStoreService,
     WorkflowTitleBackfillService,
     GraphExecutorService,
+    RunWorkflowService,
   ],
 })
 export class GraphsModule {}

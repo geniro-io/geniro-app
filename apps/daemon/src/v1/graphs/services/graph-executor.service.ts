@@ -99,7 +99,9 @@ import {
   validateWorkflowGraph,
 } from '../utils/graph-validate';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
+import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
+import { RunWorkflowService } from './run-workflow.service';
 import { WorkflowStoreService } from './workflow-store.service';
 
 /** How one node's turn ended (the run-level rollup derives from these). */
@@ -439,6 +441,7 @@ export class GraphExecutorService implements OnModuleInit {
     private readonly skillHarvest: SkillHarvestStore,
     private readonly mcpHarvest: McpHarvestStore,
     private readonly store: WorkflowStoreService,
+    private readonly runWorkflows: RunWorkflowService,
     private readonly teardown: RunTeardownService,
     private readonly groups: RunGroupsService,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
@@ -556,6 +559,9 @@ export class GraphExecutorService implements OnModuleInit {
     const run = await this.runDao.create(
       {
         workflowId: input.slug,
+        // The graph as it is NOW, kept with the run: a later edit of the
+        // library workflow must not reach this run (`Run.workflowSnapshot`).
+        workflowSnapshot: workflowSnapshotOf(input.workflow),
         groupId,
         status: 'running',
         agentKind: null,
@@ -738,9 +744,12 @@ export class GraphExecutorService implements OnModuleInit {
   /**
    * Everything a further pass needs before its walk starts.
    *
-   * The workflow is read from the library as it is NOW, the way a new run of
-   * it would be — an edit made since the last pass is what the next one is
-   * expected to run. Each node's recorded CLI session is collected so it can
+   * The workflow is the run's OWN copy, taken when it started — never the
+   * library as it is now. Asked for as "old workflows chats should not be
+   * changed if i change current workflow": an edit made since is what the next
+   * RUN of it runs, not what this one continues with. A run made before runs
+   * kept a copy is frozen on this first read (`RunWorkflowService`). Each
+   * node's recorded CLI session is collected so it can
    * resume, and the message row is written here rather than by the walk,
    * because the route answers with it.
    */
@@ -761,7 +770,7 @@ export class GraphExecutorService implements OnModuleInit {
         'run is missing a working directory',
       );
     }
-    const { workflow: stored } = await this.store.get(run.workflowId);
+    const stored = await this.runWorkflows.workflowOf(run, em);
     validateWorkflowGraph(stored.nodes, stored.edges);
     validateRunnableGraph(stored.nodes, stored.edges);
     computeRunOrder(stored.nodes, stored.edges);

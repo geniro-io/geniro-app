@@ -63,6 +63,7 @@ import {
 } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { GraphExecutorService } from './graph-executor.service';
+import { RunWorkflowService } from './run-workflow.service';
 import type { WorkflowStoreService } from './workflow-store.service';
 
 // ── In-memory fakes (mirroring chat.service.spec's harness) ──────────────────
@@ -867,6 +868,13 @@ function setup(
     skillHarvest,
     mcpHarvest,
     workflowStore,
+    // The real service over the fake DAO and store: a run started here keeps
+    // its copy, and a follow-up reads that copy, as the running daemon does.
+    new RunWorkflowService(
+      { fork: () => ({}) } as never,
+      runDao as unknown as RunDao,
+      workflowStore,
+    ),
     teardown,
     // The real rule over a fake store: a group claiming this run's workflow
     // slug is what the executor files it under, and `autoGroupId` is the seam
@@ -2285,6 +2293,42 @@ describe('GraphExecutorService — follow-up messages', () => {
       .filter((row) => row.runId === run.id)
       .map((row) => row.seq);
     expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
+  it('continues on the workflow the run STARTED with, not the library as edited since', async () => {
+    // "old workflows chats should not be changed if i change current workflow.
+    // They should use snapshots."
+    const { service, claude, runDao, storeGet } = setup();
+    const workflow = triggered(LINEAR);
+    const run = await service.startRun({
+      slug: 'linear',
+      workflow,
+      cwd: dir,
+      prompt: 'first',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A1');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B1');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // The library copy is edited afterwards: the Reviewer is gone from it.
+    storeGet.mockResolvedValue({
+      slug: 'linear',
+      workflow: triggered({ ...LINEAR, nodes: [LINEAR.nodes[0]!], edges: [] }),
+    });
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+    completeTurn(claude.starts[2]!, 'A2');
+    await drain();
+
+    // The Reviewer still runs — this run's own graph has it — and the library
+    // was never asked.
+    expect(claude.starts).toHaveLength(4);
+    expect(storeGet).not.toHaveBeenCalled();
+    completeTurn(claude.starts[3]!, 'B2');
+    await drain();
   });
 
   it('hands a follow-up to a LIVE run: a working agent’s turn takes it, an idle one gets another turn', async () => {

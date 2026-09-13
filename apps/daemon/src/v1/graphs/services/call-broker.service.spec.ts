@@ -1431,6 +1431,44 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     }
   });
 
+  it('stands down while the callee waits on its own tool call, and resumes after it answers', async () => {
+    // REPORTED as "'qa' has produced nothing for 10 minutes" over a QA agent
+    // that had launched ten reviewer sub-agents as `Task` tool calls: their
+    // results arrived eleven minutes apart and nothing reached the wire in
+    // between. A callee waiting on its own tool is working.
+    vi.useFakeTimers();
+    try {
+      const { broker, items, deferred } = harness({ launch: 'defer' });
+      const call = broker.callAgent('run-1', 'orch', {
+        agent: 'helper',
+        message: 'review it',
+      });
+
+      // The tool call is itself a persisted row, so the executor reports both.
+      broker.noteCalleeToolStarted('run-1', 'call-1', 'tool-a');
+      broker.noteCalleeActivity('run-1', 'call-1');
+      await vi.advanceTimersByTimeAsync(60 * 60_000);
+      expect(items.some((i) => i.payload.stalledCall === true)).toBe(false);
+
+      // Answered — and now the silence counts again, from here.
+      broker.noteCalleeToolFinished('run-1', 'call-1', 'tool-a');
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
+      expect(items.filter((i) => i.payload.stalledCall === true)).toHaveLength(
+        1,
+      );
+
+      deferred[0]!.resolve({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: 'sess-1',
+      });
+      await call;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stays suspended even though the card itself is a row', async () => {
     // The trap in the pairing: an `approval_request` is PERSISTED, so the
     // executor's own activity hook fires for the very event that suspended the

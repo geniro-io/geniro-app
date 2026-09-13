@@ -2157,6 +2157,23 @@ export class GraphExecutorService implements OnModuleInit {
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
               if (callContext) {
+                // A tool call in flight holds the watchdog off until it
+                // answers: the callee is waiting on its own work, however long
+                // that takes (a delegate can run for many minutes and say
+                // nothing on the wire).
+                if (event.type === 'tool_call') {
+                  this.callBroker.noteCalleeToolStarted(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                } else if (event.type === 'tool_result') {
+                  this.callBroker.noteCalleeToolFinished(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                }
                 // This callee is demonstrably alive — restart its silence
                 // watchdog. The broker holds a promise and nothing else, so
                 // this seam is the only place a callee's output is visible.

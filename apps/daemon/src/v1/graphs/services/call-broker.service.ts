@@ -176,6 +176,18 @@ interface ActiveCall {
    */
   blockedOnVerdicts: number;
   /**
+   * The tool calls this callee has started and not yet had answered, by id.
+   *
+   * The silence watchdog is SUSPENDED while any is open: a callee waiting on
+   * its own tool is working, however long the tool takes and whether or not it
+   * writes anything meanwhile. REPORTED as "'qa' has produced nothing for 10
+   * minutes" over a QA agent that had launched ten reviewer sub-agents as
+   * `Task` tool calls — their results arrived at 16:39 and 16:50, and a cursor
+   * delegate puts nothing on the wire in between. A SET rather than a count, so
+   * a tool call announced twice is one open call.
+   */
+  openToolCalls: Set<string>;
+  /**
    * The conversation this call runs in — see {@link ThreadRecord.conversationId}.
    * What a thread continuation is checked against: one conversation serves one
    * call at a time.
@@ -531,6 +543,7 @@ export class CallBroker implements OnModuleInit {
       silence: null,
       saidStalled: false,
       blockedOnVerdicts: 0,
+      openToolCalls: new Set(),
       // A fresh call opens a conversation of its own, named after itself.
       conversationId: conversationId ?? callId,
     };
@@ -1189,6 +1202,47 @@ export class CallBroker implements OnModuleInit {
   }
 
   /**
+   * The callee started a tool call — SUSPEND its silence watchdog until the
+   * tool answers ({@link ActiveCall.openToolCalls}).
+   *
+   * Called by the executor at the same seam as {@link noteCalleeActivity},
+   * which is the only place a callee's tool calls are visible from.
+   */
+  noteCalleeToolStarted(
+    runId: string,
+    callId: string,
+    toolCallId: string,
+  ): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call) {
+      return;
+    }
+    call.openToolCalls.add(toolCallId);
+    if (call.silence !== null) {
+      clearTimeout(call.silence);
+      call.silence = null;
+    }
+  }
+
+  /**
+   * A callee's tool call answered — restart the window once the LAST open one
+   * has. A result for a call this never saw start changes nothing.
+   */
+  noteCalleeToolFinished(
+    runId: string,
+    callId: string,
+    toolCallId: string,
+  ): void {
+    const call = this.runs.get(runId)?.activeCalls.get(callId);
+    if (!call?.openToolCalls.delete(toolCallId)) {
+      return;
+    }
+    if (call.openToolCalls.size === 0) {
+      this.armSilenceWatch(runId, callId, call);
+    }
+  }
+
+  /**
    * A card went up for a node — its own AskUserQuestion to the user, or a
    * permission it holds in ask mode — so it cannot answer anything until a
    * person does. Suspend the TTL of every question its callees have parked,
@@ -1307,7 +1361,13 @@ export class CallBroker implements OnModuleInit {
     // card is itself persisted as a row, so without this the very event that
     // suspends the window would immediately re-arm it. A PARKED one too —
     // waiting on its caller's answer is the same silence.
-    if (call.blockedOnVerdicts > 0 || call.parked !== null) {
+    // And one waiting on its own tool call, for the same reason: the tool call
+    // is persisted as a row too, and it is what starts the wait.
+    if (
+      call.blockedOnVerdicts > 0 ||
+      call.parked !== null ||
+      call.openToolCalls.size > 0
+    ) {
       return;
     }
     call.silence = setTimeout(() => {

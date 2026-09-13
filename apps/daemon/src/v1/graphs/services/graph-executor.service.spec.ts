@@ -2608,6 +2608,49 @@ describe('GraphExecutorService — agent calls', () => {
     );
   });
 
+  it('tells the broker when a callee’s tool call starts and when it answers', async () => {
+    // The seam the watchdog's tool-call suspension rests on. REPORTED as
+    // "'qa' has produced nothing for 10 minutes" over a callee waiting on ten
+    // reviewer sub-agents it had launched as tool calls. Every broker case
+    // passes with this wiring deleted.
+    const { service, claude, callBroker } = setup();
+    const started = vi.spyOn(callBroker, 'noteCalleeToolStarted');
+    const finished = vi.spyOn(callBroker, 'noteCalleeToolFinished');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+
+    callee.emit({ type: 'tool_call', id: 'task-1', name: 'Task', input: {} });
+    await drain();
+    expect(started).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+    expect(finished).not.toHaveBeenCalled();
+
+    callee.emit({
+      type: 'tool_result',
+      id: 'task-1',
+      name: 'Task',
+      result: 'reviewed',
+      isError: false,
+    });
+    await drain();
+    expect(finished).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+
+    completeTurn(callee, 'done');
+    await envelope;
+    await drain();
+  });
+
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {
     const { service, claude, callTokens, callBroker, itemDao } = setup();
     const run = await service.startRun({

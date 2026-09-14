@@ -629,7 +629,7 @@ function callTitle(callId: string): string {
 
 /** The fold-state key of one conversation of one agent. */
 function instanceKey(agentId: string, threadId: string): string {
-  return `${agentId} ${threadId}`;
+  return `${agentId}\u0000${threadId}`;
 }
 
 /**
@@ -1243,6 +1243,8 @@ export function AgentsPanel({
     markers: readonly ChatTimelineMarker[];
     partialReason: string | null;
     onJump: (seq: number) => void;
+    /** The agent is still working on the newest message — see the timeline. */
+    inProgress: boolean;
   };
   onOpenFolderTerminal?: () => void;
   /**
@@ -1484,6 +1486,7 @@ export function AgentsPanel({
                 markers={timeline.markers}
                 partialReason={timeline.partialReason}
                 onJump={timeline.onJump}
+                inProgress={timeline.inProgress}
                 className="size-7 text-muted-foreground"
               />
             ) : null}
@@ -1540,6 +1543,7 @@ export function AgentsPanel({
             markers={timeline.markers}
             partialReason={timeline.partialReason}
             onJump={timeline.onJump}
+            inProgress={timeline.inProgress}
             className="size-6 text-muted-foreground"
           />
         ) : null}

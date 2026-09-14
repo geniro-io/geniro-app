@@ -786,6 +786,7 @@ describe('AgentsPanel', () => {
           ],
           partialReason: null,
           onJump,
+          inProgress: false,
         }}
       />,
     );

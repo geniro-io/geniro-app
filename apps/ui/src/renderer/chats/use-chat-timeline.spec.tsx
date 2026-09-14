@@ -46,6 +46,7 @@ interface Props {
   runId: string | null;
   settledTurns: number;
   latestUserSeq: number;
+  latestAgentSeq: number;
 }
 
 let root: Root | null = null;
@@ -59,8 +60,19 @@ function mount(
   initial: Props,
 ): (next: Props) => void {
   const api = { readChatTimeline } as unknown as ChatsApi;
-  function Probe({ runId, settledTurns, latestUserSeq }: Props): null {
-    seen = useChatTimeline(api, runId, settledTurns, latestUserSeq);
+  function Probe({
+    runId,
+    settledTurns,
+    latestUserSeq,
+    latestAgentSeq,
+  }: Props): null {
+    seen = useChatTimeline(
+      api,
+      runId,
+      settledTurns,
+      latestUserSeq,
+      latestAgentSeq,
+    );
     return null;
   }
   container = document.createElement('div');
@@ -86,7 +98,12 @@ afterEach(() => {
   seen = null;
 });
 
-const BASE: Props = { runId: 'r1', settledTurns: 0, latestUserSeq: 0 };
+const BASE: Props = {
+  runId: 'r1',
+  settledTurns: 0,
+  latestUserSeq: 0,
+  latestAgentSeq: 0,
+};
 
 describe('useChatTimeline', () => {
   it('reads the rail for the open run', async () => {
@@ -121,6 +138,21 @@ describe('useChatTimeline', () => {
     expect(read).toHaveBeenCalledTimes(1);
 
     rerender({ ...BASE, latestUserSeq: 7 });
+    await act(async () => {});
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads when the agent WRITES mid-turn, so the open stretch is live', async () => {
+    // REPORTED as "its not live": a twenty-minute turn moves neither of the
+    // other two triggers, so the stretch being worked read `0 messages` until
+    // the turn ended.
+    const read = vi.fn(() => Promise.resolve(rail()));
+    const rerender = mount(read, BASE);
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+
+    rerender({ ...BASE, latestAgentSeq: 9 });
     await act(async () => {});
 
     expect(read).toHaveBeenCalledTimes(2);

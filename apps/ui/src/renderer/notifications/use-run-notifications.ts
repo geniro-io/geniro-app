@@ -7,8 +7,8 @@ import { isSettledRunStatus } from '../chats/run-status';
 import {
   type AgentNotice,
   agentNoticeBody,
-  announcesEnding,
   diffRunNotifications,
+  endingIsProvisional,
   notificationBody,
 } from './run-notifications';
 
@@ -16,6 +16,13 @@ import {
 function post(payload: Parameters<GeniroApi['notify']>[0]): void {
   void window.geniro.notify(payload).catch((err: unknown) => {
     console.error('failed to post a notification', err);
+  });
+}
+
+/** Withdraw a run's provisional banner — the same failure policy as a post. */
+function retract(runId: string): void {
+  void window.geniro.retractNotification(runId).catch((err: unknown) => {
+    console.error('failed to withdraw a notification', err);
   });
 }
 
@@ -62,9 +69,10 @@ export function useRunNotifications<TRun extends { id: string }>({
    */
   quiet?: ReadonlySet<string>;
   /**
-   * How many DETACHED commands this run has out. A finished turn is announced
-   * by itself only while this is zero ({@link announcesEnding}). Optional — a
-   * caller that cannot know announces every ending.
+   * How many DETACHED commands this run has out. A turn that finishes with any
+   * is announced PROVISIONALLY ({@link endingIsProvisional}) — its banner is
+   * withdrawn if the run goes back to work. Optional — a caller that cannot
+   * know announces every ending as final.
    */
   shellsOpenOf?: (run: TRun) => number;
   /**
@@ -81,6 +89,8 @@ export function useRunNotifications<TRun extends { id: string }>({
   const handledNoticeRef = useRef(0);
   /** Runs whose agent sent a notice during the turn now under way. */
   const noticedRef = useRef<Set<string>>(new Set());
+  /** Runs whose last ending was posted provisionally and is still standing. */
+  const provisionalRef = useRef<Set<string>>(new Set());
   // Read at post time, not captured: the effects below re-run on every list
   // change, and a stale active id would suppress a banner for the wrong chat.
   const activeRunIdRef = useRef(activeRunId);
@@ -124,7 +134,10 @@ export function useRunNotifications<TRun extends { id: string }>({
     const current = new Map(runs.map((run) => [run.id, statusOf(run)]));
     const triggers = diffRunNotifications(seenRef.current, current, quiet);
     // A run going back to WORK starts a new turn, so a notice from the last one
-    // no longer speaks for its ending.
+    // no longer speaks for its ending — and a provisional banner that called the
+    // last one finished was wrong: the agent was waiting, so it is withdrawn.
+    // Whatever reopened the run (the command reporting back, or the user's own
+    // message) the banner no longer describes it.
     for (const [runId, status] of current) {
       const before = seenRef.current.get(runId);
       if (
@@ -133,6 +146,9 @@ export function useRunNotifications<TRun extends { id: string }>({
         !isSettledRunStatus(status)
       ) {
         noticedRef.current.delete(runId);
+        if (provisionalRef.current.delete(runId)) {
+          retract(runId);
+        }
       }
     }
     // Recorded BEFORE the posts, so a throw from one cannot leave the same
@@ -147,18 +163,19 @@ export function useRunNotifications<TRun extends { id: string }>({
       if (!run) {
         continue;
       }
+      let stillRunning = 0;
       if (trigger.kind === 'turn-end' && trigger.status === 'completed') {
-        const noticed = noticedRef.current.delete(trigger.runId);
-        // A finished turn that is not announced by itself: the agent is waiting
-        // on a command it started, or it already said it was done. A failure is
-        // exempt from both — nobody asked for it, so it is always news.
-        if (noticed || !announcesEnding(shellsOpenOf?.(run) ?? 0)) {
+        // The agent already said it was done, in its own words — that banner is
+        // the announcement. A failure is exempt: nobody asked for it.
+        if (noticedRef.current.delete(trigger.runId)) {
           continue;
         }
+        stillRunning = shellsOpenOf?.(run) ?? 0;
       }
       if (watching(trigger.runId)) {
         continue;
       }
+      const provisional = endingIsProvisional(stillRunning);
       post({
         kind: trigger.kind,
         runId: trigger.runId,
@@ -167,8 +184,13 @@ export function useRunNotifications<TRun extends { id: string }>({
           trigger,
           awaitingOf(run),
           summaryOf?.(run) ?? null,
+          stillRunning,
         ),
+        ...(provisional ? { retractable: true } : {}),
       });
+      if (provisional) {
+        provisionalRef.current.add(trigger.runId);
+      }
     }
     // `summaryOf` rides the deps with the rest: the settle that changes a run's
     // status and the sentence explaining it arrive in ONE event, so the two

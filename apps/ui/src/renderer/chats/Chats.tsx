@@ -6911,10 +6911,11 @@ export function Chats({
     quiet: quietSettles,
     // A thread with a command still out may not be finished at all: the agent
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
+    // Its ending is announced provisionally and withdrawn if the run resumes.
     // The same reading the badge uses for its own shells word — see the hook.
     shellsOpenOf: runShellsOpen,
-    // What the agent said itself, with `notify_user` — the one way a finished
-    // agent that left something running can be announced at all.
+    // What the agent said itself, with `notify_user` — posted in its words, in
+    // place of the plain ending.
     notices: agentNotices,
     activeRunId,
   });

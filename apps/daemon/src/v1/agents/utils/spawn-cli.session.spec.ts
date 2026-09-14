@@ -810,9 +810,14 @@ describe('cancelling a session turn', () => {
 
     expect(settled).toBe(false);
     expect(events.some((event) => event.type === 'turn_complete')).toBe(false);
-    // Not lost: the continuation's ending goes the between-turn way.
+    // Not lost: the continuation's ending goes the between-turn way — stamped
+    // as having ended nothing, which is what keeps its row off the run's badge.
     expect(betweenTurns).toEqual([
-      expect.objectContaining({ type: 'turn_complete', continuation: true }),
+      expect.objectContaining({
+        type: 'turn_complete',
+        continuation: true,
+        insideTurn: true,
+      }),
     ]);
 
     line(child, { done: true, finalText: 'BANANA-9' });

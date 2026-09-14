@@ -336,7 +336,13 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return {
         kind: 'turn_complete',
         role: null,
-        payload: { usage: event.usage, stopReason: event.stopReason },
+        // TWIN PARSER: `insideTurn` is read back by the renderer's
+        // `settled-status.ts`, which must not settle a run on such a row.
+        payload: {
+          usage: event.usage,
+          stopReason: event.stopReason,
+          ...(event.insideTurn === true ? { insideTurn: true } : {}),
+        },
       };
     case 'notice':
       // Same shape the graph executor persists its own degrade messages in, so

@@ -719,6 +719,18 @@ type AgentEventBody =
        * real answer arrived.
        */
       continuation?: boolean;
+      /**
+       * True when this continuation's result arrived while a turn geniro
+       * started was still owed its own answer, so it ended NOTHING. Set by
+       * `spawn-cli` alone, never by an adapter — only the session knows a turn
+       * is open.
+       *
+       * Persisted on the row, because a client reading the row cannot tell
+       * otherwise: the renderer mirrors a live `turn_complete` onto the run's
+       * badge, and REPORTED as a sidebar reading `completed · 32m` over a thread
+       * still visibly working, the daemon's own status having never moved.
+       */
+      insideTurn?: boolean;
     }
   | { type: 'turn_cancelled' }
   | {

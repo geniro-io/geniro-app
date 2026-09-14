@@ -16,6 +16,10 @@ import type {
   RunStatusEvent,
   VerdictAck,
 } from '../daemon-client';
+import {
+  AFTER_CLOSE_GRACE_MS,
+  RECENT_LAUNCH_MS,
+} from '../notifications/run-notifications';
 import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
@@ -2521,12 +2525,50 @@ describe('Chats — the system notifications a thread earns', () => {
     });
   });
 
-  it('reports a finished thread whose detached COMMAND is still running', async () => {
+  it('reports a finished thread whose long-running COMMAND is still up, at once', async () => {
     // REPORTED as "agent finoshed work, so i should gett notification", over a
     // thread that had finished with commands still out. The badge reading counts
     // shells and answers `held`, which is never settled — so a background thread
     // whose command outlives its turn (`pnpm dev`, a tailed log) earned no
     // banner at all. The "has the agent stopped" reading leaves shells out.
+    //
+    // And NOT ten seconds late, which is how every such banner used to arrive:
+    // a command launched well before the ending is a server left up, not one
+    // the agent is waiting on, so there is nothing to hold for.
+    twoChats();
+    const { client, emitRunStatus } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    notify.mockClear();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        emitRunStatus({ runId: 'r2', status: null, shellsOpen: 2 });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(RECENT_LAUNCH_MS + 1_000);
+      });
+      await act(async () => {
+        emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+      });
+
+      expect(notify).toHaveBeenCalledWith({
+        kind: 'turn-end',
+        runId: 'r2',
+        title: 'Second chat',
+        body: 'The turn finished.',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('HOLDS the ending of a thread that just launched a command, until that command ends', async () => {
+    // REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
+    // завершения каких-то процессов… и в каждом из этих случаев он мне
+    // отправляет false positive-нотификацию": an agent ends its turn waiting on
+    // a command it has just backgrounded, and carries on when it reports.
     twoChats();
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
@@ -2540,23 +2582,22 @@ describe('Chats — the system notifications a thread earns', () => {
           runId: 'r2',
           status: 'completed',
           activity: null,
-          shellsOpen: 2,
+          shellsOpen: 1,
         });
       });
-
-      // NOT yet: an agent routinely ends its turn waiting on a command and
-      // resumes the moment it reports, so the claim is held while it might
-      // still be undone — the reported "our application thinks the agent
-      // finished, although a second later it continues".
+      await act(async () => {
+        vi.advanceTimersByTime(60_000);
+      });
+      // A minute on and the command is still running: still no claim.
       expect(notify).not.toHaveBeenCalled();
 
+      // The command ended and the agent said nothing more — it WAS done.
       await act(async () => {
-        vi.advanceTimersByTime(10_000);
+        emitRunStatus({ runId: 'r2', status: null, shellsOpen: 0 });
       });
-
-      // And it DOES arrive once the agent has stayed quiet — which is the
-      // other report, about a `pnpm dev` that never reports and so would
-      // otherwise suppress the banner for good.
+      await act(async () => {
+        vi.advanceTimersByTime(AFTER_CLOSE_GRACE_MS);
+      });
       expect(notify).toHaveBeenCalledWith({
         kind: 'turn-end',
         runId: 'r2',

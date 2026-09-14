@@ -5,7 +5,44 @@ const settled = (status: 'completed' | 'failed') =>
   ({ runId: 'r1', kind: 'turn-end', status }) as const;
 
 import type { RunStatusKind } from '../chats/run-status';
-import { diffRunNotifications, notificationBody } from './run-notifications';
+import {
+  diffRunNotifications,
+  holdsEnding,
+  notificationBody,
+  RECENT_LAUNCH_MS,
+} from './run-notifications';
+
+describe('holdsEnding', () => {
+  const now = 1_000_000;
+
+  it('holds an ending while a command launched moments ago is still running', () => {
+    expect(holdsEnding({ shellsOpen: 1, launchedAt: now - 5_000, now })).toBe(
+      true,
+    );
+  });
+
+  it('announces at once when every command has already ended', () => {
+    expect(holdsEnding({ shellsOpen: 0, launchedAt: now - 5_000, now })).toBe(
+      false,
+    );
+  });
+
+  it('announces at once when the running command is an OLD one — a dev server left up', () => {
+    expect(
+      holdsEnding({
+        shellsOpen: 1,
+        launchedAt: now - RECENT_LAUNCH_MS - 1,
+        now,
+      }),
+    ).toBe(false);
+  });
+
+  it('announces at once when no launch was ever seen — the commands predate the window', () => {
+    expect(holdsEnding({ shellsOpen: 2, launchedAt: undefined, now })).toBe(
+      false,
+    );
+  });
+});
 
 const reading = (
   entries: Record<string, RunStatusKind>,

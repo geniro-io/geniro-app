@@ -97,6 +97,76 @@ export function diffRunNotifications(
 }
 
 /**
+ * How recently the newest still-running command must have been LAUNCHED for a
+ * turn's ending to be held back instead of announced.
+ *
+ * REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
+ * завершения каких-то процессов… и в каждом из этих случаев он мне отправляет
+ * false positive-нотификацию". An agent routinely ends its turn WAITING on a
+ * command it just backgrounded — a test run, a build — and the CLI opens a new
+ * turn of its own the moment that command reports. Nothing on the wire says
+ * which kind of ending a turn is (claude's `result` line carries no word about
+ * background work), so the answer is read off WHEN the command started.
+ *
+ * Measured on the reporter's own `geniro.db` (2026-09-14), over every turn end
+ * that left a detached command running. Of 275 whose command was launched in
+ * that very turn, the agent carried on by itself after 150 — and in 141 of
+ * those the command had been launched at most two minutes before the turn
+ * ended (117 within thirty seconds). A launch older than that is the dev
+ * server left up: the agent carried on after 9 of 64 of them, and after only
+ * 61 of the 699 endings whose commands all came from earlier turns.
+ */
+export const RECENT_LAUNCH_MS = 2 * 60_000;
+
+/**
+ * How long a held ending waits after one of its commands has ENDED before it
+ * is announced after all.
+ *
+ * The CLI learns a command finished from the command itself, so a carried-on
+ * turn speaks almost at once: measured, the agent's first row came within 10s
+ * of the close in 126 of 148 cases and within 30s in 141. Speaking retracts the
+ * banner, so this only ever delays a turn that really is over.
+ */
+export const AFTER_CLOSE_GRACE_MS = 30_000;
+
+/**
+ * The longest an ending is held while its commands are still running.
+ *
+ * The other end of the stick: a server launched right before the turn ended
+ * never exits, and that agent IS done. Ten minutes covers 123 of the 150
+ * measured commands the agent was waiting on, so a longer wait is announced
+ * with a banner that may yet be followed by more work, and a server-launching
+ * turn is announced ten minutes late rather than never.
+ */
+export const HOLD_CEILING_MS = 10 * 60_000;
+
+/**
+ * Whether a turn's ending should be held back rather than announced — a
+ * command is still running, and the newest launch is recent enough that the
+ * agent is most likely waiting on it. See {@link RECENT_LAUNCH_MS}.
+ *
+ * Everything else is announced at once. That includes a run whose commands all
+ * predate the turn, which the old blanket ten-second wait delayed for nothing.
+ */
+export function holdsEnding({
+  shellsOpen,
+  launchedAt,
+  now,
+}: {
+  /** How many detached commands the run has out right now. */
+  shellsOpen: number;
+  /** When a launch was last seen, or undefined if none was seen this session. */
+  launchedAt: number | undefined;
+  now: number;
+}): boolean {
+  return (
+    shellsOpen > 0 &&
+    launchedAt !== undefined &&
+    now - launchedAt <= RECENT_LAUNCH_MS
+  );
+}
+
+/**
  * The line under the thread's name.
  *
  * Worded from the kind and the status it landed in, so a failure does not

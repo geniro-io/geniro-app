@@ -662,6 +662,69 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect((await taskDao.getById(task.id))?.status).toBe('done');
   });
 
+  it('keeps a reviewed card’s report current when the agent carries on after its turn settled', async () => {
+    // REPORTED: the first settle came when the agent backgrounded a long check
+    // and ended its turn with "waiting for it, then I'll open the PR"; the CLI
+    // carried on by itself, opened the PR and wrote its real closing words —
+    // and the card still showed the interim message.
+    const task = await working();
+    await row(
+      'run-1',
+      'message',
+      'assistant',
+      '{"text":"waiting for full-check, then I will open the PR"}',
+    );
+    await settleRun('run-1', 'completed');
+    const closing = await row(
+      'run-1',
+      'message',
+      'assistant',
+      '{"text":"opened the PR"}',
+    );
+
+    await settleRun('run-1', 'completed');
+
+    const stored = await taskDao.getById(task.id);
+    expect(stored?.reportItemId).toBe(closing.id);
+    // The column is still the first settle's.
+    expect(stored?.status).toBe('in_review');
+  });
+
+  it('leaves the report of a card the user called Done alone', async () => {
+    const task = await working();
+    const report = await row('run-1', 'message', 'assistant', '{"text":"a"}');
+    await settleRun('run-1', 'completed');
+    await tasks.moveStatus(task.id, { from: 'in_review', to: 'done' });
+    await row('run-1', 'message', 'assistant', '{"text":"a follow-up answer"}');
+
+    await settleRun('run-1', 'completed');
+
+    expect((await taskDao.getById(task.id))?.reportItemId).toBe(report.id);
+  });
+
+  it('does not copy the same screenshot again when a later settle finds the same report', async () => {
+    const task = await working();
+    const scratch = mkdtempSync(join(tmpdir(), 'geniro-report-shots-'));
+    const shot = join(scratch, 'panel.png');
+    writeFileSync(shot, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    await row(
+      'run-1',
+      'message',
+      'assistant',
+      JSON.stringify({ text: `Done.\n\n![the panel](${shot})` }),
+    );
+
+    try {
+      await settleRun('run-1', 'completed');
+      await settleRun('run-1', 'completed');
+
+      expect((await tasks.get(task.id)).attachments).toHaveLength(1);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+      rmSync(join(ATTACHMENTS_ROOT, task.id), { recursive: true, force: true });
+    }
+  });
+
   it('one contested card does not cost the board its whole listing', async () => {
     const task = await working();
     const other = await tasks.create({ projectId, title: 'untouched' });

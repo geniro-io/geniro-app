@@ -1531,6 +1531,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         at !== undefined ||
         named !== undefined ||
         opened !== undefined ||
+        // The task-list capture announces with `status: null` and nothing else
+        // beside the list, so leaving it out of this gate dropped every live
+        // update: the shelf's `Tasks` chip kept the list the chat listing was
+        // loaded with while the transcript's own card moved on. REPORTED as
+        // "tasks wasnt synced" — a chip reading 1/11 under a card at 11/12.
+        tasks !== undefined ||
         workedMs !== undefined ||
         toolCalls !== undefined ||
         previewLine !== undefined ||

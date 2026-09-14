@@ -216,8 +216,12 @@ export class TaskSettleService implements OnModuleInit {
     // after review settles it again — and without this, a card the user had
     // moved to `done` would be dragged back to `in_review` by a conversation
     // they deliberately continued. Only a card still reading as worked is a
-    // card this has anything to say about.
+    // card whose COLUMN this has anything to say about — its REPORT is the one
+    // exception, see `refreshReport`.
     if (task.status !== 'in_progress') {
+      if (task.status === 'in_review' && status === 'completed') {
+        await this.refreshReport(run, task.id, task.reportItemId, em);
+      }
       return;
     }
 
@@ -232,6 +236,39 @@ export class TaskSettleService implements OnModuleInit {
     // reads the work in its worktree and routinely continues the conversation,
     // so the directory has to outlive the settle — see `isWorkFinished`.
     await this.tasks.moveStatus(task.id, { from: task.status, to });
+  }
+
+  /**
+   * Re-read the report of a card already in review when its run settles again.
+   *
+   * A turn's end is not the end of the work: an agent that backgrounds a long
+   * command settles its turn while the command runs, and the CLI then carries on
+   * by itself when it reports back — committing, pushing, opening the pull
+   * request and writing its real closing words. The card had already moved on
+   * the first settle, so it kept the interim message for good. REPORTED as a
+   * card whose report read "I'm waiting for its notification. Once it passes
+   * I'll make three commits, push, and open the PR" directly under the pull
+   * request those words promised.
+   *
+   * Only the REPORT moves — the column stays where the first settle put it,
+   * which is the once-only rule `settle` states. Only on `completed`: a later
+   * turn that failed has not concluded anything worth replacing a report with.
+   * Screenshots are copied only when the report actually CHANGED, because each
+   * copy lands under a fresh directory and a settle that found the same rows
+   * would otherwise attach every picture again.
+   */
+  private async refreshReport(
+    run: Pick<Run, 'id' | 'workflowId' | 'workflowSnapshot'>,
+    taskId: string,
+    current: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const reportItemId = await this.findReport(run, em);
+    if (reportItemId === null || reportItemId === current) {
+      return;
+    }
+    await this.tasks.update(taskId, { reportItemId });
+    await this.attachReportImages(run, taskId, reportItemId, em);
   }
 
   /**

@@ -2,6 +2,7 @@ import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { NotFoundException } from '@packages/common';
 
+import type { Run } from '../../runs/entity/run.entity';
 import { AgentKind } from '../../runs/runs.types';
 import type { UsageReadChannel } from '../adapters/adapter.types';
 import type {
@@ -16,7 +17,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { applyCursorSpend } from '../utils/cursor-usage';
-import { nodeSessionKey } from '../utils/session-keys';
+import { nodeSessionKey, parseSessionKey } from '../utils/session-keys';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -38,6 +39,32 @@ import { CursorUsageService } from './cursor-usage.service';
  * there is none is that adapter's own sentence — nothing here knows which CLI
  * it is talking to, or how one accounts for its window.
  */
+/**
+ * WHOSE readout is being taken — a chat's one agent, or one node of a workflow
+ * run — with everything that differs between the two resolved once.
+ *
+ * One shape rather than a second copy of the read path: a workflow node's
+ * readout first shipped as its own method that asked only the live process,
+ * and so it lost the stored reading, the prewarm and the farewell a chat's
+ * readout had, and showed nothing about a claude Manager that had gone idle.
+ */
+interface ReadingTarget {
+  runId: string;
+  /** The workflow node, or null for a chat's own agent. */
+  nodeId: string | null;
+  /** The `node_state` row the session id is recorded on. */
+  stateNodeId: string;
+  /** The key the agent's kept process is registered under. */
+  sessionKey: string;
+  agentKind: AgentKind | null;
+  /** The profile a stored reading must still describe (null for a node). */
+  configDir: string | null;
+  /** The last reading filed for this agent, verbatim JSON. */
+  storedReading: string | null;
+  /** This agent's newest transcript row — what a stored reading is pinned to. */
+  atSeq: number;
+}
+
 @Injectable()
 export class ChatMetricsService implements OnModuleInit {
   private readonly logger = new Logger(ChatMetricsService.name);
@@ -89,16 +116,18 @@ export class ChatMetricsService implements OnModuleInit {
     // user's own agent — a tax on every turn of every conversation, for a
     // readout most of them never open.
     this.bus.all().subscribe((event) => {
-      if (
-        event.item.kind !== 'turn_complete' ||
-        !this.watched.has(event.runId)
-      ) {
+      // A workflow node's turn belongs to that node's own readout; a chat's
+      // rows carry no node.
+      const nodeId = event.item.nodeId ?? null;
+      const key =
+        nodeId === null ? event.runId : nodeSessionKey(event.runId, nodeId);
+      if (event.item.kind !== 'turn_complete' || !this.watched.has(key)) {
         return;
       }
       // Owned here: this is an RxJS subscriber, so a rejection escaping it
       // reaches the process-level crash guard — and a missed prewarm is a
       // slower hover, not something worth taking the turn plumbing down for.
-      void this.capture(event.runId);
+      void this.capture(key);
     });
   }
 
@@ -119,11 +148,21 @@ export class ChatMetricsService implements OnModuleInit {
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
     }
-    if (nodeId !== null) {
-      return this.readNode(runId, nodeId, em);
+    // A workflow run names the NODE: it holds one process and one window per
+    // node, so the run alone names no agent. REPORTED as "i cant see full
+    // context info for workflow".
+    const target =
+      nodeId === null
+        ? await this.chatTarget(run, runId, em)
+        : await this.nodeTarget(runId, nodeId, em);
+    if (target === null) {
+      throw new NotFoundException(
+        'NODE_NOT_FOUND',
+        `node ${nodeId} has not run in run ${runId}`,
+      );
     }
-    // From here on this run is worth keeping a reading warm for.
-    this.watched.add(runId);
+    // From here on this agent is worth keeping a reading warm for.
+    this.watched.add(target.sessionKey);
     // A stored reading whose `atSeq` still matches the transcript describes THIS
     // conversation as it stands — nothing has been said since it was taken — so
     // asking again would spend 1.84–2.18s (measured, warm claude) to be told the
@@ -144,11 +183,10 @@ export class ChatMetricsService implements OnModuleInit {
     // stored reading still describes this conversation AND stamps a fresh one
     // taken below. Read after the ask instead, a turn landing mid-question
     // would file figures under a transcript they do not describe.
-    const atSeq = await this.itemDao.maxSeq(runId, em);
     const current = this.parseStoredReading(
-      run.lastMetricsReading,
-      atSeq,
-      run.configDir,
+      target.storedReading,
+      target.atSeq,
+      target.configDir,
     );
     // Two conditions, and each rules out a different wrong answer.
     //
@@ -170,12 +208,12 @@ export class ChatMetricsService implements OnModuleInit {
       current !== null &&
       current.context !== null &&
       planReadingIsCurrent(current, Date.now()) &&
-      this.sessions.peek(runId) !== null
+      this.sessions.peek(target.sessionKey) !== null
         ? current
         : null;
     const [agent, payloads] = await Promise.all([
       usable === null
-        ? this.readFromAgent(runId, run.agentKind, em)
+        ? this.readFromAgent(target, em)
         : Promise.resolve({
             context: usable.context,
             plan: usable.plan,
@@ -189,14 +227,14 @@ export class ChatMetricsService implements OnModuleInit {
             askedContext: true,
             askedPlan: true,
           }),
-      this.itemDao.turnCompletePayloads(runId, em),
+      this.itemDao.turnCompletePayloads(runId, em, target.nodeId ?? undefined),
     ]);
     // A live answer is FILED, which is the other half of making the next open
     // instant — without it the very first open of a chat pays two seconds, and
     // so does every open after it, since nothing was written down. Not awaited:
     // the user is waiting on this reply and the write is for the next reader.
     if (usable === null && (agent.context !== null || agent.plan !== null)) {
-      void this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
+      void this.store(target, agent.context, agent.plan);
     }
     // The stored last reading is consulted ONLY where the live one is missing
     // and could not have been taken — a CLI that answers is always preferred,
@@ -210,7 +248,7 @@ export class ChatMetricsService implements OnModuleInit {
       breakdownReason:
         context === null
           ? this.absenceReason(
-              run.agentKind,
+              target.agentKind,
               agent.askedContext,
               'breakdown',
               CONTEXT_ABSENCE,
@@ -220,7 +258,7 @@ export class ChatMetricsService implements OnModuleInit {
       planReason:
         plan === null
           ? this.absenceReason(
-              run.agentKind,
+              target.agentKind,
               agent.askedPlan,
               'planLimits',
               PLAN_ABSENCE,
@@ -245,65 +283,58 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
-   * One WORKFLOW node's readout — the two halves {@link read} answers for a
-   * chat, about the window that one node holds.
+   * A chat's own agent as a reading target.
    *
-   * A workflow run keeps a process per node, so "the run's agent" names nobody
-   * and the readout was offered for chats alone: the composer ring of a
-   * workflow run showed `569.7k / 1M` and nothing behind it. REPORTED as "i
-   * cant see full context info for workflow". Asked the SAME way a chat is — the
-   * adapter takes the node's kept process or its recorded session id, whichever
-   * its CLI reads from — and the spend is summed over that node's own turns.
-   *
-   * Two things a chat's readout does are deliberately absent. Nothing is filed
-   * on the run row's `lastMetricsReading`, which is one reading per RUN and would
-   * hand a chat's shape to whichever node was opened last; and nothing is
-   * prewarmed, since that ask is keyed by run and a workflow run's turns belong
-   * to several agents. The cost is the ask on every open — the price the chat
-   * readout paid before either existed.
+   * The position is read HERE, ahead of any question: the same position
+   * decides whether a stored reading still describes this conversation AND
+   * stamps a fresh one, and read after the ask a turn landing mid-question
+   * would file figures under a transcript they do not describe.
    */
-  private async readNode(
+  private async chatTarget(
+    run: Run,
+    runId: string,
+    em: EntityManager,
+  ): Promise<ReadingTarget> {
+    return {
+      runId,
+      nodeId: null,
+      stateNodeId: SINGLE_AGENT_NODE,
+      sessionKey: runId,
+      agentKind: run.agentKind,
+      configDir: run.configDir,
+      storedReading: run.lastMetricsReading,
+      atSeq: await this.itemDao.maxSeq(runId, em),
+    };
+  }
+
+  /**
+   * One WORKFLOW node as a reading target, or null for a node that has never
+   * run in this run.
+   *
+   * Pinned to the node's OWN newest row rather than the run's: the run's moves
+   * with every other node's work, so a Manager's reading would stop being
+   * served the moment its Engineer wrote a line — which is exactly while the
+   * Manager sits idle and someone looks at it. The profile is not part of a
+   * node's key: a node's config directory is fixed by the run's workflow copy.
+   */
+  private async nodeTarget(
     runId: string,
     nodeId: string,
     em: EntityManager,
-  ): Promise<ChatMetricsWire> {
+  ): Promise<ReadingTarget | null> {
     const state = await this.nodeStateDao.getByRunNode(runId, nodeId, em);
     if (!state) {
-      throw new NotFoundException(
-        'NODE_NOT_FOUND',
-        `node ${nodeId} has not run in run ${runId}`,
-      );
+      return null;
     }
-    const [agent, payloads] = await Promise.all([
-      this.readFromAgent(runId, state.agentKind, em, {
-        sessionKey: nodeSessionKey(runId, nodeId),
-        nodeId,
-      }),
-      this.itemDao.turnCompletePayloads(runId, em, nodeId),
-    ]);
     return {
-      context: agent.context,
-      breakdownReason:
-        agent.context === null
-          ? this.absenceReason(
-              state.agentKind,
-              agent.askedContext,
-              'breakdown',
-              CONTEXT_ABSENCE,
-            )
-          : null,
-      plan: agent.plan,
-      planReason:
-        agent.plan === null
-          ? this.absenceReason(
-              state.agentKind,
-              agent.askedPlan,
-              'planLimits',
-              PLAN_ABSENCE,
-            )
-          : null,
-      takenAt: null,
-      totals: sumUsagePayloads(payloads),
+      runId,
+      nodeId,
+      stateNodeId: nodeId,
+      sessionKey: nodeSessionKey(runId, nodeId),
+      agentKind: state.agentKind,
+      configDir: null,
+      storedReading: state.lastMetricsReading ?? null,
+      atSeq: await this.itemDao.maxSeq(runId, em, nodeId),
     };
   }
 
@@ -359,23 +390,15 @@ export class ChatMetricsService implements OnModuleInit {
    * answers one and not the other loses only that one.
    */
   private async readFromAgent(
-    runId: string,
-    agentKind: AgentKind | null,
+    target: ReadingTarget,
     em: EntityManager,
-    /**
-     * Which process and which `node_state` row answer for it — a chat's own
-     * agent unless a workflow node is named.
-     */
-    target: { sessionKey: string; nodeId: string } = {
-      sessionKey: runId,
-      nodeId: SINGLE_AGENT_NODE,
-    },
   ): Promise<{
     context: ContextBreakdownWire | null;
     plan: PlanLimitsWire | null;
     askedContext: boolean;
     askedPlan: boolean;
   }> {
+    const { runId, agentKind } = target;
     const nothing = {
       context: null,
       plan: null,
@@ -404,7 +427,7 @@ export class ChatMetricsService implements OnModuleInit {
     try {
       const state = await this.nodeStateDao.getByRunNode(
         runId,
-        target.nodeId,
+        target.stateNodeId,
         em,
       );
       sessionId = state?.agentSessionId ?? null;
@@ -506,27 +529,35 @@ export class ChatMetricsService implements OnModuleInit {
    * keep a process alive.
    */
   private async store(
-    runId: string,
-    atSeq: number,
-    configDir: string | null,
+    target: ReadingTarget,
     context: ContextBreakdownWire | null,
     plan: PlanLimitsWire | null,
   ): Promise<void> {
+    const reading = JSON.stringify({
+      takenAt: new Date().toISOString(),
+      atSeq: target.atSeq,
+      configDir: target.configDir,
+      context,
+      plan,
+    } satisfies StoredMetricsReading);
     try {
-      await this.runDao.rememberMetricsReading(
-        runId,
-        JSON.stringify({
-          takenAt: new Date().toISOString(),
-          atSeq,
-          configDir,
-          context,
-          plan,
-        } satisfies StoredMetricsReading),
-        this.em.fork(),
-      );
+      // On the row the reading belongs to: one per run for a chat, one per
+      // node for a workflow run, whose nodes each hold their own window.
+      await (target.nodeId === null
+        ? this.runDao.rememberMetricsReading(
+            target.runId,
+            reading,
+            this.em.fork(),
+          )
+        : this.nodeStateDao.rememberMetricsReading(
+            target.runId,
+            target.nodeId,
+            reading,
+            this.em.fork(),
+          ));
     } catch (err) {
       this.logger.warn(
-        `the reading for run ${runId} could not be filed: ${
+        `the reading for ${target.sessionKey} could not be filed: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
@@ -550,35 +581,48 @@ export class ChatMetricsService implements OnModuleInit {
    * Never throws. On the farewell path a failed reading must not keep a process
    * alive; on the prewarm path it is a cache miss and nothing more.
    */
-  private async capture(runId: string): Promise<void> {
+  private async capture(sessionKey: string): Promise<void> {
+    // The registry key names whose process this is. A workflow NODE's is taken
+    // on its way out exactly as a chat's is — without it a claude Manager left
+    // idle while its callees worked had nothing to show. A call's process has
+    // no readout of its own to file under, so it is left alone.
+    const owner = parseSessionKey(sessionKey);
+    if (owner === null) {
+      return;
+    }
     const em = this.em.fork();
     try {
-      const run = await this.runDao.getById(runId, em);
-      if (!run?.agentKind) {
+      let target: ReadingTarget | null;
+      if (owner.nodeId === null) {
+        const run = await this.runDao.getById(owner.runId, em);
+        target = run ? await this.chatTarget(run, owner.runId, em) : null;
+      } else {
+        target = await this.nodeTarget(owner.runId, owner.nodeId, em);
+      }
+      if (!target?.agentKind) {
         return;
       }
-      const atSeq = await this.itemDao.maxSeq(runId, em);
       // Already current — the farewell of a session that took a reading and
       // then went unused, or a second turn-end for a transcript nothing has
       // been added to. Asking again would spend two seconds of the user's own
       // agent to write down what is already written down.
       if (
         this.parseStoredReading(
-          run.lastMetricsReading,
-          atSeq,
-          run.configDir,
+          target.storedReading,
+          target.atSeq,
+          target.configDir,
         ) !== null
       ) {
         return;
       }
-      const agent = await this.readFromAgent(runId, run.agentKind, em);
+      const agent = await this.readFromAgent(target, em);
       if (agent.context === null && agent.plan === null) {
         return;
       }
-      await this.store(runId, atSeq, run.configDir, agent.context, agent.plan);
+      await this.store(target, agent.context, agent.plan);
     } catch (err) {
       this.logger.warn(
-        `the last reading for run ${runId} could not be taken: ${
+        `the last reading for ${sessionKey} could not be taken: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

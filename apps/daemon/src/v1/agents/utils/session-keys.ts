@@ -23,3 +23,23 @@ export function nodeSessionKey(runId: string, nodeId: string): string {
 export function callSessionKey(runId: string, conversationId: string): string {
   return `${runId}::call:${conversationId}`;
 }
+
+/**
+ * Which run — and which workflow node — a registry key names: a bare run id is
+ * a chat's (`nodeId` null), `<runId>::node:<id>` is a node's own process.
+ *
+ * A CALL's key answers null. Its process belongs to a conversation rather than
+ * to a node's readout, and nothing is kept per conversation to file it under.
+ */
+export function parseSessionKey(
+  key: string,
+): { runId: string; nodeId: string | null } | null {
+  const at = key.indexOf('::');
+  if (at === -1) {
+    return { runId: key, nodeId: null };
+  }
+  const rest = key.slice(at + 2);
+  return rest.startsWith('node:')
+    ? { runId: key.slice(0, at), nodeId: rest.slice('node:'.length) }
+    : null;
+}

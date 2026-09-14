@@ -837,11 +837,16 @@ export class ItemDao extends BaseDao<Item> {
   }
 
   /** Highest seq persisted for a run, or -1 when the run has no items yet. */
-  async maxSeq(runId: string, txEm?: EntityManager): Promise<number> {
+  async maxSeq(
+    runId: string,
+    txEm?: EntityManager,
+    /** One workflow node's newest row; absent means the run's. */
+    nodeId?: string,
+  ): Promise<number> {
     // Project ONLY `seq` — this runs on every sendMessage; hydrating the full
     // newest Item (incl. its text payload) just to read one integer is wasteful.
     const last = await this.getRepo(txEm).findOne(
-      { runId },
+      nodeId === undefined ? { runId } : { runId, nodeId },
       { orderBy: { seq: 'desc' }, fields: ['seq'], disableIdentityMap: true },
     );
     return last ? last.seq : -1;

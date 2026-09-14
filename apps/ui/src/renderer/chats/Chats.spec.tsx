@@ -16,7 +16,6 @@ import type {
   RunStatusEvent,
   VerdictAck,
 } from '../daemon-client';
-import { RECENT_LAUNCH_MS } from '../notifications/run-notifications';
 import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
@@ -2522,43 +2521,41 @@ describe('Chats — the system notifications a thread earns', () => {
     });
   });
 
-  it('reports a finished thread whose long-running COMMAND is still up, at once', async () => {
-    // REPORTED as "agent finoshed work, so i should gett notification", over a
-    // thread that had finished with commands still out. The badge reading counts
-    // shells and answers `held`, which is never settled — so a background thread
-    // whose command outlives its turn (`pnpm dev`, a tailed log) earned no
-    // banner at all. The "has the agent stopped" reading leaves shells out.
-    //
-    // And NOT ten seconds late, which is how every such banner used to arrive:
-    // a command launched well before the ending is a server left up, not one
-    // the agent is waiting on, so there is nothing to hold for.
+  it("posts the agent's OWN notification for a thread that finished and left a server running", async () => {
+    // The ending the rule below cannot recognise: a finished agent with a dev
+    // server still up looks exactly like one waiting on a test run, so its own
+    // `notify_user` call is what reaches the user — REPORTED originally as
+    // "agent finoshed work, so i should gett notification".
     twoChats();
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     notify.mockClear();
 
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await act(async () => {
-        emitRunStatus({ runId: 'r2', status: null, shellsOpen: 2 });
-      });
-      await act(async () => {
-        vi.advanceTimersByTime(RECENT_LAUNCH_MS + 1_000);
-      });
-      await act(async () => {
-        emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
-      });
-
-      expect(notify).toHaveBeenCalledWith({
-        kind: 'turn-end',
+    await act(async () => {
+      emitRunStatus({
         runId: 'r2',
-        title: 'Second chat',
-        body: 'The turn finished.',
+        status: null,
+        notify: 'The dev server is running at http://localhost:3000.',
       });
-    } finally {
-      vi.useRealTimers();
-    }
+    });
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The dev server is running at http://localhost:3000.',
+    });
+
+    // …and the turn's own ending, with the server still up, adds no second one.
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r2',
+        status: 'completed',
+        activity: null,
+        shellsOpen: 1,
+      });
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('SKIPS the ending of a thread that just launched a command, and announces the turn that command wakes', async () => {

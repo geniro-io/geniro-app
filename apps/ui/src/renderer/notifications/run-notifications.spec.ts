@@ -6,41 +6,36 @@ const settled = (status: 'completed' | 'failed') =>
 
 import type { RunStatusKind } from '../chats/run-status';
 import {
+  agentNoticeBody,
+  announcesEnding,
   diffRunNotifications,
-  endsWaitingOnCommand,
   notificationBody,
-  RECENT_LAUNCH_MS,
 } from './run-notifications';
 
-describe('endsWaitingOnCommand', () => {
-  const now = 1_000_000;
-
-  it('reads an ending as a wait while a command launched moments ago is still running', () => {
-    expect(
-      endsWaitingOnCommand({ shellsOpen: 1, launchedAt: now - 5_000, now }),
-    ).toBe(true);
+describe('announcesEnding', () => {
+  it('announces an ending with nothing left running', () => {
+    expect(announcesEnding(0)).toBe(true);
   });
 
-  it('is an ending when every command has already ended', () => {
-    expect(
-      endsWaitingOnCommand({ shellsOpen: 0, launchedAt: now - 5_000, now }),
-    ).toBe(false);
+  it('does not announce one while any background command runs — the agent may be waiting on it', () => {
+    expect(announcesEnding(1)).toBe(false);
+    expect(announcesEnding(3)).toBe(false);
+  });
+});
+
+describe('agentNoticeBody', () => {
+  it("is the agent's own sentence", () => {
+    expect(agentNoticeBody('The dev server is up at :3000.')).toBe(
+      'The dev server is up at :3000.',
+    );
   });
 
-  it('is an ending when the running command is an OLD one — a dev server left up', () => {
-    expect(
-      endsWaitingOnCommand({
-        shellsOpen: 1,
-        launchedAt: now - RECENT_LAUNCH_MS - 1,
-        now,
-      }),
-    ).toBe(false);
+  it('keeps a multi-line message to its first readable line', () => {
+    expect(agentNoticeBody('## Done\n\nThe server is up.')).toBe('Done');
   });
 
-  it('is an ending when no launch was ever seen — the commands predate the window', () => {
-    expect(
-      endsWaitingOnCommand({ shellsOpen: 2, launchedAt: undefined, now }),
-    ).toBe(false);
+  it('falls back to a plain sentence when the message has nothing readable', () => {
+    expect(agentNoticeBody('```\n```')).toBe('The agent is done.');
   });
 });
 

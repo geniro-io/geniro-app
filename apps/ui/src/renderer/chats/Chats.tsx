@@ -948,6 +948,7 @@ export function Chats({
     delegatesOut,
     settleSummaries,
     quietSettles,
+    agentNotices,
     deadRequestKeys,
     pendingScrollRef,
     sawTerminalRef,
@@ -6824,15 +6825,14 @@ export function Chats({
   );
 
   /**
-   * How many DETACHED commands this run has out — the reading that says an
-   * ending might yet be undone, for {@link useRunNotifications}.
+   * How many DETACHED commands this run has out — the reading that decides
+   * whether a finished turn is announced by itself, for
+   * {@link useRunNotifications}.
    *
    * The run row's own count, the one the Terminals chip shows and the badge's
    * `shellsOut` is derived from: the badge and the banner then disagree about
    * nothing, answering two questions off one fact — "something this thread
-   * started is running" and "so this ending may not be one". A COUNT rather than
-   * that flag, because the hook reads a launch off the count rising, and a
-   * second command started beside a running one never moves a flag.
+   * started is running" and "so this ending may not be the agent finishing".
    */
   const runShellsOpen = useCallback(
     (run: ChatRun): number => run.shellsOpen,
@@ -6867,6 +6867,9 @@ export function Chats({
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
     // The same reading the badge uses for its own shells word — see the hook.
     shellsOpenOf: runShellsOpen,
+    // What the agent said itself, with `notify_user` — the one way a finished
+    // agent that left something running can be announced at all.
+    notices: agentNotices,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on

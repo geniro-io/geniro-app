@@ -79,6 +79,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -809,6 +810,7 @@ function setup(
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -933,6 +935,7 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    notices,
     callTokens,
     {
       token: 'launch',

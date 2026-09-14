@@ -97,61 +97,44 @@ export function diffRunNotifications(
 }
 
 /**
- * How recently the newest still-running command must have been LAUNCHED for a
- * turn's ending to be read as a WAIT rather than announced.
+ * Whether a finished turn's ending is announced BY ITSELF — only when nothing
+ * the agent started in the background is still running.
  *
  * REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
  * завершения каких-то процессов… и в каждом из этих случаев он мне отправляет
- * false positive-нотификацию". An agent routinely ends its turn WAITING on a
- * command it just backgrounded — a test run, a build — and the CLI opens a new
- * turn of its own the moment that command reports. Nothing on the wire says
- * which kind of ending a turn is (claude's `result` line carries no word about
- * background work), so the answer is read off WHEN the command started.
+ * false positive-нотификацию": an agent routinely ends its turn WAITING on a
+ * command it just backgrounded — a test run, a build — and the CLI opens a turn
+ * of its own the moment that command reports. That later turn's ending is the
+ * real one, and it is announced like any other.
  *
- * Measured on the reporter's own `geniro.db` (2026-09-14), over every turn end
- * that left a detached command running. Of 275 whose command was launched in
- * that very turn, the agent carried on by itself after 150 — and in 141 of
- * those the command had been launched at most two minutes before the turn
- * ended (117 within thirty seconds). A launch older than that is the dev
- * server left up: the agent carried on after 9 of 64 of them, and after only
- * 61 of the 699 endings whose commands all came from earlier turns.
+ * Nothing on the wire tells a wait from a finished agent that left a dev server
+ * up — measured on claude 2.1.270, the CLI reports `idle` in both and its task
+ * frames carry only the command — and two earlier answers guessed: a ten-second
+ * hold, then a launch-time window. Both were rejected as crutches. So the rule
+ * decides only the case it can decide, and the other is the AGENT's to state:
+ * a finished agent leaving something running calls `notify_user`
+ * ({@link AgentNotice}), which is posted as its own banner.
  */
-export const RECENT_LAUNCH_MS = 2 * 60_000;
+export function announcesEnding(shellsOpen: number): boolean {
+  return shellsOpen === 0;
+}
 
 /**
- * Whether a turn's ending is the agent WAITING on a command rather than
- * finishing — a command is still running, and the newest launch is recent
- * enough that the agent most likely stopped for it. See
- * {@link RECENT_LAUNCH_MS}.
+ * A notification the AGENT asked for — its `notify_user` call, as the daemon
+ * broadcast it (`RunStatusEvent.notify`).
  *
- * Such an ending is NOT announced, and nothing is delayed to decide it: every
- * ending is judged the moment it lands, and is either announced then or never.
- * A timer that holds a banner in case the agent speaks again was tried first
- * (ten seconds, then a grace and a ceiling) and rejected as a crutch — a banner
- * on a clock is late when it is right and still wrong when the clock guesses
- * short. The real "done" needs no clock: the CLI opens a turn of its own when
- * the command reports, and THAT turn's ending is announced like any other.
- *
- * Two endings go unannounced by this, and both are the price of never guessing
- * with a timer: a server launched just before the agent stopped, and a waited-on
- * command whose report the agent never answers (15 of the 275 measured).
+ * `id` is assigned on arrival and only ever grows, which is what keeps one
+ * notice from being posted twice however often the list re-renders.
  */
-export function endsWaitingOnCommand({
-  shellsOpen,
-  launchedAt,
-  now,
-}: {
-  /** How many detached commands the run has out right now. */
-  shellsOpen: number;
-  /** When a launch was last seen, or undefined if none was seen this session. */
-  launchedAt: number | undefined;
-  now: number;
-}): boolean {
-  return (
-    shellsOpen > 0 &&
-    launchedAt !== undefined &&
-    now - launchedAt <= RECENT_LAUNCH_MS
-  );
+export interface AgentNotice {
+  id: number;
+  runId: string;
+  message: string;
+}
+
+/** The banner body for an agent's own notification: its message, on one line. */
+export function agentNoticeBody(message: string): string {
+  return oneLine(message) ?? 'The agent is done.';
 }
 
 /**

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type { RunStatusKind } from '../chats/run-status';
-import { RECENT_LAUNCH_MS } from './run-notifications';
+import type { AgentNotice } from './run-notifications';
 import { useRunNotifications } from './use-run-notifications';
 
 (
@@ -19,20 +19,27 @@ interface Row {
   shellsOpen: number;
 }
 
-// Module scope, so the hook's effect re-runs on the run list alone — the way
+// Module scope, so the hook's effects re-run on the run list alone — the way
 // `Chats` hands it memoized readers.
 const statusOf = (run: Row): RunStatusKind => run.status;
 const labelOf = (run: Row): string => run.id;
 const awaitingOf = (): null => null;
 const shellsOpenOf = (run: Row): number => run.shellsOpen;
 
-function Probe({ runs }: { runs: readonly Row[] }): null {
+function Probe({
+  runs,
+  notices,
+}: {
+  runs: readonly Row[];
+  notices: readonly AgentNotice[];
+}): null {
   useRunNotifications({
     runs,
     statusOf,
     labelOf,
     awaitingOf,
     shellsOpenOf,
+    notices,
     activeRunId: null,
   });
   return null;
@@ -41,11 +48,12 @@ function Probe({ runs }: { runs: readonly Row[] }): null {
 describe('useRunNotifications', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let notices: AgentNotice[];
   const notify = vi.fn<GeniroApi['notify']>(async () => {});
 
   beforeEach(() => {
-    vi.useFakeTimers();
     notify.mockClear();
+    notices = [];
     window.geniro = createPreloadStub({ notify });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -55,51 +63,102 @@ describe('useRunNotifications', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    vi.useRealTimers();
   });
 
   /** One reading of the one run under test. */
-  const show = (status: RunStatusKind, shellsOpen: number): void => {
-    act(() => root.render(<Probe runs={[{ id: 'r1', status, shellsOpen }]} />));
+  const show = (status: RunStatusKind, shellsOpen = 0): void => {
+    act(() =>
+      root.render(
+        <Probe
+          runs={[{ id: 'r1', status, shellsOpen }]}
+          notices={[...notices]}
+        />,
+      ),
+    );
   };
 
-  it('announces an ending with no command out at once', () => {
-    show('running', 0);
-    show('completed', 0);
+  /** The agent's `notify_user` call arriving, with the run as it stands. */
+  const agentSays = (
+    message: string,
+    status: RunStatusKind,
+    shellsOpen = 0,
+  ): void => {
+    notices.push({ id: notices.length + 1, runId: 'r1', message });
+    show(status, shellsOpen);
+  };
+
+  it('announces a finished turn with nothing left running', () => {
+    show('running');
+    show('completed');
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('announces at once when the running command was launched long before the ending — a dev server left up', () => {
-    show('running', 0);
-    show('running', 1);
-    // The CLOCK, not a timer: no banner here is ever waiting on one.
-    vi.setSystemTime(Date.now() + RECENT_LAUNCH_MS + 1_000);
-    show('completed', 1);
-    expect(notify).toHaveBeenCalledTimes(1);
-  });
-
-  it('announces at once when the commands were already out when the list loaded', () => {
+  it('does NOT announce a finished turn while a background command is still running', () => {
+    // The agent may be waiting on it; the turn the CLI opens when it reports is
+    // the one that gets announced.
     show('running', 1);
     show('completed', 1);
-    expect(notify).toHaveBeenCalledTimes(1);
-  });
-
-  it('skips an ending right after a launch, and announces the turn the command wakes instead', () => {
-    show('running', 0);
-    show('running', 1);
-    show('completed', 1);
-    // Nothing is pending that could post it later.
-    vi.runAllTimers();
     expect(notify).not.toHaveBeenCalled();
-    // The command reports, the CLI opens a turn of its own, and that one ends.
+
     show('completed', 0);
     show('running', 0);
     show('completed', 0);
     expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('still announces a FAILED turn while a command is running — nobody asked for it', () => {
+    show('running', 1);
+    show('failed', 1);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("posts the agent's own notification, in its words", () => {
+    show('running', 1);
+    agentSays(
+      'The dev server is running at http://localhost:3000.',
+      'running',
+      1,
+    );
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r1',
+      title: 'r1',
+      body: 'The dev server is running at http://localhost:3000.',
+    });
+  });
+
+  it('posts each notice once, however often the list re-renders', () => {
+    show('running', 1);
+    agentSays('Ready to try.', 'running', 1);
+    show('running', 1);
+    show('running', 1);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not announce the ending of a turn whose agent already notified', () => {
+    show('running');
+    agentSays('All done — the build is green.', 'running');
+    show('completed');
+    // The one banner is the agent's own — not the turn's plain ending.
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ body: 'All done — the build is green.' }),
+    );
+  });
+
+  it("announces the NEXT turn's ending as usual after a notice", () => {
+    show('running');
+    agentSays('Ready.', 'running');
+    show('completed');
+    show('running');
+    show('completed');
+    expect(notify.mock.calls.map(([payload]) => payload.body)).toEqual([
+      'Ready.',
+      'The turn finished.',
+    ]);
   });
 
   it('never skips a question', () => {
-    show('running', 0);
     show('running', 1);
     show('needs-input', 1);
     expect(notify).toHaveBeenCalledTimes(1);

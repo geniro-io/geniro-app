@@ -5451,7 +5451,18 @@ export function Chats({
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
     ): AgentThread[] => {
-      return threadsOf(nodeActivity).map((thread) => {
+      const fromWindow = threadsOf(nodeActivity).map((thread): AgentThread => {
+        if (thread.kind === 'main') {
+          // The node's OWN conversation streams on the node's own key, and that
+          // live reading outranks the one folded from its settled turns.
+          const live = liveText.get(nodeId);
+          return {
+            ...thread,
+            contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
+            contextWindowTokens:
+              live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
+          };
+        }
         if (thread.kind !== 'call') {
           return thread;
         }
@@ -5465,6 +5476,36 @@ export function Chats({
           spentUsd: usage?.costUsd ?? null,
         };
       });
+      // Calls OLDER than the loaded window, known only from the daemon's
+      // per-call readings. A call's `call_started` row is the only thing that
+      // names it in the transcript, so a node called earlier in a long run had
+      // a ring on its card and no instance at all — REPORTED as "strange
+      // researcher card with some context but without calls". Each keeps its
+      // own ring; it is `running` only while its own key is streaming.
+      const inWindow = new Set(fromWindow.map((thread) => thread.id));
+      const older = (nodeReadings.get(nodeId)?.calls ?? [])
+        .filter((call) => !inWindow.has(call.callId))
+        .map((call): AgentThread => ({
+          id: call.callId,
+          kind: 'call',
+          label: call.callId,
+          brief: null,
+          status: liveText.has(partialOwnerKey(nodeId, call.callId))
+            ? 'running'
+            : 'completed',
+          sessionId: null,
+          contextTokens: call.contextTokens,
+          contextWindowTokens: call.contextWindowTokens,
+        }));
+      // After the node's own conversation, before the calls the window holds —
+      // they are older than anything on screen.
+      const mainAt =
+        fromWindow.findIndex((thread) => thread.kind === 'main') + 1;
+      return [
+        ...fromWindow.slice(0, mainAt),
+        ...older,
+        ...fromWindow.slice(mainAt),
+      ];
     };
     /**
      * WHICH reading a node's CARD states — resolved as ONE source per rank, so

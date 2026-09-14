@@ -778,7 +778,8 @@ export class GraphExecutorService implements OnModuleInit {
       this.adapterFor(kind),
     );
     const resumeSessions = new Map<string, string>();
-    for (const state of await this.nodeStateDao.listByRun(run.id, em)) {
+    const states = await this.nodeStateDao.listByRun(run.id, em);
+    for (const state of states) {
       if (state.agentSessionId) {
         resumeSessions.set(state.nodeId, state.agentSessionId);
       }
@@ -790,9 +791,19 @@ export class GraphExecutorService implements OnModuleInit {
     const callSeed = readCallSeed(
       await this.itemDao.callRecordRows(run.id, em),
     );
-    // Every node that runs starts the pass pending again, as it did the first —
-    // one added to the workflow since included, which has no row yet.
+    // Every node the DAG schedules starts the pass pending again, as it did the
+    // first — one added to the workflow since included, which has no row yet.
+    //
+    // A CALL-ONLY node that already has a row keeps it. It is never scheduled,
+    // so `pending` there promised a turn no pass would give it, and it erased
+    // how its last call ended: REPORTED as a Researcher card reading `pending`
+    // beside `106 tools` and a context ring, a day after its calls completed.
+    const onDemand = onDemandNodeIds(workflow.nodes, workflow.edges);
+    const hasRow = new Set(states.map((state) => state.nodeId));
     for (const node of workflow.nodes) {
+      if (onDemand.has(node.id) && hasRow.has(node.id)) {
+        continue;
+      }
       if (!isNonExecutableNode(node)) {
         await this.nodeStateDao.setStatus(
           run.id,
@@ -2146,6 +2157,23 @@ export class GraphExecutorService implements OnModuleInit {
                 ...(callContext ? { callId: callContext.callId } : {}),
               });
               if (callContext) {
+                // A tool call in flight holds the watchdog off until it
+                // answers: the callee is waiting on its own work, however long
+                // that takes (a delegate can run for many minutes and say
+                // nothing on the wire).
+                if (event.type === 'tool_call') {
+                  this.callBroker.noteCalleeToolStarted(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                } else if (event.type === 'tool_result') {
+                  this.callBroker.noteCalleeToolFinished(
+                    runId,
+                    callContext.callId,
+                    event.id,
+                  );
+                }
                 // This callee is demonstrably alive — restart its silence
                 // watchdog. The broker holds a promise and nothing else, so
                 // this seam is the only place a callee's output is visible.

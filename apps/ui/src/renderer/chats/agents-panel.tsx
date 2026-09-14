@@ -1637,14 +1637,22 @@ export function AgentsPanel({
               const tasksLive = agent.status === 'running';
               const settledOpen = showSettled.has(agent.id);
               // The SPLIT shape's blocks: every call, and the node's own
-              // conversation only when something happened in it — its heading
-              // and terminal are the card's, so an empty block for it would be a
+              // conversation when something happened in it — its heading and
+              // terminal are the card's, so an empty block for it would be a
               // heading repeated as a list item.
+              //
+              // A context READING counts as something happening. The card's ring
+              // reads whichever conversation reported last, which on a node that
+              // is also called is routinely a call — so hiding the main block
+              // took the main conversation's own ring off the panel entirely.
+              // REPORTED as "we should show context for EACH subagent instance,
+              // now it's only one for all".
               const shownInstances = split
                 ? instances.filter(
                     (instance) =>
                       instance.thread.kind === 'call' ||
-                      hasInstanceContent(instance),
+                      hasInstanceContent(instance) ||
+                      (instance.thread.contextTokens ?? null) !== null,
                   )
                 : [];
               const activeInstances =

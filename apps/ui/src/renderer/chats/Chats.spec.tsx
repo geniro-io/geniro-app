@@ -3935,6 +3935,96 @@ describe('Chats workflow runs', () => {
     ).toContain('47.2k of 200k');
   });
 
+  it('gives a node’s OWN conversation instance its own live ring, beside its calls', async () => {
+    // REPORTED as "we should show context for EACH subagent instance, now it's
+    // only one for all". The main instance's thread carried no reading at all,
+    // so its ring was empty whatever the node's own turn was streaming.
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client, emitItem, emitLiveText } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    await act(async () => {
+      emitItem({
+        ...wfItem(4, 'status', 'helper'),
+        // The node's OWN turn: a status row with no callId.
+        payload: { nodeId: 'helper', status: 'running' },
+      });
+      emitItem({
+        ...wfItem(5, 'call_started', 'orch'),
+        payload: {
+          callId: 'call-5',
+          calleeNodeId: 'helper',
+          mode: 'async',
+          message: 'capture the visuals',
+        },
+      });
+      emitLiveText({
+        runId: 'w1',
+        nodeId: 'helper',
+        text: 'working',
+        // The node's own key, which is what its own turn publishes under.
+        ownerKey: 'helper',
+        thinkingTokens: null,
+        ...LIVE_DELTA_REST,
+        contextTokens: 33_300,
+        contextWindowTokens: 200_000,
+      });
+    });
+
+    const main = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="main"]',
+    );
+    expect(main).not.toBeNull();
+    expect(
+      main!
+        .querySelector('button[aria-label*="of 200k"]')
+        ?.getAttribute('aria-label'),
+    ).toContain('33.3k of 200k');
+  });
+
+  it('gives a call OLDER than the loaded window its own instance, from the durable call row', async () => {
+    // REPORTED as "strange researcher card with some context but without
+    // calls": the Researcher's calls were a day older than the newest page of
+    // items, so no `call_started` row named them and the card had a ring and
+    // no instance. The daemon still holds each call's reading.
+    workflowApi.listWorkflowRunNodes.mockResolvedValue([
+      {
+        runId: 'w1',
+        nodeId: 'helper',
+        status: 'running',
+        contextTokens: 201_788,
+        contextWindowTokens: 256_000,
+        calls: [
+          {
+            callId: 'call-4',
+            contextTokens: 201_788,
+            contextWindowTokens: 256_000,
+          },
+        ],
+        workedMs: null,
+        toolCalls: 106,
+        startedAt: null,
+        endedAt: null,
+        error: null,
+      },
+    ]);
+    workflowApi.listWorkflowRuns.mockResolvedValue([wfRun]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Review team');
+
+    const instance = container.querySelector<HTMLElement>(
+      '[data-slot="agent-instance"][data-instance-id="call-4"]',
+    );
+    expect(instance).not.toBeNull();
+    expect(
+      instance!
+        .querySelector('button[aria-label*="of 256k"]')
+        ?.getAttribute('aria-label'),
+    ).toContain('201.8k of 256k');
+  });
+
   it('keeps a callee’s ring after the live plane is gone, from the durable call row', async () => {
     // The RANK ABOVE the node row, and the one with no live delta anywhere: a
     // window that reloaded, or a run that settled, has no live plane at all —

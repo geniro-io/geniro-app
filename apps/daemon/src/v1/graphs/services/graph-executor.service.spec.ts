@@ -2505,6 +2505,33 @@ describe('GraphExecutorService — agent calls', () => {
     edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
   };
 
+  it('keeps a call-only node’s last status on a follow-up pass instead of resetting it to pending', async () => {
+    // REPORTED as a Researcher card reading `pending` beside `106 tools` and a
+    // context ring, a day after its calls completed. Every pass reset every
+    // node to pending — right for a node the DAG schedules, wrong for one only
+    // a call ever runs, which no pass will schedule.
+    const { service, claude, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+    // As a call the pass gave it would have left it.
+    nodeDao.rows.get(`${run.id}:helper`)!.status = 'completed';
+
+    await service.sendMessage(run.id, 'again');
+    await drain();
+
+    expect(nodeDao.rows.get(`${run.id}:helper`)?.status).toBe('completed');
+    // The node the DAG schedules still starts the pass over, and is running.
+    expect(nodeDao.rows.get(`${run.id}:orch`)?.status).toBe('running');
+  });
+
   it('gives every node the run’s custom instructions WITHOUT displacing its role', async () => {
     // The compose-don't-overwrite contract. `systemPrompt` was the only
     // instruction channel a node had, so folding the global text into it would
@@ -2579,6 +2606,49 @@ describe('GraphExecutorService — agent calls', () => {
     expect(note.mock.calls.every(([, callId]) => callId === 'call-1')).toBe(
       true,
     );
+  });
+
+  it('tells the broker when a callee’s tool call starts and when it answers', async () => {
+    // The seam the watchdog's tool-call suspension rests on. REPORTED as
+    // "'qa' has produced nothing for 10 minutes" over a callee waiting on ten
+    // reviewer sub-agents it had launched as tool calls. Every broker case
+    // passes with this wiring deleted.
+    const { service, claude, callBroker } = setup();
+    const started = vi.spyOn(callBroker, 'noteCalleeToolStarted');
+    const finished = vi.spyOn(callBroker, 'noteCalleeToolFinished');
+    const run = await service.startRun({
+      slug: 'c',
+      workflow: triggered(CALL_WF),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'review it',
+    });
+    await drain();
+    const callee = claude.starts[1]!;
+
+    callee.emit({ type: 'tool_call', id: 'task-1', name: 'Task', input: {} });
+    await drain();
+    expect(started).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+    expect(finished).not.toHaveBeenCalled();
+
+    callee.emit({
+      type: 'tool_result',
+      id: 'task-1',
+      name: 'Task',
+      result: 'reviewed',
+      isError: false,
+    });
+    await drain();
+    expect(finished).toHaveBeenCalledWith(run.id, 'call-1', 'task-1');
+
+    completeTurn(callee, 'done');
+    await envelope;
+    await drain();
   });
 
   it('grants the claude caller its MCP endpoint + awareness block; the callee turn stays bare', async () => {

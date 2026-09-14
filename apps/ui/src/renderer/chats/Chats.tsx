@@ -5195,6 +5195,24 @@ export function Chats({
     [items],
   );
   /**
+   * The newest paragraph the agent WROTE in the loaded window — a `message`
+   * that is not the user's, or a `reasoning` row — the timeline's third refresh
+   * trigger, which is what keeps the stretch being worked live. The same rows
+   * the daemon counts as a stretch's messages.
+   */
+  const latestAgentSeq = useMemo(
+    () =>
+      items.reduce(
+        (seq, item) =>
+          (item.kind === 'message' && item.role !== 'user') ||
+          item.kind === 'reasoning'
+            ? item.seq
+            : seq,
+        0,
+      ),
+    [items],
+  );
+  /**
    * Every user message in the thread, whatever the loaded window holds.
    *
    * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
@@ -5206,6 +5224,7 @@ export function Chats({
     activeRunId,
     threadWorked.turns,
     latestUserSeq,
+    latestAgentSeq,
   );
   /**
    * Every command the run still has RUNNING, read from the daemon.
@@ -5278,8 +5297,11 @@ export function Chats({
       markers: timeline.markers,
       partialReason: timeline.partialReason,
       onJump: jumpToSeq,
+      // The reading the header's own `live` controls take, so the timeline's
+      // live dot and the rest of the screen cannot disagree about the run.
+      inProgress: isWorkingRunStatus(activeRunStatus),
     }),
-    [timeline.markers, timeline.partialReason, jumpToSeq],
+    [timeline.markers, timeline.partialReason, jumpToSeq, activeRunStatus],
   );
   /**
    * What the header states about the thread as a WHOLE — the daemon's answer

@@ -685,6 +685,27 @@ interface TurnState {
    * a stalling one up to a minute.
    */
   promptHeld: boolean;
+  /**
+   * The CLI has already answered this turn's latest prompt with a result of
+   * its own — held, or dropped when the agent spoke again.
+   *
+   * It is what decides whether a CONTINUATION's result can end the turn. While
+   * the prompt is unanswered it cannot: the CLI finishes a continuation it was
+   * already running before it reads the prompt, so that result is not this
+   * turn's answer (the probed case at the continuation branch in `emit`). Once
+   * the prompt HAS been answered, nothing further is owed — every result after
+   * that is a continuation, because a continuation is the only way the CLI
+   * speaks again unprompted. Skipping those left a turn with no ending it would
+   * accept. TRACED on run `3e05c90a` (2026-09-14): a turn opened 12:47, its own
+   * result held for sub-agents, the agent carried on as each one reported, and
+   * the last continuation's result at 13:56 was skipped as "not this turn's
+   * ending" — thirty minutes of silence later the deadline settled the turn as
+   * `error`, under a transcript whose final row read `done`.
+   *
+   * Cleared again when a follow-up is delivered into the turn, since that is a
+   * new prompt the CLI has not answered yet.
+   */
+  promptAnswered: boolean;
 }
 
 /**
@@ -1874,9 +1895,14 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // handed this turn the continuation's text and ended it before its real
       // answer arrived. The result goes the between-turn way instead (its row
       // and usage are real), and this turn waits for its own.
+      //
+      // Only while that answer is still OWED — see `TurnState.promptAnswered`.
+      // Once the turn has had its own result, a continuation's result is the
+      // only ending left to it.
       if (
         normalized.type === 'turn_complete' &&
-        normalized.continuation === true
+        normalized.continuation === true &&
+        !turn.promptAnswered
       ) {
         opts.logger?.debug?.(
           `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
@@ -1901,6 +1927,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         );
         armSilenceDeadline(turn);
         return;
+      }
+      if (normalized.type === 'turn_complete') {
+        turn.promptAnswered = true;
       }
       // The CLI has stopped TALKING while work it started is still running, and
       // on a session lifetime the process is still there doing it. Hold the
@@ -2421,6 +2450,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       outstanding: new Map(),
       deferredTerminal: null,
       promptHeld: turnOptions.holdPrompt !== undefined,
+      promptAnswered: false,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
@@ -2612,6 +2642,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             !turn.terminalEmitted &&
             turnOptions.sendFollowUp(message)
           : turnWrite(() => turnOptions.buildFollowUpPayload?.(message));
+        // A new prompt the CLI has not answered — a continuation's result is
+        // again not this turn's ending (see `TurnState.promptAnswered`).
+        if (delivered) {
+          turn.promptAnswered = false;
+        }
         // A message delivered into a HELD turn ends the hold at the write,
         // rather than when the CLI gets round to answering. Waiting for it to
         // speak leaves a window — measured at 8 seconds in the reported case,

@@ -4167,6 +4167,8 @@ export function Chats({
     skillKinds,
     skillCwd,
     vocabularyConfigDir,
+    // Refreshed as the `/` popup opens, so it never shows a stale first read.
+    slashQuery(input) !== null,
   );
   // Assigned during render rather than from an effect: the two send paths read
   // it in a click handler, which cannot run before the render that produced

@@ -415,6 +415,20 @@ export interface AgentTask {
    * two halves cannot be paired without state the mapper deliberately lacks.
    */
   activeForm: string | null;
+  /**
+   * The CLI REMOVED this task — set on a PATCH row only. claude's `TaskUpdate`
+   * takes `status: "deleted"` (its own input schema, read out of the 2.1.270
+   * bundle), and reading that as an unrecognised status left the row on screen
+   * under the unknown glyph, still counted in the total.
+   */
+  deleted?: true;
+  /**
+   * A PATCH row that states no status at all — `TaskUpdate`'s `status` is
+   * optional, and a call that only renames a task omits it. The consumer keeps
+   * the status it had; without this the patch's null read as "moved somewhere
+   * unknown" and a finished task lost its tick.
+   */
+  keepsStatus?: true;
 }
 
 /**
@@ -1257,6 +1271,20 @@ type AgentEventBody =
        */
       type: 'turn_model';
       model: string;
+    }
+  | {
+      /**
+       * The CLI's own statement of whether it is working, for a CLI that makes
+       * one (claude, under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`). `idle` is
+       * its authoritative turn-over: probed on claude 2.1.270, it is NOT sent
+       * while a background agent the turn launched is still due to report, and
+       * it is sent only after the continuation that report triggers has ended.
+       * Consumed by `spawn-cli` to end a held turn without a timer.
+       *
+       * EPHEMERAL — never a transcript row.
+       */
+      type: 'session_state';
+      idle: boolean;
     }
   | {
       /**

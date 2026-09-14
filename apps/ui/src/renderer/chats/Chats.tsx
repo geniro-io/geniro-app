@@ -179,7 +179,11 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import { runningShellsByAgent, type ShellRun } from './shell-activity';
+import {
+  runningShellsByAgent,
+  type ShellRun,
+  shellRuns,
+} from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
@@ -4963,7 +4967,10 @@ export function Chats({
     return buildTurnBlocks(
       buildWorkflowCards(buildSubagentBlocks(flow, items), items),
     );
-  }, [items, collapseToolSteps]);
+    // The daemon's list is an input too. It is folded and broadcast AFTER the
+    // item that moved it, so keyed on `items` alone the latest card kept the
+    // previous list's rows until some unrelated item arrived.
+  }, [items, collapseToolSteps, activeRun?.id, activeRun?.taskList]);
   /**
    * The run's row has SETTLED — whatever it settled as.
    *
@@ -5449,12 +5456,18 @@ export function Chats({
           // latest request, while `activity` can only report the last
           // COMPLETED turn — which is exactly the staleness the meter was
           // criticised for. Falls back the moment the live plane is quiet.
+          // …then the RUN ROW, in the composer ring's own order (`chatContext`).
+          // Skipping it put the last SETTLED turn's figure on this card beside a
+          // ring reading the daemon's newer one — `2%` against `46%` on a
+          // thread reopened mid-turn.
           contextTokens:
             liveText.get(CHAT_LIVE_KEY)?.contextTokens ??
+            activeRun.contextTokens ??
             chatActivity?.contextTokens ??
             null,
           contextWindowTokens:
             liveText.get(CHAT_LIVE_KEY)?.contextWindowTokens ??
+            activeRun.contextWindowTokens ??
             chatActivity?.contextWindowTokens ??
             null,
           // The DAEMON's totals over every turn, the figures the header and
@@ -6202,7 +6215,15 @@ export function Chats({
     if (runShells.length === 0) {
       return sidePanelLive.shells;
     }
-    const known = new Set(sidePanelLive.shells.map((shell) => shell.id));
+    // Every command the loaded transcript KNOWS, finished ones included — not
+    // only the running list. The daemon's read is refetched when the run's
+    // count moves, and never at all for a workflow run, so a command that ended
+    // in the window was put straight back as `running` from a list read before
+    // it ended.
+    const known = new Set([
+      ...sidePanelLive.shells.map((shell) => shell.id),
+      ...shellRuns(items).map((shell) => shell.id),
+    ]);
     const extra: ShellRun[] = [];
     for (const shell of runShells) {
       if (known.has(shell.id)) {
@@ -6230,7 +6251,7 @@ export function Chats({
     // Oldest first, like the transcript they came from: the daemon's rows are
     // by definition older than anything the loaded window holds.
     return [...extra, ...sidePanelLive.shells];
-  }, [runShells, sidePanelLive.shells]);
+  }, [runShells, sidePanelLive.shells, items]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -6779,7 +6800,10 @@ export function Chats({
         // spinner for as long as the user is looking elsewhere.
         heldForBackgroundWork: holding.has(run.id),
       }),
-    [holding, shellsOut],
+    // `delegatesOut` too: a turn that settles with sub-agents still out moves
+    // only that set, and without it every thread the user was not looking at
+    // kept the old reading — `completed` over a hold, `held` after it ended.
+    [holding, shellsOut, delegatesOut],
   );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
@@ -8195,7 +8219,11 @@ export function Chats({
                             // unfinished task on a settled thread is one
                             // nothing is advancing, and a spinner there would
                             // claim work that stopped.
-                            live={!isSettledRunStatus(activeRunStatus)}
+                            // `running` alone, the agents panel's own reading:
+                            // held or waiting on the user is not work moving
+                            // through the list, and the two surfaces disagreed
+                            // about the same task for as long as that lasted.
+                            live={activeRunStatus === 'running'}
                           />
                           <ActiveWorkflowChips
                             workflows={runWorkflows}

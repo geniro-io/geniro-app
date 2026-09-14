@@ -2181,6 +2181,75 @@ describe('GraphExecutorService', () => {
     expect(errorItem).toBeDefined();
   });
 
+  it('boot reconcile settles the turns and calls the transcript left open', async () => {
+    // The renderer reads a node's liveness and a call block's status off the
+    // TRANSCRIPT before node_state, so failing the node rows alone left the
+    // card and the call block spinning under the failed run.
+    const { service, runDao, nodeDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    await nodeDao.createPending(orphan.id, 'orch');
+    await nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+    const rows = [
+      ['orch', 'status', { nodeId: 'orch', status: 'running' }],
+      [
+        'orch',
+        'call_started',
+        {
+          callId: 'c1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'poet',
+          mode: 'sync',
+          message: 'write',
+        },
+      ],
+      ['poet', 'status', { nodeId: 'poet', status: 'running', callId: 'c1' }],
+    ] as const;
+    for (const [index, [nodeId, kind, payload]] of rows.entries()) {
+      await itemDao.create({
+        runId: orphan.id,
+        nodeId,
+        seq: index,
+        kind,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    await service.reconcileOrphanedRuns();
+
+    const written = itemDao.items
+      .filter((i) => i.runId === orphan.id && i.seq >= rows.length)
+      .map((i) => ({
+        nodeId: i.nodeId,
+        kind: i.kind,
+        payload: JSON.parse(i.payload) as Record<string, unknown>,
+      }));
+    expect(written).toContainEqual({
+      nodeId: 'orch',
+      kind: 'status',
+      payload: { nodeId: 'orch', status: 'failed' },
+    });
+    expect(written).toContainEqual({
+      nodeId: 'poet',
+      kind: 'status',
+      payload: { nodeId: 'poet', status: 'failed', callId: 'c1' },
+    });
+    expect(written).toContainEqual(
+      expect.objectContaining({
+        nodeId: 'orch',
+        kind: 'call_result',
+        payload: expect.objectContaining({
+          callId: 'c1',
+          calleeNodeId: 'poet',
+          status: 'error',
+        }),
+      }),
+    );
+  });
+
   it('boot reconcile closes a graph card the KILLED daemon never swept, keeping its node', async () => {
     // Same crash gap as the chat path: the approval registry died with the
     // process, so the only surviving record of an open card is the transcript.

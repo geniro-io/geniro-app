@@ -103,6 +103,7 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
+import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
@@ -1014,9 +1015,8 @@ export class GraphExecutorService implements OnModuleInit {
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
-        for (const request of unansweredRequests(
-          await this.itemDao.getByRun(run.id, -1, em),
-        )) {
+        const history = await this.itemDao.getByRun(run.id, -1, em);
+        for (const request of unansweredRequests(history)) {
           await this.persist(
             em,
             run.id,
@@ -1027,6 +1027,36 @@ export class GraphExecutorService implements OnModuleInit {
             {
               ...request.payload,
               ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+            },
+          );
+        }
+        // The renderer reads a node's liveness and a call block's status off
+        // the TRANSCRIPT before node_state, so failing the node rows below
+        // alone left the card and the call block spinning under a failed run.
+        // Settle both where the renderer looks.
+        for (const turn of openNodeTurns(history)) {
+          await this.persist(em, run.id, turn.nodeId, seq++, 'status', null, {
+            nodeId: turn.nodeId,
+            status: 'failed',
+            ...(turn.callId !== null ? { callId: turn.callId } : {}),
+          });
+        }
+        for (const call of openCalls(history)) {
+          await this.persist(
+            em,
+            run.id,
+            call.callerNodeId,
+            seq++,
+            'call_result',
+            null,
+            {
+              callId: call.callId,
+              callerNodeId: call.callerNodeId,
+              calleeNodeId: call.calleeNodeId,
+              mode: call.mode,
+              status: 'error',
+              error:
+                'CALLEE_FAILED: interrupted — the daemon stopped before the call finished',
             },
           );
         }

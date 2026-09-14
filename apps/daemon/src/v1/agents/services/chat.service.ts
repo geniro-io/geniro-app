@@ -434,6 +434,18 @@ export class ChatService implements OnModuleInit {
    * transcript agreeing that nothing is out.
    */
   private readonly delegatesOut = new Map<string, Set<string>>();
+  /**
+   * Each chat's `notify_user` sink, kept past its turn.
+   *
+   * Every other host tool dies with the turn that registered it, and so did
+   * this one — which made it refuse exactly where it is needed: the CLI opens a
+   * continuation BY ITSELF when a background command reports, with no turn of
+   * ours in flight, and an agent that finishes there with a server left up is
+   * the one case the automatic turn-end rule cannot announce. It sends a
+   * broadcast and holds nothing of the turn, so it may outlive one; the next
+   * turn's registration replaces it, and a deleted run drops it.
+   */
+  private readonly notifiers = new Map<string, () => void>();
 
   constructor(
     private readonly em: EntityManager,
@@ -956,6 +968,16 @@ export class ChatService implements OnModuleInit {
         : patch.model !== undefined
           ? { contextWindow: null }
           : {}),
+      // …and the window MEASURED under the old choice goes with it. It is only
+      // ever overwritten by a positive reading, and a model that has not yet
+      // finished a turn on this machine reports none — so the new model's first
+      // turn was drawn against the old model's window (`Context 175% full` after
+      // moving a 350k conversation from a 1M model to a 200k one).
+      ...((patch.model !== undefined && patch.model !== run.model) ||
+      (patch.contextWindow !== undefined &&
+        patch.contextWindow !== run.contextWindow)
+        ? { contextWindowTokens: null }
+        : {}),
       // Cleared by a model change on exactly the window's own reasoning, and
       // more sharply: these axes belong to the model that enumerated them, and
       // one of them (`optimize_for`) exists on a single model of thirty-four —
@@ -1783,6 +1805,9 @@ export class ChatService implements OnModuleInit {
       this.delegatesOut.delete(runId);
       // Same rule, same one place: nothing can read a deleted run's context.
       this.contexts.forget(runId);
+      // Nor send a notification about it.
+      this.notifiers.get(runId)?.();
+      this.notifiers.delete(runId);
     }
   }
 
@@ -2638,11 +2663,6 @@ export class ChatService implements OnModuleInit {
         );
       }
       if (stranded.length > 0) {
-        // The rows above are persisted directly rather than raised as agent
-        // events, so `recordDelegateBracket` never sees them — the badge count
-        // is retired here, once, instead of per row.
-        this.delegatesOut.delete(runId);
-        this.announceDelegatesOut(runId);
         this.logger.log(
           `run ${runId}: closed ${stranded.length} sub-agent(s) left out by its agent session`,
         );
@@ -2654,6 +2674,17 @@ export class ChatService implements OnModuleInit {
       this.logger.error(
         `run ${runId} failed to close its stranded sub-agents: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      // The rows above are persisted directly rather than raised as agent
+      // events, so `recordDelegateBracket` never sees them — the badge count is
+      // retired here, once, instead of per row. In a FINALLY: the process that
+      // ran those delegates is gone either way, and a write that threw half way
+      // used to skip this and leave the run reporting delegates out over closes
+      // that said otherwise, until the run was deleted.
+      if (this.delegatesOut.has(runId)) {
+        this.delegatesOut.delete(runId);
+        this.announceDelegatesOut(runId);
+      }
     }
   }
 
@@ -4407,6 +4438,10 @@ export class ChatService implements OnModuleInit {
       const disposeNotifier = mcpEndpoint
         ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
         : null;
+      // NOT disposed with the turn — see `notifiers`.
+      if (disposeNotifier) {
+        this.notifiers.set(runId, disposeNotifier);
+      }
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -4420,7 +4455,6 @@ export class ChatService implements OnModuleInit {
         disposeScorer?.();
         disposeComparer?.();
         disposeGallerist?.();
-        disposeNotifier?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

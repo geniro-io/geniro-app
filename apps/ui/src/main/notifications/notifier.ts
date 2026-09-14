@@ -31,6 +31,12 @@ import { Notification } from 'electron';
  * spec swaps it for a double rather than for another vendor.
  */
 
+/** A banner already posted — what can still be done to it. */
+export interface PostedBanner {
+  /** Take it off the screen and out of Notification Centre. */
+  close(): void;
+}
+
 /** One posted banner, from the caller's point of view. */
 export interface Notifier {
   /**
@@ -55,7 +61,7 @@ export interface Notifier {
      * "sometimes nothing arrives" this exists to make visible.
      */
     onOutcome?: (outcome: { shown: boolean; error: string | null }) => void,
-  ): void;
+  ): PostedBanner;
 }
 
 export const electronNotifier: Notifier = {
@@ -71,5 +77,8 @@ export const electronNotifier: Notifier = {
       onOutcome?.({ shown: false, error: String(error) }),
     );
     banner.show();
+    // `close()` on a delivered banner removes it from Notification Centre as
+    // well as from the screen, which is what withdrawing one has to mean.
+    return { close: () => banner.close() };
   },
 };

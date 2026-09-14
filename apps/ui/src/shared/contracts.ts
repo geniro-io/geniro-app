@@ -721,6 +721,12 @@ export interface RunNotification {
   title: string;
   /** One line under the title. */
   body: string;
+  /**
+   * Whether this banner may be withdrawn later (`retractNotification`) — a turn
+   * that ended with a command it started still running, whose agent may only be
+   * waiting on it. Absent on every banner that is final.
+   */
+  retractable?: boolean;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1426,6 +1432,13 @@ export interface GeniroApi {
    */
   notify(notification: RunNotification): Promise<void>;
   /**
+   * Withdraw the RETRACTABLE banner still standing for a run, from the screen
+   * and from Notification Centre. A no-op when there is none — never posted
+   * (settings off, the chat on screen), already clicked, or a final one — and
+   * none of those is the caller's to know.
+   */
+  retractNotification(runId: string): Promise<void>;
+  /**
    * Post a banner the user explicitly asked for, and report what became of it.
    *
    * The one notification path with an ANSWER, and it needs one: every other is
@@ -1521,6 +1534,7 @@ export const IPC = {
   revealPath: 'geniro:revealPath',
   toggleDevTools: 'geniro:toggleDevTools',
   notify: 'geniro:notify',
+  retractNotification: 'geniro:retractNotification',
   testNotification: 'geniro:testNotification',
   openNotificationSettings: 'geniro:openNotificationSettings',
   onNotificationActivated: 'geniro:onNotificationActivated',

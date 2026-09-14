@@ -285,6 +285,10 @@ export function createPreloadStub(
       note('notify');
       return Promise.resolve();
     },
+    retractNotification: () => {
+      note('retractNotification');
+      return Promise.resolve();
+    },
     testNotification: () => {
       note('testNotification');
       return Promise.resolve({

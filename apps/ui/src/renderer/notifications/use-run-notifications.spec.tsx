@@ -50,11 +50,15 @@ describe('useRunNotifications', () => {
   let root: Root;
   let notices: AgentNotice[];
   const notify = vi.fn<GeniroApi['notify']>(async () => {});
+  const retractNotification = vi.fn<GeniroApi['retractNotification']>(
+    async () => {},
+  );
 
   beforeEach(() => {
     notify.mockClear();
+    retractNotification.mockClear();
     notices = [];
-    window.geniro = createPreloadStub({ notify });
+    window.geniro = createPreloadStub({ notify, retractNotification });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -93,17 +97,47 @@ describe('useRunNotifications', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT announce a finished turn while a background command is still running', () => {
-    // The agent may be waiting on it; the turn the CLI opens when it reports is
-    // the one that gets announced.
+  it('announces a finished turn with a command still running, as a banner it can take back', () => {
+    // The reported case: the agent finished and left a dev server up.
     show('running', 1);
     show('completed', 1);
-    expect(notify).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r1',
+      title: 'r1',
+      body: 'The turn finished — 1 command still running.',
+      retractable: true,
+    });
+    expect(retractNotification).not.toHaveBeenCalled();
+  });
 
-    show('completed', 0);
+  it('withdraws that banner when the run goes back to work — the agent was only waiting', () => {
+    show('running', 1);
+    show('completed', 1);
+    // The command reported back and the CLI opened a turn of its own.
     show('running', 0);
+    expect(retractNotification).toHaveBeenCalledWith('r1');
+
+    // That continuation's ending is the real one, and it is final.
     show('completed', 0);
-    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify.mock.calls[1]![0]).not.toHaveProperty('retractable');
+  });
+
+  it('leaves the banner standing while nothing reopens the run', () => {
+    show('running', 1);
+    show('completed', 1);
+    show('completed', 1);
+    show('completed', 0);
+    expect(retractNotification).not.toHaveBeenCalled();
+  });
+
+  it('never withdraws a final banner', () => {
+    show('running');
+    show('completed');
+    show('running');
+    show('completed');
+    expect(retractNotification).not.toHaveBeenCalled();
   });
 
   it('still announces a FAILED turn while a command is running — nobody asked for it', () => {

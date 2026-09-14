@@ -2183,7 +2183,20 @@ interface CallShell {
  * - `mcp__geniro__*` tool calls and their results are dropped entirely (see
  *   {@link GENIRO_TOOL_PREFIX}).
  */
-export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
+export function groupTranscript(
+  items: readonly ChatItem[],
+  {
+    recoverOrphanCalls = true,
+  }: {
+    /**
+     * Rebuild the block of a call whose start row is above the window. The
+     * MAIN flow wants it; a call block's own re-fold must not, since every row
+     * inside it still carries that call's id and would rebuild the block inside
+     * itself without end.
+     */
+    recoverOrphanCalls?: boolean;
+  } = {},
+): TranscriptEntry[] {
   // Pass 1 — collect the call shells and claim each callee sub-turn's items.
   const shells = new Map<string, CallShell>();
   for (const item of items) {
@@ -2241,6 +2254,61 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
     if (id && callId && !delegateCalls.has(id)) {
       delegateCalls.set(id, callId);
     }
+  }
+  // Calls whose `call_started` is OLDER than the loaded window, recovered from
+  // the rows the call itself still tags. A long call outlives `HISTORY_PAGE`:
+  // measured on a Dev Team run, an Engineer call started at seq 10737 while the
+  // window opened near 11600, and every row it went on streaming carried
+  // `callId: call-10` with no shell to be claimed into. They fell into the main
+  // flow as bare Engineer turn blocks — uncollapsible, split at every turn end
+  // into two blocks back to back, and topped by an empty block holding only its
+  // `Working…` row, since the live row had no open call to be placed in.
+  // REPORTED as all three. The block is rebuilt exactly as a windowed one,
+  // anchored at the first row the window holds; it lacks only the brief, which
+  // lived on the start row.
+  const orphanCalls = new Set<string>();
+  /** The first windowed row of each orphan call → that call's id. */
+  const orphanAnchors = new Map<string, string>();
+  for (const item of recoverOrphanCalls ? items : []) {
+    if (
+      UNCLAIMABLE_KINDS.has(item.kind) ||
+      (item.kind === 'system' &&
+        payloadBoolean(item.payload, 'stalledCall') === true)
+    ) {
+      continue;
+    }
+    const callId = payloadString(item.payload, 'callId');
+    if (callId === null) {
+      continue;
+    }
+    const followup = CALL_FOLLOWUP_KINDS.has(item.kind);
+    const existing = shells.get(callId);
+    if (existing !== undefined) {
+      // Only an orphan learns its caller late — a windowed shell has it already.
+      if (orphanCalls.has(callId) && existing.started.nodeId === null) {
+        existing.started.nodeId = payloadString(item.payload, 'callerNodeId');
+      }
+      continue;
+    }
+    const calleeNodeId = followup
+      ? payloadString(item.payload, 'calleeNodeId')
+      : item.nodeId;
+    if (calleeNodeId === null) {
+      continue;
+    }
+    const started: ChatItem = {
+      id: `orphan-call:${callId}`,
+      runId: item.runId,
+      nodeId: payloadString(item.payload, 'callerNodeId'),
+      seq: item.seq,
+      kind: 'call_started',
+      role: null,
+      payload: { callId, calleeNodeId },
+      createdAt: item.createdAt,
+    };
+    shells.set(callId, { started, calleeNodeId, bucket: [] });
+    orphanCalls.add(callId);
+    orphanAnchors.set(item.id, callId);
   }
   const claimed = new Set<string>();
   if (shells.size > 0) {
@@ -2305,6 +2373,23 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
 
   for (const item of items) {
     if (claimed.has(item.id)) {
+      const orphanCallId = orphanAnchors.get(item.id);
+      const orphan =
+        orphanCallId === undefined ? undefined : shells.get(orphanCallId);
+      if (orphanCallId !== undefined && orphan !== undefined) {
+        openGroups.delete(groupKey(orphan.started));
+        entries.push(
+          buildCallBlock(
+            orphanCallId,
+            orphan,
+            stalledCalls.has(orphanCallId),
+            // Nothing in the window says it started, and a call whose rows are
+            // still arriving has not ended — its own settle row, which always
+            // follows those rows, moves this on when it lands.
+            'running',
+          ),
+        );
+      }
       continue;
     }
     if (item.kind === 'call_started') {
@@ -2788,8 +2873,9 @@ function buildCallBlock(
   callId: string,
   shell: CallShell,
   stalled: boolean,
+  initialStatus: CallBlockEntry['status'] = 'pending',
 ): CallBlockEntry {
-  let status: CallBlockEntry['status'] = 'pending';
+  let status = initialStatus;
   const inner: ChatItem[] = [];
   for (const item of shell.bucket) {
     if (item.kind === 'status') {
@@ -2856,7 +2942,10 @@ function buildCallBlock(
     // out is the ordinary thread's own shape.
     entries: buildTurnBlocks(
       buildWorkflowCards(
-        buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+        buildSubagentBlocks(
+          groupTranscript(visibleInner, { recoverOrphanCalls: false }),
+          visibleInner,
+        ),
         visibleInner,
       ),
     ),

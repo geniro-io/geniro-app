@@ -20,6 +20,23 @@ export class NodeStateDao extends BaseDao<NodeState> {
     return this.getRepo(txEm).findOne({ runId, nodeId });
   }
 
+  /**
+   * File (or clear) one node's last context and plan reading — the per-node
+   * twin of `RunDao.rememberMetricsReading`, and a bare `nativeUpdate` for its
+   * reason: a row that no longer exists simply matches nothing.
+   */
+  async rememberMetricsReading(
+    runId: string,
+    nodeId: string,
+    reading: string | null,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      { lastMetricsReading: reading },
+    );
+  }
+
   async listByRun(runId: string, txEm?: EntityManager): Promise<NodeState[]> {
     // Read-only snapshot path — no identity-map tracking needed (see item.dao).
     return this.getRepo(txEm).find({ runId }, { disableIdentityMap: true });

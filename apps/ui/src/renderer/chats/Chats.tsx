@@ -207,6 +207,7 @@ import {
   buildSubagentBlocks,
   buildTurnBlocks,
   buildWorkflowCards,
+  type CallBlockEntry,
   callBlockLatest,
   callBlockUsage,
   collectCallBlocks,
@@ -390,6 +391,29 @@ function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
  * effect dependency of `useRunNotifications`, and a fresh arrow per render
  * would re-run that effect on every keystroke in the composer.
  */
+/**
+ * A call block's lifecycle in the panel's run vocabulary. A `pending` call has
+ * been asked for and is not over, which the panel's rows call `running`.
+ */
+function callThreadStatusOf(
+  status: CallBlockEntry['status'],
+): AgentThread['status'] {
+  return status === 'pending' ? 'running' : status;
+}
+
+/**
+ * Order two call ids by the number the broker minted them with (`call-2`
+ * before `call-10`), which is the order the calls were made in. An id carrying
+ * no number sorts after the ones that do, by its text.
+ */
+function compareCallIds(a: string, b: string): number {
+  const number = (id: string): number => {
+    const match = /(\d+)$/.exec(id);
+    return match === null ? Number.POSITIVE_INFINITY : Number(match[1]);
+  };
+  return number(a) - number(b) || a.localeCompare(b);
+}
+
 function runAwaiting(run: ChatRun): RunAwaiting | null {
   return run.awaiting;
 }
@@ -2636,32 +2660,40 @@ export function Chats({
    * fresh identity per render would re-run their effects.
    */
   const loadChatMetrics = useCallback(
-    (runId: string) =>
-      chatApi.readChatMetrics({ runId }).then((metrics) => {
-        // The reading the PANEL takes is the freshest one this client can get:
-        // it is the CLI's own accounting, asked over the live process, while
-        // the ring's own sources are a turn's `context_progress` — emitted on
-        // main-thread assistant lines only — and the last settled turn. So a
-        // tool-heavy stretch moves the panel and leaves the ring where the
-        // last assistant line put it.
-        //
-        // REPORTED as "Context circle wasnt synced, it took 15s to sync",
-        // against an open panel reading 425.4k while the ring beside it still
-        // showed the previous figure — and 15s is simply how long that agent
-        // went without producing a main-thread line.
-        //
-        // Mirrored through the SAME seam the live plane uses, so the ranking
-        // is unchanged: `chatContext` reads the live delta first, and this
-        // only ever refreshes the run-row copy underneath it. Its own guards
-        // do the rest — a non-positive count is not a measurement, and an
-        // unchanged one re-renders nothing.
-        rememberRunContext(
-          runId,
-          metrics.context?.totalTokens ?? null,
-          metrics.context?.maxTokens ?? null,
-        );
-        return metrics;
-      }),
+    (runId: string, nodeId: string | null) =>
+      chatApi
+        .readChatMetrics({ runId, nodeId: nodeId ?? undefined })
+        .then((metrics) => {
+          // A NODE's reading is one agent of a workflow run, and the run row's
+          // copy is a chat's — mirroring it would put one node's window under
+          // the whole run.
+          if (nodeId !== null) {
+            return metrics;
+          }
+          // The reading the PANEL takes is the freshest one this client can get:
+          // it is the CLI's own accounting, asked over the live process, while
+          // the ring's own sources are a turn's `context_progress` — emitted on
+          // main-thread assistant lines only — and the last settled turn. So a
+          // tool-heavy stretch moves the panel and leaves the ring where the
+          // last assistant line put it.
+          //
+          // REPORTED as "Context circle wasnt synced, it took 15s to sync",
+          // against an open panel reading 425.4k while the ring beside it still
+          // showed the previous figure — and 15s is simply how long that agent
+          // went without producing a main-thread line.
+          //
+          // Mirrored through the SAME seam the live plane uses, so the ranking
+          // is unchanged: `chatContext` reads the live delta first, and this
+          // only ever refreshes the run-row copy underneath it. Its own guards
+          // do the rest — a non-positive count is not a measurement, and an
+          // unchanged one re-renders nothing.
+          rememberRunContext(
+            runId,
+            metrics.context?.totalTokens ?? null,
+            metrics.context?.maxTokens ?? null,
+          );
+          return metrics;
+        }),
     [chatApi, rememberRunContext],
   );
 
@@ -5482,21 +5514,47 @@ export function Chats({
       // a ring on its card and no instance at all — REPORTED as "strange
       // researcher card with some context but without calls". Each keeps its
       // own ring; it is `running` only while its own key is streaming.
+      //
+      // A call whose START is above the window while its rows are not has a
+      // block too — the fold rebuilds it from the rows the call still tags —
+      // and that block knows how the call STANDS, which the readings cannot:
+      // they carry a window and nothing else. Read off it, a call working for
+      // an hour past its start row is `running`, where the live-key test above
+      // called it `completed` between two deltas. REPORTED as an Engineer card
+      // reading `running` over "0 active · 4 instances", every one `completed`.
       const inWindow = new Set(fromWindow.map((thread) => thread.id));
-      const older = (nodeReadings.get(nodeId)?.calls ?? [])
-        .filter((call) => !inWindow.has(call.callId))
-        .map((call): AgentThread => ({
-          id: call.callId,
+      const readings = nodeReadings.get(nodeId)?.calls ?? [];
+      const olderIds = [
+        ...new Set([
+          ...readings.map((call) => call.callId),
+          ...[...callBlocks.values()]
+            .filter((block) => block.calleeNodeId === nodeId)
+            .map((block) => block.callId),
+        ]),
+      ]
+        .filter((callId) => !inWindow.has(callId))
+        .sort(compareCallIds);
+      const older = olderIds.map((callId): AgentThread => {
+        const block = callBlocks.get(callId);
+        const usage = block === undefined ? null : callBlockUsage(block);
+        return {
+          id: callId,
           kind: 'call',
-          label: call.callId,
-          brief: null,
-          status: liveText.has(partialOwnerKey(nodeId, call.callId))
-            ? 'running'
-            : 'completed',
+          label: callId,
+          brief: block?.message ?? null,
+          status:
+            block !== undefined
+              ? callThreadStatusOf(block.status)
+              : liveText.has(partialOwnerKey(nodeId, callId))
+                ? 'running'
+                : 'completed',
           sessionId: null,
-          contextTokens: call.contextTokens,
-          contextWindowTokens: call.contextWindowTokens,
-        }));
+          ...resolveCalleeContext(liveText, nodeReadings, nodeId, callId),
+          latest: block === undefined ? null : callBlockLatest(block),
+          spentTokens: usage?.tokens ?? null,
+          spentUsd: usage?.costUsd ?? null,
+        };
+      });
       // After the node's own conversation, before the calls the window holds —
       // they are older than anything on screen.
       const mainAt =
@@ -8541,13 +8599,19 @@ export function Chats({
                           single root, so this draws nothing rather than a
                           figure about no particular node.
 
-                          `runId` is null: that prop opens the full breakdown,
-                          which is a question put to ONE live process, and a
-                          workflow run holds one per node. */}
+                          Its full breakdown is the ROOT node's, asked by node:
+                          a workflow run holds one process per node, so the run
+                          alone names no agent. REPORTED as "i cant see full
+                          context info for workflow" while this was withheld. */}
                                 {chatContext.tokens === null ? null : (
                                   <ContextMeter
                                     className="ml-1.5"
-                                    runId={null}
+                                    runId={
+                                      wfNodes.rootId === null
+                                        ? null
+                                        : activeRun.id
+                                    }
+                                    nodeId={wfNodes.rootId}
                                     contextTokens={chatContext.tokens}
                                     contextWindowTokens={chatContext.window}
                                     live={isWorkingRunStatus(activeRunStatus)}
@@ -8612,11 +8676,10 @@ export function Chats({
                           : undefined
                       }
                       terminalReasons={terminalReasons}
-                      // A chat only: a workflow run's nodes each hold their own
-                      // process, and this readout is about the one a chat holds.
-                      metricsRunId={
-                        activeRun && !activeRun.workflowId ? activeRun.id : null
-                      }
+                      // A workflow run's readouts are asked per NODE, each
+                      // holding its own process; a chat's is its one agent's.
+                      metricsRunId={activeRun?.id ?? null}
+                      metricsByNode={Boolean(activeRun?.workflowId)}
                       // The HOVER half of the same resolution the button acts on.
                       // Never passed until now, so the hint it feeds — the invocation,
                       // selectable, with a copy control — could not open on this

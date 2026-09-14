@@ -30,7 +30,7 @@ import { previewMessageOf } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
-import { settledRunStatus, TERMINAL_KINDS } from './settled-status';
+import { settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
@@ -103,10 +103,7 @@ function queueMayDrainAfterReplay(
   if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
     return false;
   }
-  const endedOnTerminal =
-    lastItem !== undefined &&
-    TERMINAL_KINDS.has(lastItem.kind) &&
-    lastItem.nodeId === null;
+  const endedOnTerminal = tailSettledAs !== null;
   // A HELD run counts as drainable even though its status is `running` and its
   // transcript has no terminal row — the daemon is DEFERRING that row until the
   // last delegate reports, which is why neither of the other two readings can

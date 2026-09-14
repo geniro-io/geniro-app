@@ -409,6 +409,31 @@ describe('useChatRun', () => {
     );
   });
 
+  it('keeps a run WORKING through a continuation’s result that arrived inside its turn', async () => {
+    // REPORTED as a sidebar reading `completed` over a thread still working: a
+    // background task finished mid-turn, and its row was mirrored as the end.
+    const { client, emitItem } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'go')]);
+    const harness = await mount(client);
+    harness.queued.add('r1');
+    await open(harness, 'r1');
+
+    expect(harness.state().streaming).toBe(true);
+
+    await act(async () => {
+      emitItem({
+        ...turnEnd('r1', 1),
+        payload: { continuation: true, insideTurn: true },
+      });
+    });
+
+    expect(harness.state().streaming).toBe(true);
+    expect(harness.state().runs.find((run) => run.id === 'r1')?.status).toBe(
+      'running',
+    );
+    expect(harness.drain).not.toHaveBeenCalled();
+  });
+
   it('releases the queue on a live turn end, and never on a cancel', async () => {
     const { client, emitItem } = makeClient();
     const harness = await mount(client);

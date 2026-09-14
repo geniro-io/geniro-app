@@ -214,6 +214,29 @@ describe('mapEventToItem', () => {
     });
   });
 
+  it('persists that a continuation’s result ended NOTHING, and says nothing on an ordinary ending', () => {
+    // The renderer reads this flag to keep such a row off the run's badge.
+    expect(
+      mapEventToItem({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: 'Background task completed.',
+        continuation: true,
+        insideTurn: true,
+      })?.payload,
+    ).toEqual({ usage: null, stopReason: 'end_turn', insideTurn: true });
+    expect(
+      mapEventToItem({
+        type: 'turn_complete',
+        usage: null,
+        stopReason: 'end_turn',
+        finalText: 'Done.',
+        continuation: true,
+      })?.payload,
+    ).toEqual({ usage: null, stopReason: 'end_turn' });
+  });
+
   it('maps turn_complete keeping usage and stopReason; finalText is not persisted', () => {
     expect(
       mapEventToItem({

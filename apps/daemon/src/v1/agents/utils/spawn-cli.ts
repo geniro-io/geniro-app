@@ -1908,7 +1908,8 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
           `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
         );
         armSilenceDeadline(turn);
-        handleOrphanEvent(normalized);
+        // Stamped, so the ROW says it ended nothing — see `insideTurn`.
+        handleOrphanEvent({ ...normalized, insideTurn: true });
         return;
       }
       // A completion for a prompt that has not been sent is not this turn's.

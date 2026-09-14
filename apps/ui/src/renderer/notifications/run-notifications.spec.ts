@@ -7,29 +7,29 @@ const settled = (status: 'completed' | 'failed') =>
 import type { RunStatusKind } from '../chats/run-status';
 import {
   diffRunNotifications,
-  holdsEnding,
+  endsWaitingOnCommand,
   notificationBody,
   RECENT_LAUNCH_MS,
 } from './run-notifications';
 
-describe('holdsEnding', () => {
+describe('endsWaitingOnCommand', () => {
   const now = 1_000_000;
 
-  it('holds an ending while a command launched moments ago is still running', () => {
-    expect(holdsEnding({ shellsOpen: 1, launchedAt: now - 5_000, now })).toBe(
-      true,
-    );
-  });
-
-  it('announces at once when every command has already ended', () => {
-    expect(holdsEnding({ shellsOpen: 0, launchedAt: now - 5_000, now })).toBe(
-      false,
-    );
-  });
-
-  it('announces at once when the running command is an OLD one — a dev server left up', () => {
+  it('reads an ending as a wait while a command launched moments ago is still running', () => {
     expect(
-      holdsEnding({
+      endsWaitingOnCommand({ shellsOpen: 1, launchedAt: now - 5_000, now }),
+    ).toBe(true);
+  });
+
+  it('is an ending when every command has already ended', () => {
+    expect(
+      endsWaitingOnCommand({ shellsOpen: 0, launchedAt: now - 5_000, now }),
+    ).toBe(false);
+  });
+
+  it('is an ending when the running command is an OLD one — a dev server left up', () => {
+    expect(
+      endsWaitingOnCommand({
         shellsOpen: 1,
         launchedAt: now - RECENT_LAUNCH_MS - 1,
         now,
@@ -37,10 +37,10 @@ describe('holdsEnding', () => {
     ).toBe(false);
   });
 
-  it('announces at once when no launch was ever seen — the commands predate the window', () => {
-    expect(holdsEnding({ shellsOpen: 2, launchedAt: undefined, now })).toBe(
-      false,
-    );
+  it('is an ending when no launch was ever seen — the commands predate the window', () => {
+    expect(
+      endsWaitingOnCommand({ shellsOpen: 2, launchedAt: undefined, now }),
+    ).toBe(false);
   });
 });
 

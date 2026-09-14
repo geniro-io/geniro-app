@@ -6,11 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GeniroApi } from '../../shared/contracts';
 import { createPreloadStub } from '../__fixtures__/preload-stub';
 import type { RunStatusKind } from '../chats/run-status';
-import {
-  AFTER_CLOSE_GRACE_MS,
-  HOLD_CEILING_MS,
-  RECENT_LAUNCH_MS,
-} from './run-notifications';
+import { RECENT_LAUNCH_MS } from './run-notifications';
 import { useRunNotifications } from './use-run-notifications';
 
 (
@@ -30,20 +26,14 @@ const labelOf = (run: Row): string => run.id;
 const awaitingOf = (): null => null;
 const shellsOpenOf = (run: Row): number => run.shellsOpen;
 
-function Probe({
-  runs,
-  activeRunId,
-}: {
-  runs: readonly Row[];
-  activeRunId: string | null;
-}): null {
+function Probe({ runs }: { runs: readonly Row[] }): null {
   useRunNotifications({
     runs,
     statusOf,
     labelOf,
     awaitingOf,
     shellsOpenOf,
-    activeRunId,
+    activeRunId: null,
   });
   return null;
 }
@@ -65,30 +55,12 @@ describe('useRunNotifications', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
   /** One reading of the one run under test. */
-  const show = (
-    status: RunStatusKind,
-    shellsOpen: number,
-    activeRunId: string | null = null,
-  ): void => {
-    act(() =>
-      root.render(
-        <Probe
-          runs={[{ id: 'r1', status, shellsOpen }]}
-          activeRunId={activeRunId}
-        />,
-      ),
-    );
-  };
-
-  const advance = (ms: number): void => {
-    act(() => {
-      vi.advanceTimersByTime(ms);
-    });
+  const show = (status: RunStatusKind, shellsOpen: number): void => {
+    act(() => root.render(<Probe runs={[{ id: 'r1', status, shellsOpen }]} />));
   };
 
   it('announces an ending with no command out at once', () => {
@@ -100,7 +72,8 @@ describe('useRunNotifications', () => {
   it('announces at once when the running command was launched long before the ending — a dev server left up', () => {
     show('running', 0);
     show('running', 1);
-    advance(RECENT_LAUNCH_MS + 1_000);
+    // The CLOCK, not a timer: no banner here is ever waiting on one.
+    vi.setSystemTime(Date.now() + RECENT_LAUNCH_MS + 1_000);
     show('completed', 1);
     expect(notify).toHaveBeenCalledTimes(1);
   });
@@ -111,53 +84,24 @@ describe('useRunNotifications', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('holds an ending right after a launch, and drops it when the agent carries on', () => {
+  it('skips an ending right after a launch, and announces the turn the command wakes instead', () => {
     show('running', 0);
     show('running', 1);
     show('completed', 1);
+    // Nothing is pending that could post it later.
+    vi.runAllTimers();
     expect(notify).not.toHaveBeenCalled();
-    // The command reports, and the CLI opens a turn of its own.
+    // The command reports, the CLI opens a turn of its own, and that one ends.
     show('completed', 0);
     show('running', 0);
-    advance(HOLD_CEILING_MS);
-    expect(notify).not.toHaveBeenCalled();
-  });
-
-  it('announces a held ending once its command has ended and the agent stayed quiet', () => {
-    show('running', 0);
-    show('running', 1);
-    show('completed', 1);
     show('completed', 0);
-    advance(AFTER_CLOSE_GRACE_MS - 1);
-    expect(notify).not.toHaveBeenCalled();
-    advance(1);
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('announces a held ending at the ceiling when its command never exits', () => {
-    show('running', 0);
-    show('running', 1);
-    show('completed', 1);
-    advance(HOLD_CEILING_MS - 1);
-    expect(notify).not.toHaveBeenCalled();
-    advance(1);
-    expect(notify).toHaveBeenCalledTimes(1);
-  });
-
-  it('never holds a question', () => {
+  it('never skips a question', () => {
     show('running', 0);
     show('running', 1);
     show('needs-input', 1);
     expect(notify).toHaveBeenCalledTimes(1);
-  });
-
-  it('drops a held ending for a chat the user has since opened and is looking at', () => {
-    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
-    show('running', 0);
-    show('running', 1);
-    show('completed', 1);
-    show('completed', 1, 'r1');
-    advance(HOLD_CEILING_MS);
-    expect(notify).not.toHaveBeenCalled();
   });
 });

@@ -98,7 +98,7 @@ export function diffRunNotifications(
 
 /**
  * How recently the newest still-running command must have been LAUNCHED for a
- * turn's ending to be held back instead of announced.
+ * turn's ending to be read as a WAIT rather than announced.
  *
  * REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
  * завершения каких-то процессов… и в каждом из этих случаев он мне отправляет
@@ -119,36 +119,24 @@ export function diffRunNotifications(
 export const RECENT_LAUNCH_MS = 2 * 60_000;
 
 /**
- * How long a held ending waits after one of its commands has ENDED before it
- * is announced after all.
+ * Whether a turn's ending is the agent WAITING on a command rather than
+ * finishing — a command is still running, and the newest launch is recent
+ * enough that the agent most likely stopped for it. See
+ * {@link RECENT_LAUNCH_MS}.
  *
- * The CLI learns a command finished from the command itself, so a carried-on
- * turn speaks almost at once: measured, the agent's first row came within 10s
- * of the close in 126 of 148 cases and within 30s in 141. Speaking retracts the
- * banner, so this only ever delays a turn that really is over.
- */
-export const AFTER_CLOSE_GRACE_MS = 30_000;
-
-/**
- * The longest an ending is held while its commands are still running.
+ * Such an ending is NOT announced, and nothing is delayed to decide it: every
+ * ending is judged the moment it lands, and is either announced then or never.
+ * A timer that holds a banner in case the agent speaks again was tried first
+ * (ten seconds, then a grace and a ceiling) and rejected as a crutch — a banner
+ * on a clock is late when it is right and still wrong when the clock guesses
+ * short. The real "done" needs no clock: the CLI opens a turn of its own when
+ * the command reports, and THAT turn's ending is announced like any other.
  *
- * The other end of the stick: a server launched right before the turn ended
- * never exits, and that agent IS done. Ten minutes covers 123 of the 150
- * measured commands the agent was waiting on, so a longer wait is announced
- * with a banner that may yet be followed by more work, and a server-launching
- * turn is announced ten minutes late rather than never.
+ * Two endings go unannounced by this, and both are the price of never guessing
+ * with a timer: a server launched just before the agent stopped, and a waited-on
+ * command whose report the agent never answers (15 of the 275 measured).
  */
-export const HOLD_CEILING_MS = 10 * 60_000;
-
-/**
- * Whether a turn's ending should be held back rather than announced — a
- * command is still running, and the newest launch is recent enough that the
- * agent is most likely waiting on it. See {@link RECENT_LAUNCH_MS}.
- *
- * Everything else is announced at once. That includes a run whose commands all
- * predate the turn, which the old blanket ten-second wait delayed for nothing.
- */
-export function holdsEnding({
+export function endsWaitingOnCommand({
   shellsOpen,
   launchedAt,
   now,

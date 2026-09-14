@@ -16,10 +16,7 @@ import type {
   RunStatusEvent,
   VerdictAck,
 } from '../daemon-client';
-import {
-  AFTER_CLOSE_GRACE_MS,
-  RECENT_LAUNCH_MS,
-} from '../notifications/run-notifications';
+import { RECENT_LAUNCH_MS } from '../notifications/run-notifications';
 import type { SettingsSection } from '../settings/Settings';
 import { Chats } from './Chats';
 import { COMPOSER_MAX_LINES } from './composer-card';
@@ -2564,84 +2561,47 @@ describe('Chats — the system notifications a thread earns', () => {
     }
   });
 
-  it('HOLDS the ending of a thread that just launched a command, until that command ends', async () => {
+  it('SKIPS the ending of a thread that just launched a command, and announces the turn that command wakes', async () => {
     // REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
     // завершения каких-то процессов… и в каждом из этих случаев он мне
     // отправляет false positive-нотификацию": an agent ends its turn waiting on
-    // a command it has just backgrounded, and carries on when it reports.
+    // a command it has just backgrounded, and carries on when it reports. And
+    // with no delay — "we should not have delay at all": the wait is skipped
+    // outright rather than held on a timer.
     twoChats();
     const { client, emitRunStatus } = makeClient();
     const container = await mount(client);
     await clickRun(container, 'My chat');
     notify.mockClear();
 
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await act(async () => {
-        emitRunStatus({
-          runId: 'r2',
-          status: 'completed',
-          activity: null,
-          shellsOpen: 1,
-        });
-      });
-      await act(async () => {
-        vi.advanceTimersByTime(60_000);
-      });
-      // A minute on and the command is still running: still no claim.
-      expect(notify).not.toHaveBeenCalled();
-
-      // The command ended and the agent said nothing more — it WAS done.
-      await act(async () => {
-        emitRunStatus({ runId: 'r2', status: null, shellsOpen: 0 });
-      });
-      await act(async () => {
-        vi.advanceTimersByTime(AFTER_CLOSE_GRACE_MS);
-      });
-      expect(notify).toHaveBeenCalledWith({
-        kind: 'turn-end',
+    await act(async () => {
+      emitRunStatus({
         runId: 'r2',
-        title: 'Second chat',
-        body: 'The turn finished.',
+        status: 'completed',
+        activity: null,
+        shellsOpen: 1,
       });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    });
+    expect(notify).not.toHaveBeenCalled();
 
-  it('DROPS the held ending when the agent starts working again', async () => {
-    // The retraction, which is what makes holding the claim worth anything: a
-    // banner already posted cannot be taken back, so the only way to be right
-    // is not to have posted it. Claude Code's own UI gets this for free — its
-    // "done" is the prompt returning, and more output simply follows.
-    twoChats();
-    const { client, emitRunStatus } = makeClient();
-    const container = await mount(client);
-    await clickRun(container, 'My chat');
-    notify.mockClear();
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await act(async () => {
-        emitRunStatus({
-          runId: 'r2',
-          status: 'completed',
-          activity: null,
-          shellsOpen: 2,
-        });
-      });
-      await act(async () => {
-        // The command reported and the agent carried straight on.
-        emitRunStatus({ runId: 'r2', status: 'running', activity: null });
-      });
-      await act(async () => {
-        vi.advanceTimersByTime(30_000);
-      });
-
-      expect(notify).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
+    // The command reports; the CLI carries on by itself and then finishes.
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: null, shellsOpen: 0 });
+    });
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'running', activity: null });
+    });
+    expect(notify).not.toHaveBeenCalled();
+    await act(async () => {
+      emitRunStatus({ runId: 'r2', status: 'completed', activity: null });
+    });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith({
+      kind: 'turn-end',
+      runId: 'r2',
+      title: 'Second chat',
+      body: 'The turn finished.',
+    });
   });
 
   it('stays SILENT while a delegate is still out, which is real work', async () => {

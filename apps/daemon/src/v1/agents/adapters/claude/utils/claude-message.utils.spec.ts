@@ -1545,6 +1545,9 @@ describe('mapClaudeMessage — background tasks', () => {
         phase: 'started',
         unit: 'other',
         toolCallId: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
+        // …and says whose it is, so the session keeps it off the main
+        // thread's terminals.
+        ownedByDelegate: true,
       },
     ]);
   });

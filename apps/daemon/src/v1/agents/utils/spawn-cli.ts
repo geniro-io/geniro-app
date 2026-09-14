@@ -840,6 +840,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * nothing else will ever say the turn is over.
    */
   let announcesSessionState = false;
+  /**
+   * Background commands a DELEGATE started (`background_work.ownedByDelegate`),
+   * remembered only so their settle is swallowed along with their start — see
+   * {@link announceShellWork}.
+   */
+  const delegateShells = new Set<string>();
 
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
   let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1523,6 +1529,15 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
     if (event.phase === 'started') {
+      // A DELEGATE's own command: its block holds it, and the main thread's
+      // terminals — list, count, chip — deliberately do not (REPORTED as "we
+      // should not show terminals from subagents"). Without this every one
+      // reached the daemon's shell list and the run's count, and the shelf
+      // chip listed it unlabelled while the agents panel showed nothing.
+      if (event.ownedByDelegate === true && event.unit !== 'agent') {
+        delegateShells.add(event.id);
+        return;
+      }
       // Recorded for EVERY unit, delegate or not: a settle carries no kind, so
       // which map answers for an id is decided here, where the CLI stated it.
       if (event.unit !== 'agent' && event.toolCallId !== null) {
@@ -1552,6 +1567,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // what the `started` recorded, so a unit this map never saw is silently not
     // a shell and nothing is announced for it.
     if (delegateWork.has(event.id)) {
+      return;
+    }
+    // Its start announced nothing, so its end has nothing to close.
+    if (delegateShells.delete(event.id)) {
       return;
     }
     runningShells.delete(event.id);

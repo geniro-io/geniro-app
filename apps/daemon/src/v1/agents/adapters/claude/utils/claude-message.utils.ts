@@ -637,6 +637,9 @@ function mapClaudeLine(
                 ? 'agent'
                 : 'other',
             toolCallId,
+            ...(root.owned_by_subagent === true
+              ? { ownedByDelegate: true as const }
+              : {}),
           },
         ];
         // A workflow's ANCHOR, and the only line that ever states its name: the

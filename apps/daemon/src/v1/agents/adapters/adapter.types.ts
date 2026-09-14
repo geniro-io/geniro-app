@@ -1046,7 +1046,7 @@ type AgentEventBody =
        * as the tool call that made it, which is the reason `shell_info` was
        * settle-only in the first place. What it carries instead is the one thing
        * no row can — that this run has a command out RIGHT NOW — so the daemon
-       * can publish a live count per run (`ChatService.shellRuns`).
+       * can publish a live count per run (`BackgroundWorkCounts`).
        *
        * That count exists because the renderer used to fold the same question
        * out of the OPEN thread's transcript, which is answerable for one run and
@@ -1169,6 +1169,15 @@ type AgentEventBody =
        * names nothing gets neither.
        */
       unit: 'agent' | 'other';
+      /**
+       * The unit was started BY a delegate rather than by the agent itself —
+       * claude's `owned_by_subagent`, the only owner fact its `task_started`
+       * line carries (read out of the 2.1.270 bundle: no parent id). A
+       * delegate's own background command belongs to that delegate's block,
+       * not to the main thread's terminals, so `runCliSession` announces
+       * nothing for it.
+       */
+      ownedByDelegate?: true;
       /**
        * The tool call that launched it, when the CLI ties one to it — which is
        * what joins this unit to the sub-agent block already in the transcript,

@@ -47,6 +47,8 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
     };
     /** The CLI announcing its session state, as claude's mapper reads it. */
     state?: 'idle' | 'running';
+    /** The unit was started by a DELEGATE (claude's `owned_by_subagent`). */
+    owned?: boolean;
   };
   if (row.state !== undefined) {
     return [{ type: 'session_state', idle: row.state === 'idle' }];
@@ -61,6 +63,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         toolCallId: row.call ?? null,
         outcome: row.outcome,
         usage: row.spent,
+        ...(row.owned === true ? { ownedByDelegate: true as const } : {}),
       },
     ];
   }
@@ -1192,6 +1195,31 @@ describe('which delegate a render card can be credited to', () => {
 });
 
 describe('a turn whose background work outlives its result', () => {
+  it('announces nothing for a command a DELEGATE started, at either end', async () => {
+    // REPORTED as "we should not show terminals from subagents": claude marks
+    // such a command `owned_by_subagent` and names no parent, and its open used
+    // to reach the run's shell list and count as the main thread's.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'b-owned',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_bash',
+      owned: true,
+    });
+    line(child, { work: 'b-owned', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(
+      events.some((e) => e.type === 'shell_open' || e.type === 'shell_info'),
+    ).toBe(false);
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
   it('holds for a DELEGATE and not for a backgrounded command', async () => {
     // The hold buys a turn for the agent's OWN continuation to land in, which
     // is a thing a delegate triggers and a shell does not: a shell's end is a

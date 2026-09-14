@@ -53,6 +53,7 @@ function MeterReadout({
   side,
   className,
   runId,
+  nodeId = null,
   live = false,
   children,
 }: {
@@ -63,6 +64,8 @@ function MeterReadout({
   className?: string;
   /** Which chat to fetch the full readout for, or null for none. */
   runId?: string | null;
+  /** Which workflow node of that run, or null for a chat's own agent. */
+  nodeId?: string | null;
   /** Whether this chat's agent is working right now — see {@link LIVE_REREAD_MS}. */
   live?: boolean;
   children: React.ReactNode;
@@ -72,7 +75,7 @@ function MeterReadout({
   // fetch has to be told. `useState`'s setter is stable, so it can be the
   // callback directly.
   const [open, setOpen] = useState(false);
-  const metrics = useChatMetrics(runId ?? null, open, live);
+  const metrics = useChatMetrics(runId ?? null, nodeId, open, live);
   return (
     <HoverPopover
       // Unchanged whichever shape the meter has taken, so "where is the meter"
@@ -145,21 +148,23 @@ function MeterReadout({
 /** What one open readout knows about the chat it is reporting on. */
 interface MetricsState {
   /**
-   * Which chat this reading was taken from.
+   * Which chat — and which of its workflow nodes — this reading was taken
+   * from, as one key.
    *
    * Carried WITH the reading rather than assumed from the current props: the
    * component is not unmounted across a chat switch (the composer keeps one
    * meter and `activateRun` only swaps the run beneath it), so without this the
-   * state that survives the switch is indistinguishable from a fresh one.
+   * state that survives the switch is indistinguishable from a fresh one. The
+   * node is part of it because a workflow run holds one window per node.
    */
-  runId: string | null;
+  target: string | null;
   data: ChatMetricsDto | null;
   loading: boolean;
   error: string | null;
 }
 
 /** A readout that knows nothing yet — the shape a chat starts on. */
-const NO_READING: Omit<MetricsState, 'runId'> = {
+const NO_READING: Omit<MetricsState, 'target'> = {
   data: null,
   loading: false,
   error: null,
@@ -185,14 +190,16 @@ const NO_READING: Omit<MetricsState, 'runId'> = {
  */
 function useChatMetrics(
   runId: string | null,
+  nodeId: string | null,
   open: boolean,
   live: boolean,
 ): MetricsState | null {
   const load = useContext(ChatMetricsLoaderContext);
   const [state, setState] = useState<MetricsState>({
-    runId: null,
+    target: null,
     ...NO_READING,
   });
+  const target = runId === null ? null : `${runId} ${nodeId ?? ''}`;
   // Bumped by the live re-read timer below. A nonce rather than calling the
   // fetch from two places: one effect owns the request, so a re-read cannot
   // race the open-fetch or duplicate its cancellation.
@@ -224,21 +231,21 @@ function useChatMetrics(
       // Re-reading the SAME chat keeps what is already on screen, so a refetch
       // costs no blank panel. A DIFFERENT chat keeps nothing: those figures
       // describe a conversation the user has left.
-      previous.runId === runId
+      previous.target === target
         ? { ...previous, loading: true, error: null }
-        : { runId, ...NO_READING, loading: true },
+        : { target, ...NO_READING, loading: true },
     );
-    void load(runId)
+    void load(runId, nodeId)
       .then((data) => {
         if (current) {
-          setState({ runId, data, loading: false, error: null });
+          setState({ target, data, loading: false, error: null });
         }
       })
       .catch((err: unknown) => {
         if (current) {
           setState((previous) => ({
             ...previous,
-            runId,
+            target,
             loading: false,
             error: err instanceof Error ? err.message : String(err),
           }));
@@ -249,7 +256,7 @@ function useChatMetrics(
     };
     // `live` rides the deps so a settle takes one final reading; `nonce` is the
     // live re-read.
-  }, [load, runId, open, live, nonce]);
+  }, [load, runId, nodeId, target, open, live, nonce]);
   if (load === null || runId === null) {
     return null;
   }
@@ -260,7 +267,7 @@ function useChatMetrics(
   // frame of the new chat's panel is the old chat's window, totals and spend,
   // with the summary suppressed alongside it. One frame rather than forever,
   // and the same wrong figures under the same wrong name.
-  return state.runId === runId ? state : { runId, ...NO_READING };
+  return state.target === target ? state : { target, ...NO_READING };
 }
 
 /**
@@ -285,11 +292,18 @@ export function ContextMeter({
   contextWindowTokens,
   spentUsd = null,
   runId = null,
+  nodeId = null,
   side = 'bottom',
   live = false,
   awaitingReading = null,
   className,
 }: {
+  /**
+   * Which WORKFLOW node of {@link runId} the readout reports on, or null for a
+   * chat's own agent. A workflow run holds one window per node, so without it
+   * there is no single agent to ask.
+   */
+  nodeId?: string | null;
   /** Prompt-side tokens of the latest request, or null when unknown. */
   contextTokens: number | null;
   /** The model's own window, or null when the CLI has not reported one. */
@@ -373,6 +387,7 @@ export function ContextMeter({
         side={side}
         className={className}
         runId={runId}
+        nodeId={nodeId}
         live={live}
         label={awaitingReading}
         ring={
@@ -451,6 +466,7 @@ export function ContextMeter({
         side={side}
         className={className}
         runId={runId}
+        nodeId={nodeId}
         live={live}
         label={unscaled ?? 'No context reading yet'}
         ring={
@@ -486,6 +502,7 @@ export function ContextMeter({
       side={side}
       className={className}
       runId={runId}
+      nodeId={nodeId}
       live={live}
       // Deliberately still the bare reading, with no "which measurement"
       // qualifier: this is the control's accessible NAME, and a name that

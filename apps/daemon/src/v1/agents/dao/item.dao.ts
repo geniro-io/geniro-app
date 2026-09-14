@@ -333,9 +333,13 @@ export class ItemDao extends BaseDao<Item> {
   async turnCompletePayloads(
     runId: string,
     txEm?: EntityManager,
+    /** One workflow node's turns alone; absent means every row of the run. */
+    nodeId?: string,
   ): Promise<string[]> {
     const rows = await this.getRepo(txEm).find(
-      { runId, kind: 'turn_complete' },
+      nodeId === undefined
+        ? { runId, kind: 'turn_complete' }
+        : { runId, kind: 'turn_complete', nodeId },
       {
         orderBy: { seq: 'asc' },
         fields: ['payload'],

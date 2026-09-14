@@ -16,6 +16,7 @@ import { ItemDao } from '../dao/item.dao';
 import { NodeStateDao } from '../dao/node-state.dao';
 import { RunDao } from '../dao/run.dao';
 import { applyCursorSpend } from '../utils/cursor-usage';
+import { nodeSessionKey } from '../utils/session-keys';
 import { sumUsagePayloads } from '../utils/usage-figures';
 import { AgentAdapterRegistry } from './agent-adapter.registry';
 import { AgentEventBus } from './agent-events.bus';
@@ -109,11 +110,17 @@ export class ChatMetricsService implements OnModuleInit {
    * window from one moment beside a cost from another, which is the kind of
    * disagreement between two numbers on one surface that reads as a bug.
    */
-  async read(runId: string): Promise<ChatMetricsWire> {
+  async read(
+    runId: string,
+    nodeId: string | null = null,
+  ): Promise<ChatMetricsWire> {
     const em = this.em.fork();
     const run = await this.runDao.getById(runId, em);
     if (!run) {
       throw new NotFoundException('RUN_NOT_FOUND', `run ${runId} not found`);
+    }
+    if (nodeId !== null) {
+      return this.readNode(runId, nodeId, em);
     }
     // From here on this run is worth keeping a reading warm for.
     this.watched.add(runId);
@@ -238,6 +245,69 @@ export class ChatMetricsService implements OnModuleInit {
   }
 
   /**
+   * One WORKFLOW node's readout — the two halves {@link read} answers for a
+   * chat, about the window that one node holds.
+   *
+   * A workflow run keeps a process per node, so "the run's agent" names nobody
+   * and the readout was offered for chats alone: the composer ring of a
+   * workflow run showed `569.7k / 1M` and nothing behind it. REPORTED as "i
+   * cant see full context info for workflow". Asked the SAME way a chat is — the
+   * adapter takes the node's kept process or its recorded session id, whichever
+   * its CLI reads from — and the spend is summed over that node's own turns.
+   *
+   * Two things a chat's readout does are deliberately absent. Nothing is filed
+   * on the run row's `lastMetricsReading`, which is one reading per RUN and would
+   * hand a chat's shape to whichever node was opened last; and nothing is
+   * prewarmed, since that ask is keyed by run and a workflow run's turns belong
+   * to several agents. The cost is the ask on every open — the price the chat
+   * readout paid before either existed.
+   */
+  private async readNode(
+    runId: string,
+    nodeId: string,
+    em: EntityManager,
+  ): Promise<ChatMetricsWire> {
+    const state = await this.nodeStateDao.getByRunNode(runId, nodeId, em);
+    if (!state) {
+      throw new NotFoundException(
+        'NODE_NOT_FOUND',
+        `node ${nodeId} has not run in run ${runId}`,
+      );
+    }
+    const [agent, payloads] = await Promise.all([
+      this.readFromAgent(runId, state.agentKind, em, {
+        sessionKey: nodeSessionKey(runId, nodeId),
+        nodeId,
+      }),
+      this.itemDao.turnCompletePayloads(runId, em, nodeId),
+    ]);
+    return {
+      context: agent.context,
+      breakdownReason:
+        agent.context === null
+          ? this.absenceReason(
+              state.agentKind,
+              agent.askedContext,
+              'breakdown',
+              CONTEXT_ABSENCE,
+            )
+          : null,
+      plan: agent.plan,
+      planReason:
+        agent.plan === null
+          ? this.absenceReason(
+              state.agentKind,
+              agent.askedPlan,
+              'planLimits',
+              PLAN_ABSENCE,
+            )
+          : null,
+      takenAt: null,
+      totals: sumUsagePayloads(payloads),
+    };
+  }
+
+  /**
    * What this thread has cost, and NOTHING about its window.
    *
    * The same sum {@link read} answers with, reached without the adapter round
@@ -292,6 +362,14 @@ export class ChatMetricsService implements OnModuleInit {
     runId: string,
     agentKind: AgentKind | null,
     em: EntityManager,
+    /**
+     * Which process and which `node_state` row answer for it — a chat's own
+     * agent unless a workflow node is named.
+     */
+    target: { sessionKey: string; nodeId: string } = {
+      sessionKey: runId,
+      nodeId: SINGLE_AGENT_NODE,
+    },
   ): Promise<{
     context: ContextBreakdownWire | null;
     plan: PlanLimitsWire | null;
@@ -321,12 +399,12 @@ export class ChatMetricsService implements OnModuleInit {
     // BOTH channels are offered and the adapter takes what it needs: claude
     // answers from the live process, cursor from the session store it wrote
     // to disk — which is why the id is fetched even when a process exists.
-    const live = this.sessions.peek(runId);
+    const live = this.sessions.peek(target.sessionKey);
     let sessionId: string | null = null;
     try {
       const state = await this.nodeStateDao.getByRunNode(
         runId,
-        SINGLE_AGENT_NODE,
+        target.nodeId,
         em,
       );
       sessionId = state?.agentSessionId ?? null;

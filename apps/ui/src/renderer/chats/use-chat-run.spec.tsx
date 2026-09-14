@@ -465,6 +465,38 @@ describe('useChatRun', () => {
     );
   });
 
+  it('keeps the run row’s sub-agent COUNT current from the broadcast, not only the load-time listing', async () => {
+    // REPORTED as `Sub-agents 3` over a panel holding only `5 finished`: the
+    // chip reads `run.subagentsOut`, and the announce moved a flag alone, so
+    // the figure stayed whatever the listing said when the window loaded.
+    chatApi.listChats.mockResolvedValue([{ ...run1, subagentsOut: 3 }, run2]);
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        subagentsOut: 1,
+      } as RunStatusEvent);
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.subagentsOut).toBe(
+      1,
+    );
+
+    await act(async () => {
+      emitRunStatus({
+        runId: 'r1',
+        status: null,
+        subagentsOut: 0,
+      } as RunStatusEvent);
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.subagentsOut).toBe(
+      0,
+    );
+  });
+
   it('moves a background thread’s preview MID-TURN, not only when the turn ends', async () => {
     // The settle-time fix above still left the reported "still i see here
     // outdated last llm message. As soon as i click on thread - it will be

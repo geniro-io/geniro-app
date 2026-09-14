@@ -618,9 +618,18 @@ function TaskBand({
   );
 }
 
+/**
+ * A call id in words: `call-10` → `Call 10`. An id not of the broker's shape is
+ * returned as it is rather than guessed at.
+ */
+function callTitle(callId: string): string {
+  const match = /^call-(\d+)$/.exec(callId);
+  return match === null ? callId : `Call ${match[1]}`;
+}
+
 /** The fold-state key of one conversation of one agent. */
 function instanceKey(agentId: string, threadId: string): string {
-  return `${agentId} ${threadId}`;
+  return `${agentId}\u0000${threadId}`;
 }
 
 /**
@@ -713,13 +722,18 @@ function InstanceBlock({
   const { thread } = instance;
   const content = hasInstanceContent(instance);
   // A call with a brief is titled BY it, with its id as a tag; one without is
-  // titled by what it is called, which for a call is the id itself.
+  // titled by what it is called — `Call 10`, the id in words, since `call-10`
+  // is the broker's spelling rather than a name.
   const brief = thread.kind === 'call' ? (thread.brief ?? null) : null;
+  const live = isInstanceLive(instance);
   return (
     <li
       data-slot="agent-instance"
       data-instance-id={thread.id}
-      className="flex flex-col rounded-md border border-border bg-muted/40">
+      data-live={live ? 'true' : undefined}
+      // The working instance is the one a reader scans for, so it alone is
+      // tinted; a list of finished calls stays one quiet surface.
+      className={cn('flex flex-col', live && 'bg-muted/50')}>
       <ThreadRow
         as="div"
         leading={
@@ -740,7 +754,12 @@ function InstanceBlock({
             />
           </button>
         }
-        title={brief ?? undefined}
+        title={
+          brief ??
+          (thread.kind === 'call' && thread.label === thread.id
+            ? callTitle(thread.id)
+            : undefined)
+        }
         tag={brief === null ? null : thread.id}
         // The node's own conversation carries its terminal in the card header.
         hideTerminal={thread.kind === 'main'}
@@ -1083,6 +1102,7 @@ export function AgentsPanel({
   onResolveHandoff,
   terminalReasons,
   metricsRunId = null,
+  metricsByNode = false,
 }: {
   agents: AgentDisplay[];
   /**
@@ -1114,15 +1134,16 @@ export function AgentsPanel({
   /** Take the reader to one workflow's card in the transcript. */
   onRevealWorkflow?: (workflowId: string) => void;
   /**
-   * The chat whose expanded context readout this panel may offer, or null.
-   *
-   * Null for a workflow run, and that is the whole reason it is a prop rather
-   * than read off each card: the breakdown is asked of the ONE process a chat
-   * run holds, and a workflow's nodes each hold their own — so offering it
-   * there would report one node's window under every node's name. It is
-   * therefore only ever given to the chat agent's own card.
+   * The run whose expanded context readouts this panel may offer, or null.
    */
   metricsRunId?: string | null;
+  /**
+   * Whether those readouts are asked PER NODE — a workflow run, whose nodes
+   * each hold a process and a window of their own. Otherwise only the chat
+   * agent's own card offers one, since a chat holds one process; asking the run
+   * alone on a workflow would report one node's window under every node's name.
+   */
+  metricsByNode?: boolean;
   /**
    * MCP servers per {@link mcpScopeKey}, fetched by the owner.
    *
@@ -1222,6 +1243,8 @@ export function AgentsPanel({
     markers: readonly ChatTimelineMarker[];
     partialReason: string | null;
     onJump: (seq: number) => void;
+    /** The agent is still working on the newest message — see the timeline. */
+    inProgress: boolean;
   };
   onOpenFolderTerminal?: () => void;
   /**
@@ -1463,6 +1486,7 @@ export function AgentsPanel({
                 markers={timeline.markers}
                 partialReason={timeline.partialReason}
                 onJump={timeline.onJump}
+                inProgress={timeline.inProgress}
                 className="size-7 text-muted-foreground"
               />
             ) : null}
@@ -1519,6 +1543,7 @@ export function AgentsPanel({
             markers={timeline.markers}
             partialReason={timeline.partialReason}
             onJump={timeline.onJump}
+            inProgress={timeline.inProgress}
             className="size-6 text-muted-foreground"
           />
         ) : null}
@@ -1760,10 +1785,14 @@ export function AgentsPanel({
                       data-slot="agent-card-context"
                       className="ml-auto flex shrink-0 items-center gap-0.5">
                       <ContextMeter
-                        // Only the chat agent's own card: see `metricsRunId`.
+                        // Per node on a workflow run, else only the chat
+                        // agent's own card: see `metricsByNode`.
                         runId={
-                          agent.id === CHAT_AGENT_KEY ? metricsRunId : null
+                          metricsByNode || agent.id === CHAT_AGENT_KEY
+                            ? metricsRunId
+                            : null
                         }
+                        nodeId={metricsByNode ? agent.id : null}
                         contextTokens={agent.contextTokens}
                         contextWindowTokens={agent.contextWindowTokens}
                         spentUsd={agent.spentUsd}
@@ -1883,12 +1912,33 @@ export function AgentsPanel({
                       className="flex flex-col border-t border-border px-2 py-1.5">
                       {/* Counted off the BLOCKS below it, on the rule the flat
                           caption follows: a caption that disagrees with its own
-                          list is read as a bug in the counting. */}
-                      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                        {activeInstances} active · {shownInstances.length}{' '}
-                        {shownInstances.length === 1 ? 'instance' : 'instances'}
+                          list is read as a bug in the counting.
+
+                          The panel's own micro-label shape (the one the calls
+                          wiring and `MenuGroup` wear) rather than a sentence:
+                          `0 active · 4 instances` in body text read as one more
+                          row of the list it heads. The running count is drawn
+                          only when there is one — `0 running` beside four
+                          finished calls is a figure nobody needs. */}
+                      <p
+                        data-slot="agent-instances-caption"
+                        className="m-0 flex items-center gap-1.5 px-1 pb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">
+                        <span>Instances</span>
+                        <span className="font-normal tabular-nums">
+                          {shownInstances.length}
+                        </span>
+                        {activeInstances > 0 ? (
+                          <span className="font-normal normal-case">
+                            · {activeInstances} running
+                          </span>
+                        ) : null}
                       </p>
-                      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                      {/* ONE list with rules between its rows, not a bordered
+                          box per instance: four stacked boxes, each a heading
+                          and a status word, drew eight borders around four
+                          facts — REPORTED as "we need to improve calls design.
+                          Now it looks ugly". */}
+                      <ul className="m-0 flex list-none flex-col divide-y divide-border overflow-hidden rounded-md border border-border p-0">
                         {shownInstances.map((instance) => {
                           const key = instanceKey(agent.id, instance.thread.id);
                           const open =

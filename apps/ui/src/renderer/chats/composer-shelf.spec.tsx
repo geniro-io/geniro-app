@@ -257,6 +257,42 @@ describe('RunningSubagentChips', () => {
     expect(chip.textContent).toContain('2');
   });
 
+  it('says why the count is higher than the list — the shells chip’s rule', async () => {
+    // REPORTED as `Sub-agents 3` over a panel holding nothing but finished
+    // delegates. With the row's count current, the one honest way that shape
+    // still arises is a delegate launched before the loaded page — and without
+    // a sentence the chip and its panel contradict each other.
+    const empty = mount(
+      <RunningSubagentChips running={0} reportedOut={2} threads={[]} />,
+    );
+    await press(empty, 'running-subagents');
+    const note = document.querySelector('[data-slot="subagents-unlisted"]');
+    expect(note?.textContent).toContain(
+      '2 sub-agents still working, launched earlier',
+    );
+    // …and no "delegated nothing" sentence under a note saying two are out.
+    expect(document.body.textContent).not.toContain('delegated nothing');
+  });
+
+  it('counts only the unlisted remainder when some delegates are listed', async () => {
+    const el = mount(
+      <RunningSubagentChips running={1} reportedOut={3} threads={[thread()]} />,
+    );
+    await press(el, 'running-subagents');
+    expect(
+      document.querySelector('[data-slot="subagents-unlisted"]')?.textContent,
+    ).toContain('2 more launched earlier');
+    expect(document.body.textContent).toContain('explore the adapters');
+  });
+
+  it('adds no note when every working delegate is listed', async () => {
+    const el = mount(<RunningSubagentChips running={1} threads={[thread()]} />);
+    await press(el, 'running-subagents');
+    expect(
+      document.querySelector('[data-slot="subagents-unlisted"]'),
+    ).toBeNull();
+  });
+
   it('counts the WORKING delegates and holds every one of them behind the chip', async () => {
     const el = mount(
       <RunningSubagentChips

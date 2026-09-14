@@ -97,6 +97,59 @@ export function diffRunNotifications(
 }
 
 /**
+ * Whether a finished turn's banner is PROVISIONAL — posted, then withdrawn if
+ * the run goes back to work — because something the agent started in the
+ * background is still running.
+ *
+ * REPORTED in both directions. First as "он сам 2 или 3 раза остановился,
+ * потому что просто ждет завершения каких-то процессов… и в каждом из этих
+ * случаев он мне отправляет false positive-нотификацию": an agent routinely
+ * ends its turn WAITING on a command it backgrounded — a test run, a build —
+ * and the CLI opens a turn of its own the moment that command reports. Then,
+ * once such endings were skipped, as silence from an agent that had finished
+ * and left a dev server up: "i should get notification in this case".
+ *
+ * Nothing on the wire tells the two apart — measured on claude 2.1.270, the CLI
+ * reports `idle` in both and its task frames carry only the command — and a
+ * ten-second hold and a launch-time window were both rejected as guesses. So
+ * both are announced, and what the run does NEXT settles which it was: a wait
+ * turns back into work, and the banner that called it finished is withdrawn
+ * from the screen and from Notification Centre. Announcing at the ending is
+ * also what the CLIs' own apps do — Cursor's "Done" and the Claude app's
+ * "finished a task" both fire with a background command still running (read
+ * from their shipped bundles); neither takes it back.
+ */
+export function endingIsProvisional(shellsOpen: number): boolean {
+  return shellsOpen > 0;
+}
+
+/** "1 command still running", or null with none — the provisional banner's note. */
+function stillRunningNote(count: number): string | null {
+  if (count <= 0) {
+    return null;
+  }
+  return `${count} ${count === 1 ? 'command' : 'commands'} still running`;
+}
+
+/**
+ * A notification the AGENT asked for — its `notify_user` call, as the daemon
+ * broadcast it (`RunStatusEvent.notify`).
+ *
+ * `id` is assigned on arrival and only ever grows, which is what keeps one
+ * notice from being posted twice however often the list re-renders.
+ */
+export interface AgentNotice {
+  id: number;
+  runId: string;
+  message: string;
+}
+
+/** The banner body for an agent's own notification: its message, on one line. */
+export function agentNoticeBody(message: string): string {
+  return oneLine(message) ?? 'The agent is done.';
+}
+
+/**
  * The line under the thread's name.
  *
  * Worded from the kind and the status it landed in, so a failure does not
@@ -114,6 +167,12 @@ export function notificationBody(
    * said, or on a client that predates the field.
    */
   summary: string | null = null,
+  /**
+   * How many commands the agent left running as a COMPLETED turn ended — said
+   * in the banner, since that is what makes it provisional. Ignored for any
+   * other ending.
+   */
+  stillRunning = 0,
 ): string {
   if (trigger.kind === 'question') {
     const phrase =
@@ -128,13 +187,20 @@ export function notificationBody(
   // complaint being a notification with no content in it. A failure's message
   // matters even more: it is the one case where the user has to decide whether
   // to go and look.
-  const said = oneLine(summary);
-  if (said !== null) {
-    return trigger.status === 'failed' ? `Failed: ${said}` : said;
+  if (trigger.status === 'failed') {
+    const said = oneLine(summary);
+    return said !== null ? `Failed: ${said}` : 'The turn failed.';
   }
-  return trigger.status === 'failed'
-    ? 'The turn failed.'
-    : 'The turn finished.';
+  const running = stillRunningNote(stillRunning);
+  if (running === null) {
+    return oneLine(summary) ?? 'The turn finished.';
+  }
+  // The agent's words are cut shorter to leave room for the note — main refuses
+  // a body over its bound, which would lose the banner outright.
+  const said = oneLine(summary, BODY_LIMIT - running.length - 3);
+  return said !== null
+    ? `${said} (${running})`
+    : `The turn finished — ${running}.`;
 }
 
 /**
@@ -156,7 +222,7 @@ const BODY_LIMIT = 220;
  * no banner at all. Returns null for text with nothing readable in it, which
  * falls back to the plain sentence.
  */
-function oneLine(text: string | null): string | null {
+function oneLine(text: string | null, limit = BODY_LIMIT): string | null {
   if (text === null) {
     return null;
   }
@@ -167,10 +233,10 @@ function oneLine(text: string | null): string | null {
   if (line === undefined || line === '') {
     return null;
   }
-  if (line.length <= BODY_LIMIT) {
+  if (line.length <= limit) {
     return line;
   }
-  const cut = line.slice(0, BODY_LIMIT);
+  const cut = line.slice(0, limit);
   const lastSpace = cut.lastIndexOf(' ');
-  return `${(lastSpace > BODY_LIMIT - 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+  return `${(lastSpace > limit - 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }

@@ -48,6 +48,7 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
+import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
   mapEventToItem,
@@ -72,6 +73,10 @@ import {
   type WorkflowRun,
 } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
   unanswerablePayload,
@@ -99,6 +104,7 @@ import {
   validateRunnableGraph,
   validateWorkflowGraph,
 } from '../utils/graph-validate';
+import { openCalls, openNodeTurns } from '../utils/open-call-work';
 import { createTurnSemaphore } from '../utils/turn-semaphore';
 import { workflowSnapshotOf } from '../utils/workflow-snapshot';
 import { CallBroker } from './call-broker.service';
@@ -463,6 +469,18 @@ export class GraphExecutorService implements OnModuleInit {
    * own keys.
    */
   private readonly sessionClosers = new Map<string, () => void>();
+
+  /**
+   * How many detached commands and background sub-agents each workflow run
+   * still has out — the chat path's own counter (`BackgroundWorkCounts`),
+   * recorded from this executor's event sinks. A workflow run is listed in the
+   * same sidebar as a chat and reported 0 for both figures, so its badge could
+   * never reach the held state and its shelf never counted a delegate launched
+   * earlier than the loaded page.
+   */
+  private readonly backgroundWork = new BackgroundWorkCounts((runId, patch) =>
+    this.bus.publishRunStatus({ runId, status: null, ...patch }),
+  );
 
   onModuleInit(): void {
     this.sessions.onClosed((key) => {
@@ -885,7 +903,13 @@ export class GraphExecutorService implements OnModuleInit {
     // behind our back.
     this.deleting.add(runId);
     try {
-      return await this.teardown.purge(em, runId, this.registry.settled(runId));
+      const purged = await this.teardown.purge(
+        em,
+        runId,
+        this.registry.settled(runId),
+      );
+      this.backgroundWork.forget(runId);
+      return purged;
     } finally {
       // The call surface dies with the run even if the purge threw half-way:
       // leaving it registered would let a child that outlived its run dispatch
@@ -925,6 +949,10 @@ export class GraphExecutorService implements OnModuleInit {
         run,
         previews.get(run.id) ?? null,
         this.approvals.awaitingFor(run.id),
+        0,
+        null,
+        this.backgroundWork.shellsOpen(run.id),
+        this.backgroundWork.subagentsOut(run.id),
       ),
     );
   }
@@ -1010,9 +1038,8 @@ export class GraphExecutorService implements OnModuleInit {
         });
         // The kill took the in-memory registry with it, so no settle path ever
         // swept these — without this the cards come back looking answerable.
-        for (const request of unansweredRequests(
-          await this.itemDao.getByRun(run.id, -1, em),
-        )) {
+        const history = await this.itemDao.getByRun(run.id, -1, em);
+        for (const request of unansweredRequests(history)) {
           await this.persist(
             em,
             run.id,
@@ -1023,6 +1050,36 @@ export class GraphExecutorService implements OnModuleInit {
             {
               ...request.payload,
               ...(request.nodeId ? { nodeId: request.nodeId } : {}),
+            },
+          );
+        }
+        // The renderer reads a node's liveness and a call block's status off
+        // the TRANSCRIPT before node_state, so failing the node rows below
+        // alone left the card and the call block spinning under a failed run.
+        // Settle both where the renderer looks.
+        for (const turn of openNodeTurns(history)) {
+          await this.persist(em, run.id, turn.nodeId, seq++, 'status', null, {
+            nodeId: turn.nodeId,
+            status: 'failed',
+            ...(turn.callId !== null ? { callId: turn.callId } : {}),
+          });
+        }
+        for (const call of openCalls(history)) {
+          await this.persist(
+            em,
+            run.id,
+            call.callerNodeId,
+            seq++,
+            'call_result',
+            null,
+            {
+              callId: call.callId,
+              callerNodeId: call.callerNodeId,
+              calleeNodeId: call.calleeNodeId,
+              mode: call.mode,
+              status: 'error',
+              error:
+                'CALLEE_FAILED: interrupted — the daemon stopped before the call finished',
             },
           );
         }
@@ -1397,6 +1454,8 @@ export class GraphExecutorService implements OnModuleInit {
         }
       }
       for (const { event, owner } of closes) {
+        // The count comes down with the row that states the ending.
+        this.backgroundWork.record(runId, event);
         const mapped = mapEventToItem(event);
         if (mapped) {
           await persistItem(owner.nodeId, mapped.kind, mapped.role, {
@@ -2136,6 +2195,7 @@ export class GraphExecutorService implements OnModuleInit {
           // (see `PartialStreamService.endThinking`). Kept in step with the
           // chat path, which does the same at its own persist seam.
           this.partials.endThinking(runId, ownerKey, node.id);
+          this.backgroundWork.record(runId, event);
           const mapped = mapEventToItem(event);
           // A compaction the agent finished: stamped onto its summary, or
           // written on its own ahead of this row — nothing else records one.
@@ -2303,6 +2363,7 @@ export class GraphExecutorService implements OnModuleInit {
           if (this.deleting.has(runId)) {
             return;
           }
+          this.backgroundWork.record(runId, event);
           const mapped = mapEventToItem(event);
           for (const row of offTurnCompactions.rowsBefore(event, mapped)) {
             await persistItem(node.id, row.kind, row.role, {
@@ -2378,9 +2439,9 @@ export class GraphExecutorService implements OnModuleInit {
       // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
-      const sessionKey = `${runId}::${
-        callContext ? `call:${callContext.conversationId}` : `node:${node.id}`
-      }`;
+      const sessionKey = callContext
+        ? callSessionKey(runId, callContext.conversationId)
+        : nodeSessionKey(runId, node.id);
       const handle: AgentTurnHandle = this.sessions.startTurn(
         sessionKey,
         adapter,

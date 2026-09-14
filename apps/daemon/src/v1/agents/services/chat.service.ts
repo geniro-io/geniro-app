@@ -42,6 +42,7 @@ import {
   type HostGalleryOutcome,
   type HostMetrics,
   type HostMetricsOutcome,
+  type HostNotifyOutcome,
   type HostPatch,
   type HostPatchOutcome,
   type HostPlan,
@@ -63,6 +64,7 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
+import { BackgroundWorkCounts } from '../utils/background-work-counts';
 import { withCarriedContext } from '../utils/carried-context';
 import { CompactionRows } from '../utils/compaction-rows';
 import {
@@ -76,6 +78,7 @@ import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMetricsCall } from '../utils/host-metrics';
+import { isHostNotifyCall } from '../utils/host-notify';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
@@ -119,6 +122,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -405,32 +409,22 @@ export class ChatService implements OnModuleInit {
    * end on both of its terminal channels (claude does — measured 7ms apart),
    * and a counter would go negative or latch on the double.
    */
-  private readonly shellRuns = new Map<string, Set<string>>();
+  private readonly backgroundWork = new BackgroundWorkCounts((runId, patch) =>
+    this.bus.publishRunStatus({ runId, status: null, ...patch }),
+  );
 
   /**
-   * Runs holding background SUB-AGENTS that have not reported back, by the id
-   * of the call that launched each.
+   * Each chat's `notify_user` sink, kept past its turn.
    *
-   * The delegate twin of {@link shellRuns}, and it exists for the same reason
-   * stated one step more sharply: a shell at least ANNOUNCES its end, while one
-   * shipped CLI never announces a delegate's at all. Re-measured on cursor-agent
-   * 2026.08.31-4057e58 — nine reviewers declared out, no close on any channel
-   * across the twelve minutes its process went on living — so the transcript
-   * can never end one by itself, and every surface that folded this out of the
-   * OPEN thread's items could only ever answer about the chat being looked at.
-   *
-   * It asserts nothing about the turn, exactly like a shell and unlike
-   * {@link heldRuns}: such a delegate must not hold a turn open, because there
-   * is no report coming to release the hold — it would run to the silence
-   * deadline over an agent that finished speaking minutes ago.
-   *
-   * IN MEMORY, and that is consistent rather than a gap: the set is emptied by
-   * writing each delegate's ending into the transcript
-   * ({@link closeStrandedDelegates}), and a daemon that died without doing so
-   * has its next boot do it instead — so a restart finds both this map and the
-   * transcript agreeing that nothing is out.
+   * Every other host tool dies with the turn that registered it, and so did
+   * this one — which made it refuse exactly where it is needed: the CLI opens a
+   * continuation BY ITSELF when a background command reports, with no turn of
+   * ours in flight, and an agent that finishes there with a server left up is
+   * the one case the automatic turn-end rule cannot announce. It sends a
+   * broadcast and holds nothing of the turn, so it may outlive one; the next
+   * turn's registration replaces it, and a deleted run drops it.
    */
-  private readonly delegatesOut = new Map<string, Set<string>>();
+  private readonly notifiers = new Map<string, () => void>();
 
   constructor(
     private readonly em: EntityManager,
@@ -476,6 +470,7 @@ export class ChatService implements OnModuleInit {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -952,6 +947,16 @@ export class ChatService implements OnModuleInit {
         : patch.model !== undefined
           ? { contextWindow: null }
           : {}),
+      // …and the window MEASURED under the old choice goes with it. It is only
+      // ever overwritten by a positive reading, and a model that has not yet
+      // finished a turn on this machine reports none — so the new model's first
+      // turn was drawn against the old model's window (`Context 175% full` after
+      // moving a 350k conversation from a 1M model to a 200k one).
+      ...((patch.model !== undefined && patch.model !== run.model) ||
+      (patch.contextWindow !== undefined &&
+        patch.contextWindow !== run.contextWindow)
+        ? { contextWindowTokens: null }
+        : {}),
       // Cleared by a model change on exactly the window's own reasoning, and
       // more sharply: these axes belong to the model that enumerated them, and
       // one of them (`optimize_for`) exists on a single model of thirty-four —
@@ -1772,13 +1777,14 @@ export class ChatService implements OnModuleInit {
       // `heldRuns` and `closedDelegates` are dropped — the whole point of the
       // map is that a detached command is still out after the turn ended. A
       // deleted run is the only state in which nothing can be waiting on it.
-      this.shellRuns.delete(runId);
-      // The delegate twin, on the identical rule: a background sub-agent
-      // outlives its turn by construction, so only a deleted run — which
-      // nothing can be waiting on — may drop it.
-      this.delegatesOut.delete(runId);
+      // The delegate twin rides the same call, on the identical rule: a
+      // background sub-agent outlives its turn by construction.
+      this.backgroundWork.forget(runId);
       // Same rule, same one place: nothing can read a deleted run's context.
       this.contexts.forget(runId);
+      // Nor send a notification about it.
+      this.notifiers.get(runId)?.();
+      this.notifiers.delete(runId);
     }
   }
 
@@ -2634,11 +2640,6 @@ export class ChatService implements OnModuleInit {
         );
       }
       if (stranded.length > 0) {
-        // The rows above are persisted directly rather than raised as agent
-        // events, so `recordDelegateBracket` never sees them — the badge count
-        // is retired here, once, instead of per row.
-        this.delegatesOut.delete(runId);
-        this.announceDelegatesOut(runId);
         this.logger.log(
           `run ${runId}: closed ${stranded.length} sub-agent(s) left out by its agent session`,
         );
@@ -2650,6 +2651,14 @@ export class ChatService implements OnModuleInit {
       this.logger.error(
         `run ${runId} failed to close its stranded sub-agents: ${err instanceof Error ? err.message : String(err)}`,
       );
+    } finally {
+      // The rows above are persisted directly rather than raised as agent
+      // events, so `recordDelegateBracket` never sees them — the badge count is
+      // retired here, once, instead of per row. In a FINALLY: the process that
+      // ran those delegates is gone either way, and a write that threw half way
+      // used to skip this and leave the run reporting delegates out over closes
+      // that said otherwise, until the run was deleted.
+      this.backgroundWork.retireDelegates(runId);
     }
   }
 
@@ -2816,27 +2825,12 @@ export class ChatService implements OnModuleInit {
     if (event.type !== 'subagent_info' || event.backgroundOpen === null) {
       return;
     }
+    // The badge count first — `BackgroundWorkCounts` announces, and a close
+    // only when it actually retired one (claude reports an ending twice).
+    this.backgroundWork.record(runId, event);
     if (event.backgroundOpen) {
       this.closedDelegates.get(runId)?.delete(event.id);
-      const out = this.delegatesOut.get(runId);
-      if (out) {
-        out.add(event.id);
-      } else {
-        this.delegatesOut.set(runId, new Set([event.id]));
-      }
-      this.announceDelegatesOut(runId);
       return;
-    }
-    // The badge count first, and only when this close actually RETIRED one: a
-    // CLI free to report an ending twice (claude does, 7ms apart on its two
-    // terminal channels) would otherwise broadcast the same figure to every
-    // window a second time.
-    const out = this.delegatesOut.get(runId);
-    if (out?.delete(event.id)) {
-      if (out.size === 0) {
-        this.delegatesOut.delete(runId);
-      }
-      this.announceDelegatesOut(runId);
     }
     const closed = this.closedDelegates.get(runId);
     if (closed) {
@@ -2847,21 +2841,8 @@ export class ChatService implements OnModuleInit {
   }
 
   /**
-   * Tell every window how many background sub-agents this run still has out.
-   *
-   * A `status: null` announce, like {@link announceShellsOpen} beside it: this
-   * says what the run is HOLDING, never whether it is still going.
-   */
-  private announceDelegatesOut(runId: string): void {
-    this.bus.publishRunStatus({
-      runId,
-      status: null,
-      subagentsOut: this.delegatesOut.get(runId)?.size ?? 0,
-    });
-  }
-
-  /**
-   * Track the DETACHED commands this run still has out — see {@link shellRuns}.
+   * Track the DETACHED commands this run still has out — see
+   * {@link BackgroundWorkCounts}.
    *
    * Read off the two ANNOUNCEMENTS `spawn-cli` makes about a detached command,
    * `shell_open` and `shell_info`, never off the `background_work` bracket they
@@ -2879,29 +2860,11 @@ export class ChatService implements OnModuleInit {
    * the session, which is the phantom-shell defect from a new direction.
    */
   private recordShellBracket(runId: string, event: AgentEvent): void {
-    const open = this.shellRuns.get(runId);
-    if (event.type === 'shell_open') {
-      if (open) {
-        open.add(event.workId);
-      } else {
-        this.shellRuns.set(runId, new Set([event.workId]));
-      }
-      this.announceShellsOpen(runId);
-      return;
+    // Shell brackets ONLY: the call sites pair this with
+    // `recordDelegateBracket`, which records the delegate half.
+    if (event.type === 'shell_open' || event.type === 'shell_info') {
+      this.backgroundWork.record(runId, event);
     }
-    if (event.type !== 'shell_info') {
-      return;
-    }
-    // A close for a unit this run never opened changes nothing — and must not
-    // announce, or every duplicate terminal (claude sends two, 7ms apart) is a
-    // second broadcast to every window saying what the first already said.
-    if (!open?.delete(event.workId)) {
-      return;
-    }
-    if (open.size === 0) {
-      this.shellRuns.delete(runId);
-    }
-    this.announceShellsOpen(runId);
   }
 
   /**
@@ -2925,33 +2888,7 @@ export class ChatService implements OnModuleInit {
    * announcing again would say nothing new.
    */
   noteShellClosed(runId: string, workId: string | null): void {
-    if (workId === null) {
-      return;
-    }
-    const open = this.shellRuns.get(runId);
-    if (!open?.delete(workId)) {
-      return;
-    }
-    if (open.size === 0) {
-      this.shellRuns.delete(runId);
-    }
-    this.announceShellsOpen(runId);
-  }
-
-  /**
-   * Tell every window how many detached commands this run still has out.
-   *
-   * A `status: null` announce, like the activity and hold ones beside it: this
-   * says what the run is HOLDING, never whether it is still going, and a status
-   * asserted by an event that never read the run is the defect the nullable
-   * status exists to prevent.
-   */
-  private announceShellsOpen(runId: string): void {
-    this.bus.publishRunStatus({
-      runId,
-      status: null,
-      shellsOpen: this.shellRuns.get(runId)?.size ?? 0,
-    });
+    this.backgroundWork.noteShellClosed(runId, workId);
   }
 
   /**
@@ -3281,6 +3218,9 @@ export class ChatService implements OnModuleInit {
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
         isHostGalleryCall(hostServerName, toolName) ||
+        // The notify tool, on the render family's reading: a banner the agent
+        // asks for is not something a permission card meaningfully guards.
+        isHostNotifyCall(hostServerName, toolName) ||
         // The patch tool auto-approves TOO, and the reason is worth stating
         // because the opposite looks right: this tool writes to disk, so surely
         // it should be gated? It IS — by its own card. Two different gates were
@@ -4096,6 +4036,18 @@ export class ChatService implements OnModuleInit {
         return { status: 'drawn', images: gallery.images.length };
       };
       /**
+       * geniro's own notification channel — the agent telling the user,
+       * outside the app, that it is done (`HOST_NOTIFY_TOOL`).
+       *
+       * Writes no row. The message rides the client-wide `run_status`
+       * broadcast, which is what reaches a window not looking at this chat —
+       * and a notification is only ever for that window.
+       */
+      const notifyUser = (message: string): Promise<HostNotifyOutcome> => {
+        this.bus.publishRunStatus({ runId, status: null, notify: message });
+        return Promise.resolve({ status: 'sent' });
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -4385,6 +4337,13 @@ export class ChatService implements OnModuleInit {
       const disposeGallerist = mcpEndpoint
         ? this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery)
         : null;
+      const disposeNotifier = mcpEndpoint
+        ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
+        : null;
+      // NOT disposed with the turn — see `notifiers`.
+      if (disposeNotifier) {
+        this.notifiers.set(runId, disposeNotifier);
+      }
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -5607,8 +5566,8 @@ export class ChatService implements OnModuleInit {
       this.approvals.awaitingFor(run.id),
       this.heldRuns.get(run.id) ?? 0,
       this.configDirPins.forRun(run.agentKind, run.cwd),
-      this.shellRuns.get(run.id)?.size ?? 0,
-      this.delegatesOut.get(run.id)?.size ?? 0,
+      this.backgroundWork.shellsOpen(run.id),
+      this.backgroundWork.subagentsOut(run.id),
     );
   }
 

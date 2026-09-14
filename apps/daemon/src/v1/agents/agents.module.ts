@@ -52,6 +52,7 @@ import { MetricsBroker } from './services/metrics.broker';
 import { ModelParametersService } from './services/model-parameters.service';
 import { ModelVocabularyStore } from './services/model-vocabulary.store';
 import { ModelsService } from './services/models.service';
+import { NotifyBroker } from './services/notify.broker';
 import { PartialStreamService } from './services/partial-stream.service';
 import { PatchBroker } from './services/patch.broker';
 import { PlanBroker } from './services/plan.broker';
@@ -108,6 +109,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     PlanBroker,
+    NotifyBroker,
     CacheResetService,
     AgentAdapterRegistry,
     AgentVersionService,
@@ -331,6 +333,7 @@ import { defaultSpawn } from './utils/spawn-cli';
     MetricsBroker,
     GalleryBroker,
     PlanBroker,
+    NotifyBroker,
     PartialStreamService,
     // Exported for the graphs module: the executor reads this CLI's probed
     // permission modes when it builds a node's turn, and `/v1/capabilities`

@@ -42,6 +42,30 @@ export const EditOnly: Story = {
   },
 };
 
+/**
+ * A prompt carrying a `<placeholder>`, which CommonMark reads as an HTML tag.
+ * The preview must show it as typed and keep every line after it — it used to
+ * open an element that swallowed the rest of the block.
+ */
+export const AngleBracketPlaceholders: Story = {
+  args: {
+    value: `TEAM SETTINGS — edit these values. Repo: ManifestOS.
+
+Workspace: a worktree at .claude/worktrees/<linear-id-slug> on a NEW branch cut from main. Pass \`worktree\`.
+Worktree env: set a worktree up with the repo's \`manifest-worktree\` skill.
+Depth: standard. Never pass --deep.
+Ship: draft PR. Pass \`draft only\`.
+`,
+  },
+  render: (args) => {
+    function MdEditorDemo(): React.JSX.Element {
+      const [value, setValue] = useState(args.value);
+      return <MdEditor {...args} value={value} onChange={setValue} />;
+    }
+    return <MdEditorDemo />;
+  },
+};
+
 export const ReadOnly: Story = {
   args: { readOnly: true },
 };

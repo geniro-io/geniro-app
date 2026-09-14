@@ -25,11 +25,12 @@ import type { DaemonClient } from '../daemon-client';
  * sends and the daemon refuses.
  */
 export type ChatListScope = ListChatsScopeEnum;
+import type { AgentNotice } from '../notifications/run-notifications';
 import { previewMessageOf } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
-import { settledRunStatus, TERMINAL_KINDS } from './settled-status';
+import { settledRunStatus } from './settled-status';
 import { payloadString } from './transcript-item';
 
 /** Stable identity for "nobody is mid-sentence" — avoids a re-render per reset. */
@@ -102,10 +103,7 @@ function queueMayDrainAfterReplay(
   if (tailSettledAs === 'cancelled' || run.status === 'cancelled') {
     return false;
   }
-  const endedOnTerminal =
-    lastItem !== undefined &&
-    TERMINAL_KINDS.has(lastItem.kind) &&
-    lastItem.nodeId === null;
+  const endedOnTerminal = tailSettledAs !== null;
   // A HELD run counts as drainable even though its status is `running` and its
   // transcript has no terminal row — the daemon is DEFERRING that row until the
   // last delegate reports, which is why neither of the other two readings can
@@ -239,6 +237,12 @@ export interface ChatRunState {
   delegatesOut: ReadonlySet<string>;
   settleSummaries: ReadonlyMap<string, string | null>;
   quietSettles: ReadonlySet<string>;
+  /**
+   * Notifications the AGENTS asked for (`notify_user`), oldest first, as they
+   * arrived on the client-wide broadcast — for every run, not only the open
+   * one, since a notification is only ever for a thread nobody is looking at.
+   */
+  agentNotices: readonly AgentNotice[];
   /**
    * Requests the daemon reported as already settled — invalid answers remain
    * retryable, while expired cards stop retrying forever.
@@ -541,6 +545,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
     new Set(),
   );
+  /**
+   * The agents' own notifications, newest last — see
+   * {@link ChatRunState.agentNotices}. Kept to the last few: the hook that posts
+   * them tracks the newest id it handled, so older entries are only history.
+   */
+  const [agentNotices, setAgentNotices] = useState<readonly AgentNotice[]>([]);
+  const agentNoticeIdRef = useRef(0);
 
   /**
    * A replay's one reading of the sidebar row — the run's status, taken from
@@ -592,7 +603,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             return run;
           }
           const next = { ...run };
-          if (settled !== null && run.status === 'running') {
+          // …and only when that ending is NEWER than the row's own last word. A
+          // row the daemon restated as `running` after it — the CLI thinking
+          // off-turn, which writes no transcript row — is fresher than any tail
+          // replayed here, and overwriting it put `completed` on the header,
+          // the composer and the sidebar of an agent that was still working.
+          if (
+            settled !== null &&
+            run.status === 'running' &&
+            !(Date.parse(run.updatedAt) > Date.parse(lastItem.createdAt))
+          ) {
             next.status = settled;
           }
           if (previewText !== null) {
@@ -758,11 +778,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         }
         return next;
       });
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === item.runId ? { ...run, contextTokens: null } : run,
-        ),
-      );
+      // The ROW only for a compaction happening NOW. A replayed one is history
+      // the daemon has already applied to its own row — which may well hold a
+      // figure measured since — and clearing this window's copy on every
+      // activation of a thread with an old compaction in its page left the
+      // ring saying "measured on the next message" over a known count.
+      if (live) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId ? { ...run, contextTokens: null } : run,
+          ),
+        );
+      }
     }
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
@@ -1261,6 +1288,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
     // is harmless.
     const unsubscribeReconnect = client.onReconnect((joinError) => {
+      // FIRST, and whether or not a thread is open. Every client-wide broadcast
+      // sent while the socket was down is gone — a background thread settling,
+      // a question opening, a hold ending, a shell or sub-agent count moving —
+      // and each is announced only on its TRANSITION, so nothing would ever
+      // repeat it: the sidebar kept `running` over a finished thread for good
+      // after a laptop's sleep. The listing restates all of them at once.
+      refreshRuns();
       const active = activeRunIdRef.current;
       if (!active) {
         return;
@@ -1337,6 +1371,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       if (event.summary !== undefined) {
         const said = event.summary;
         setSettleSummaries((prev) => new Map(prev).set(event.runId, said));
+      }
+      // The agent asking to be heard — queued BEFORE the row update, like the
+      // summary, so a notice and the settle that may follow it are handled in
+      // that order.
+      if (event.notify !== undefined) {
+        agentNoticeIdRef.current += 1;
+        const notice: AgentNotice = {
+          id: agentNoticeIdRef.current,
+          runId: event.runId,
+          message: event.notify,
+        };
+        setAgentNotices((prev) => [...prev.slice(-19), notice]);
       }
       // Recorded on the same terms and for the same reason: only a SETTLE says
       // anything about this, and every settle says it — so an absent field is
@@ -1493,7 +1539,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         tasks !== undefined ||
         workedMs !== undefined ||
         toolCalls !== undefined ||
-        previewLine !== undefined
+        previewLine !== undefined ||
+        event.holdingFor !== undefined
       ) {
         setRuns((prev) =>
           prev.map((run) =>
@@ -1502,6 +1549,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...run,
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
+                  // The ROW's copy too, not only the `holding` map: the queue's
+                  // replay decision (`queueMayDrainAfterReplay`) reads the row,
+                  // and a copy frozen at the load-time listing drained a queued
+                  // message into a turn that had since started, or held one
+                  // back behind a hold that had since ended.
+                  ...(event.holdingFor === undefined
+                    ? {}
+                    : { holdingFor: event.holdingFor }),
                   ...(at === undefined ? {} : { updatedAt: at }),
                   // Each SET independently: the daemon sends the pair on a
                   // settle, and either half is legitimately null there (a CLI
@@ -1672,7 +1727,22 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // and a status transition never does, since a turn settling is exactly
       // when a background sub-agent is still out.
       if (event.subagentsOut !== undefined) {
-        const out = event.subagentsOut > 0;
+        // The COUNT onto the row as well, for the shells' reason above: the
+        // Sub-agents chip reads `run.subagentsOut`, so keeping only the flag
+        // froze its figure at the load-time listing. REPORTED as `Sub-agents 3`
+        // over a panel holding nothing but `5 finished`, with the daemon itself
+        // answering 0.
+        const count = event.subagentsOut;
+        setRuns((prev) =>
+          prev.some(
+            (row) => row.id === event.runId && row.subagentsOut !== count,
+          )
+            ? prev.map((row) =>
+                row.id === event.runId ? { ...row, subagentsOut: count } : row,
+              )
+            : prev,
+        );
+        const out = count > 0;
         setDelegatesOut((prev) => {
           if (out === prev.has(event.runId)) {
             return prev;
@@ -1961,6 +2031,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     delegatesOut,
     settleSummaries,
     quietSettles,
+    agentNotices,
     deadRequestKeys,
     pendingScrollRef,
     sawTerminalRef,

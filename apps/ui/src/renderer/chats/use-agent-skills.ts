@@ -7,11 +7,19 @@ import { mergeSkills } from './skill-autocomplete';
 
 /**
  * The composer target's invokable skills, fetched from the daemon per
- * (agent kind, cwd, PROFILE) and cached for the session (the underlying disk layout
- * rarely changes mid-session; a restart re-scans). `kinds` may hold several
- * kinds — a workflow trigger fanning out to mixed agents — whose lists union
- * de-duped by name. A fetch failure just yields an empty list: the
- * autocomplete is a nicety, never an error surface.
+ * (agent kind, cwd, PROFILE). `kinds` may hold several kinds — a workflow
+ * trigger fanning out to mixed agents — whose lists union de-duped by name. A
+ * fetch failure just yields an empty list: the autocomplete is a nicety, never
+ * an error surface.
+ *
+ * Cached, and REVALIDATED each time the user starts typing a command: the
+ * cached answer is shown at once and the fresh one replaces it when it lands.
+ * The cache used to be final for the whole session, so whatever the first read
+ * said stayed the popup's answer until the app restarted — a read taken while
+ * the CLI's own command report was missing (a probe that timed out under load,
+ * a plugin installed after the chat opened) went on hiding every plugin
+ * command, `/geniro:resolve` among them. A failure is never cached, so the next
+ * `/` asks again.
  */
 export function useAgentSkills(
   agentsApi: DaemonApis['agents'],
@@ -26,6 +34,11 @@ export function useAgentSkills(
    * `/` menu offered the default account's list to every chat.
    */
   configDir: string | null = null,
+  /**
+   * Whether the composer holds a slash token being typed right now — the moment
+   * the list is about to be looked at, and so the one worth refreshing it for.
+   */
+  typingCommand = false,
 ): AgentSkill[] {
   const cacheRef = useRef(new Map<string, AgentSkill[]>());
   const [skills, setSkills] = useState<AgentSkill[]>([]);
@@ -38,13 +51,22 @@ export function useAgentSkills(
       setSkills([]);
       return;
     }
+    const keys = targetKinds.map(
+      (kind) => `${kind}\u0000${cwd}\u0000${configDir ?? ''}`,
+    );
+    const cached = keys.map((key) => cacheRef.current.get(key));
+    if (cached.every((list) => list !== undefined)) {
+      setSkills(mergeSkills(cached));
+      if (!typingCommand) {
+        return;
+      }
+    }
     let stale = false;
     void Promise.all(
-      targetKinds.map(async (kind) => {
-        const key = `${kind}\u0000${cwd}\u0000${configDir ?? ''}`;
-        const cached = cacheRef.current.get(key);
-        if (cached) {
-          return cached;
+      targetKinds.map(async (kind, index) => {
+        const previous = cached[index];
+        if (previous && !typingCommand) {
+          return previous;
         }
         try {
           const list = await agentsApi.listAgentSkills({
@@ -53,10 +75,11 @@ export function useAgentSkills(
             // Omitted rather than empty — an absent directory is the CLI's own.
             ...(configDir ? { configDir } : {}),
           });
-          cacheRef.current.set(key, list);
+          cacheRef.current.set(keys[index]!, list);
           return list;
         } catch {
-          return [];
+          // A failed refresh keeps the answer already on screen.
+          return previous ?? [];
         }
       }),
     ).then((lists) => {
@@ -67,6 +90,6 @@ export function useAgentSkills(
     return () => {
       stale = true;
     };
-  }, [agentsApi, kindsKey, cwd, configDir]);
+  }, [agentsApi, kindsKey, cwd, configDir, typingCommand]);
   return skills;
 }

@@ -70,6 +70,67 @@ describe('foldTaskLists', () => {
     expect(groups[0]!.tasks[0]!.title).toBe('write specs');
   });
 
+  it('removes a task a patch DELETED, so the total stops counting it', () => {
+    // claude's `TaskUpdate` takes `status: "deleted"`; read as an unknown
+    // status, the row stayed in the list and the total never shrank.
+    const groups = foldTaskLists([
+      {
+        nodeId: null,
+        payload: snapshot([{ id: '1' }, { id: '2' }, { id: '3' }]),
+      },
+      {
+        nodeId: null,
+        payload: {
+          mode: 'patch',
+          tasks: [
+            {
+              id: '2',
+              title: null,
+              status: null,
+              activeForm: null,
+              deleted: true,
+            },
+          ],
+        },
+      },
+      { nodeId: null, payload: patch('1', 'completed') },
+    ]);
+    expect(done(groups)).toBe('1/2');
+    expect(groups[0]!.tasks.map((task) => task.id)).toEqual(['1', '3']);
+  });
+
+  it('keeps the status of a task a patch only RENAMED', () => {
+    // A `TaskUpdate` with a `subject` and no `status`: the finished task must
+    // keep its tick, and the stored row must not carry the patch-only flag.
+    const groups = foldTaskLists([
+      {
+        nodeId: null,
+        payload: snapshot([{ id: '1', title: 'old', status: 'completed' }]),
+      },
+      {
+        nodeId: null,
+        payload: {
+          mode: 'patch',
+          tasks: [
+            {
+              id: '1',
+              title: 'new',
+              status: null,
+              activeForm: null,
+              keepsStatus: true,
+            },
+          ],
+        },
+      },
+    ]);
+    expect(groups[0]!.tasks[0]).toEqual({
+      id: '1',
+      title: 'new',
+      status: 'completed',
+      activeForm: null,
+    });
+  });
+
   it('reads a payload with no mode as a PATCH, never as a snapshot', () => {
     // The fail-safe direction: a patch mistaken for a snapshot deletes every
     // task it did not name, turning a list of six into the one that just moved.

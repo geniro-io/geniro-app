@@ -62,6 +62,92 @@ const result = (
   nodeId: string | null = 'orch',
 ): ChatItem => item('tool_result', { id, name: null, result: value }, nodeId);
 
+describe('a call whose start is OLDER than the loaded window', () => {
+  // Measured on a Dev Team run: an Engineer call started at seq 10737 while the
+  // window opened near 11600, so its `call_started` was never loaded and every
+  // row the call went on streaming fell into the main flow as bare Engineer
+  // turn blocks — uncollapsible, two back to back at each turn end.
+  const engineerRow = (
+    kind: ChatItem['kind'],
+    payload: Record<string, unknown>,
+    role: string | null = 'assistant',
+  ): ChatItem =>
+    item(kind, { ...payload, callId: 'call-10' }, 'engineer', role);
+
+  it('folds the rows the call still tags into ONE running call block', () => {
+    const rows = [
+      engineerRow('message', { text: 'Round 2 bugs review: one MEDIUM.' }),
+      engineerRow('turn_complete', { usage: { outputTokens: 3 } }, null),
+      item(
+        'call_question',
+        {
+          callId: 'call-10',
+          callerNodeId: 'manager',
+          calleeNodeId: 'engineer',
+          question: 'Proceed?',
+        },
+        'manager',
+      ),
+      engineerRow('message', { text: 'Round 2 architecture review.' }),
+    ];
+
+    const entries = groupTranscript(rows);
+
+    expect(entries).toHaveLength(1);
+    const block = entries[0] as CallBlockEntry;
+    expect(block.type).toBe('call-block');
+    expect(block.callId).toBe('call-10');
+    expect(block.calleeNodeId).toBe('engineer');
+    // Learned from the caller's own row about the call, the start being gone.
+    expect(block.callerNodeId).toBe('manager');
+    // Nothing in the window ended it, and its rows are still arriving.
+    expect(block.status).toBe('running');
+    // The brief lived on the start row, so there is none to show.
+    expect(block.message).toBeNull();
+    expect(callBlockSummary(block)).toBe('Round 2 architecture review.');
+  });
+
+  it('settles on the call’s own status row, and frames its last words as the result', () => {
+    const entries = groupTranscript([
+      engineerRow('message', { text: 'Working on it.' }),
+      engineerRow('message', { text: 'Done: both fixes landed.' }),
+      engineerRow('status', { status: 'completed' }, null),
+    ]);
+
+    const block = entries[0] as CallBlockEntry;
+    expect(entries).toHaveLength(1);
+    expect(block.status).toBe('completed');
+    expect(block.result).toBe('Done: both fixes landed.');
+  });
+
+  it('narrates a working callee from that block, never from an Engineer block of its own', () => {
+    // The reported `ENGINEER · Working… 25s` block with nothing else in it: the
+    // working fallback had no open call to defer to, so it opened a block.
+    const durable = groupTranscript([
+      item(
+        'message',
+        { text: 'Waiting on the Engineer.' },
+        'manager',
+        'assistant',
+      ),
+      engineerRow('message', { text: 'Round 2 bugs review.' }),
+    ]);
+
+    const out = withLiveText(
+      buildTurnBlocks(durable),
+      new Map(),
+      new Set(['engineer']),
+    );
+
+    // Every top-level entry is the call block or the Manager's own — no
+    // Engineer turn block holding nothing but its `Working…` row.
+    const engineerBlocks = out.filter(
+      (entry) => entry.type === 'turn-block' && entry.nodeId === 'engineer',
+    );
+    expect(engineerBlocks).toHaveLength(0);
+  });
+});
+
 describe('entryStartSeq', () => {
   it('answers a plain row with its own seq', () => {
     const row = item('message', { text: 'hi' });
@@ -1236,6 +1322,86 @@ describe('groupTranscript — call blocks', () => {
     expect(innerJson).toContain('Baltic');
     // The ok settle envelope is bookkeeping — the done chip + result own it.
     expect(innerJson).not.toContain('call_result');
+  });
+
+  it('keeps each workflow NODE’s task history apart on its cards', () => {
+    // Keyed by thread alone, every node shared the main-thread history: an
+    // Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1 on the
+    // Engineer's own card.
+    const entries = groupTranscript([
+      item(
+        'task_list',
+        {
+          mode: 'snapshot',
+          tasks: [
+            { id: '1', title: 'Plan', status: 'pending', activeForm: null },
+          ],
+          toolCallId: null,
+        },
+        'mgr',
+      ),
+      item(
+        'task_list',
+        {
+          mode: 'patch',
+          tasks: [
+            { id: '1', title: null, status: 'completed', activeForm: null },
+          ],
+          toolCallId: null,
+        },
+        'eng',
+      ),
+    ]);
+    const cards = entries.flatMap((entry) =>
+      entry.type === 'task-list' ? [[entry.nodeId, entry.tasks]] : [],
+    );
+    expect(cards).toEqual([
+      [
+        'mgr',
+        [{ id: '1', title: 'Plan', status: 'pending', activeForm: null }],
+      ],
+      [
+        'eng',
+        [{ id: '1', title: null, status: 'completed', activeForm: null }],
+      ],
+    ]);
+  });
+
+  it('a call that settles with no status row of its own stops spinning', () => {
+    // A fan-out's queued call cancelled before its turn began: the broker
+    // writes call_started and a CALLEE_CANCELLED result, and the callee never
+    // wrote a status row at all.
+    const cancelled = groupTranscript([
+      startCall('call-1', 'poet'),
+      item(
+        'call_result',
+        {
+          callId: 'call-1',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error: 'CALLEE_CANCELLED: the callee turn was cancelled',
+        },
+        'orch',
+      ),
+    ]);
+    expect((cancelled[0] as CallBlockEntry).status).toBe('cancelled');
+
+    // A turn whose running row survived a daemon kill, settled by the result.
+    const failed = groupTranscript([
+      startCall('call-2', 'poet'),
+      tagged('status', { status: 'running' }, 'poet', 'call-2'),
+      item(
+        'call_result',
+        {
+          callId: 'call-2',
+          calleeNodeId: 'poet',
+          status: 'error',
+          error: 'CALLEE_FAILED: interrupted',
+        },
+        'orch',
+      ),
+    ]);
+    expect((failed[0] as CallBlockEntry).status).toBe('failed');
   });
 
   it('an ERROR settle keeps its row inside the block', () => {
@@ -3549,16 +3715,22 @@ describe('groupTranscript task lists', () => {
         status: 'pending' as const,
         activeForm: null,
       });
-      const entries = groupTranscript([
-        item('task_list', {
-          mode: 'patch',
-          toolCallId: null,
-          callId: 'call-2',
-          tasks: [
-            { id: '1', title: null, status: 'pending', activeForm: null },
-          ],
-        }),
-      ]);
+      // A bare callee row with no start is, on the main flow, a call whose
+      // start is above the window and would be folded into its block; the
+      // card's matching is what this pins, so the recovery stays out of it.
+      const entries = groupTranscript(
+        [
+          item('task_list', {
+            mode: 'patch',
+            toolCallId: null,
+            callId: 'call-2',
+            tasks: [
+              { id: '1', title: null, status: 'pending', activeForm: null },
+            ],
+          }),
+        ],
+        { recoverOrphanCalls: false },
+      );
       const [card] = cards(
         withDurableTaskLists(entries, [
           { nodeId: 'orch', callId: 'call-1', tasks: [row('First brief')] },

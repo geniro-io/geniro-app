@@ -544,37 +544,6 @@ const DETACHED_SHELL_POLL_MS = 5000;
  */
 const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
 /**
- * How long a RELEASED hold waits before it settles the turn.
- *
- * The hold ends when the last delegate reports — and that is exactly the
- * moment the CLI is about to speak again, because the way it learns a delegate
- * finished is a task notification, which opens a whole further turn of its own.
- * So the release fires one breath before the continuation, and geniro settled
- * the turn, painted `completed` and posted a NOTIFICATION into that gap.
- * REPORTED as "запускает какую-то фоновую задачу, выполняет её, говорит мне
- * «done», но потом сразу продолжает работать… я получаю фейковую нотификацию".
- * TRACED in the reporter's own daemon log on run `309e0822`: held at 13:00:45,
- * `releasing the held 'turn_complete' — its background work has reported` at
- * 13:02:48, badge `completed` in the same second, and the agent writing
- * "Explorer returned with substantial findings" ten seconds later, then working
- * on for another thirteen minutes.
- *
- * The mechanism for this already existed and was one step out of reach: a
- * main-thread event DISCARDS a held terminal ({@link RESUMES_A_HELD_TURN}), so
- * a turn that visibly continues runs on to its next terminal instead. It only
- * ever ran BEFORE the release, and the continuation lands just after. All this
- * does is keep the hold open a moment longer so the existing rule can see it.
- *
- * Ten seconds, from the 22 releases in that log: the agent was producing again
- * within 4s of 18 of them, within 8.3s of 20, and the two stragglers (15.3s,
- * 39.2s) are the shape a fresh user message makes. It costs nothing in the
- * common case — the turn does continue, so the settle was never due — and in
- * the genuine-ending case it delays a badge and a notification by ten seconds,
- * which is the right way round: a late "done" is a wait, an early one is a lie.
- */
-export const HELD_TERMINAL_GRACE_MS = 10_000;
-
-/**
  * Main-thread events that prove the MODEL is producing again, and so end a
  * hold — see the release in `emit`.
  *
@@ -685,6 +654,27 @@ interface TurnState {
    * a stalling one up to a minute.
    */
   promptHeld: boolean;
+  /**
+   * The CLI has already answered this turn's latest prompt with a result of
+   * its own — held, or dropped when the agent spoke again.
+   *
+   * It is what decides whether a CONTINUATION's result can end the turn. While
+   * the prompt is unanswered it cannot: the CLI finishes a continuation it was
+   * already running before it reads the prompt, so that result is not this
+   * turn's answer (the probed case at the continuation branch in `emit`). Once
+   * the prompt HAS been answered, nothing further is owed — every result after
+   * that is a continuation, because a continuation is the only way the CLI
+   * speaks again unprompted. Skipping those left a turn with no ending it would
+   * accept. TRACED on run `3e05c90a` (2026-09-14): a turn opened 12:47, its own
+   * result held for sub-agents, the agent carried on as each one reported, and
+   * the last continuation's result at 13:56 was skipped as "not this turn's
+   * ending" — thirty minutes of silence later the deadline settled the turn as
+   * `error`, under a transcript whose final row read `done`.
+   *
+   * Cleared again when a follow-up is delivered into the turn, since that is a
+   * new prompt the CLI has not answered yet.
+   */
+  promptAnswered: boolean;
 }
 
 /**
@@ -831,13 +821,31 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    */
   let deferredOffTurnTerminal: AgentEvent | null = null;
   /**
-   * Bounds the {@link HELD_TERMINAL_GRACE_MS} pause on a released hold.
+   * Whether this CLI has ever announced its session state (`session_state`).
    *
-   * Session-scoped and single, because `openWork` is: only one hold can be
-   * emptying at a time, so the in-turn and off-turn releases can never both be
-   * waiting.
+   * It decides what ends a hold once its last unit has reported. The report is
+   * NOT the end: the CLI learns a delegate finished through a task
+   * notification, which opens a whole further turn of its own, so settling on
+   * the report settled one breath before the agent spoke again — REPORTED as a
+   * false "done" notification ("говорит мне «done», но потом сразу продолжает
+   * работать"). A CLI that announces its state says when the turn is really
+   * over: `idle` comes only after that continuation has ended (probed on claude
+   * 2.1.270 — see `CLAUDE_SESSION_STATE_SUBTYPE`). So such a hold ends on the
+   * continuation's own result (its main-thread output discards the held
+   * terminal first) or on `idle`, with no timer anywhere. A ten-second grace
+   * stood here before, and it delayed every genuine ending's badge and
+   * notification by exactly that much.
+   *
+   * A CLI that has never announced its state is released on the report, since
+   * nothing else will ever say the turn is over.
    */
-  let heldReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  let announcesSessionState = false;
+  /**
+   * Background commands a DELEGATE started (`background_work.ownedByDelegate`),
+   * remembered only so their settle is swallowed along with their start — see
+   * {@link announceShellWork}.
+   */
+  const delegateShells = new Set<string>();
 
   /** Bounds {@link deferredOffTurnTerminal}, as the turn's own deadline does. */
   let offTurnHoldTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1136,8 +1144,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // the continuation this hold was released for has begun, so the held
     // terminal describes a stretch that is demonstrably not over. Dropped
     // rather than released — the run then settles on the continuation's OWN
-    // result, exactly as a turn does. Without it the grace merely delays a
-    // wrong answer by ten seconds.
+    // result, exactly as a turn does.
     if (
       deferredOffTurnTerminal !== null &&
       event.parentToolUseId === undefined &&
@@ -1147,7 +1154,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         `${opts.command}: dropping the off-turn hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
       deferredOffTurnTerminal = null;
-      cancelHeldRelease();
       if (offTurnHoldTimer) {
         clearTimeout(offTurnHoldTimer);
         offTurnHoldTimer = null;
@@ -1321,7 +1327,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     turn.terminalEmitted = true;
     turn.deferredTerminal = null;
-    cancelHeldRelease();
     if (opts.stdinLifetime === 'turn') {
       endStdin();
       // Closing stdin only ASKS a one-turn CLI to finish; one that ignores EOF
@@ -1483,36 +1488,56 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
    * channels, nowhere else) and says nothing a client needs — the tool call is
    * already the start.
    */
-  /** Drop a pending grace — the hold is being resolved another way. */
-  const cancelHeldRelease = (): void => {
-    if (heldReleaseTimer) {
-      clearTimeout(heldReleaseTimer);
-      heldReleaseTimer = null;
-    }
-  };
-
   /**
-   * Settle a released hold, but not for another {@link HELD_TERMINAL_GRACE_MS}
-   * — long enough for the continuation the report is about to trigger.
+   * The CLI's own statement of whether it is working — see
+   * {@link announcesSessionState}.
    *
-   * The caller's `release` re-reads whatever it holds, so a hold that was
-   * DISCARDED in the meantime (the main thread spoke) resolves to nothing and
-   * this becomes a no-op. That is the whole design: nothing new decides when a
-   * turn is over, the existing rule just gets a moment to apply.
+   * `idle` is the authoritative turn-over, so a hold still standing when it
+   * arrives is over — including one {@link openWork} still counts units for:
+   * the CLI does not go idle while a background agent of its own is due to
+   * report, so a unit still listed here is a report this layer missed, and it is
+   * written off the way the silence deadline writes off its own.
    */
-  const releaseHeldAfterGrace = (release: () => void): void => {
-    cancelHeldRelease();
-    heldReleaseTimer = setTimeout(() => {
-      heldReleaseTimer = null;
-      release();
-    }, HELD_TERMINAL_GRACE_MS);
-    heldReleaseTimer.unref?.();
+  const onSessionState = (idle: boolean): void => {
+    announcesSessionState = true;
+    if (!idle) {
+      return;
+    }
+    const turn = current;
+    const held = turn?.deferredTerminal ?? deferredOffTurnTerminal;
+    if (!held) {
+      return;
+    }
+    if (openWork.size > 0) {
+      opts.logger?.warn(
+        `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
+      );
+      openWork.clear();
+    } else {
+      opts.logger?.debug?.(
+        `${opts.command}: the CLI went idle — settling the held '${held.type}'`,
+      );
+    }
+    if (turn?.deferredTerminal) {
+      finishTurn(turn, turn.deferredTerminal);
+      return;
+    }
+    releaseOffTurnHold();
   };
 
   const announceShellWork = (
     event: Extract<AgentEvent, { type: 'background_work' }>,
   ): void => {
     if (event.phase === 'started') {
+      // A DELEGATE's own command: its block holds it, and the main thread's
+      // terminals — list, count, chip — deliberately do not (REPORTED as "we
+      // should not show terminals from subagents"). Without this every one
+      // reached the daemon's shell list and the run's count, and the shelf
+      // chip listed it unlabelled while the agents panel showed nothing.
+      if (event.ownedByDelegate === true && event.unit !== 'agent') {
+        delegateShells.add(event.id);
+        return;
+      }
       // Recorded for EVERY unit, delegate or not: a settle carries no kind, so
       // which map answers for an id is decided here, where the CLI stated it.
       if (event.unit !== 'agent' && event.toolCallId !== null) {
@@ -1542,6 +1567,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // what the `started` recorded, so a unit this map never saw is silently not
     // a shell and nothing is announced for it.
     if (delegateWork.has(event.id)) {
+      return;
+    }
+    // Its start announced nothing, so its end has nothing to close.
+    if (delegateShells.delete(event.id)) {
       return;
     }
     runningShells.delete(event.id);
@@ -1782,33 +1811,27 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // The last unit reported, so anything held for it is due. Only reached when
     // this settle actually closed something that was being waited on — a stray
     // `settled` for unknown work must release nothing.
-    const held = current?.deferredTerminal;
-    if (held && current) {
-      const turn = current;
-      opts.logger?.debug?.(
-        `${opts.command}: releasing the held '${held.type}' — its background work has reported, settling in ${HELD_TERMINAL_GRACE_MS}ms unless the agent speaks`,
-      );
-      releaseHeldAfterGrace(() => {
-        // RE-READ, never the `held` captured above: the main thread speaking in
-        // the meantime discards it, and settling the captured copy would end
-        // the turn in the middle of the answer that discarded it.
-        const due = turn.deferredTerminal;
-        if (due) {
-          finishTurn(turn, due);
-        }
-      });
+    const held = current?.deferredTerminal ?? deferredOffTurnTerminal;
+    if (!held) {
       return;
     }
-    if (deferredOffTurnTerminal) {
+    if (announcesSessionState) {
+      // Nothing settles on the report itself — see `announcesSessionState`. The
+      // continuation's output discards this hold and its result ends the turn;
+      // with no continuation, the CLI's `idle` does (`onSessionState`).
       opts.logger?.debug?.(
-        `${opts.command}: releasing an off-turn '${deferredOffTurnTerminal.type}' — its background work has reported, settling in ${HELD_TERMINAL_GRACE_MS}ms unless the agent speaks`,
+        `${opts.command}: the held '${held.type}' has no background work left — it ends on the CLI's continuation or its idle announcement`,
       );
-      releaseHeldAfterGrace(() => {
-        if (deferredOffTurnTerminal) {
-          releaseOffTurnHold();
-        }
-      });
+      return;
     }
+    opts.logger?.debug?.(
+      `${opts.command}: releasing the held '${held.type}' — its background work has reported`,
+    );
+    if (current?.deferredTerminal) {
+      finishTurn(current, current.deferredTerminal);
+      return;
+    }
+    releaseOffTurnHold();
   };
 
   /**
@@ -1824,6 +1847,12 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // detachable as one run inside a turn, and the sweep's whole subject is
     // work that outlives the turn that started it.
     rememberExecuteCall(event);
+    if (event.type === 'session_state') {
+      // Turn plumbing wherever it arrives, never forwarded: it maps to no row,
+      // and what it says is this layer's business — whether a hold is over.
+      onSessionState(event.idle);
+      return;
+    }
     const turn = current;
     if (!turn) {
       handleOrphanEvent(event);
@@ -1874,15 +1903,21 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       // handed this turn the continuation's text and ended it before its real
       // answer arrived. The result goes the between-turn way instead (its row
       // and usage are real), and this turn waits for its own.
+      //
+      // Only while that answer is still OWED — see `TurnState.promptAnswered`.
+      // Once the turn has had its own result, a continuation's result is the
+      // only ending left to it.
       if (
         normalized.type === 'turn_complete' &&
-        normalized.continuation === true
+        normalized.continuation === true &&
+        !turn.promptAnswered
       ) {
         opts.logger?.debug?.(
           `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
         );
         armSilenceDeadline(turn);
-        handleOrphanEvent(normalized);
+        // Stamped, so the ROW says it ended nothing — see `insideTurn`.
+        handleOrphanEvent({ ...normalized, insideTurn: true });
         return;
       }
       // A completion for a prompt that has not been sent is not this turn's.
@@ -1901,6 +1936,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         );
         armSilenceDeadline(turn);
         return;
+      }
+      if (normalized.type === 'turn_complete') {
+        turn.promptAnswered = true;
       }
       // The CLI has stopped TALKING while work it started is still running, and
       // on a session lifetime the process is still there doing it. Hold the
@@ -1973,11 +2011,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       opts.logger?.debug?.(
         `${opts.command}: releasing the hold — the main thread is talking again with ${openWork.size} unit(s) still out`,
       );
-      // Dropping it IS how a pending grace is answered — the timer re-reads
-      // this field and finds nothing due. One mechanism rather than two: a
-      // separate `clearTimeout` here would be a second place that has to be
-      // kept in step with every future way a hold can be discarded, and the
-      // one that got forgotten would settle a turn mid-answer.
       turn.deferredTerminal = null;
       turn.options.onEvent({ type: 'turn_held', open: 0 });
     }
@@ -2100,7 +2133,10 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     osDetachedShells.clear();
     executeCalls.clear();
-    for (const id of [...shellWork.keys()]) {
+    // `runningShells` as well as `shellWork`: a unit the CLI announced with no
+    // launching call is in the first alone, and closing only the second left
+    // its `shell_open` without an end — a `Terminals 1` nothing could retire.
+    for (const id of new Set([...shellWork.keys(), ...runningShells])) {
       announceShellWork({
         type: 'background_work',
         id,
@@ -2119,7 +2155,6 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     // so the loop above did not settle it — but it died with the group too.
     runningShells.clear();
     openWork.clear();
-    cancelHeldRelease();
     releaseOffTurnHold();
     if (current) {
       settleTurn(current, 'the process ended');
@@ -2421,6 +2456,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       outstanding: new Map(),
       deferredTerminal: null,
       promptHeld: turnOptions.holdPrompt !== undefined,
+      promptAnswered: false,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
@@ -2612,6 +2648,11 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
             !turn.terminalEmitted &&
             turnOptions.sendFollowUp(message)
           : turnWrite(() => turnOptions.buildFollowUpPayload?.(message));
+        // A new prompt the CLI has not answered — a continuation's result is
+        // again not this turn's ending (see `TurnState.promptAnswered`).
+        if (delivered) {
+          turn.promptAnswered = false;
+        }
         // A message delivered into a HELD turn ends the hold at the write,
         // rather than when the CLI gets round to answering. Waiting for it to
         // speak leaves a window — measured at 8 seconds in the reported case,

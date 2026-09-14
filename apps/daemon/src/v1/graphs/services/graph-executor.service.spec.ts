@@ -686,6 +686,7 @@ function setup(
   statusEvents: { runId: string; status: string | null }[];
   /** Every AWAITING announce (status null, `awaiting` set), in order. */
   awaitingEvents: { runId: string; awaiting: string | null }[];
+  countEvents: { runId: string; shellsOpen?: number; subagentsOut?: number }[];
   deletedRuns: string[];
   removedAttachmentRuns: string[];
   /** The real registry the executor opens its processes on. */
@@ -755,9 +756,32 @@ function setup(
     runId: string;
     awaiting: string | null;
   }[] = [];
+  // COUNT announces (status null, `shellsOpen`/`subagentsOut` set) are filed
+  // apart for the same reason awaiting ones are: they say what the run is
+  // holding, never whether it is still going.
+  const countEvents: {
+    runId: string;
+    shellsOpen?: number;
+    subagentsOut?: number;
+  }[] = [];
   bus.allStatuses().subscribe((event) => {
     if (event.status === null && event.awaiting !== undefined) {
       awaitingEvents.push({ runId: event.runId, awaiting: event.awaiting });
+      return;
+    }
+    if (
+      event.status === null &&
+      (event.shellsOpen !== undefined || event.subagentsOut !== undefined)
+    ) {
+      countEvents.push({
+        runId: event.runId,
+        ...(event.shellsOpen !== undefined
+          ? { shellsOpen: event.shellsOpen }
+          : {}),
+        ...(event.subagentsOut !== undefined
+          ? { subagentsOut: event.subagentsOut }
+          : {}),
+      });
       return;
     }
     statusEvents.push({ runId: event.runId, status: event.status });
@@ -920,6 +944,7 @@ function setup(
     storeGet,
     statusEvents,
     awaitingEvents,
+    countEvents,
     deletedRuns,
     removedAttachmentRuns,
   };
@@ -2179,6 +2204,75 @@ describe('GraphExecutorService', () => {
       (i) => i.runId === orphan.id && i.kind === 'error',
     );
     expect(errorItem).toBeDefined();
+  });
+
+  it('boot reconcile settles the turns and calls the transcript left open', async () => {
+    // The renderer reads a node's liveness and a call block's status off the
+    // TRANSCRIPT before node_state, so failing the node rows alone left the
+    // card and the call block spinning under the failed run.
+    const { service, runDao, nodeDao, itemDao } = setup();
+    const orphan = await runDao.create({
+      workflowId: 'ghost',
+      status: 'running',
+      cwd: dir,
+    });
+    await nodeDao.createPending(orphan.id, 'orch');
+    await nodeDao.setStatus(orphan.id, 'orch', { status: 'running' });
+    const rows = [
+      ['orch', 'status', { nodeId: 'orch', status: 'running' }],
+      [
+        'orch',
+        'call_started',
+        {
+          callId: 'c1',
+          callerNodeId: 'orch',
+          calleeNodeId: 'poet',
+          mode: 'sync',
+          message: 'write',
+        },
+      ],
+      ['poet', 'status', { nodeId: 'poet', status: 'running', callId: 'c1' }],
+    ] as const;
+    for (const [index, [nodeId, kind, payload]] of rows.entries()) {
+      await itemDao.create({
+        runId: orphan.id,
+        nodeId,
+        seq: index,
+        kind,
+        payload: JSON.stringify(payload),
+      });
+    }
+
+    await service.reconcileOrphanedRuns();
+
+    const written = itemDao.items
+      .filter((i) => i.runId === orphan.id && i.seq >= rows.length)
+      .map((i) => ({
+        nodeId: i.nodeId,
+        kind: i.kind,
+        payload: JSON.parse(i.payload) as Record<string, unknown>,
+      }));
+    expect(written).toContainEqual({
+      nodeId: 'orch',
+      kind: 'status',
+      payload: { nodeId: 'orch', status: 'failed' },
+    });
+    expect(written).toContainEqual({
+      nodeId: 'poet',
+      kind: 'status',
+      payload: { nodeId: 'poet', status: 'failed', callId: 'c1' },
+    });
+    expect(written).toContainEqual(
+      expect.objectContaining({
+        nodeId: 'orch',
+        kind: 'call_result',
+        payload: expect.objectContaining({
+          callId: 'c1',
+          calleeNodeId: 'poet',
+          status: 'error',
+        }),
+      }),
+    );
   });
 
   it('boot reconcile closes a graph card the KILLED daemon never swept, keeping its node', async () => {
@@ -5722,6 +5816,40 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     );
     expect(terminal).toBeGreaterThan(-1);
     expect(rows.indexOf(stopped[0]!)).toBeGreaterThan(terminal);
+  });
+
+  it('announces the run’s detached commands and background delegates as their counts move', async () => {
+    // A workflow run shares the chat sidebar and reported 0 for both figures, so
+    // its badge never reached the held state and its shelf never counted a
+    // delegate launched earlier than the loaded page.
+    const { service, claude, sessions, countEvents } = setup();
+    const run = await service.startRun({
+      slug: 'one',
+      workflow: triggered(ONE),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const turn = claude.starts[0]!;
+    turn.emit(delegate('task-out', true));
+    turn.emit(delegate('task-back', true));
+    turn.emit(delegate('task-back', false, 'completed'));
+    turn.emit({ type: 'shell_open', toolCallId: 'toolu_left', workId: 'b1' });
+    completeTurn(turn, 'done');
+    await drain();
+
+    const last = (key: 'shellsOpen' | 'subagentsOut'): number | undefined =>
+      countEvents
+        .filter((e) => e.runId === run.id && e[key] !== undefined)
+        .at(-1)?.[key];
+    expect(last('subagentsOut')).toBe(1);
+    expect(last('shellsOpen')).toBe(1);
+
+    // The process goes, the executor writes the delegate's ending — and the
+    // count comes down with that row.
+    sessions.closeRun(run.id);
+    await drain();
+    expect(last('subagentsOut')).toBe(0);
   });
 
   it("closes a reaped callee session's delegates while the run goes on — and only that session's", async () => {

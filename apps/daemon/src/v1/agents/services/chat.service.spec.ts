@@ -79,6 +79,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -809,6 +810,7 @@ function setup(
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -933,6 +935,7 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    notices,
     callTokens,
     {
       token: 'launch',
@@ -4437,6 +4440,27 @@ describe('ChatService — approval modes (parity M1)', () => {
         approval: 'plan',
       }),
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
+  });
+
+  it('updateSettings drops the measured window when the model changes, and keeps it otherwise', async () => {
+    // The window is only ever overwritten by a positive reading, and a model
+    // that has not finished a turn here reports none — so the new model's
+    // first turn was drawn against the old model's window.
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.rememberContext(run.id, {
+      contextTokens: 350_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    await service.updateSettings(run.id, { approval: 'acceptEdits' });
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBe(1_000_000);
+
+    const moved = await service.updateSettings(run.id, { model: 'sonnet' });
+    expect(moved.contextWindowTokens).toBeNull();
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBeNull();
+    // The COUNT still measures the conversation, which a model change keeps.
+    expect(runDao.runs.get(run.id)?.contextTokens).toBe(350_000);
   });
 
   it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {

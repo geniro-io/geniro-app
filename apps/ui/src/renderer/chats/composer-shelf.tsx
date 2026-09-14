@@ -445,6 +445,10 @@ export function RunningSubagentChips({
   if (count === 0) {
     return null;
   }
+  // The terminals chip's rule, for the same contradiction: a delegate launched
+  // earlier than the loaded page is counted by the run and has no row here, so
+  // without a sentence the chip said `3` over a panel of finished ones.
+  const unlisted = count - running;
   return (
     <HoverPopover
       slot="running-subagents"
@@ -477,7 +481,18 @@ export function RunningSubagentChips({
           <span className="text-muted-foreground tabular-nums">{count}</span>
         </>
       }>
-      {groups === undefined ? (
+      {unlisted > 0 ? (
+        <p
+          data-slot="subagents-unlisted"
+          className="m-0 px-1 pb-1.5 text-[11px] text-muted-foreground">
+          {running === 0
+            ? `${unlisted} sub-agent${unlisted === 1 ? '' : 's'} still working, launched earlier in this conversation than the part loaded here.`
+            : `${unlisted} more launched earlier in this conversation than the part loaded here.`}
+        </p>
+      ) : null}
+      {/* No rows means the note above is the whole answer — the list's own
+          "delegated nothing" sentence under it would contradict it. */}
+      {threads.length === 0 && unlisted > 0 ? null : groups === undefined ? (
         <SubagentRows threads={threads} onOpen={onOpen} />
       ) : (
         <SubagentGroupRows groups={groups} onOpen={onOpen} />

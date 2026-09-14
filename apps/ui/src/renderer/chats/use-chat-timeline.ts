@@ -28,20 +28,24 @@ const NOTHING: ChatTimelineState = {
  * of the last few exchanges and present it as the whole conversation — shorter,
  * cheaper, and indistinguishable from a genuinely short thread.
  *
- * TWO refresh triggers, because two different things move the rail and neither
- * covers the other. `settledTurns` covers a turn ENDING, which is when a
- * segment's message count, elapsed time and spend stop changing. `latestUserSeq`
- * covers a message being SENT, which adds a marker immediately — without it the
- * message currently being answered is missing from the rail for the whole of
- * the turn, which is exactly when someone looks. Both are monotonic within a
- * thread and neither moves when older history pages in, so scrolling up costs
- * no fetch.
+ * THREE refresh triggers, because three different things move the rail and none
+ * covers the others. `settledTurns` covers a turn ENDING, which is when a
+ * segment's spend stops changing. `latestUserSeq` covers a message being SENT,
+ * which adds a marker immediately — without it the message currently being
+ * answered is missing from the rail for the whole of the turn, which is exactly
+ * when someone looks. `latestAgentSeq` covers the work IN BETWEEN: a turn that
+ * runs for twenty minutes moves neither of the others, so its stretch sat at
+ * `0 messages` until it ended — REPORTED as "its not live". It moves once per
+ * paragraph the agent writes (a `message` or `reasoning` row), never per token.
+ * All three are monotonic within a thread and none moves when older history
+ * pages in, so scrolling up costs no fetch.
  */
 export function useChatTimeline(
   api: Pick<ChatsApi, 'readChatTimeline'> | null,
   runId: string | null,
   settledTurns: number,
   latestUserSeq: number,
+  latestAgentSeq: number,
 ): ChatTimelineState {
   const [state, setState] = useState<ChatTimelineState>(() => ({
     ...NOTHING,
@@ -77,7 +81,7 @@ export function useChatTimeline(
     return () => {
       cancelled = true;
     };
-  }, [api, runId, settledTurns, latestUserSeq]);
+  }, [api, runId, settledTurns, latestUserSeq, latestAgentSeq]);
 
   // The markers belong to the run they were read from. A thread switch renders
   // once before the effect above can replace them, so without this guard the

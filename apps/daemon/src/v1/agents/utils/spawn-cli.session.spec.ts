@@ -699,6 +699,90 @@ describe('cancelling a session turn', () => {
     expect(session.shellsRunning).toBe(1);
   });
 
+  it('a follow-up delivered after the turn’s own result makes a continuation’s result NOT its ending again', async () => {
+    // The follow-up is a new prompt the CLI has not answered, so the probed
+    // case is back: a continuation already running finishes first, and its
+    // result must not end the turn before the follow-up's answer arrives.
+    const betweenTurns: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      buildFollowUpPayload: (message) => `${message.text}\n`,
+      onEvent: (event) => events.push(event),
+    });
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { work: 'd1', phase: 'started', unit: 'agent', call: 't1' });
+    line(child, { done: true, finalText: 'Launched the reviewer.' });
+    expect(
+      handle?.sendUserMessage({
+        text: 'Check the docs too.',
+        images: undefined,
+      }),
+    ).toBe(true);
+    line(child, { work: 'd1', phase: 'settled', outcome: 'completed' });
+    line(child, { continuationDone: true, finalText: 'Reviewer reported.' });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    expect(betweenTurns).toEqual([
+      expect.objectContaining({ type: 'turn_complete', continuation: true }),
+    ]);
+
+    line(child, { done: true, finalText: 'Docs checked too.' });
+    await handle?.done;
+
+    expect(events.filter((event) => event.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'Docs checked too.' }),
+    ]);
+  });
+
+  it('settles on a continuation’s result once the turn has had its OWN result', async () => {
+    // TRACED on run `3e05c90a` (2026-09-14): the turn's own result was held for
+    // a sub-agent, the agent carried on by itself as it reported, and the
+    // continuation's result was skipped as "not this turn's ending" — so the
+    // turn had no ending it would accept, and the silence deadline settled it
+    // as `error` thirty minutes later.
+    const betweenTurns: AgentEvent[] = [];
+    const { session, child } = openSession(undefined, undefined, (event) =>
+      betweenTurns.push(event),
+    );
+    const events: AgentEvent[] = [];
+    const handle = session.startTurn({
+      onEvent: (event) => events.push(event),
+    });
+    let settled = false;
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { work: 'd1', phase: 'started', unit: 'agent', call: 't1' });
+    line(child, { done: true, finalText: 'Launched the reviewer.' });
+    // The main thread speaks again — the continuation has begun — so the held
+    // result is dropped and the turn runs on to its next ending.
+    line(child, { says: 'The reviewer came back with two findings.' });
+    line(child, { work: 'd1', phase: 'settled', outcome: 'completed' });
+    line(child, { continuationDone: true, finalText: 'Both are fixed.' });
+    await Promise.race([
+      handle?.done,
+      new Promise((resolve) => setTimeout(resolve, 50)),
+    ]);
+
+    expect(settled).toBe(true);
+    expect(events.filter((event) => event.type === 'turn_complete')).toEqual([
+      expect.objectContaining({ finalText: 'Both are fixed.' }),
+    ]);
+    expect(betweenTurns.some((event) => event.type === 'turn_complete')).toBe(
+      false,
+    );
+  });
+
   it('does NOT settle a turn on the result of a continuation the CLI ran by itself', async () => {
     // Probed on claude 2.1.266: a message written while the CLI was running a
     // continuation of its own was answered only AFTER that continuation's

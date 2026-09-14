@@ -1689,7 +1689,22 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       // and a status transition never does, since a turn settling is exactly
       // when a background sub-agent is still out.
       if (event.subagentsOut !== undefined) {
-        const out = event.subagentsOut > 0;
+        // The COUNT onto the row as well, for the shells' reason above: the
+        // Sub-agents chip reads `run.subagentsOut`, so keeping only the flag
+        // froze its figure at the load-time listing. REPORTED as `Sub-agents 3`
+        // over a panel holding nothing but `5 finished`, with the daemon itself
+        // answering 0.
+        const count = event.subagentsOut;
+        setRuns((prev) =>
+          prev.some(
+            (row) => row.id === event.runId && row.subagentsOut !== count,
+          )
+            ? prev.map((row) =>
+                row.id === event.runId ? { ...row, subagentsOut: count } : row,
+              )
+            : prev,
+        );
+        const out = count > 0;
         setDelegatesOut((prev) => {
           if (out === prev.has(event.runId)) {
             return prev;

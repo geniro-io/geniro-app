@@ -25,6 +25,7 @@ import type { DaemonClient } from '../daemon-client';
  * sends and the daemon refuses.
  */
 export type ChatListScope = ListChatsScopeEnum;
+import type { AgentNotice } from '../notifications/run-notifications';
 import { previewMessageOf } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
@@ -239,6 +240,12 @@ export interface ChatRunState {
   delegatesOut: ReadonlySet<string>;
   settleSummaries: ReadonlyMap<string, string | null>;
   quietSettles: ReadonlySet<string>;
+  /**
+   * Notifications the AGENTS asked for (`notify_user`), oldest first, as they
+   * arrived on the client-wide broadcast — for every run, not only the open
+   * one, since a notification is only ever for a thread nobody is looking at.
+   */
+  agentNotices: readonly AgentNotice[];
   /**
    * Requests the daemon reported as already settled — invalid answers remain
    * retryable, while expired cards stop retrying forever.
@@ -541,6 +548,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
   const [quietSettles, setQuietSettles] = useState<ReadonlySet<string>>(
     new Set(),
   );
+  /**
+   * The agents' own notifications, newest last — see
+   * {@link ChatRunState.agentNotices}. Kept to the last few: the hook that posts
+   * them tracks the newest id it handled, so older entries are only history.
+   */
+  const [agentNotices, setAgentNotices] = useState<readonly AgentNotice[]>([]);
+  const agentNoticeIdRef = useRef(0);
 
   /**
    * A replay's one reading of the sidebar row — the run's status, taken from
@@ -1338,6 +1352,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         const said = event.summary;
         setSettleSummaries((prev) => new Map(prev).set(event.runId, said));
       }
+      // The agent asking to be heard — queued BEFORE the row update, like the
+      // summary, so a notice and the settle that may follow it are handled in
+      // that order.
+      if (event.notify !== undefined) {
+        agentNoticeIdRef.current += 1;
+        const notice: AgentNotice = {
+          id: agentNoticeIdRef.current,
+          runId: event.runId,
+          message: event.notify,
+        };
+        setAgentNotices((prev) => [...prev.slice(-19), notice]);
+      }
       // Recorded on the same terms and for the same reason: only a SETTLE says
       // anything about this, and every settle says it — so an absent field is
       // an activity announce and must leave the reading alone, while a settle
@@ -1955,6 +1981,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     delegatesOut,
     settleSummaries,
     quietSettles,
+    agentNotices,
     deadRequestKeys,
     pendingScrollRef,
     sawTerminalRef,

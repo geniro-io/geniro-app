@@ -948,6 +948,7 @@ export function Chats({
     delegatesOut,
     settleSummaries,
     quietSettles,
+    agentNotices,
     deadRequestKeys,
     pendingScrollRef,
     sawTerminalRef,
@@ -6846,17 +6847,18 @@ export function Chats({
   );
 
   /**
-   * Whether this run still has a DETACHED command out — the reading that says
-   * an ending might yet be undone, for {@link useRunNotifications}.
+   * How many DETACHED commands this run has out — the reading that decides
+   * whether a finished turn is announced by itself, for
+   * {@link useRunNotifications}.
    *
-   * The same `shellsOut` the badge reads, deliberately: the badge and the
-   * banner are then disagreeing about nothing, they are answering two different
-   * questions off one fact — "something this thread started is running" and
-   * "so this ending may not be one".
+   * The run row's own count, the one the Terminals chip shows and the badge's
+   * `shellsOut` is derived from: the badge and the banner then disagree about
+   * nothing, answering two questions off one fact — "something this thread
+   * started is running" and "so this ending may not be the agent finishing".
    */
-  const runHasShellsOut = useCallback(
-    (run: ChatRun): boolean => shellsOut.has(run.id),
-    [shellsOut],
+  const runShellsOpen = useCallback(
+    (run: ChatRun): number => run.shellsOpen,
+    [],
   );
 
   const notificationLabel = useCallback(
@@ -6886,7 +6888,10 @@ export function Chats({
     // A thread with a command still out may not be finished at all: the agent
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
     // The same reading the badge uses for its own shells word — see the hook.
-    deferEnding: runHasShellsOut,
+    shellsOpenOf: runShellsOpen,
+    // What the agent said itself, with `notify_user` — the one way a finished
+    // agent that left something running can be announced at all.
+    notices: agentNotices,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on

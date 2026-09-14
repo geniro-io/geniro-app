@@ -5,7 +5,39 @@ const settled = (status: 'completed' | 'failed') =>
   ({ runId: 'r1', kind: 'turn-end', status }) as const;
 
 import type { RunStatusKind } from '../chats/run-status';
-import { diffRunNotifications, notificationBody } from './run-notifications';
+import {
+  agentNoticeBody,
+  announcesEnding,
+  diffRunNotifications,
+  notificationBody,
+} from './run-notifications';
+
+describe('announcesEnding', () => {
+  it('announces an ending with nothing left running', () => {
+    expect(announcesEnding(0)).toBe(true);
+  });
+
+  it('does not announce one while any background command runs — the agent may be waiting on it', () => {
+    expect(announcesEnding(1)).toBe(false);
+    expect(announcesEnding(3)).toBe(false);
+  });
+});
+
+describe('agentNoticeBody', () => {
+  it("is the agent's own sentence", () => {
+    expect(agentNoticeBody('The dev server is up at :3000.')).toBe(
+      'The dev server is up at :3000.',
+    );
+  });
+
+  it('keeps a multi-line message to its first readable line', () => {
+    expect(agentNoticeBody('## Done\n\nThe server is up.')).toBe('Done');
+  });
+
+  it('falls back to a plain sentence when the message has nothing readable', () => {
+    expect(agentNoticeBody('```\n```')).toBe('The agent is done.');
+  });
+});
 
 const reading = (
   entries: Record<string, RunStatusKind>,

@@ -42,6 +42,7 @@ import {
   type HostGalleryOutcome,
   type HostMetrics,
   type HostMetricsOutcome,
+  type HostNotifyOutcome,
   type HostPatch,
   type HostPatchOutcome,
   type HostPlan,
@@ -76,6 +77,7 @@ import { isHostComparisonCall } from '../utils/host-comparison';
 import { isHostFindingsCall } from '../utils/host-findings';
 import { isHostGalleryCall } from '../utils/host-gallery';
 import { isHostMetricsCall } from '../utils/host-metrics';
+import { isHostNotifyCall } from '../utils/host-notify';
 import { isHostPatchCall } from '../utils/host-patch';
 import { isHostPlanCall } from '../utils/host-plan';
 import { hostMcpServerName, isHostQuestionCall } from '../utils/host-question';
@@ -119,6 +121,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -476,6 +479,7 @@ export class ChatService implements OnModuleInit {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly notices: NotifyBroker,
     private readonly callTokens: CallTokenRegistry,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -3281,6 +3285,9 @@ export class ChatService implements OnModuleInit {
         isHostFindingsCall(hostServerName, toolName) ||
         isHostChartCall(hostServerName, toolName) ||
         isHostGalleryCall(hostServerName, toolName) ||
+        // The notify tool, on the render family's reading: a banner the agent
+        // asks for is not something a permission card meaningfully guards.
+        isHostNotifyCall(hostServerName, toolName) ||
         // The patch tool auto-approves TOO, and the reason is worth stating
         // because the opposite looks right: this tool writes to disk, so surely
         // it should be gated? It IS — by its own card. Two different gates were
@@ -4096,6 +4103,18 @@ export class ChatService implements OnModuleInit {
         return { status: 'drawn', images: gallery.images.length };
       };
       /**
+       * geniro's own notification channel — the agent telling the user,
+       * outside the app, that it is done (`HOST_NOTIFY_TOOL`).
+       *
+       * Writes no row. The message rides the client-wide `run_status`
+       * broadcast, which is what reaches a window not looking at this chat —
+       * and a notification is only ever for that window.
+       */
+      const notifyUser = (message: string): Promise<HostNotifyOutcome> => {
+        this.bus.publishRunStatus({ runId, status: null, notify: message });
+        return Promise.resolve({ status: 'sent' });
+      };
+      /**
        * geniro's own patch channel: the agent proposes a change it has NOT
        * made, the user sees the diff with Apply and Reject, and this writes the
        * file if they accept.
@@ -4385,6 +4404,9 @@ export class ChatService implements OnModuleInit {
       const disposeGallerist = mcpEndpoint
         ? this.galleries.register(runId, SINGLE_AGENT_NODE, drawGallery)
         : null;
+      const disposeNotifier = mcpEndpoint
+        ? this.notices.register(runId, SINGLE_AGENT_NODE, notifyUser)
+        : null;
       // Idempotent by construction — each disposer only deletes the entry it
       // installed — which is what lets the settle path call it for ORDERING
       // (before the sweep) while the two failure paths call it for COVERAGE,
@@ -4398,6 +4420,7 @@ export class ChatService implements OnModuleInit {
         disposeScorer?.();
         disposeComparer?.();
         disposeGallerist?.();
+        disposeNotifier?.();
       };
       // ZERO the last turn's running bill before this one's first request can
       // report. It belongs HERE rather than at the settle for the reason the

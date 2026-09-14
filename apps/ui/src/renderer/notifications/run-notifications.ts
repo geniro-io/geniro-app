@@ -97,6 +97,47 @@ export function diffRunNotifications(
 }
 
 /**
+ * Whether a finished turn's ending is announced BY ITSELF — only when nothing
+ * the agent started in the background is still running.
+ *
+ * REPORTED as "он сам 2 или 3 раза остановился, потому что просто ждет
+ * завершения каких-то процессов… и в каждом из этих случаев он мне отправляет
+ * false positive-нотификацию": an agent routinely ends its turn WAITING on a
+ * command it just backgrounded — a test run, a build — and the CLI opens a turn
+ * of its own the moment that command reports. That later turn's ending is the
+ * real one, and it is announced like any other.
+ *
+ * Nothing on the wire tells a wait from a finished agent that left a dev server
+ * up — measured on claude 2.1.270, the CLI reports `idle` in both and its task
+ * frames carry only the command — and two earlier answers guessed: a ten-second
+ * hold, then a launch-time window. Both were rejected as crutches. So the rule
+ * decides only the case it can decide, and the other is the AGENT's to state:
+ * a finished agent leaving something running calls `notify_user`
+ * ({@link AgentNotice}), which is posted as its own banner.
+ */
+export function announcesEnding(shellsOpen: number): boolean {
+  return shellsOpen === 0;
+}
+
+/**
+ * A notification the AGENT asked for — its `notify_user` call, as the daemon
+ * broadcast it (`RunStatusEvent.notify`).
+ *
+ * `id` is assigned on arrival and only ever grows, which is what keeps one
+ * notice from being posted twice however often the list re-renders.
+ */
+export interface AgentNotice {
+  id: number;
+  runId: string;
+  message: string;
+}
+
+/** The banner body for an agent's own notification: its message, on one line. */
+export function agentNoticeBody(message: string): string {
+  return oneLine(message) ?? 'The agent is done.';
+}
+
+/**
  * The line under the thread's name.
  *
  * Worded from the kind and the status it landed in, so a failure does not

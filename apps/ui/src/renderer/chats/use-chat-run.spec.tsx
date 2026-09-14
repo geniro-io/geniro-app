@@ -491,6 +491,37 @@ describe('useChatRun', () => {
     expect(r2.status).toBe(run2.status);
   });
 
+  it('applies a task-list announce, which carries no status and nothing else', async () => {
+    // REPORTED as "tasks wasnt synced": the shelf's chip read the run row's
+    // `taskList`, and the daemon's capture announces it alone (`status: null`),
+    // so the row kept the list it was loaded with while the agent worked on.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    const taskList = [
+      {
+        nodeId: null,
+        callId: null,
+        tasks: [
+          {
+            id: '1',
+            title: 'Case insights',
+            status: 'completed',
+            activeForm: null,
+          },
+        ],
+      },
+    ] as RunStatusEvent['taskList'];
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, taskList } as RunStatusEvent);
+    });
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.taskList).toEqual(
+      taskList,
+    );
+  });
+
   it('keeps the preview a WORDLESS settle would otherwise blank', async () => {
     // `null` clears the notification's sentence — a turn that said nothing must
     // not re-announce the previous one's words — but the preview is the

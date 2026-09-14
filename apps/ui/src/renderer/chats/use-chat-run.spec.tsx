@@ -522,6 +522,125 @@ describe('useChatRun', () => {
     );
   });
 
+  it('re-reads the whole listing on reconnect, even with no thread open', async () => {
+    // Every client-wide broadcast sent while the socket was down is lost and
+    // announced only on its transition — so a thread that settled during a
+    // laptop's sleep read `running` in the sidebar for good.
+    const { client, fireReconnect } = makeClient();
+    const harness = await mount(client);
+    const before = chatApi.listChats.mock.calls.length;
+
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, status: 'completed', holdingFor: 0 },
+      run2,
+    ]);
+    await act(async () => {
+      fireReconnect();
+    });
+
+    expect(chatApi.listChats.mock.calls.length).toBe(before + 1);
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('keeps the daemon’s newer `running` when a thread opens on an older ending', async () => {
+    // The CLI thinking off-turn restates the run as `running` without writing
+    // a row, so the transcript still ends on the previous turn's
+    // `turn_complete`. Opening the thread wrote `completed` over the header,
+    // composer and sidebar of an agent that was working.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, status: 'running', updatedAt: '2026-09-14T10:00:05.000Z' },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      { ...turnEnd('r1', 1), createdAt: '2026-09-14T10:00:00.000Z' },
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
+      'running',
+    );
+  });
+
+  it('still settles a stale `running` row whose last word is older than the ending', async () => {
+    // The case the replay reconcile exists for — a settle broadcast this
+    // window never heard — must keep working under the guard above.
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, status: 'running', updatedAt: '2026-09-14T09:59:00.000Z' },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      { ...turnEnd('r1', 1), createdAt: '2026-09-14T10:00:00.000Z' },
+    ]);
+    const { client } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.status).toBe(
+      'completed',
+    );
+  });
+
+  it('clears the row’s context count for a LIVE compaction, never for a replayed one', async () => {
+    // Replayed history is already applied to the daemon's own row, which may
+    // hold a figure measured since. Clearing the copy on every activation of a
+    // thread with an old compaction in its page left the ring saying "measured
+    // on the next message" over a known count.
+    const compaction = (seq: number): ChatItem => ({
+      id: `r1-c${seq}`,
+      runId: 'r1',
+      nodeId: null,
+      seq,
+      kind: 'system',
+      role: null,
+      payload: { message: 'compacted', conversationReplaced: true },
+      createdAt: 'now',
+    });
+    chatApi.listChats.mockResolvedValue([
+      { ...run1, contextTokens: 462_000 },
+      run2,
+    ]);
+    chatApi.listRunItems.mockResolvedValue([
+      compaction(1),
+      msg('r1', 2, 'user', 'go'),
+    ]);
+    const { client, emitItem } = makeClient();
+    const harness = await mount(client);
+    await open(harness, 'r1');
+
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.contextTokens).toBe(
+      462_000,
+    );
+
+    await act(async () => {
+      emitItem(compaction(3));
+    });
+    expect(
+      harness.state().runs.find((r) => r.id === 'r1')?.contextTokens,
+    ).toBeNull();
+  });
+
+  it('keeps the run row’s `holdingFor` current from the broadcast', async () => {
+    // The queue's replay decision reads the ROW's copy; frozen at the listing
+    // it drained a message into a turn that had started since, or held one
+    // behind a hold that had ended.
+    const { client, emitRunStatus } = makeClient();
+    const harness = await mount(client);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, holdingFor: 2 });
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.holdingFor).toBe(2);
+
+    await act(async () => {
+      emitRunStatus({ runId: 'r1', status: null, holdingFor: 0 });
+    });
+    expect(harness.state().runs.find((r) => r.id === 'r1')?.holdingFor).toBe(0);
+  });
+
   it('moves a background thread’s preview MID-TURN, not only when the turn ends', async () => {
     // The settle-time fix above still left the reported "still i see here
     // outdated last llm message. As soon as i click on thread - it will be

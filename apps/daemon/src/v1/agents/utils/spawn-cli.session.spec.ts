@@ -2,12 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { FakeChild, fakeSpawn } from '../__tests__/fake-child';
 import type { AgentEvent, TurnIo } from '../adapters/adapter.types';
-import {
-  HELD_TERMINAL_GRACE_MS,
-  runCliSession,
-  runHeadlessCli,
-  type SessionLogger,
-} from './spawn-cli';
+import { runCliSession, runHeadlessCli, type SessionLogger } from './spawn-cli';
 
 const noopMapper = (): AgentEvent[] => [];
 
@@ -50,7 +45,14 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
       toolUses: number | null;
       durationMs: number | null;
     };
+    /** The CLI announcing its session state, as claude's mapper reads it. */
+    state?: 'idle' | 'running';
+    /** The unit was started by a DELEGATE (claude's `owned_by_subagent`). */
+    owned?: boolean;
   };
+  if (row.state !== undefined) {
+    return [{ type: 'session_state', idle: row.state === 'idle' }];
+  }
   if (typeof row.work === 'string' && row.phase !== undefined) {
     return [
       {
@@ -61,6 +63,7 @@ const resultOnDone = (obj: unknown): AgentEvent[] => {
         toolCallId: row.call ?? null,
         outcome: row.outcome,
         usage: row.spent,
+        ...(row.owned === true ? { ownedByDelegate: true as const } : {}),
       },
     ];
   }
@@ -1038,26 +1041,17 @@ describe('runHeadlessCli keeps the one-turn contract', () => {
  */
 
 /**
- * Report a unit and let the released hold's grace expire.
+ * Report a unit and have the CLI announce it is idle.
  *
- * A release no longer settles the turn on the spot: the CLI is about to open a
- * continuation (that is how it learns a delegate finished), so the hold stays
- * open for {@link HELD_TERMINAL_GRACE_MS} to give the existing discard rule a
- * chance to see it — see `spawn-cli.ts`. Every case here that expects the turn
- * to END on a report has to let that window pass, and the ones that expect it
- * to CONTINUE deliberately do not.
+ * For a CLI that announces its state the report alone does not settle a held
+ * turn — its continuation's result or its `idle` does (`onSessionState` in
+ * `spawn-cli.ts`). Every case here that expects the turn to END on a report
+ * sends both, and the ones that expect it to CONTINUE do not.
  */
-async function reportAndLetTheGracePass(
-  child: FakeChild,
-  work: string,
-): Promise<void> {
-  vi.useFakeTimers();
-  try {
-    line(child, { work, phase: 'settled' });
-    await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
-  } finally {
-    vi.useRealTimers();
-  }
+async function reportAndGoIdle(child: FakeChild, work: string): Promise<void> {
+  line(child, { work, phase: 'settled' });
+  line(child, { state: 'idle' });
+  await Promise.resolve();
 }
 
 describe('which delegate a render card can be credited to', () => {
@@ -1081,7 +1075,7 @@ describe('which delegate a render card can be credited to', () => {
 
     expect(handle!.attributableDelegate()).toBe('toolu_launch');
 
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
   });
 
@@ -1106,7 +1100,7 @@ describe('which delegate a render card can be credited to', () => {
 
     line(child, { done: true });
     await Promise.resolve();
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
   });
 
@@ -1132,7 +1126,7 @@ describe('which delegate a render card can be credited to', () => {
     expect(handle!.attributableDelegate()).toBeNull();
 
     line(child, { work: 'a', phase: 'settled' });
-    await reportAndLetTheGracePass(child, 'b');
+    await reportAndGoIdle(child, 'b');
     await handle?.done;
   });
 
@@ -1146,7 +1140,7 @@ describe('which delegate a render card can be credited to', () => {
 
     expect(handle!.attributableDelegate()).toBeNull();
 
-    await reportAndLetTheGracePass(child, 'nameless');
+    await reportAndGoIdle(child, 'nameless');
     await handle?.done;
   });
 
@@ -1171,7 +1165,7 @@ describe('which delegate a render card can be credited to', () => {
     expect(handle!.attributableDelegate()).toBeNull();
 
     line(child, { work: 'named', phase: 'settled' });
-    await reportAndLetTheGracePass(child, 'nameless');
+    await reportAndGoIdle(child, 'nameless');
     await handle?.done;
   });
 
@@ -1179,7 +1173,6 @@ describe('which delegate a render card can be credited to', () => {
     // Why the lookup goes THROUGH the live set: the delegate map deliberately
     // outlives a delegate's end so a late cost report can still be booked, so
     // reading it alone goes on naming a delegate that has finished.
-    vi.useFakeTimers();
     const { session, child } = openSession();
     const handle = session.startTurn({ onEvent: () => {} });
 
@@ -1196,12 +1189,37 @@ describe('which delegate a render card can be credited to', () => {
     line(child, { work: 'task-1', phase: 'settled' });
     expect(handle!.attributableDelegate()).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
+    line(child, { state: 'idle' });
     await handle?.done;
   });
 });
 
 describe('a turn whose background work outlives its result', () => {
+  it('announces nothing for a command a DELEGATE started, at either end', async () => {
+    // REPORTED as "we should not show terminals from subagents": claude marks
+    // such a command `owned_by_subagent` and names no parent, and its open used
+    // to reach the run's shell list and count as the main thread's.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, {
+      work: 'b-owned',
+      phase: 'started',
+      unit: 'other',
+      call: 'toolu_bash',
+      owned: true,
+    });
+    line(child, { work: 'b-owned', phase: 'settled' });
+    line(child, { done: true });
+    await handle?.done;
+
+    expect(
+      events.some((e) => e.type === 'shell_open' || e.type === 'shell_info'),
+    ).toBe(false);
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
   it('holds for a DELEGATE and not for a backgrounded command', async () => {
     // The hold buys a turn for the agent's OWN continuation to land in, which
     // is a thing a delegate triggers and a shell does not: a shell's end is a
@@ -1254,7 +1272,7 @@ describe('a turn whose background work outlives its result', () => {
       isError: false,
     });
 
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
 
     expect(events.at(-1)).toEqual(COMPLETE);
@@ -1280,30 +1298,66 @@ describe('a turn whose background work outlives its result', () => {
       settled = true;
     });
 
-    vi.useFakeTimers();
-    try {
-      line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
-      line(child, { done: true });
-      line(child, { work: 'task-1', phase: 'settled' });
-      // Halfway through the window — nothing has settled yet, which is the
-      // whole change: before it, the terminal went out on the report.
-      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS / 2);
-      expect(settled).toBe(false);
-      expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
+    line(child, { state: 'running' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    line(child, { work: 'task-1', phase: 'settled' });
+    await Promise.resolve();
+    // Nothing has settled on the report, which is the whole change: before, the
+    // terminal went out on it.
+    expect(settled).toBe(false);
+    expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
 
-      // …and then the continuation the report triggered begins.
-      line(child, { says: 'Explorer returned with substantial findings.' });
-      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS * 2);
-    } finally {
-      vi.useRealTimers();
-    }
+    // …and then the continuation the report triggered begins.
+    line(child, { says: 'Explorer returned with substantial findings.' });
+    await Promise.resolve();
 
-    // The held result is DROPPED, not merely delayed: it describes a turn that
-    // has since continued, so the turn now ends on its NEXT terminal.
+    // The held result is DROPPED: it describes a turn that has since continued,
+    // so the turn now ends on its NEXT terminal.
     expect(settled).toBe(false);
     expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
 
     line(child, { done: true });
+    await handle?.done;
+    expect(events.at(-1)).toEqual(COMPLETE);
+  });
+
+  it('settles the moment the CLI goes idle when no continuation follows — no timer', async () => {
+    // The genuine ending: the delegate reported and the agent had nothing more
+    // to say. A ten-second grace used to stand here, and every such ending's
+    // badge and notification arrived that much late. Real timers throughout,
+    // so a wait of any length would time this case out.
+    const events: AgentEvent[] = [];
+    let settled = false;
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+    void handle?.done.then(() => {
+      settled = true;
+    });
+
+    line(child, { state: 'running' });
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true, finalText: 'LAUNCHED' });
+    line(child, { work: 'task-1', phase: 'settled' });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    line(child, { state: 'idle' });
+    await handle?.done;
+    expect(settled).toBe(true);
+    expect(events.at(-1)).toEqual({ ...COMPLETE, finalText: 'LAUNCHED' });
+  });
+
+  it('releases on the report for a CLI that has never announced its state', async () => {
+    // Nothing else would ever say that turn is over.
+    const events: AgentEvent[] = [];
+    const { session, child } = openSession();
+    const handle = session.startTurn({ onEvent: (e) => events.push(e) });
+
+    line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
+    line(child, { done: true });
+    line(child, { work: 'task-1', phase: 'settled' });
+
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1319,7 +1373,7 @@ describe('a turn whose background work outlives its result', () => {
 
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
 
     expect(events.at(-1)).toEqual(COMPLETE);
@@ -1367,7 +1421,7 @@ describe('a turn whose background work outlives its result', () => {
     // …and the stale result is GONE rather than merely unannounced: releasing
     // it when the last unit reports would settle the turn in the middle of the
     // answer the agent is now writing.
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
@@ -1423,7 +1477,7 @@ describe('a turn whose background work outlives its result', () => {
     ]);
     expect(events.some((e) => e.type === 'turn_complete')).toBe(false);
 
-    await reportAndLetTheGracePass(child, 'forever');
+    await reportAndGoIdle(child, 'forever');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1436,7 +1490,7 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { work: 'task-2', phase: 'started', unit: 'agent' });
     line(child, { done: true });
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await Promise.resolve();
 
     // Held, and the count came DOWN as the first unit reported — the sentence
@@ -1446,7 +1500,7 @@ describe('a turn whose background work outlives its result', () => {
       { type: 'turn_held', open: 1 },
     ]);
 
-    await reportAndLetTheGracePass(child, 'task-2');
+    await reportAndGoIdle(child, 'task-2');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -1460,8 +1514,7 @@ describe('a turn whose background work outlives its result', () => {
 
     line(child, { work: 'task-1', phase: 'started', unit: 'agent' });
     line(child, { done: true });
-    // Deliberately NOT graced: a stray closes nothing, so it releases nothing
-    // and there is no window to wait out.
+    // A stray closes nothing, so it releases nothing.
     line(child, { work: 'somebody-elses-task', phase: 'settled' });
     await Promise.resolve();
 
@@ -1472,15 +1525,9 @@ describe('a turn whose background work outlives its result', () => {
       { type: 'turn_held', open: 1 },
     ]);
 
-    vi.useFakeTimers();
-    try {
-      line(child, { work: 'task-1', phase: 'settled' });
-      // A second report for the same task must not release a second terminal.
-      line(child, { work: 'task-1', phase: 'settled' });
-      await vi.advanceTimersByTimeAsync(HELD_TERMINAL_GRACE_MS + 1);
-    } finally {
-      vi.useRealTimers();
-    }
+    line(child, { work: 'task-1', phase: 'settled' });
+    // A second report for the same task must not release a second terminal.
+    line(child, { work: 'task-1', phase: 'settled' });
     await handle?.done;
 
     expect(events.at(-1)).toEqual(COMPLETE);
@@ -1506,7 +1553,7 @@ describe('a turn whose background work outlives its result', () => {
     // announced ONCE: the second result did not re-enter the hold.
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
 
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
 
     expect(events.at(-1)).toEqual({ ...COMPLETE, finalText: 'LAUNCHED' });
@@ -2012,7 +2059,7 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
 
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
     expect(events.at(-1)).toEqual(COMPLETE);
   });
@@ -2030,7 +2077,7 @@ describe('a turn whose background work outlives its result', () => {
 
     expect(between.some((e) => e.type === 'turn_complete')).toBe(false);
 
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     expect(between.at(-1)).toEqual(COMPLETE);
   });
 
@@ -2055,7 +2102,7 @@ describe('a turn whose background work outlives its result', () => {
     line(child, { done: true });
     await Promise.resolve();
     expect(events).toEqual([{ type: 'turn_held', open: 1 }]);
-    await reportAndLetTheGracePass(child, 'task-1');
+    await reportAndGoIdle(child, 'task-1');
     await handle?.done;
   });
 

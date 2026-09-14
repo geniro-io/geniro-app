@@ -24,6 +24,8 @@ import {
   CLAUDE_PERMISSION_CHANNEL_FAILURE_MARKERS,
   CLAUDE_PERMISSION_CHANNEL_FAILURE_NOTICE,
   CLAUDE_RUN_FAILED_MESSAGE,
+  CLAUDE_SESSION_IDLE_STATE,
+  CLAUDE_SESSION_STATE_SUBTYPE,
   CLAUDE_STATUS_SUBTYPE,
   CLAUDE_TASK_NOTIFICATION_SUBTYPE,
   CLAUDE_TASK_PROGRESS_SUBTYPE,
@@ -600,6 +602,19 @@ function mapClaudeLine(
         // guessed at.
         return [];
       }
+      if (asString(root.subtype) === CLAUDE_SESSION_STATE_SUBTYPE) {
+        // Only whether the CLI is IDLE is acted on — `running` and
+        // `requires_action` both say it is not. See the constant for the probe.
+        const state = asString(root.state);
+        return state === null
+          ? []
+          : [
+              {
+                type: 'session_state',
+                idle: state === CLAUDE_SESSION_IDLE_STATE,
+              },
+            ];
+      }
       if (asString(root.subtype) === CLAUDE_TASK_STARTED_SUBTYPE) {
         const id = asString(root.task_id);
         if (id === null) {
@@ -622,6 +637,9 @@ function mapClaudeLine(
                 ? 'agent'
                 : 'other',
             toolCallId,
+            ...(root.owned_by_subagent === true
+              ? { ownedByDelegate: true as const }
+              : {}),
           },
         ];
         // A workflow's ANCHOR, and the only line that ever states its name: the

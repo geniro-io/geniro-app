@@ -582,7 +582,11 @@ export function computeAgentActivity(
       // a real figure with it made the meter read `0 of 200k` mid-conversation
       // — and the live plane already treats a non-positive count as absent
       // (`live-text.ts`), so accepting it only here was the odd one out.
-      const context = usage.contextTokens ?? usage.inputTokens;
+      // `contextTokens` ALONE. `inputTokens` is the turn's fresh input — a
+      // figure like 12 — and the daemon sends a null count precisely when the
+      // CLI reported no per-request breakdown, so falling back to it overwrote
+      // a real reading with `12 of 1M · 0%`.
+      const context = usage.contextTokens;
       if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
       }

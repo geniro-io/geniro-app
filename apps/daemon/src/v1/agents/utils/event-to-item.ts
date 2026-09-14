@@ -47,6 +47,8 @@ function mapEventBody(event: AgentEvent): MappedItem | null {
       return null; // captured into the MCP-harvest store, not a transcript item
     case 'turn_model':
       return null; // seeds the live plane's window lookup, not a transcript item
+    case 'session_state':
+      return null; // turn plumbing consumed by spawn-cli, never forwarded as a row
     case 'unhandled_control':
       return null; // logged and dropped by AgentAdapter.start — a diagnostic, not a row
     case 'context_compacted':

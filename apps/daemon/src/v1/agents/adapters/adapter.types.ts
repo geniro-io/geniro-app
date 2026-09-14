@@ -415,6 +415,20 @@ export interface AgentTask {
    * two halves cannot be paired without state the mapper deliberately lacks.
    */
   activeForm: string | null;
+  /**
+   * The CLI REMOVED this task — set on a PATCH row only. claude's `TaskUpdate`
+   * takes `status: "deleted"` (its own input schema, read out of the 2.1.270
+   * bundle), and reading that as an unrecognised status left the row on screen
+   * under the unknown glyph, still counted in the total.
+   */
+  deleted?: true;
+  /**
+   * A PATCH row that states no status at all — `TaskUpdate`'s `status` is
+   * optional, and a call that only renames a task omits it. The consumer keeps
+   * the status it had; without this the patch's null read as "moved somewhere
+   * unknown" and a finished task lost its tick.
+   */
+  keepsStatus?: true;
 }
 
 /**
@@ -1032,7 +1046,7 @@ type AgentEventBody =
        * as the tool call that made it, which is the reason `shell_info` was
        * settle-only in the first place. What it carries instead is the one thing
        * no row can — that this run has a command out RIGHT NOW — so the daemon
-       * can publish a live count per run (`ChatService.shellRuns`).
+       * can publish a live count per run (`BackgroundWorkCounts`).
        *
        * That count exists because the renderer used to fold the same question
        * out of the OPEN thread's transcript, which is answerable for one run and
@@ -1156,6 +1170,15 @@ type AgentEventBody =
        */
       unit: 'agent' | 'other';
       /**
+       * The unit was started BY a delegate rather than by the agent itself —
+       * claude's `owned_by_subagent`, the only owner fact its `task_started`
+       * line carries (read out of the 2.1.270 bundle: no parent id). A
+       * delegate's own background command belongs to that delegate's block,
+       * not to the main thread's terminals, so `runCliSession` announces
+       * nothing for it.
+       */
+      ownedByDelegate?: true;
+      /**
        * The tool call that launched it, when the CLI ties one to it — which is
        * what joins this unit to the sub-agent block already in the transcript,
        * since that block is keyed by exactly that id.
@@ -1257,6 +1280,20 @@ type AgentEventBody =
        */
       type: 'turn_model';
       model: string;
+    }
+  | {
+      /**
+       * The CLI's own statement of whether it is working, for a CLI that makes
+       * one (claude, under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`). `idle` is
+       * its authoritative turn-over: probed on claude 2.1.270, it is NOT sent
+       * while a background agent the turn launched is still due to report, and
+       * it is sent only after the continuation that report triggers has ended.
+       * Consumed by `spawn-cli` to end a held turn without a timer.
+       *
+       * EPHEMERAL — never a transcript row.
+       */
+      type: 'session_state';
+      idle: boolean;
     }
   | {
       /**

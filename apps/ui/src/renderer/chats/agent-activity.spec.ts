@@ -143,14 +143,22 @@ describe('computeAgentActivity', () => {
     expect(activity.get(CHAT_AGENT_KEY)?.contextTokens).toBe(8_400);
   });
 
-  it('falls back to inputTokens when a CLI reports no contextTokens', () => {
+  it('never reads a turn’s fresh inputTokens as the context figure', () => {
+    // REVERSES the old "falls back to inputTokens" pin. The daemon sends a null
+    // count precisely when a CLI reported no per-request breakdown, and
+    // `inputTokens` is one request's fresh input — so the fallback replaced a
+    // real reading with `42 of 1M · 0%`.
     const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 120_000, costUsd: null },
+        stopReason: null,
+      }),
       item('turn_complete', 'worker', {
         usage: { inputTokens: 42, costUsd: null },
         stopReason: null,
       }),
     ]);
-    expect(activity.get('worker')?.contextTokens).toBe(42);
+    expect(activity.get('worker')?.contextTokens).toBe(120_000);
     expect(activity.get('worker')?.spentUsd).toBeNull();
   });
 

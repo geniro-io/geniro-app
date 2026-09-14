@@ -2364,7 +2364,7 @@ export function groupTranscript(
   // The running fold per thread, and the card currently open for it. Kept per
   // thread because both CLIs number tasks from 1, so a delegate's task `1` and
   // the main agent's are different tasks.
-  const taskLists = new Map<string | null, TaskAnnouncement[]>();
+  const taskLists = new Map<string, TaskAnnouncement[]>();
   const openTaskCards = new Map<string, TaskListEntry>();
   const pairsByCallId = new Map<string, ToolPair>();
   // Keyed by node AND by originating thread, so a sub-agent's calls collapse
@@ -2613,9 +2613,14 @@ export function groupTranscript(
         continue;
       }
       const thread = subagentIdOf(item);
-      const history = taskLists.get(thread) ?? [];
+      // Keyed by NODE and thread, the pair the cards themselves are keyed by.
+      // By thread alone every workflow node shared the main-thread history, so
+      // an Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1
+      // on the Engineer's card while the side panel said otherwise.
+      const historyKey = groupKey(item);
+      const history = taskLists.get(historyKey) ?? [];
       history.push(announcement);
-      taskLists.set(thread, history);
+      taskLists.set(historyKey, history);
       // Folded from the thread's WHOLE history rather than this run's rows: a
       // run holding one `TaskUpdate` knows about one task, and the list is only
       // ever the fold of everything before it.
@@ -2863,6 +2868,20 @@ function closeGroupsBeforeTurnEnds(
 }
 
 /**
+ * The block status a `call_result` envelope states. TWIN PARSER: the broker
+ * (`call-broker.service.ts`) writes `{status: 'ok' | 'error', error}`, and a
+ * cancel's error carries the `CALLEE_CANCELLED` code.
+ */
+function callResultStatus(payload: unknown): CallBlockEntry['status'] {
+  if (payloadString(payload, 'status') === 'ok') {
+    return 'completed';
+  }
+  return payloadString(payload, 'error')?.startsWith('CALLEE_CANCELLED')
+    ? 'cancelled'
+    : 'failed';
+}
+
+/**
  * Assemble one call's block: status items drive the header's live status
  * (they never render as rows — the old "▸ B started"/"✓ B finished" pair
  * folds into the header icon), everything else re-folds recursively (tool
@@ -2886,6 +2905,16 @@ function buildCallBlock(
       continue;
     }
     inner.push(item);
+  }
+  // The callee's status rows are the usual source, but a call can settle with
+  // none: a fan-out's queued call cancelled before its turn began gets only the
+  // broker's `call_result`. That envelope is the call's own last word, so an
+  // unsettled header yields to it instead of spinning under a finished call.
+  if (status === 'pending' || status === 'running') {
+    const settle = shell.bucket.find((item) => item.kind === 'call_result');
+    if (settle) {
+      status = callResultStatus(settle.payload);
+    }
   }
   // A COMPLETED sub-turn's last message is the call's RESULT — pull it out
   // of the flow so the block can frame it (request at the top, result at

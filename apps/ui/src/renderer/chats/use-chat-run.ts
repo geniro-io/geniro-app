@@ -603,7 +603,16 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
             return run;
           }
           const next = { ...run };
-          if (settled !== null && run.status === 'running') {
+          // …and only when that ending is NEWER than the row's own last word. A
+          // row the daemon restated as `running` after it — the CLI thinking
+          // off-turn, which writes no transcript row — is fresher than any tail
+          // replayed here, and overwriting it put `completed` on the header,
+          // the composer and the sidebar of an agent that was still working.
+          if (
+            settled !== null &&
+            run.status === 'running' &&
+            !(Date.parse(run.updatedAt) > Date.parse(lastItem.createdAt))
+          ) {
             next.status = settled;
           }
           if (previewText !== null) {
@@ -769,11 +778,18 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         }
         return next;
       });
-      setRuns((prev) =>
-        prev.map((run) =>
-          run.id === item.runId ? { ...run, contextTokens: null } : run,
-        ),
-      );
+      // The ROW only for a compaction happening NOW. A replayed one is history
+      // the daemon has already applied to its own row — which may well hold a
+      // figure measured since — and clearing this window's copy on every
+      // activation of a thread with an old compaction in its page left the
+      // ring saying "measured on the next message" over a known count.
+      if (live) {
+        setRuns((prev) =>
+          prev.map((run) =>
+            run.id === item.runId ? { ...run, contextTokens: null } : run,
+          ),
+        );
+      }
     }
     // Only a RUN-level terminal item ends the working state — a workflow's
     // per-node turn_complete/error (nodeId set) must not re-enable the composer
@@ -1272,6 +1288,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // seq we rendered. addItem de-dupes, so an overlap with re-joined live items
     // is harmless.
     const unsubscribeReconnect = client.onReconnect((joinError) => {
+      // FIRST, and whether or not a thread is open. Every client-wide broadcast
+      // sent while the socket was down is gone — a background thread settling,
+      // a question opening, a hold ending, a shell or sub-agent count moving —
+      // and each is announced only on its TRANSITION, so nothing would ever
+      // repeat it: the sidebar kept `running` over a finished thread for good
+      // after a laptop's sleep. The listing restates all of them at once.
+      refreshRuns();
       const active = activeRunIdRef.current;
       if (!active) {
         return;
@@ -1510,7 +1533,8 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         opened !== undefined ||
         workedMs !== undefined ||
         toolCalls !== undefined ||
-        previewLine !== undefined
+        previewLine !== undefined ||
+        event.holdingFor !== undefined
       ) {
         setRuns((prev) =>
           prev.map((run) =>
@@ -1519,6 +1543,14 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
                   ...run,
                   ...(status !== null ? { status } : {}),
                   ...(parked !== undefined ? { awaiting: parked } : {}),
+                  // The ROW's copy too, not only the `holding` map: the queue's
+                  // replay decision (`queueMayDrainAfterReplay`) reads the row,
+                  // and a copy frozen at the load-time listing drained a queued
+                  // message into a turn that had since started, or held one
+                  // back behind a hold that had since ended.
+                  ...(event.holdingFor === undefined
+                    ? {}
+                    : { holdingFor: event.holdingFor }),
                   ...(at === undefined ? {} : { updatedAt: at }),
                   // Each SET independently: the daemon sends the pair on a
                   // settle, and either half is legitimately null there (a CLI

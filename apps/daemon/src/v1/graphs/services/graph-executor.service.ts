@@ -72,6 +72,10 @@ import {
   type WorkflowRun,
 } from '../../agents/utils/run-kind';
 import { writeRunStatus } from '../../agents/utils/run-status';
+import {
+  callSessionKey,
+  nodeSessionKey,
+} from '../../agents/utils/session-keys';
 import { createSessionIdSaver } from '../../agents/utils/session-saver';
 import {
   unanswerablePayload,
@@ -2378,9 +2382,9 @@ export class GraphExecutorService implements OnModuleInit {
       // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
-      const sessionKey = `${runId}::${
-        callContext ? `call:${callContext.conversationId}` : `node:${node.id}`
-      }`;
+      const sessionKey = callContext
+        ? callSessionKey(runId, callContext.conversationId)
+        : nodeSessionKey(runId, node.id);
       const handle: AgentTurnHandle = this.sessions.startTurn(
         sessionKey,
         adapter,

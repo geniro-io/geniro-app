@@ -304,7 +304,10 @@ describe('AgentsPanel', () => {
     // own live turns and is deliberately not what this caption counts. Each
     // call is an INSTANCE of the agent, drawn as its own block, so that is the
     // noun the caption counts in.
-    expect(worker.textContent).toContain('1 active · 2 instances');
+    expect(
+      worker.querySelector('[data-slot="agent-instances-caption"]')
+        ?.textContent,
+    ).toBe('Instances2· 1 running');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
     // they are legible without opening anything.
@@ -556,8 +559,8 @@ describe('AgentsPanel', () => {
     const worker = [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
       row.textContent?.includes('Worker'),
     )!;
-    const threads = [...worker.querySelectorAll('p')].find((p) =>
-      p.textContent?.includes('active'),
+    const threads = worker.querySelector(
+      '[data-slot="agent-instances-caption"]',
     )!;
     const tasks = worker.querySelector('[data-slot="agent-task-list"]')!;
 
@@ -2449,10 +2452,16 @@ describe('AgentsPanel — the instances of a called agent', () => {
     expect(second.textContent).not.toContain('pnpm build');
     expect(second.textContent).not.toContain('Write the lexer');
 
-    // Counted off the blocks: two of the three are still working.
-    expect(el.querySelector(CARD_SELECTOR)!.textContent).toContain(
-      '2 active · 3 instances',
-    );
+    // Counted off the blocks: two of the three are still working, and only
+    // those two are tinted as the live ones.
+    expect(
+      el.querySelector('[data-slot="agent-instances-caption"]')?.textContent,
+    ).toBe('Instances3· 2 running');
+    expect(
+      [...el.querySelectorAll('[data-slot="agent-instance"][data-live]')].map(
+        (each) => each.getAttribute('data-instance-id'),
+      ),
+    ).toHaveLength(2);
   });
 
   it('says where each instance has got to, and what that instance alone has spent', () => {
@@ -2506,10 +2515,12 @@ describe('AgentsPanel — the instances of a called agent', () => {
       block(el, 'call-8')!.querySelector('[data-slot="agent-instance-brief"]')
         ?.textContent,
     ).toBe('Fix it — add the two missing guards\nThen re-run QA.');
-    // A call with no brief is titled by its id, with no tag repeating it.
+    // A call with no brief is titled by its id IN WORDS, with no tag repeating
+    // it — `call-10` is the broker's spelling, not a name.
     const bare = block(el, 'call-9')!;
     expect(bare.querySelector('[data-slot="thread-row-tag"]')).toBeNull();
-    expect(bare.textContent).toContain('call-9');
+    expect(bare.textContent).toContain('Call 9');
+    expect(bare.textContent).not.toContain('call-9');
     // …and with nothing said or measured, its second line still says its state.
     expect(
       bare.querySelector('[data-slot="agent-instance-latest"]')?.textContent,

@@ -2781,8 +2781,14 @@ describe('ChatService', () => {
         ),
       ).toBe(true);
 
-      // The NEXT turn opens on a fresh session carrying the summary — once.
+      // The NEXT turn opens on a fresh session carrying the summary — once —
+      // and on a NEW process: the kept one still holds the replaced session,
+      // and a later turn opened on it would carry the summary into the very
+      // conversation it replaced.
+      const opened = cursor.sessions.length;
       await service.sendMessage(run.id, 'now do it');
+      expect(cursor.sessions).toHaveLength(opened + 1);
+      expect(cursor.sessions[opened - 1]?.closed).toBe(true);
       const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
       expect(next.resumeSessionId).toBeNull();
       expect(next.prompt).toContain('we agreed on plan B');
@@ -2794,6 +2800,41 @@ describe('ChatService', () => {
       const third = cursor.start.mock.calls[2]?.[0] as AgentTurnInput;
       expect(third.prompt).toBe('and again');
       await turn(cursor, 'ok');
+    });
+
+    it('refuses a message until a replacing compaction has committed its summary', async () => {
+      // The run is freed before the finalizer finishes, and the finalizer is
+      // what commits the summary: a message started in between would resume
+      // the replaced session and be missing from the summary that follows.
+      const { service, cursor, runDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'cursor-agent',
+        cwd: dir,
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const store = runDao.setPendingContext.bind(runDao);
+      runDao.setPendingContext = async (id, context) => {
+        await gate;
+        await store(id, context);
+      };
+      await service.sendMessage(run.id, '/compact');
+      cursor.emit({ type: 'session', sessionId: 'sess-1' });
+      await turn(cursor, 'we agreed on plan B');
+
+      await expect(service.sendMessage(run.id, 'now do it')).rejects.toThrow(
+        /compacting its conversation/,
+      );
+      expect(cursor.start).toHaveBeenCalledTimes(1);
+
+      release();
+      await drain();
+      await service.sendMessage(run.id, 'now do it');
+      const next = cursor.start.mock.calls[1]?.[0] as AgentTurnInput;
+      expect(next.prompt).toContain('we agreed on plan B');
+      await turn(cursor, 'done');
     });
 
     it('abandons the compaction — and SAYS so — when the turn did not finish', async () => {

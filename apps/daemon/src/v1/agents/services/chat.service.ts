@@ -3111,6 +3111,19 @@ export class ChatService implements OnModuleInit {
     // the claim must stay the first thing that can be raced. A pure lookup
     // against this CLI's own static list — no probe, no await.
     const geniroCommand = this.adapterFor(run.agentKind).geniroCommandFor(text);
+    // Nor is a message handed to — or started behind — a geniro compaction. On
+    // a CLI whose compaction replaces the session, a follow-up interrupts the
+    // summary prompt and the reply to it is what gets committed as the summary;
+    // and that compaction is not over when its turn ends — its finalizer still
+    // commits the summary and retires the process, so a turn started in that
+    // window would resume the replaced session and be missing from the summary.
+    // Synchronous, so it cannot open a window ahead of the claim below.
+    if (this.compactingRuns.has(runId)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'the agent is compacting its conversation — your message goes out once it has',
+      );
+    }
     // Reserve the run synchronously BEFORE any further await — this closes the
     // check-then-act window where two concurrent messages would both pass the
     // busy check, share one `maxSeq` base, allocate colliding seq values (the
@@ -3133,16 +3146,6 @@ export class ChatService implements OnModuleInit {
         throw new ConflictException(
           'RUN_BUSY',
           `/${geniroCommand.name} needs the agent to be idle — wait for this turn to finish`,
-        );
-      }
-      // Nor is a message handed to a turn that IS a geniro command. On a CLI
-      // whose compaction replaces the session, a follow-up interrupts the
-      // summary prompt and the reply to it is what gets committed as the
-      // summary — the conversation is dropped for an answer to one message.
-      if (this.compactingRuns.has(runId)) {
-        throw new ConflictException(
-          'RUN_BUSY',
-          'the agent is compacting its conversation — your message goes out once it has',
         );
       }
       // A turn holds the run. That used to be the end of it — the message went
@@ -5290,10 +5293,13 @@ export class ChatService implements OnModuleInit {
           this.finalizing.delete(runId);
         }
       });
-      // On the TURN's end, not the finalizer's: the flag refuses follow-ups
-      // into the compaction turn, and a next turn can start while this one's
-      // finalizer is still running — its follow-ups must not read as refused.
-      void handle.done.finally(releaseCompaction);
+      // On the TURN's end for a compaction done in place, so a later turn's
+      // follow-ups are never refused on its account — but on the FINALIZER's
+      // for one that replaces the session, which is not over until the summary
+      // is committed and the process retired.
+      void (
+        geniroCommand?.replacesSession === true ? finalized : handle.done
+      ).finally(releaseCompaction);
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold
@@ -5457,6 +5463,10 @@ export class ChatService implements OnModuleInit {
     }
     await this.runDao.setPendingContext(runId, carried, em);
     await this.nodeStateDao.clearSessionId(runId, SINGLE_AGENT_NODE, em);
+    // Clearing the id is not enough on a KEPT process: a later turn is opened
+    // on the session it already holds, so the summary would be sent into the
+    // very conversation it replaced and the window would never shrink.
+    this.sessions.retire(runId, 'its conversation was compacted');
     // The conversation this run's context figure was measured on has just been
     // DISCARDED — the next turn opens a fresh session carrying the summary
     // above. REPORTED as "после компакта кружочек не обновляется, он всё ещё

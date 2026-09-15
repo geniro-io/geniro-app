@@ -60,7 +60,11 @@ export function autoCompactDue(
   if (full === null || full < percent) {
     return false;
   }
-  if (baselineTokens === null || reading.tokens === null || reading.window === null) {
+  if (
+    baselineTokens === null ||
+    reading.tokens === null ||
+    reading.window === null
+  ) {
     return true;
   }
   return (

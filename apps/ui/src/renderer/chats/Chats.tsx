@@ -2129,6 +2129,65 @@ export function Chats({
   }, [items, liveText]);
 
   /**
+   * Fetch the page before the oldest item on screen, and hold the reader's
+   * place while it lands. Three callers: the scroll listener, the notice's own
+   * button, and the fill effect below `transcriptEntries` — the last two exist
+   * because a transcript that does not overflow its pane can never be scrolled.
+   *
+   * Hold the reader's place. Prepending a page inserts rows ABOVE the viewport,
+   * which pushes everything they were reading down by exactly the height that
+   * arrived — so the scroll offset is moved by the same amount, and nothing
+   * appears to move at all.
+   *
+   * Over SEVERAL FRAMES, and that is the whole of a reported defect. The promise
+   * resolves when the state is set, not when React has committed the rows and
+   * the browser has laid them out — so a single correction here reads a
+   * `scrollHeight` that has barely moved, applies almost nothing, and the page
+   * then grows underneath the reader with nothing left to compensate. Measured
+   * in the running app on a 30k-row thread: the transcript grew 42,865px →
+   * 74,092px across one older page while `scrollTop` stayed put, which puts the
+   * reader 31,227px away from what they were reading. REPORTED as "он обрезает
+   * беседу почему-то" — the conversation had not been cut, they had been moved
+   * off it.
+   *
+   * `applied` is what makes re-running safe: each pass compensates only the
+   * growth it has not already paid for, so a page that arrives in three chunks
+   * is held three times rather than over-corrected once.
+   */
+  const pageOlder = useCallback(
+    async (scroller: HTMLElement): Promise<boolean> => {
+      const load = loadOlderRef.current;
+      if (load === null) {
+        return false;
+      }
+      const before = scroller.scrollHeight;
+      const grew = await load();
+      if (!grew) {
+        return false;
+      }
+      let frames = 0;
+      let applied = 0;
+      const hold = (): void => {
+        if (!scroller.isConnected) {
+          return;
+        }
+        const owed = scroller.scrollHeight - before - applied;
+        if (owed > 0) {
+          scroller.scrollTop += owed;
+          applied += owed;
+        }
+        frames += 1;
+        if (frames < OLDER_PAGE_HOLD_FRAMES) {
+          requestAnimationFrame(hold);
+        }
+      };
+      requestAnimationFrame(hold);
+      return true;
+    },
+    [],
+  );
+
+  /**
    * Keep the tail glued to the bottom when a block grows AFTER it rendered.
    *
    * The effect above runs once per React commit, which is too early for the
@@ -2182,48 +2241,7 @@ export function Chats({
         loadOlderRef.current !== null &&
         shouldLoadOlder(scroller, previousScrollTop)
       ) {
-        // Hold the reader's place. Prepending a page inserts rows ABOVE the
-        // viewport, which pushes everything they were reading down by exactly
-        // the height that arrived — so the scroll offset is moved by the same
-        // amount, and nothing appears to move at all.
-        //
-        // Over SEVERAL FRAMES, and that is the whole of a reported defect. The
-        // promise resolves when the state is set, not when React has committed
-        // the rows and the browser has laid them out — so a single correction
-        // here reads a `scrollHeight` that has barely moved, applies almost
-        // nothing, and the page then grows underneath the reader with nothing
-        // left to compensate. Measured in the running app on a 30k-row thread:
-        // the transcript grew 42,865px → 74,092px across one older page while
-        // `scrollTop` stayed put, which puts the reader 31,227px away from what
-        // they were reading. REPORTED as "он обрезает беседу почему-то" — the
-        // conversation had not been cut, they had been moved off it.
-        //
-        // `applied` is what makes re-running safe: each pass compensates only
-        // the growth it has not already paid for, so a page that arrives in
-        // three chunks is held three times rather than over-corrected once.
-        const before = scroller.scrollHeight;
-        void loadOlderRef.current().then((grew) => {
-          if (!grew) {
-            return;
-          }
-          let frames = 0;
-          let applied = 0;
-          const hold = (): void => {
-            if (!scroller.isConnected) {
-              return;
-            }
-            const owed = scroller.scrollHeight - before - applied;
-            if (owed > 0) {
-              scroller.scrollTop += owed;
-              applied += owed;
-            }
-            frames += 1;
-            if (frames < OLDER_PAGE_HOLD_FRAMES) {
-              requestAnimationFrame(hold);
-            }
-          };
-          requestAnimationFrame(hold);
-        });
+        void pageOlder(scroller);
       }
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
@@ -5141,6 +5159,43 @@ export function Chats({
     [durableEntries, liveText, workingAgents],
   );
   /**
+   * Keep paging while what is loaded does not FILL the pane.
+   *
+   * Scrolling is the pager's trigger, and a transcript shorter than its pane
+   * has no scroll to give — so it never asked. That is not an edge case on a
+   * workflow run: every row a callee streams folds into ONE call card, so the
+   * newest 1,000 items routinely render as a single row. REPORTED as "it cannot
+   * load messages" over exactly that — "Scroll up for earlier messages" above
+   * one card and a pane of nothing. Re-checked on every render of the entries,
+   * since a page that also folds into that card leaves the pane just as short.
+   *
+   * A page that fails or adds nothing stops it for this run: without that a
+   * daemon refusing the read would be asked again on every streamed token.
+   * The notice's button is still there to try again.
+   */
+  const fillStoppedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (
+      !scroller ||
+      !hasOlder ||
+      loadingOlder ||
+      activeRunId === null ||
+      fillStoppedRef.current === activeRunId ||
+      // jsdom, and a pane not laid out yet: nothing measured is not "short".
+      scroller.clientHeight === 0 ||
+      scroller.scrollHeight - scroller.clientHeight > scroller.clientHeight / 2
+    ) {
+      return;
+    }
+    const runId = activeRunId;
+    void pageOlder(scroller).then((grew) => {
+      if (!grew) {
+        fillStoppedRef.current = runId;
+      }
+    });
+  }, [transcriptEntries, hasOlder, loadingOlder, activeRunId, pageOlder]);
+  /**
    * The dynamic workflows this run launched — the SAME reading the transcript's
    * cards are built from, handed to the shelf above the composer and to the
    * side panel.
@@ -7823,6 +7878,11 @@ export function Chats({
                     conversation that appears to start mid-sentence — and it is
                     the top row precisely because that is where a reader who has
                     scrolled this far is looking. */}
+                      {/* A BUTTON as well as a caption: scrolling is the only
+                    other trigger, and a transcript that does not overflow its
+                    pane has no scroll to give. REPORTED as "it cannot load
+                    messages" over a workflow whose newest page folded into ONE
+                    call card — "Scroll up" above nothing to scroll. */}
                       {hasOlder ? (
                         <div
                           data-slot="older-messages"
@@ -7833,7 +7893,21 @@ export function Chats({
                               Loading earlier messages…
                             </>
                           ) : (
-                            'Scroll up for earlier messages'
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              data-slot="older-messages-load"
+                              className="h-6 px-2 text-xs text-muted-foreground"
+                              onClick={() => {
+                                const scroller =
+                                  transcriptEndRef.current?.parentElement;
+                                if (scroller) {
+                                  void pageOlder(scroller);
+                                }
+                              }}>
+                              Load earlier messages
+                            </Button>
                           )}
                         </div>
                       ) : null}

@@ -1724,7 +1724,7 @@ describe('Chats transcript auto-scroll', () => {
       container.querySelector(
         '[data-slot="agent-cards"] [data-slot="agent-spend"]',
       )?.textContent,
-    ).toBe('268.6k tokens · $37.81');
+    ).toBe('268.6k in/out · $37.81');
   });
 
   it('moves the ring onto the reading the PANEL just took', async () => {
@@ -6031,6 +6031,104 @@ describe('Chats queued messages', () => {
     //
     // Per-test rather than `vi.setConfig`, which would raise it for all 286
     // tests in this file and blunt the hang guard for every one of them.
+  }, 20_000);
+
+  it('pages on its own while what is loaded does not FILL the pane — no scroll needed', async () => {
+    // REPORTED as "it cannot load messages": a workflow's newest 1,000 items
+    // folded into ONE call card, so "Scroll up for earlier messages" sat over a
+    // pane with nothing to scroll — and scrolling was the pager's only trigger.
+    const page = (from: number, count: number): ChatItem[] =>
+      Array.from({ length: count }, (_, i) =>
+        msg(from + i, 'user', `m${from + i}`),
+      );
+    api.listRunItems.mockResolvedValueOnce(page(1000, HISTORY_PAGE));
+    api.listRunItems.mockResolvedValue(page(0, 10));
+    // Every transcript pane reports itself exactly filled: 1,000px of content
+    // in a 1,000px box, with nothing to scroll. Set on the prototype because the
+    // pane is measured as the page lands, before a test could reach the node.
+    const heightOf = (el: HTMLElement): number =>
+      el.dataset.slot === 'transcript' ? 1_000 : 0;
+    const client = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'clientHeight',
+    );
+    const scroll = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      'scrollHeight',
+    );
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heightOf(this);
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return heightOf(this);
+      },
+    });
+    try {
+      const container = await mount(makeClient().client);
+      await clickRun(container, 'My chat');
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(api.listRunItems).toHaveBeenCalledWith({
+        runId: 'r1',
+        limit: HISTORY_PAGE,
+        beforeSeq: 1000,
+      });
+      expect(
+        container.querySelector('[data-slot="older-messages"]'),
+      ).toBeNull();
+    } finally {
+      // Both are ELEMENT's own properties, so normally there is nothing on
+      // HTMLElement to put back — the override is deleted instead. Leaving it
+      // behind makes every later pane read as filled, and a later chat's fill
+      // check then pages forever against a mock that always answers a full page.
+      if (client) {
+        Object.defineProperty(HTMLElement.prototype, 'clientHeight', client);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'clientHeight');
+      }
+      if (scroll) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollHeight', scroll);
+      } else {
+        Reflect.deleteProperty(HTMLElement.prototype, 'scrollHeight');
+      }
+    }
+  }, 20_000);
+
+  it('loads the earlier page from the notice itself, on a press', async () => {
+    const page = (from: number, count: number): ChatItem[] =>
+      Array.from({ length: count }, (_, i) =>
+        msg(from + i, 'user', `m${from + i}`),
+      );
+    api.listRunItems.mockResolvedValue(page(1000, HISTORY_PAGE));
+    const container = await mount(makeClient().client);
+    await clickRun(container, 'My chat');
+    // jsdom measures nothing, so the fill check stands aside — the press is
+    // the only thing that can ask here.
+    expect(api.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+    });
+
+    api.listRunItems.mockResolvedValue(page(0, 10));
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-slot="older-messages-load"]')
+        ?.click();
+      await Promise.resolve();
+    });
+
+    expect(api.listRunItems).toHaveBeenLastCalledWith({
+      runId: 'r1',
+      limit: HISTORY_PAGE,
+      beforeSeq: 1000,
+    });
   }, 20_000);
 
   it('does not page a chat that arrived whole', async () => {
@@ -11727,10 +11825,12 @@ describe('Chats — background sub-agents', () => {
     // A delegate the run stopped without is FINISHED work, so the list counts
     // it rather than showing it — the split is only about which rows are on
     // screen, never about what the row then says.
-    expect(panel?.textContent).toContain('1 finished sub-agent');
+    // Counted on the Sub-agents block's header, which is shut: nothing in it
+    // is still running.
+    expect(panel?.textContent).toContain('Sub-agents1 finished');
     await act(async () => {
       [...(panel?.querySelectorAll('button') ?? [])]
-        .find((el) => el.textContent?.includes('finished sub-agent'))
+        .find((el) => el.textContent?.includes('1 finished'))
         ?.click();
     });
 

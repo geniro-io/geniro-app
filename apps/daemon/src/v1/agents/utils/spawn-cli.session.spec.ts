@@ -831,6 +831,106 @@ describe('cancelling a session turn', () => {
     ]);
   });
 
+  describe('a prompt the CLI answered INSIDE a continuation', () => {
+    // TRACED on run `a0877ce9` (2026-09-14): a called Engineer's final message
+    // and two continuation results landed at 17:01:24 with the CLI announcing
+    // `idle` in the same millisecond — and no result of the turn's own ever
+    // followed. The turn waited for one until the silence deadline failed it
+    // at 17:31:24, and its caller was told CALLEE_FAILED about finished work.
+    const openAnsweredTurn = (
+      extra: Partial<
+        Parameters<ReturnType<typeof openSession>['session']['startTurn']>[0]
+      > = {},
+    ) => {
+      const betweenTurns: AgentEvent[] = [];
+      const { session, child } = openSession(undefined, undefined, (event) =>
+        betweenTurns.push(event),
+      );
+      const events: AgentEvent[] = [];
+      const handle = session.startTurn({
+        onEvent: (event) => events.push(event),
+        ...extra,
+      });
+      const state = { settled: false };
+      void handle?.done.then(() => {
+        state.settled = true;
+      });
+      return { child, handle, events, betweenTurns, state };
+    };
+
+    it('settles on that result the moment the CLI goes idle', async () => {
+      const { child, events, betweenTurns, state } = openAnsweredTurn();
+
+      line(child, { continuationDone: true, finalText: 'Opened PR #5673.' });
+      await Promise.resolve();
+      expect(state.settled).toBe(false);
+
+      line(child, { state: 'idle' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(state.settled).toBe(true);
+      expect(events.filter((event) => event.type === 'turn_complete')).toEqual([
+        {
+          type: 'turn_complete',
+          usage: null,
+          stopReason: null,
+          finalText: 'Opened PR #5673.',
+        },
+      ]);
+      // The continuation's own row — the one carrying the spend — is still the
+      // only copy of it; the settle carries the text and no usage.
+      expect(
+        betweenTurns.filter((event) => event.type === 'turn_complete'),
+      ).toHaveLength(1);
+    });
+
+    it('does not settle on idle while a card is still waiting on the user', async () => {
+      const { child, state } = openAnsweredTurn();
+
+      line(child, { continuationDone: true, finalText: 'Need a decision.' });
+      line(child, { ask: 'q1' });
+      line(child, { state: 'idle' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(state.settled).toBe(false);
+    });
+
+    it('forgets that result once a follow-up is delivered — it did not answer it', async () => {
+      const { child, handle, state } = openAnsweredTurn({
+        buildFollowUpPayload: (message) => `${message.text}\n`,
+      });
+
+      line(child, { continuationDone: true, finalText: 'First answer.' });
+      expect(
+        handle?.sendUserMessage({ text: 'And the docs?', images: undefined }),
+      ).toBe(true);
+      line(child, { state: 'idle' });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(state.settled).toBe(false);
+    });
+
+    it('settles on that result at the silence deadline instead of failing the turn', async () => {
+      vi.useFakeTimers();
+      const { child, handle, events } = openAnsweredTurn();
+
+      line(child, { continuationDone: true, finalText: 'Shipped.' });
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+      await handle?.done;
+
+      expect(events.some((event) => event.type === 'error')).toBe(false);
+      expect(events.at(-1)).toEqual(
+        expect.objectContaining({
+          type: 'turn_complete',
+          finalText: 'Shipped.',
+        }),
+      );
+    });
+  });
+
   it('kills the group when the CLI has no interrupt to send', () => {
     // The honest fallback: a CLI that cannot be told to stop can only be
     // stopped. Reporting the cancel as delivered without doing anything would

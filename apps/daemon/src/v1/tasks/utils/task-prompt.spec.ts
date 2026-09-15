@@ -21,6 +21,29 @@ describe('the report instructions — screenshots', () => {
   });
 });
 
+describe('the report instructions — the board tool', () => {
+  it('tell both engines that update_task is the only way the card changes', () => {
+    // The settle no longer moves a finished card or reads its report out of
+    // the transcript, so an agent never told about the tool leaves its card in
+    // In progress for good.
+    for (const text of [
+      TASK_REPORT_INSTRUCTIONS,
+      TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+    ]) {
+      expect(text).toContain('`update_task`');
+      expect(text).toContain('`in_review`');
+      expect(text).toMatch(/nothing moves the card/);
+    }
+  });
+
+  it('tells a workflow node to leave the card to the agent that concludes', () => {
+    // Every node of a task workflow holds the tool; without this each one
+    // replaces the card's report with its own slice.
+    expect(TASK_REPORT_INSTRUCTIONS_WORKFLOW).toMatch(/leaves the card alone/);
+    expect(TASK_REPORT_INSTRUCTIONS).not.toMatch(/leaves the card alone/);
+  });
+});
+
 /**
  * The half that makes attaching mean anything.
  *

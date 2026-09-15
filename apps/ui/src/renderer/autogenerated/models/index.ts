@@ -4240,7 +4240,13 @@ export interface TaskDto {
      * @type {string}
      * @memberof TaskDto
      */
-    reportItemId: string | null;
+    report: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof TaskDto
+     */
+    reportedAt: string | null;
     /**
      * Pull requests the task's run opened, oldest first, as captured from the agent output
      * @type {Array<RunPullRequest>}

@@ -2338,16 +2338,26 @@ describe('withLiveText', () => {
       ]),
     );
 
-  it('puts a working row at the END for a callee whose open call the conversation moved past', () => {
+  it('puts a working row at the END, in the caller’s flow, for a callee whose open call the conversation moved past', () => {
     // REPORTED as "subagent is still working but I don't see status in the
     // chat": an async call stays open while its caller keeps talking, so the
     // card narrating the callee sat screens above the end of the transcript and
     // nothing at the bottom said anything was still running.
+    //
+    // Filed under the CALLER, not the callee: the row names the callee itself,
+    // so a block titled with the callee would hold nothing but that row —
+    // REPORTED as an "empty Engineer block".
     const entries = withLiveText(buriedCall(), new Map(), new Set(['poet']));
 
     const tail = entries.at(-1) as TurnBlockEntry;
     expect(tail.type).toBe('turn-block');
-    expect(tail.nodeId).toBe('poet');
+    expect(tail.nodeId).toBe('orch');
+    expect(
+      entries.some(
+        (entry) => entry.type === 'turn-block' && entry.nodeId === 'poet',
+      ),
+      'a block of the callee’s own was drawn',
+    ).toBe(false);
     expect(
       (tail.entries.at(-1) as { item: ChatItem }).item.payload,
     ).toMatchObject({
@@ -2367,10 +2377,102 @@ describe('withLiveText', () => {
     );
 
     const tail = entries.at(-1) as TurnBlockEntry;
-    expect(tail.nodeId).toBe('poet');
+    expect(tail.nodeId).toBe('orch');
     expect(
       liveRowKind((tail.entries.at(-1) as { item: ChatItem }).item.payload),
     ).toBe('working');
+  });
+
+  it('does NOT double up for a callee whose live key carries its call id', () => {
+    // A callee's live plane is keyed `<node>::<callId>` while the working set
+    // names the NODE, so a callee with no open card on screen drew `Thinking…`
+    // AND `Working…` — the two keys could never match.
+    const entries = withLiveText(
+      [],
+      new Map([['poet::call-9', live({ thinkingStretch: 1 })]]),
+      new Set(['poet']),
+    );
+
+    const rows = entries.flatMap((entry) =>
+      entry.type === 'turn-block' ? entry.entries : [],
+    );
+    expect(rows).toHaveLength(1);
+    expect(liveRowKind((rows[0] as { item: ChatItem }).item.payload)).toBe(
+      'thinking',
+    );
+  });
+
+  it('writes a callee’s live words into ITS call when the node is serving two at once', () => {
+    // A fan-out calls one agent twice; each call has its own card and its own
+    // live key. Matched on the node alone, every word went into the NEWEST
+    // card, whichever call it belonged to.
+    const entries = withLiveText(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'call_started',
+            { callId: 'call-2', calleeNodeId: 'poet', message: 'Two.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-2' }, 'poet'),
+        ]),
+      ),
+      new Map([['poet::call-1', live({ text: 'the first poem' })]]),
+    );
+
+    const cards = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (inner): inner is CallBlockEntry => inner.type === 'call-block',
+          )
+        : [],
+    );
+    const holdsWords = (callId: string): boolean =>
+      cards
+        .find((card) => card.callId === callId)!
+        .entries.some(
+          (row) =>
+            row.type === 'item' &&
+            (row.item.payload as { text?: unknown }).text === 'the first poem',
+        );
+    expect(cards).toHaveLength(2);
+    expect(holdsWords('call-1')).toBe(true);
+    expect(holdsWords('call-2')).toBe(false);
+  });
+
+  it('draws NO end row for a buried callee whose caller is already waiting on it', () => {
+    // REPORTED twice: `waiting on Engineer · call-2` at the end of the
+    // transcript, and directly under it an ENGINEER block holding nothing but
+    // `Engineer is working · call-2`. Something landing after the card (the
+    // caller's reply, the user's message) reads as "buried", but the caller's
+    // own row already names the call — a second one is the callee twice.
+    const entries = withLiveText(
+      buriedCall(),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(
+      liveRows.some((row) => row.item.nodeId === 'poet'),
+      'a callee row was drawn beside the caller’s waiting row',
+    ).toBe(false);
+    expect(
+      liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
+    ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
   });
 
   it('still draws the CALLER’s own working row while it waits', () => {

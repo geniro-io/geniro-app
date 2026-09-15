@@ -1,11 +1,15 @@
-import { setPersistedFlag } from '../components/use-persisted-flag';
+import { writeThreadFlag } from './thread-ui-memory';
 
-/** The right-hand agents panel, folded shut. */
-export const AGENTS_PANEL_COLLAPSED_FLAG = 'chats.agentsPanelCollapsed';
+/**
+ * The right-hand agents panel, folded shut — remembered PER THREAD
+ * (`thread-ui-memory.ts`), so folding it in one conversation leaves the others
+ * as they were.
+ */
+export const AGENTS_PANEL_COLLAPSED_FLAG = 'agents-panel:collapsed';
 
 /** The "Merged & closed" fold under the thread's own pull requests. */
 export const THREAD_PULL_REQUESTS_SETTLED_FLAG =
-  'chats.threadPullRequestsSettledOpen';
+  'agents-panel:pull-requests-settled-open';
 
 /**
  * Show the whole list of pull requests this thread opened — in the PANEL, which
@@ -15,10 +19,15 @@ export const THREAD_PULL_REQUESTS_SETTLED_FLAG =
  * drawn. It opens the fold as well as the panel on purpose: most of what a
  * finished thread opened is merged, so a panel revealed with its settled group
  * still shut would answer "all of them" with an empty section.
+ *
+ * A null run is a shelf drawn outside a thread, where there is no panel to open.
  */
-export function revealThreadPullRequests(): void {
-  setPersistedFlag(AGENTS_PANEL_COLLAPSED_FLAG, false);
-  setPersistedFlag(THREAD_PULL_REQUESTS_SETTLED_FLAG, true);
+export function revealThreadPullRequests(runId: string | null): void {
+  if (runId === null) {
+    return;
+  }
+  writeThreadFlag(runId, AGENTS_PANEL_COLLAPSED_FLAG, false);
+  writeThreadFlag(runId, THREAD_PULL_REQUESTS_SETTLED_FLAG, true);
 }
 
 /**
@@ -29,6 +38,9 @@ export function revealThreadPullRequests(): void {
  * because a thread launches workflows in ones and twos where it opens pull
  * requests in thirties.
  */
-export function revealWorkflows(): void {
-  setPersistedFlag(AGENTS_PANEL_COLLAPSED_FLAG, false);
+export function revealWorkflows(runId: string | null): void {
+  if (runId === null) {
+    return;
+  }
+  writeThreadFlag(runId, AGENTS_PANEL_COLLAPSED_FLAG, false);
 }

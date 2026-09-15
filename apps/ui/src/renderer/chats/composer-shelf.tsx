@@ -37,6 +37,7 @@ import {
   TaskScrollRows,
 } from './task-list';
 import type { AgentTaskRow } from './task-payload';
+import { ThreadUiMemoryContext } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import { shelfThreadPullRequests } from './use-thread-pull-requests';
 import { WorkflowChip, workflowShellStatus } from './workflow-block';
@@ -180,6 +181,7 @@ export function ThreadPullRequestChips({
 }: {
   results: readonly PullRequestRefResult[];
 }): React.JSX.Element | null {
+  const runId = useContext(ThreadUiMemoryContext);
   const shown = shelfThreadPullRequests(results);
   if (shown.length === 0) {
     return null;
@@ -227,7 +229,7 @@ export function ThreadPullRequestChips({
             SHELF_SEGMENT_CLASS,
             'shrink-0 font-normal text-muted-foreground',
           )}
-          onClick={revealThreadPullRequests}>
+          onClick={() => revealThreadPullRequests(runId)}>
           {/* The GLYPH is the other half of making `All 4` mean something. It
               was the one item on the shelf that named no subject, and the
               hardest to guess, being a control rather than a reading: carrying
@@ -608,6 +610,7 @@ export function ActiveWorkflowChips({
   onReveal: (workflowId: string) => void;
 }): React.JSX.Element | null {
   const runSettledAt = useContext(RunSettledContext);
+  const runId = useContext(ThreadUiMemoryContext);
   const running = workflows.filter(
     (entry) => workflowShellStatus(entry, runSettledAt) === 'running',
   );
@@ -635,7 +638,7 @@ export function ActiveWorkflowChips({
             SHELF_CHIP_CLASS,
             'shrink-0 font-normal text-muted-foreground',
           )}
-          onClick={revealWorkflows}>
+          onClick={() => revealWorkflows(runId)}>
           <WorkflowIcon aria-hidden="true" className="size-3.5 shrink-0" />
           All {running.length}
         </button>

@@ -265,6 +265,7 @@ export const CallBlock = memo(function CallBlock({
         eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}
         status={status}
         collapsible
+        memoryKey={`call:${block.id}`}
         toggleLabel={
           caller ? `${caller} → ${callee} call` : `Call to ${callee}`
         }
@@ -387,6 +388,7 @@ export const CallBlock = memo(function CallBlock({
           <BlockRequest
             label={`Providing instructions for ${callee}`}
             text={block.message}
+            memoryKey={`call:${block.id}:request`}
           />
         ) : null}
         {/*
@@ -409,7 +411,11 @@ export const CallBlock = memo(function CallBlock({
           ))}
         </NestedThreadContext.Provider>
         {block.result ? (
-          <BlockResult label={`Result from ${callee}`} text={block.result} />
+          <BlockResult
+            label={`Result from ${callee}`}
+            text={block.result}
+            memoryKey={`call:${block.id}:result`}
+          />
         ) : null}
         {status === 'running' && !liveTail ? (
           // THREE lines — the reported ask. The full command is still in the

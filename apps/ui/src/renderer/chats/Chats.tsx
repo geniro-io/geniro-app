@@ -205,6 +205,7 @@ import {
   taskProgress,
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
+import { forgetThread } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
@@ -3103,6 +3104,7 @@ export function Chats({
       // Nothing can ever show it again, so it must not be kept — the same rule
       // the daemon's own per-run maps follow, announced there on the bus.
       forgetContextReading(deleting.id);
+      forgetThread(deleting.id);
       setDeleting(null);
       // The open transcript belongs to a run that no longer exists: leave its
       // room and fall back to the composer, rather than leaving a dead
@@ -3136,6 +3138,7 @@ export function Chats({
     () =>
       client.onRunDeleted((runId) => {
         forgetContextReading(runId);
+        forgetThread(runId);
         dropRun(runId, newChat);
       }),
     [client, dropRun, newChat, forgetContextReading],
@@ -7092,7 +7095,10 @@ export function Chats({
       <ChatProviders
         signIn={signInToActiveCli}
         retry={retryActiveRun}
-        callContext={resolveCallReading}>
+        callContext={resolveCallReading}
+        // What the reader folded and opened is remembered per THREAD — see
+        // `thread-ui-memory.ts`.
+        threadId={activeRunId}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>

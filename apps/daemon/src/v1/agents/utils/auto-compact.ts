@@ -73,7 +73,10 @@ export function autoCompactDue(
   );
 }
 
-/** The transcript note written just before an automatic compaction runs. */
+/**
+ * The transcript note written once an automatic compaction has taken the run,
+ * so it lands just after the `/compact` it explains.
+ */
 export function autoCompactNotice(
   percent: number,
   reading: AutoCompactReading,

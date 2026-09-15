@@ -985,9 +985,9 @@ export const MIN_AUTO_COMPACT_PERCENT = 10;
 export const MAX_AUTO_COMPACT_PERCENT = 95;
 
 /**
- * The ONE validator for an auto-compact threshold, shared by chat create, the
- * settings PATCH and the workflow node schema so the three cannot disagree
- * about what a percentage may be. See `Run.autoCompactPercent`.
+ * The ONE validator for an auto-compact threshold, shared by chat create and
+ * the settings PATCH so the two cannot disagree about what a percentage may
+ * be. See `Run.autoCompactPercent`.
  */
 export const AutoCompactPercentSchema = z
   .number()

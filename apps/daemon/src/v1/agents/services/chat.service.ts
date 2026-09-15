@@ -1811,6 +1811,7 @@ export class ChatService implements OnModuleInit {
       this.backgroundWork.forget(runId);
       // Same rule, same one place: nothing can read a deleted run's context.
       this.contexts.forget(runId);
+      this.compactionBaselines.delete(runId);
       // Nor send a notification about it.
       this.notifiers.get(runId)?.();
       this.notifiers.delete(runId);
@@ -3180,7 +3181,6 @@ export class ChatService implements OnModuleInit {
     const compactionToken = Symbol(runId);
     if (geniroCommand) {
       this.compactingRuns.set(runId, compactionToken);
-      this.compactionBaselines.set(runId, 'pending');
     }
     const releaseCompaction = (): void => {
       if (this.compactingRuns.get(runId) === compactionToken) {
@@ -5254,6 +5254,13 @@ export class ChatService implements OnModuleInit {
             );
             settledStatus = 'completed';
           }
+          // Only a compaction that FINISHED re-bases the auto-compact rule. One
+          // that was stopped or failed shrank nothing, and arming the baseline
+          // anyway would measure the next turn at the same size and switch
+          // auto-compaction off for exactly the conversation that needs it.
+          if (geniroCommand && settledStatus === 'completed') {
+            this.compactionBaselines.set(runId, 'pending');
+          }
           // LAST, once the transcript is drained and the run's status is
           // final: this is the only step that destroys something (the CLI's
           // own conversation), so it must not run beside writes that could
@@ -5282,8 +5289,11 @@ export class ChatService implements OnModuleInit {
         if (this.finalizing.get(runId) === finalized) {
           this.finalizing.delete(runId);
         }
-        releaseCompaction();
       });
+      // On the TURN's end, not the finalizer's: the flag refuses follow-ups
+      // into the compaction turn, and a next turn can start while this one's
+      // finalizer is still running — its follow-ups must not read as refused.
+      void handle.done.finally(releaseCompaction);
       // After the finalizer rather than inside it: the claim this turn held
       // must be gone before `/compact` can take the run. A compaction turn
       // never re-arms it, or a conversation that stays over the threshold
@@ -5373,17 +5383,21 @@ export class ChatService implements OnModuleInit {
       // claim, and a note written ahead of that refusal would announce a
       // compaction that never ran.
       await this.sendMessage(runId, AUTO_COMPACT_COMMAND);
+      // Its own catch: the compaction is already running by now, so a failed
+      // note must not be reported as a compaction that never started.
+      const notice = autoCompactNotice(run.autoCompactPercent, reading);
       await this.persist(
         em,
         runId,
         await this.seqs.reserve(runId),
         'system',
         null,
-        {
-          message: autoCompactNotice(run.autoCompactPercent, reading),
-          severity: 'info',
-        },
-      );
+        { message: notice, severity: 'info' },
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId} auto-compaction note write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     } catch (err) {
       this.logger.warn(
         `run ${runId} auto-compaction did not start: ${err instanceof Error ? err.message : String(err)}`,

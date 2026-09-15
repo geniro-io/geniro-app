@@ -2635,6 +2635,38 @@ describe('ChatService', () => {
       expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(1);
     });
 
+    it('compacts again after an automatic compaction was stopped before it finished', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      const overThreshold = async (text: string): Promise<void> => {
+        claude.emit({
+          type: 'context_progress',
+          contextTokens: 170_000,
+          contextWindowTokens: 200_000,
+        });
+        await turn(claude, text);
+        await drain();
+      };
+
+      await service.sendMessage(run.id, 'first');
+      await overThreshold('one');
+      expect(claude.start).toHaveBeenCalledTimes(2); // the auto /compact
+      // Stopped: nothing was compacted, so the conversation is still 85% full.
+      await turn(claude, 'summar', { type: 'turn_cancelled' });
+      await drain();
+
+      await service.sendMessage(run.id, 'second');
+      await overThreshold('two');
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(2);
+    });
+
     it('does not compact after a turn that was cancelled over the threshold', async () => {
       const { service, claude } = setup();
       const run = await service.createChat({

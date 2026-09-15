@@ -64,6 +64,41 @@ describe('a task list read off a tool CALL', () => {
     });
   });
 
+  it('reads `status: "deleted"` as a REMOVAL, not as an unknown status', () => {
+    // The tool's own input schema (2.1.270) lists `deleted` beside the three
+    // statuses; read as unknown, the row stayed on screen and in the total.
+    const event = claudeTaskEventFromToolUse(
+      'TaskUpdate',
+      { taskId: '3', status: 'deleted' },
+      't',
+    );
+    expect(event?.type === 'task_list' && event.tasks[0]).toEqual({
+      id: '3',
+      title: null,
+      status: null,
+      activeForm: null,
+      deleted: true,
+    });
+  });
+
+  it('keeps the status of an update that names none, taking its subject as the title', () => {
+    // `status` is optional on the tool: a rename sends `{taskId, subject}`.
+    // Without `keepsStatus` a finished task fell back to unknown and the rename
+    // was dropped with it.
+    const event = claudeTaskEventFromToolUse(
+      'TaskUpdate',
+      { taskId: '2', subject: 'Write the migration notes' },
+      't',
+    );
+    expect(event?.type === 'task_list' && event.tasks[0]).toEqual({
+      id: '2',
+      title: 'Write the migration notes',
+      status: null,
+      activeForm: null,
+      keepsStatus: true,
+    });
+  });
+
   it('says nothing about the list for a `TaskCreate` call', () => {
     // Deliberate, and the reason is on the wire: the created task's id exists
     // only in the RESULT, and a patch with no id cannot be applied to anything.

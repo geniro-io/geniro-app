@@ -1,7 +1,11 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
-import type { GitChange, GitChangeStatus } from '../../shared/contracts';
+import type {
+  GitChange,
+  GitChanges,
+  GitChangeStatus,
+} from '../../shared/contracts';
 import { DiffFigures } from '../components/diff-figures';
 import { EmptyState } from '../components/empty-state';
 import { ErrorText } from '../components/error-text';
@@ -205,6 +209,7 @@ export function ChatChangesDialog({
   truncated,
   unavailableReason: reason,
   movedOffStart = false,
+  upstreamBase = null,
   error,
   loading,
   onRefresh,
@@ -231,6 +236,15 @@ export function ChatChangesDialog({
    * said in the header, since "against <sha>" would then be untrue.
    */
   movedOffStart?: boolean;
+  /**
+   * The checkout shares newer history with the remote than the start, so the
+   * list is measured against this commit — the newest HEAD shares with the
+   * named ref — and everything already there is left out. Said in the header
+   * for the reason `movedOffStart` is: "against <start>" is then untrue. It
+   * names the REF and no cause: a pull and a merge of the chat's own commits
+   * both move this base, and the header cannot tell which happened.
+   */
+  upstreamBase?: GitChanges['upstreamBase'];
   error: string | null;
   loading: boolean;
   /** Asked for on open — the "I am looking at it now" read. */
@@ -264,7 +278,9 @@ export function ChatChangesDialog({
             ? 'This chat was not stamped with a commit, so there is nothing to compare against.'
             : movedOffStart
               ? `This checkout has moved off ${startSha.slice(0, 12)}, the commit this chat started at, onto another branch — so this lists what is uncommitted on it now, including files that were created and never added. Read-only: undo anything here in your own git.`
-              : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
+              : upstreamBase !== null
+                ? `Working tree against ${upstreamBase.sha.slice(0, 12)}, the newest commit this checkout shares with ${upstreamBase.ref} — everything up to it is already there, so it is left out. This chat started at ${startSha.slice(0, 12)}. Includes files that were created and never added. Read-only: undo anything here in your own git.`
+                : `Working tree against ${startSha.slice(0, 12)} — including files that were created and never added. Read-only: undo anything here in your own git.`}
         </p>
 
         {error ? <ErrorText className="shrink-0">{error}</ErrorText> : null}

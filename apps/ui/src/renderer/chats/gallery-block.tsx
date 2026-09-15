@@ -9,6 +9,7 @@ import { cn } from '../components/ui/utils';
 import { SectionLabel } from './block-shell';
 import type { GallerySpec } from './gallery-payload';
 import { LocalImageLoaderContext, refusalFor } from './local-image-loader';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * One tile's state once the walk has reached it: the bytes, or why not.
@@ -151,10 +152,13 @@ function useGalleryImages(
 
 export function GalleryCard({
   gallery,
+  memoryKey,
 }: {
   gallery: GallerySpec;
+  /** Where the card's fold is remembered within its thread. */
+  memoryKey?: string;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useThreadFlag(memoryKey, true);
   const [viewing, setViewing] = useState<number | null>(null);
   const paths = gallery.images.map((image) => image.path);
   const { tiles: resolved, loaderMissing } = useGalleryImages(paths, open);

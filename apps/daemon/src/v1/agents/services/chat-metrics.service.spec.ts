@@ -164,6 +164,246 @@ function build(opts: {
   };
 }
 
+describe('ChatMetricsService — one workflow node', () => {
+  // A workflow run keeps a process per node, so its readout names the node:
+  // REPORTED as "i cant see full context info for workflow" while the composer
+  // ring of a workflow run offered a figure and nothing behind it.
+  function buildNode(
+    state: Record<string, unknown> | null,
+    opts: {
+      /** What the node's agent answers when asked now. */
+      breakdown?: AgentContextUsage | null;
+      /** Where the NODE's own transcript stands. */
+      maxSeq?: number;
+    } = {},
+  ) {
+    const peek = vi.fn().mockReturnValue(null);
+    const getByRunNode = vi.fn().mockResolvedValue(state);
+    const turnCompletePayloads = vi
+      .fn()
+      .mockResolvedValue([turn({ inputTokens: 10, outputTokens: 5 })]);
+    const maxSeq = vi.fn().mockResolvedValue(opts.maxSeq ?? 1);
+    const readContextUsage = vi
+      .fn()
+      .mockResolvedValue('breakdown' in opts ? opts.breakdown : BREAKDOWN);
+    const runRemember = vi.fn().mockResolvedValue(undefined);
+    const nodeRemember = vi.fn().mockResolvedValue(undefined);
+    const turns = new Subject<RunItemEvent>();
+    let farewell: ((key: string) => Promise<void>) | null = null;
+    const service = new ChatMetricsService(
+      { fork: () => ({}) } as unknown as EntityManager,
+      {
+        getById: () =>
+          Promise.resolve({
+            agentKind: null,
+            lastMetricsReading: null,
+            configDir: null,
+          }),
+        rememberMetricsReading: runRemember,
+      } as unknown as RunDao,
+      { turnCompletePayloads, maxSeq } as unknown as ItemDao,
+      {
+        getByRunNode,
+        rememberMetricsReading: nodeRemember,
+      } as unknown as NodeStateDao,
+      {
+        peek,
+        onIdleFarewell: (listener: (key: string) => Promise<void>) => {
+          farewell = listener;
+        },
+      } as unknown as AgentSessionRegistry,
+      {
+        for: () =>
+          ({
+            getConfig: () => ({
+              usage: {
+                unavailableReason: null,
+                breakdown: { kind: 'reads', channel: 'session-store' },
+                planLimits: { kind: 'unavailable', reason: 'none here' },
+              },
+            }),
+            readContextUsage,
+            readPlanLimits: () => Promise.resolve(null),
+          }) as unknown as AgentAdapter,
+      } as unknown as AgentAdapterRegistry,
+      { all: () => turns.asObservable() } as unknown as AgentEventBus,
+      { refresh: () => Promise.resolve() } as unknown as CursorUsageService,
+    );
+    service.onModuleInit();
+    return {
+      service,
+      peek,
+      getByRunNode,
+      turnCompletePayloads,
+      maxSeq,
+      readContextUsage,
+      runRemember,
+      nodeRemember,
+      /** Fire what the registry fires on an idle close of the process under `key`. */
+      farewell: (key: string) => farewell!(key),
+      /** Play a settled turn of `nodeId` onto the agent bus. */
+      settleTurn: (nodeId: string) =>
+        turns.next({
+          runId: 'run-1',
+          item: { kind: 'turn_complete', nodeId, seq: 2 },
+        } as unknown as RunItemEvent),
+    };
+  }
+
+  /** A reading as `store` files it, pinned to `atSeq`. */
+  const storedNodeReading = (atSeq: number): string =>
+    JSON.stringify({
+      takenAt: '2026-09-14T10:00:00.000Z',
+      atSeq,
+      configDir: null,
+      context: BREAKDOWN,
+      plan: null,
+    });
+
+  it('serves the node’s LAST reading once its process is gone, dated when it was taken', async () => {
+    // A claude Manager waits idle while its callees work, its process is closed
+    // for idleness, and a live-only readout then had nothing — while a claude
+    // chat beside it showed its breakdown from the reading it had kept.
+    // REPORTED against exactly that Manager.
+    const built = buildNode(
+      {
+        agentKind: AgentKind.Claude,
+        agentSessionId: 'sess-manager',
+        lastMetricsReading: storedNodeReading(4),
+      },
+      { breakdown: null, maxSeq: 4 },
+    );
+
+    const metrics = await built.service.read('run-1', 'manager');
+
+    // Pinned to the NODE's own newest row, not the run's — the Engineer's work
+    // moves the run's on every line.
+    expect(built.maxSeq).toHaveBeenCalledWith(
+      'run-1',
+      expect.anything(),
+      'manager',
+    );
+    expect(metrics.context).toEqual(BREAKDOWN);
+    expect(metrics.takenAt).toBe('2026-09-14T10:00:00.000Z');
+  });
+
+  it('drops a node’s reading once that node has written a row since', async () => {
+    const built = buildNode(
+      {
+        agentKind: AgentKind.Claude,
+        agentSessionId: 'sess-manager',
+        lastMetricsReading: storedNodeReading(4),
+      },
+      { breakdown: null, maxSeq: 9 },
+    );
+
+    const metrics = await built.service.read('run-1', 'manager');
+
+    expect(metrics.context).toBeNull();
+    expect(metrics.takenAt).toBeNull();
+  });
+
+  it('takes a node’s reading on its way out and files it on the NODE, never the run', async () => {
+    const built = buildNode({
+      agentKind: AgentKind.Claude,
+      agentSessionId: 'sess-manager',
+      lastMetricsReading: null,
+    });
+
+    await built.farewell('run-1::node:manager');
+
+    expect(built.nodeRemember).toHaveBeenCalledWith(
+      'run-1',
+      'manager',
+      expect.stringContaining('"atSeq":1'),
+      expect.anything(),
+    );
+    expect(built.runRemember).not.toHaveBeenCalled();
+  });
+
+  it('leaves a CALL’s process alone — it has no readout of its own to file under', async () => {
+    const built = buildNode({
+      agentKind: AgentKind.Claude,
+      agentSessionId: 'sess-engineer',
+    });
+
+    await built.farewell('run-1::call:call-2');
+
+    expect(built.getByRunNode).not.toHaveBeenCalled();
+    expect(built.nodeRemember).not.toHaveBeenCalled();
+  });
+
+  it('prewarms a node’s reading when THAT node’s turn settles after its readout was opened', async () => {
+    const built = buildNode({
+      agentKind: AgentKind.Claude,
+      agentSessionId: 'sess-manager',
+      lastMetricsReading: null,
+    });
+    await built.service.read('run-1', 'manager');
+    built.nodeRemember.mockClear();
+    built.maxSeq.mockResolvedValue(2);
+
+    built.settleTurn('manager');
+
+    await vi.waitFor(() =>
+      expect(built.nodeRemember).toHaveBeenCalledWith(
+        'run-1',
+        'manager',
+        expect.stringContaining('"atSeq":2'),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it('asks the NODE’s own process and session, and totals that node’s turns alone', async () => {
+    const built = buildNode({
+      agentKind: AgentKind.CursorAgent,
+      agentSessionId: 'sess-manager',
+    });
+
+    const metrics = await built.service.read('run-1', 'manager');
+
+    // The key the executor keeps that node's process under — not the run's.
+    expect(built.peek).toHaveBeenCalledWith('run-1::node:manager');
+    expect(built.getByRunNode).toHaveBeenCalledWith(
+      'run-1',
+      'manager',
+      expect.anything(),
+    );
+    expect(built.readContextUsage).toHaveBeenCalledWith({
+      live: null,
+      sessionId: 'sess-manager',
+    });
+    expect(built.turnCompletePayloads).toHaveBeenCalledWith(
+      'run-1',
+      expect.anything(),
+      'manager',
+    );
+    expect(metrics.context).toEqual(BREAKDOWN);
+    expect(ChatMetricsWireSchema.parse(metrics)).toEqual(metrics);
+    // Filed on the NODE for the next open; the run row holds one reading per
+    // RUN and a node's must not overwrite it.
+    await vi.waitFor(() =>
+      expect(built.nodeRemember).toHaveBeenCalledWith(
+        'run-1',
+        'manager',
+        expect.any(String),
+        expect.anything(),
+      ),
+    );
+    expect(built.runRemember).not.toHaveBeenCalled();
+  });
+
+  it('refuses a node that has never run in this run', async () => {
+    const built = buildNode(null);
+
+    await expect(built.service.read('run-1', 'ghost')).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(built.readContextUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('ChatMetricsService', () => {
   it('answers with the live breakdown and no reason when one was taken', () => {
     const { service } = build({});

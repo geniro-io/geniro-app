@@ -58,6 +58,8 @@ class FakeSession implements AgentSession {
    * session and must not reap this one.
    */
   parked = false;
+  /** Detached commands the process is still running — a dev server, say. */
+  shellsRunning = 0;
   private settle: (() => void) | null = null;
 
   ask(): Promise<null> {
@@ -458,6 +460,46 @@ describe('AgentSessionRegistry — ending a process', () => {
     vi.advanceTimersByTime(SESSION_IDLE_MS);
 
     expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('does not close a session still running a detached command, however quiet it is', async () => {
+    // Reported as "This site can't be reached": an agent started `web` and
+    // `api` in the background, and a dev server writes nothing while it works —
+    // so the idle window read the process serving both as unused.
+    vi.useFakeTimers();
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    at(sessions, 0).shellsRunning = 2;
+
+    vi.advanceTimersByTime(SESSION_IDLE_MS * 3);
+
+    expect(at(sessions, 0).closes).toBe(0);
+
+    // Once the last one ends, the window resumes and an unused process goes.
+    at(sessions, 0).shellsRunning = 0;
+    vi.advanceTimersByTime(SESSION_IDLE_MS);
+
+    expect(at(sessions, 0).closes).toBe(1);
+  });
+
+  it('closes EVERY process one run holds — its own key and each `<runId>::…` key — and no other run’s', () => {
+    // A workflow run keeps one process per node and per conversation, and they
+    // outlive its passes; a delete or archive closing only the bare run key
+    // would leave them, and every server they started, running for good.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1', adapter, INPUT, noop);
+    registry.startTurn('run-1::node:manager', adapter, INPUT, noop);
+    registry.startTurn('run-1::call:call-1', adapter, INPUT, noop);
+    registry.startTurn('run-10::node:manager', adapter, INPUT, noop);
+
+    registry.closeRun('run-1');
+
+    expect(sessions.map((session) => session.closes)).toEqual([1, 1, 1, 0]);
+    expect(registry.liveCount).toBe(1);
   });
 
   it('does not close a session whose CLI is still producing rows between turns', async () => {

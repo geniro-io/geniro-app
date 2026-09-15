@@ -2183,7 +2183,20 @@ interface CallShell {
  * - `mcp__geniro__*` tool calls and their results are dropped entirely (see
  *   {@link GENIRO_TOOL_PREFIX}).
  */
-export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
+export function groupTranscript(
+  items: readonly ChatItem[],
+  {
+    recoverOrphanCalls = true,
+  }: {
+    /**
+     * Rebuild the block of a call whose start row is above the window. The
+     * MAIN flow wants it; a call block's own re-fold must not, since every row
+     * inside it still carries that call's id and would rebuild the block inside
+     * itself without end.
+     */
+    recoverOrphanCalls?: boolean;
+  } = {},
+): TranscriptEntry[] {
   // Pass 1 — collect the call shells and claim each callee sub-turn's items.
   const shells = new Map<string, CallShell>();
   for (const item of items) {
@@ -2242,6 +2255,61 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       delegateCalls.set(id, callId);
     }
   }
+  // Calls whose `call_started` is OLDER than the loaded window, recovered from
+  // the rows the call itself still tags. A long call outlives `HISTORY_PAGE`:
+  // measured on a Dev Team run, an Engineer call started at seq 10737 while the
+  // window opened near 11600, and every row it went on streaming carried
+  // `callId: call-10` with no shell to be claimed into. They fell into the main
+  // flow as bare Engineer turn blocks — uncollapsible, split at every turn end
+  // into two blocks back to back, and topped by an empty block holding only its
+  // `Working…` row, since the live row had no open call to be placed in.
+  // REPORTED as all three. The block is rebuilt exactly as a windowed one,
+  // anchored at the first row the window holds; it lacks only the brief, which
+  // lived on the start row.
+  const orphanCalls = new Set<string>();
+  /** The first windowed row of each orphan call → that call's id. */
+  const orphanAnchors = new Map<string, string>();
+  for (const item of recoverOrphanCalls ? items : []) {
+    if (
+      UNCLAIMABLE_KINDS.has(item.kind) ||
+      (item.kind === 'system' &&
+        payloadBoolean(item.payload, 'stalledCall') === true)
+    ) {
+      continue;
+    }
+    const callId = payloadString(item.payload, 'callId');
+    if (callId === null) {
+      continue;
+    }
+    const followup = CALL_FOLLOWUP_KINDS.has(item.kind);
+    const existing = shells.get(callId);
+    if (existing !== undefined) {
+      // Only an orphan learns its caller late — a windowed shell has it already.
+      if (orphanCalls.has(callId) && existing.started.nodeId === null) {
+        existing.started.nodeId = payloadString(item.payload, 'callerNodeId');
+      }
+      continue;
+    }
+    const calleeNodeId = followup
+      ? payloadString(item.payload, 'calleeNodeId')
+      : item.nodeId;
+    if (calleeNodeId === null) {
+      continue;
+    }
+    const started: ChatItem = {
+      id: `orphan-call:${callId}`,
+      runId: item.runId,
+      nodeId: payloadString(item.payload, 'callerNodeId'),
+      seq: item.seq,
+      kind: 'call_started',
+      role: null,
+      payload: { callId, calleeNodeId },
+      createdAt: item.createdAt,
+    };
+    shells.set(callId, { started, calleeNodeId, bucket: [] });
+    orphanCalls.add(callId);
+    orphanAnchors.set(item.id, callId);
+  }
   const claimed = new Set<string>();
   if (shells.size > 0) {
     for (const item of items) {
@@ -2296,7 +2364,7 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
   // The running fold per thread, and the card currently open for it. Kept per
   // thread because both CLIs number tasks from 1, so a delegate's task `1` and
   // the main agent's are different tasks.
-  const taskLists = new Map<string | null, TaskAnnouncement[]>();
+  const taskLists = new Map<string, TaskAnnouncement[]>();
   const openTaskCards = new Map<string, TaskListEntry>();
   const pairsByCallId = new Map<string, ToolPair>();
   // Keyed by node AND by originating thread, so a sub-agent's calls collapse
@@ -2305,6 +2373,23 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
 
   for (const item of items) {
     if (claimed.has(item.id)) {
+      const orphanCallId = orphanAnchors.get(item.id);
+      const orphan =
+        orphanCallId === undefined ? undefined : shells.get(orphanCallId);
+      if (orphanCallId !== undefined && orphan !== undefined) {
+        openGroups.delete(groupKey(orphan.started));
+        entries.push(
+          buildCallBlock(
+            orphanCallId,
+            orphan,
+            stalledCalls.has(orphanCallId),
+            // Nothing in the window says it started, and a call whose rows are
+            // still arriving has not ended — its own settle row, which always
+            // follows those rows, moves this on when it lands.
+            'running',
+          ),
+        );
+      }
       continue;
     }
     if (item.kind === 'call_started') {
@@ -2528,9 +2613,14 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         continue;
       }
       const thread = subagentIdOf(item);
-      const history = taskLists.get(thread) ?? [];
+      // Keyed by NODE and thread, the pair the cards themselves are keyed by.
+      // By thread alone every workflow node shared the main-thread history, so
+      // an Engineer's `TaskUpdate {taskId: "1"}` ticked the Manager's task 1
+      // on the Engineer's card while the side panel said otherwise.
+      const historyKey = groupKey(item);
+      const history = taskLists.get(historyKey) ?? [];
       history.push(announcement);
-      taskLists.set(thread, history);
+      taskLists.set(historyKey, history);
       // Folded from the thread's WHOLE history rather than this run's rows: a
       // run holding one `TaskUpdate` knows about one task, and the list is only
       // ever the fold of everything before it.
@@ -2778,6 +2868,20 @@ function closeGroupsBeforeTurnEnds(
 }
 
 /**
+ * The block status a `call_result` envelope states. TWIN PARSER: the broker
+ * (`call-broker.service.ts`) writes `{status: 'ok' | 'error', error}`, and a
+ * cancel's error carries the `CALLEE_CANCELLED` code.
+ */
+function callResultStatus(payload: unknown): CallBlockEntry['status'] {
+  if (payloadString(payload, 'status') === 'ok') {
+    return 'completed';
+  }
+  return payloadString(payload, 'error')?.startsWith('CALLEE_CANCELLED')
+    ? 'cancelled'
+    : 'failed';
+}
+
+/**
  * Assemble one call's block: status items drive the header's live status
  * (they never render as rows — the old "▸ B started"/"✓ B finished" pair
  * folds into the header icon), everything else re-folds recursively (tool
@@ -2788,8 +2892,9 @@ function buildCallBlock(
   callId: string,
   shell: CallShell,
   stalled: boolean,
+  initialStatus: CallBlockEntry['status'] = 'pending',
 ): CallBlockEntry {
-  let status: CallBlockEntry['status'] = 'pending';
+  let status = initialStatus;
   const inner: ChatItem[] = [];
   for (const item of shell.bucket) {
     if (item.kind === 'status') {
@@ -2800,6 +2905,16 @@ function buildCallBlock(
       continue;
     }
     inner.push(item);
+  }
+  // The callee's status rows are the usual source, but a call can settle with
+  // none: a fan-out's queued call cancelled before its turn began gets only the
+  // broker's `call_result`. That envelope is the call's own last word, so an
+  // unsettled header yields to it instead of spinning under a finished call.
+  if (status === 'pending' || status === 'running') {
+    const settle = shell.bucket.find((item) => item.kind === 'call_result');
+    if (settle) {
+      status = callResultStatus(settle.payload);
+    }
   }
   // A COMPLETED sub-turn's last message is the call's RESULT — pull it out
   // of the flow so the block can frame it (request at the top, result at
@@ -2856,7 +2971,10 @@ function buildCallBlock(
     // out is the ordinary thread's own shape.
     entries: buildTurnBlocks(
       buildWorkflowCards(
-        buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
+        buildSubagentBlocks(
+          groupTranscript(visibleInner, { recoverOrphanCalls: false }),
+          visibleInner,
+        ),
         visibleInner,
       ),
     ),
@@ -3405,16 +3523,42 @@ export function withLiveText(
     attach(out, entry, openCallees);
   }
   for (const key of workingAgents) {
-    if (spokenFor.has(key)) {
-      continue;
-    }
     // A callee working inside an open call block is NOT silent: the block says
     // `<callee> is thinking...` and wears a running mark, one line further down
     // the same card. The fallback row here would be a SECOND place that agent
     // appears — an empty block at the root of the transcript, outside the call
     // that is the only reason it is running — which is what was reported.
+    //
+    // …UNLESS the conversation has moved on past that card. An async call stays
+    // open while its caller keeps talking, so on a long run the block — and
+    // every live word the callee streams into it — sits screens above the end
+    // of the transcript, and the bottom said nothing at all while the callee
+    // worked for an hour. REPORTED as "subagent is still working but I don't
+    // see status in the chat". Then the end of the transcript gets one row
+    // naming the call, whatever the callee is streaming, because those words
+    // land in the buried block too.
     const workingNode = nodeIdOf(key);
     if (workingNode !== null && openCallees.has(workingNode)) {
+      const buried = buriedOpenCallOf(blocks, workingNode);
+      if (buried !== null) {
+        const since = lastMainThreadRowAt(buried.entries, workingNode);
+        attach(
+          out,
+          liveEntry(key, {
+            id: `${LIVE_TEXT_ITEM_PREFIX}${key}:working-in-call`,
+            kind: 'reasoning',
+            payload: {
+              live: 'working',
+              ...(since === null ? {} : { workingSince: since }),
+              workingInCallId: buried.callId,
+              workingInNodeId: workingNode,
+            },
+          }),
+        );
+      }
+      continue;
+    }
+    if (spokenFor.has(key)) {
       continue;
     }
     // Measured from the last row this agent put on screen, NEVER from the row's
@@ -3579,6 +3723,55 @@ function openCallCallees(
     }
   }
   return found;
+}
+
+/**
+ * The newest open call this node is the callee of, when something has been
+ * written BELOW it — null when there is no such call, or when the call block is
+ * still the last thing in the transcript (there it narrates its callee itself).
+ */
+function buriedOpenCallOf(
+  entries: readonly TranscriptEntry[],
+  calleeNodeId: string,
+): CallBlockEntry | null {
+  const open: CallBlockEntry[] = [];
+  const walk = (list: readonly TranscriptEntry[]): void => {
+    for (const entry of list) {
+      if (entry.type === 'call-block') {
+        if (
+          entry.calleeNodeId === calleeNodeId &&
+          OPEN_CALL_STATUSES.has(entry.status)
+        ) {
+          open.push(entry);
+        }
+        continue;
+      }
+      if (entry.type === 'turn-block') {
+        walk(entry.entries);
+      }
+    }
+  };
+  walk(entries);
+  const newest = open.at(-1);
+  if (newest === undefined) {
+    return null;
+  }
+  return endsWith(entries, newest) ? null : newest;
+}
+
+/** Whether `target` is the transcript's last entry, at any nesting depth. */
+function endsWith(
+  entries: readonly TranscriptEntry[],
+  target: TranscriptEntry,
+): boolean {
+  const last = entries.at(-1);
+  if (last === undefined) {
+    return false;
+  }
+  if (last === target) {
+    return true;
+  }
+  return last.type === 'turn-block' && endsWith(last.entries, target);
 }
 
 /**

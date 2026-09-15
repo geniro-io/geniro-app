@@ -1,11 +1,12 @@
 import { ChevronRight } from 'lucide-react';
-import { createContext, memo, useContext, useState } from 'react';
+import { createContext, memo, useContext } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
 import { type BlockStatus } from './block-shell';
 import { RunSettledContext } from './live-row';
 import { NestedThreadContext } from './subagent-context';
+import { useThreadOverride } from './thread-ui-memory';
 import { ToolBodyView } from './tool-body-view';
 import { ToolCallIcon, ToolOperationIcon, toolRowAccent } from './tool-icon';
 import {
@@ -76,7 +77,9 @@ function ToolRow({
   // mounted the moment the CALL streams in and its diff can arrive later (on
   // the result, for an ACP agent), so a seeded row would stay shut on exactly
   // the edits this exists to show. Same shape as `TaskListCard`'s `latest`.
-  const [override, setOverride] = useState<boolean | null>(null);
+  // Remembered per thread, keyed by the call, so leaving the conversation and
+  // coming back finds the row the way the reader left it.
+  const [override, setOverride] = useThreadOverride(`tool:${pair.call.id}`);
   // The user's own press outranks BOTH — the setting decides what a row starts
   // as, never what it can be.
   const collapseSteps = useContext(CollapseToolStepsContext);
@@ -283,7 +286,7 @@ export const ToolGroup = memo(function ToolGroup({
   // before. So a group holding a file change opens itself, and its other calls
   // — the reads and commands that led to it — come along as the one-line rows
   // they already were, which is what the CLI prints too.
-  const [override, setOverride] = useState<boolean | null>(null);
+  const [override, setOverride] = useThreadOverride(`tools:${group.id}`);
   const collapseSteps = useContext(CollapseToolStepsContext);
   const open =
     override ?? (!collapseSteps && group.pairs.some(showsFileChange));

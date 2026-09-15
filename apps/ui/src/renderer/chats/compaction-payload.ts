@@ -2,9 +2,10 @@
  * What a `system` row's `compaction` key says about the compaction whose summary
  * the row carries.
  *
- * TWIN PARSER: `apps/daemon/src/v1/agents/services/chat.service.ts` stamps this
- * key onto a CLI-authored notice when the compaction boundary that preceded it
- * reported token figures. An item payload is `z.unknown()` on the wire BY DESIGN
+ * TWIN PARSER: `apps/daemon/src/v1/agents/utils/compaction-rows.ts` writes this
+ * key — onto the CLI's summary when one follows the compaction boundary, else
+ * onto a row of its own (an automatic compaction puts no summary on the
+ * stream). An item payload is `z.unknown()` on the wire BY DESIGN
  * — every item kind carries a different shape — so no generated type reaches the
  * renderer and the two sides are independent readings of one shape. Rename the
  * key there and this file must change with it.
@@ -29,6 +30,8 @@ export interface CompactionFacts {
   preTokens: number | null;
   /** Context tokens after it, or null. Claude reports this less often than pre. */
   postTokens: number | null;
+  /** `auto` when the window filled, `manual` for `/compact`, null if unstated. */
+  trigger: 'auto' | 'manual' | null;
 }
 
 /**
@@ -48,10 +51,18 @@ export function compactionFacts(payload: unknown): CompactionFacts | null {
   if (value === null || typeof value !== 'object') {
     return null;
   }
-  const record = value as { preTokens?: unknown; postTokens?: unknown };
+  const record = value as {
+    preTokens?: unknown;
+    postTokens?: unknown;
+    trigger?: unknown;
+  };
   return {
     preTokens: positive(record.preTokens),
     postTokens: positive(record.postTokens),
+    trigger:
+      record.trigger === 'auto' || record.trigger === 'manual'
+        ? record.trigger
+        : null,
   };
 }
 
@@ -106,7 +117,9 @@ function positive(value: unknown): number | null {
  * never a fabricated "after" figure, which would be the one number a reader would
  * actually act on.
  */
-export function compactionDetail(facts: CompactionFacts): string | undefined {
+export function compactionDetail(
+  facts: Pick<CompactionFacts, 'preTokens' | 'postTokens'>,
+): string | undefined {
   const { preTokens, postTokens } = facts;
   if (preTokens !== null && postTokens !== null) {
     return `${formatTokens(preTokens)} → ${formatTokens(postTokens)} tokens`;

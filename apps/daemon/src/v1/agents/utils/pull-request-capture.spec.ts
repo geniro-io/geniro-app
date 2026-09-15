@@ -53,6 +53,31 @@ describe('readPullRequestUrls', () => {
       readPullRequestUrls('https://git.example.com/acme/app/pull/3'),
     ).toEqual([]);
   });
+
+  it('does NOT read a URL quoted inside a longer line', () => {
+    // Measured on this app's own conversation: a sub-agent grepping an exported
+    // transcript answered with the line below, and that thread's pull request
+    // was filed under the thread that had only read about it. `gh pr create`
+    // prints the URL on a line of its own; anything else is a quotation.
+    expect(
+      readPullRequestUrls(
+        '87398:    "text": "# CI-762: draft PR is up — https://github.com/manifestlaw-labs/ManifestOS/pull/5639\\n\\n**PR #5639** is a draft"',
+      ),
+    ).toEqual([]);
+    expect(
+      readPullRequestUrls(
+        'Opened https://github.com/acme/platform/pull/87 for review.',
+      ),
+    ).toEqual([]);
+  });
+
+  it('tolerates the whitespace a terminal leaves around the line', () => {
+    expect(
+      readPullRequestUrls(
+        '  https://github.com/acme/platform/pull/87 \r\n',
+      ).map((row) => row.number),
+    ).toEqual([87]);
+  });
 });
 
 describe('isPullRequestCreateCall', () => {
@@ -84,6 +109,82 @@ describe('isPullRequestCreateCall', () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
     expect(isPullRequestCreateCall(cyclic)).toBe(false);
+  });
+
+  it('is FALSE for a command that searches for, echoes or writes about the words', () => {
+    // The measured false positive: a sub-agent reading an exported transcript
+    // grepped it for the command, and its output quoted the URL that
+    // transcript's thread had opened.
+    expect(
+      isPullRequestCreateCall({
+        command:
+          'F="/Users/x/Downloads/export.md"; echo "=== pull/5639 / gh pr create"; grep -n \'gh pr create\\|pull/5639\\|--draft\' "$F" | head -40',
+      }),
+    ).toBe(false);
+    expect(
+      isPullRequestCreateCall({ command: "grep -c 'gh pr create' log" }),
+    ).toBe(false);
+    expect(
+      isPullRequestCreateCall({
+        file_path: '/tmp/analysis.md',
+        content:
+          'Draft-only was honoured: `gh pr create --draft` (L86758), URL L86779.\nRun gh pr create when the branch is pushed.',
+      }),
+    ).toBe(false);
+    expect(isPullRequestCreateCall({ command: 'gh pr created --help' })).toBe(
+      false,
+    );
+    // Words that lead up to a command are allowed in front of it; a command
+    // that TAKES the marker as its arguments is not one of them.
+    for (const command of [
+      'echo -n gh pr create',
+      'grep -rn gh pr create .',
+      'mygh pr create --fill',
+      'echo `gh pr create` in backticks',
+      'Step 2 gh pr create',
+    ]) {
+      expect(isPullRequestCreateCall({ command }), command).toBe(false);
+    }
+  });
+
+  it('is true behind the words that only lead up to a command', () => {
+    // REVIEWED: every one of these returned false under the first cut of the
+    // command-position rule, while the substring rule before it caught them —
+    // a loop over repositories would open real pull requests no chip showed.
+    for (const command of [
+      'GH_REPO=o/r gh pr create --fill',
+      'git push && GH_PAGER= gh pr create --fill',
+      'if git push; then gh pr create --fill; fi',
+      'for r in a b; do gh pr create --repo "$r" --fill; done',
+      'URL=`gh pr create --fill`',
+      'time gh pr create --fill',
+      'env GH_REPO=o/r gh pr create --fill',
+      'timeout 60 gh pr create --fill',
+      'nohup gh pr create --fill',
+      '/opt/homebrew/bin/gh pr create --fill',
+      'cd /repo && /usr/local/bin/gh pr create --fill',
+      'echo x | xargs -I{} gh pr create --title {}',
+      'bash -lc "GH_REPO=o/r gh pr create --fill"',
+      '! gh pr create --fill',
+    ]) {
+      expect(isPullRequestCreateCall({ command }), command).toBe(true);
+    }
+  });
+
+  it('is true wherever a shell would execute the words', () => {
+    for (const command of [
+      'gh pr create --fill',
+      'git push -u origin fix/x && gh pr create --fill',
+      'git push; gh pr create --draft',
+      'URL=$(gh pr create --fill) && echo "$URL"',
+      'bash -lc "cd /repo && gh pr create --fill"',
+      'sh -c "gh pr create --fill"',
+      '/bin/zsh -lc \'gh pr create --title "x"\'',
+      'zsh -c "source ~/.zshrc" -- gh pr create --fill',
+      'cd /repo\ngh pr create --fill',
+    ]) {
+      expect(isPullRequestCreateCall({ command }), command).toBe(true);
+    }
   });
 });
 

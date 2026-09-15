@@ -442,6 +442,24 @@ export class Run extends TimestampsEntity {
   taskList: string | null = null;
 
   /**
+   * The workflow this run RAN, as JSON — a copy taken when the run started, so
+   * editing the library workflow afterwards changes neither what the run's
+   * agents panel draws nor what a follow-up message runs. Asked for as "old
+   * workflows chats should not be changed if i change current workflow. They
+   * should use snapshots".
+   *
+   * Null on a chat run, and on a workflow run created before this column
+   * existed until something first reads it: that read takes the library copy
+   * as it is at that moment and keeps it (`RunWorkflowService`), so an old run
+   * is frozen from then on rather than refused.
+   *
+   * TEXT so the `safe: true` schema sync adds it additively — the rule
+   * {@link taskList} follows.
+   */
+  @Property({ type: 'text', nullable: true })
+  workflowSnapshot: string | null = null;
+
+  /**
    * What this cursor conversation has cost, in CENTS, as Cursor's own ledger
    * reports it — null for every run nothing has priced, which is every claude
    * run and every cursor run before its first usage poll.

@@ -445,6 +445,18 @@ export const WorkflowWireSchema = z.object({
 });
 export type WorkflowWire = z.infer<typeof WorkflowWireSchema>;
 
+/**
+ * The workflow ONE RUN runs — the copy it keeps (`Run.workflowSnapshot`), never
+ * the library's current one, so an edit made after the run started reaches
+ * neither its agents panel nor a follow-up message.
+ */
+export const RunWorkflowSnapshotWireSchema = z.object({
+  workflow: WorkflowSchema,
+});
+export type RunWorkflowSnapshotWire = z.infer<
+  typeof RunWorkflowSnapshotWireSchema
+>;
+
 /** Per-node execution state projected to the wire (from `node_state` rows). */
 export const NodeStateWireSchema = z.object({
   runId: z.string(),
@@ -846,6 +858,14 @@ export interface RunCallCapability {
    * nested sync chain can't hold every slot while blocked on a deeper call.
    * `resumeSessionId` continues a prior callee CLI session (a thread
    * continuation); null starts a fresh conversation.
+   *
+   * `conversationId` names the CONVERSATION this turn belongs to: the call id
+   * itself for a fresh one, and the FIRST call of the lineage for a thread
+   * continuation. The executor keys the callee's kept process by it, so a
+   * continuation is handed to the process that already holds the conversation
+   * instead of resuming the same CLI session in a second one — which is what
+   * put two live `claude --resume <id>` processes on one worktree, both
+   * answering one message and editing the same files.
    */
   launchCalleeTurn(
     callee: WorkflowAgentNode,
@@ -853,6 +873,7 @@ export interface RunCallCapability {
     callId: string,
     depth: number,
     resumeSessionId: string | null,
+    conversationId: string,
   ): Promise<CalleeTurnOutcome>;
   /** Persist one transcript item on the run's serialized write chain. */
   persistItem(
@@ -948,4 +969,35 @@ export interface TaskBoardHandler {
     runId: string,
     update: TaskBoardUpdate,
   ): Promise<TaskBoardUpdateOutcome>;
+}
+
+/**
+ * One call an EARLIER daemon made on this run, read back off the transcript —
+ * what lets a call ID and a conversation survive a daemon restart.
+ *
+ * The broker's state is in memory and dies with the daemon, so a follow-up on
+ * a run that had already made calls used to start over at `call-1`: the new
+ * `call_started` rows collided with the old ones in the transcript, and every
+ * conversation an earlier pass had built (`thread: call-N`) was unreachable
+ * — the Engineer that had spent an hour on a plan was gone and a fresh one
+ * re-oriented from a state file. Rebuilt from `call_started` (the id, the
+ * parties, the `thread` it continued) and `call_result` (the callee's CLI
+ * session id), which are already persisted for the transcript's own sake.
+ */
+export interface CallSeedRecord {
+  callId: string;
+  callerNodeId: string;
+  calleeNodeId: string;
+  /** The call this one continued (`thread:`), or null for a fresh one. */
+  thread: string | null;
+  /** The callee's CLI session id its result recorded; null = not resumable. */
+  sessionId: string | null;
+}
+
+/** What an earlier pass of a run left in the transcript — see {@link CallSeedRecord}. */
+export interface RunCallSeed {
+  /** The highest call number already in the transcript; new ids continue past it. */
+  callSeq: number;
+  /** Every earlier call, in transcript order (a continuation after its parent). */
+  records: CallSeedRecord[];
 }

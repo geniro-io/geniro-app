@@ -95,6 +95,7 @@ export class ClaudeDelegateCostLedger {
   settle(root: Record<string, unknown>): { id: string; costUsd: number }[] {
     const delegates = [...this.pending.entries()];
     this.pending.clear();
+    this.settledUsd = 0;
     if (delegates.length === 0) {
       return [];
     }
@@ -109,12 +110,35 @@ export class ClaudeDelegateCostLedger {
       const list =
         spend.model === null ? null : listCostUsd(spend.model, spend);
       if (factor === null || list === null) {
+        // One delegate nobody can price makes the turn's delegate spend
+        // UNKNOWN, not smaller — see `takeSettledUsd`.
+        this.settledUsd = null;
         continue;
       }
       priced.push({ id, costUsd: list * factor });
+      if (this.settledUsd !== null) {
+        this.settledUsd += list * factor;
+      }
     }
     return priced;
   }
+
+  /**
+   * What the delegates priced by the last {@link settle} cost together — null
+   * when any of them could not be priced — and forget it.
+   *
+   * Read by the SAME `result` line right after `settle`, to bound what the turn
+   * itself can plausibly have cost (`readClaudeUsage`). A delegate's spend is in
+   * the CLI's running total and not in the turn's own token roll-up, so a bound
+   * that left it out would clip a real fan-out turn to its launcher's tokens.
+   */
+  takeSettledUsd(): number | null {
+    const usd = this.settledUsd;
+    this.settledUsd = 0;
+    return usd;
+  }
+
+  private settledUsd: number | null = 0;
 }
 
 /**
@@ -147,7 +171,7 @@ const MAX_CALIBRATION = 4;
  * they cost — per model, and pooled across all of them as a fallback for a
  * delegate that ran on a model the turn's own roll-up does not name.
  */
-function readCalibration(root: Record<string, unknown>): {
+export function readCalibration(root: Record<string, unknown>): {
   byModel: Map<string, number>;
   overall: number | null;
 } {

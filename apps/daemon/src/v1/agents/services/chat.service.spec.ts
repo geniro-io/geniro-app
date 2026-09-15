@@ -79,6 +79,7 @@ import { GalleryBroker } from './gallery.broker';
 import { ItemSeqAllocator } from './item-seq.allocator';
 import type { McpHarvestStore } from './mcp-harvest.store';
 import { MetricsBroker } from './metrics.broker';
+import { NotifyBroker } from './notify.broker';
 import { PartialStreamService } from './partial-stream.service';
 import { PatchBroker } from './patch.broker';
 import { PlanBroker } from './plan.broker';
@@ -809,6 +810,7 @@ function setup(
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   const claudeProbe = {
     capability: () => claudeModes,
     ensureVerdict: vi.fn(async () => claudeModes),
@@ -933,6 +935,7 @@ function setup(
     metrics,
     comparisons,
     galleries,
+    notices,
     callTokens,
     {
       token: 'launch',
@@ -4439,6 +4442,27 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).rejects.toThrow("cursor-agent does not support the approval mode 'plan'");
   });
 
+  it('updateSettings drops the measured window when the model changes, and keeps it otherwise', async () => {
+    // The window is only ever overwritten by a positive reading, and a model
+    // that has not finished a turn here reports none — so the new model's
+    // first turn was drawn against the old model's window.
+    const { service, runDao } = setup();
+    const run = await service.createChat({ agentKind: 'claude', cwd: dir });
+    await runDao.rememberContext(run.id, {
+      contextTokens: 350_000,
+      contextWindowTokens: 1_000_000,
+    });
+
+    await service.updateSettings(run.id, { approval: 'acceptEdits' });
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBe(1_000_000);
+
+    const moved = await service.updateSettings(run.id, { model: 'sonnet' });
+    expect(moved.contextWindowTokens).toBeNull();
+    expect(runDao.runs.get(run.id)?.contextWindowTokens).toBeNull();
+    // The COUNT still measures the conversation, which a model change keeps.
+    expect(runDao.runs.get(run.id)?.contextTokens).toBe(350_000);
+  });
+
   it('updateSettings flips the mode between turns, refuses on a CLAIMED run, and 400s a cursor plan mode', async () => {
     const { service, registry } = setup();
     const run = await service.createChat({ agentKind: 'claude', cwd: dir });
@@ -6330,6 +6354,38 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     expect(itemDao.items.at(-1)?.payload).toContain('the delegate reported');
   });
 
+  it('records a compaction the CLI finished between turns, ahead of what it said next', async () => {
+    // A continuation turn fills the window as readily as a turn of ours, and
+    // its boundary reaches the between-turn handler, which kept no figures.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+    const before = itemDao.items.length;
+
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    claude.sessions[0]?.onBetweenTurnEvent?.({
+      type: 'text',
+      text: 'the delegate reported back',
+    });
+    await drain();
+
+    const added = itemDao.items.slice(before);
+    expect(added.map((i) => i.kind)).toEqual(['system', 'message']);
+    expect(JSON.parse(added[0]!.payload)).toMatchObject({
+      compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+    });
+  });
+
   it('puts the badge back to running while the CLI carries on by itself', async () => {
     // "it showed complete status, but in fact its not" — the run had settled
     // and the CLI went on working under it. A row arriving off-turn IS the
@@ -8196,6 +8252,64 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     await drain();
   });
 
+  it('writes a row for an AUTOMATIC compaction the CLI put no summary on the stream for', async () => {
+    // Reported as "if agent auto compacting conversation I don't see a system
+    // message". 238 of 239 compaction rows on the author's database followed a
+    // `/compact`: an automatic one emits the boundary and no summary line, so
+    // the figures were held for a summary that never came and nothing was
+    // written at all.
+    const { service, claude, itemDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: process.cwd(),
+    });
+    await service.sendMessage(run.id, 'go');
+    await drain();
+
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'started',
+      trigger: null,
+      preTokens: null,
+      postTokens: null,
+    });
+    claude.emit({
+      type: 'context_compacted',
+      phase: 'finished',
+      trigger: 'auto',
+      preTokens: 977_032,
+      postTokens: 28_921,
+    });
+    claude.emit({ type: 'text', text: 'Carrying on with the parser.' });
+    claude.emit({
+      type: 'turn_complete',
+      usage: null,
+      stopReason: null,
+      finalText: null,
+    });
+    claude.finish();
+    await drain();
+
+    const read = (payload: unknown): Record<string, unknown> =>
+      (typeof payload === 'string' ? JSON.parse(payload) : payload) as Record<
+        string,
+        unknown
+      >;
+    const rows = itemDao.items
+      .filter((row) => row.runId === run.id)
+      .sort((a, b) => a.seq - b.seq);
+    const at = rows.findIndex(
+      (row) =>
+        row.kind === 'system' && read(row.payload).compaction !== undefined,
+    );
+    expect(at).toBeGreaterThan(-1);
+    expect(read(rows[at]!.payload)).toMatchObject({
+      compaction: { preTokens: 977_032, postTokens: 28_921, trigger: 'auto' },
+    });
+    // Where it happened: ahead of what the agent said next.
+    expect(rows[at + 1]).toMatchObject({ kind: 'message', role: 'assistant' });
+  });
+
   it('takes the compaction phrase back DOWN when it finishes, rather than rewording it', async () => {
     // It used to announce a past-tense sentence here, worded by trigger
     // ("compacted the conversation", or "… to free up context"). The activity
@@ -8445,8 +8559,20 @@ describe('ChatService — run status is the truth, and it is broadcast', () => {
     claude.emit({ type: 'notice', message: 'images were withheld' });
     await drain();
 
-    const advisory = published.find((entry) => entry.item.kind === 'system');
-    expect(advisory?.item.payload).not.toHaveProperty('compaction');
+    const systemRows = published
+      .filter((entry) => entry.item.kind === 'system')
+      .map((entry) => entry.item.payload as Record<string, unknown>);
+    const advisory = systemRows.find(
+      (payload) => payload.message === 'images were withheld',
+    );
+    expect(advisory).toBeDefined();
+    expect(advisory).not.toHaveProperty('compaction');
+    // The compaction still gets its row — its own, written ahead of the
+    // advisory, since no summary came to carry it.
+    expect(systemRows.indexOf(advisory!)).toBe(1);
+    expect(systemRows[0]).toMatchObject({
+      compaction: { preTokens: 180_000, postTokens: null, trigger: 'auto' },
+    });
   });
 
   it('says a run is WAITING on the user, which "running" alone cannot', async () => {

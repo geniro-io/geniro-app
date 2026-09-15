@@ -12,6 +12,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
+  HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -21,6 +22,7 @@ import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -77,6 +79,7 @@ function service(
   metrics = new MetricsBroker(),
   comparisons = new ComparisonBroker(),
   galleries = new GalleryBroker(),
+  notices = new NotifyBroker(),
   taskBoard = new TaskBoardBroker(),
 ): McpServerService {
   return new McpServerService(
@@ -89,6 +92,7 @@ function service(
     metrics,
     comparisons,
     galleries,
+    notices,
     taskBoard,
     {
       token: 'launch',
@@ -126,6 +130,7 @@ async function everyHostTool(): Promise<
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   for (const broker of [
     questions,
     findings,
@@ -135,6 +140,7 @@ async function everyHostTool(): Promise<
     metrics,
     comparisons,
     galleries,
+    notices,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -149,6 +155,7 @@ async function everyHostTool(): Promise<
       metrics,
       comparisons,
       galleries,
+      notices,
     ),
     'run-1',
     'agent',
@@ -1204,6 +1211,75 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).not.toContain('.png');
   });
 
+  it('tools/call notify_user hands the message to the run and answers with a receipt', async () => {
+    const notices = new NotifyBroker();
+    const sent: string[] = [];
+    notices.register('run-1', 'agent', async (message) => {
+      sent.push(message);
+      return { status: 'sent' };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        notices,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_NOTIFY_TOOL,
+        arguments: { message: '  The dev server is running at :3000.  ' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(sent).toEqual(['The dev server is running at :3000.']);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Notification sent');
+  });
+
+  it('refuses a notify_user call with no message, without reaching the run', async () => {
+    // A banner with nothing in it is only ever a mistake.
+    const notices = new NotifyBroker();
+    const sent: string[] = [];
+    notices.register('run-1', 'agent', async (message) => {
+      sent.push(message);
+      return { status: 'sent' };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        notices,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_NOTIFY_TOOL,
+        arguments: { message: '   ' },
+      }),
+    );
+    const result = json().result as { isError: boolean };
+    expect(result.isError).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
   it('refuses a gallery naming no picture, without reaching the drawer', async () => {
     // A gallery of nothing is only ever a mistake, so it is a malformed call
     // rather than an empty result — the chart's rule, not the findings tool's.
@@ -1461,6 +1537,7 @@ describe('McpServerService — the board tools', () => {
       undefined,
       undefined,
       undefined,
+      undefined,
       board,
     );
     return { subject, update };
@@ -1653,6 +1730,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_PATCH_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
         /Use it (when|whenever)/,
@@ -1664,6 +1742,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_COMPARISON_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
         /(Do NOT use it|Do not use it|instead\.|write a table instead)/,

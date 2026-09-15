@@ -183,9 +183,23 @@ function CallFigures({
           />
         </span>
       )}
-      {tokens === null ? null : (
-        <span data-slot={`${slot}-tokens`} className="shrink-0 tabular-nums">
-          {formatTokens(tokens)} tokens
+      {/* The ring's own figure, in words. This slot used to print the callee's
+          input + output as "N tokens" right beside the ring, and it was read as
+          the context — REPORTED as wrong numbers over a call reading "838
+          tokens" whose window held 843k. What a call SPENT is its cost beside
+          it; the in/out split rides the hover, said for what it is. */}
+      {contextTokens === null ? null : (
+        <span
+          data-slot={`${slot}-tokens`}
+          title={
+            tokens === null
+              ? undefined
+              : `${formatTokens(tokens)} tokens in/out`
+          }
+          className="shrink-0 tabular-nums">
+          {contextWindowTokens === null
+            ? `${formatTokens(contextTokens)} context`
+            : `${formatTokens(contextTokens)} / ${formatTokens(contextWindowTokens)}`}
         </span>
       )}
       {costUsd === null ? null : (
@@ -314,7 +328,6 @@ export const CallBlock = memo(function CallBlock({
    */
   const hasFigures =
     tasks.length > 0 ||
-    usage.tokens !== null ||
     usage.costUsd !== null ||
     context.contextTokens !== null;
   const figures = (slot: 'call-summary' | 'call-footer'): React.JSX.Element => (
@@ -344,6 +357,7 @@ export const CallBlock = memo(function CallBlock({
         eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}
         status={status}
         collapsible
+        memoryKey={`call:${block.id}`}
         toggleLabel={
           caller ? `${caller} → ${callee} call` : `Call to ${callee}`
         }
@@ -415,6 +429,7 @@ export const CallBlock = memo(function CallBlock({
           <BlockRequest
             label={`Providing instructions for ${callee}`}
             text={block.message}
+            memoryKey={`call:${block.id}:request`}
           />
         ) : null}
         {/*
@@ -437,7 +452,11 @@ export const CallBlock = memo(function CallBlock({
           ))}
         </NestedThreadContext.Provider>
         {block.result ? (
-          <BlockResult label={`Result from ${callee}`} text={block.result} />
+          <BlockResult
+            label={`Result from ${callee}`}
+            text={block.result}
+            memoryKey={`call:${block.id}:result`}
+          />
         ) : null}
         {status === 'running' && !liveTail ? (
           // THREE lines — the reported ask. The full command is still in the

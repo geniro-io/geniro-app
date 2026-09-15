@@ -1,5 +1,4 @@
 import { ChevronRight } from 'lucide-react';
-import { useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -30,6 +29,7 @@ import {
   seriesKey,
   X_KEY,
 } from './chart-payload';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * A chart an agent handed over as typed numbers, plotted by the app.
@@ -94,8 +94,15 @@ interface TooltipProps {
   payload?: readonly { payload?: ChartRow }[];
 }
 
-export function ChartCard({ chart }: { chart: ChartSpec }): React.JSX.Element {
-  const [open, setOpen] = useState(true);
+export function ChartCard({
+  chart,
+  memoryKey,
+}: {
+  chart: ChartSpec;
+  /** Where the card's fold is remembered within its thread. */
+  memoryKey?: string;
+}): React.JSX.Element {
+  const [open, setOpen] = useThreadFlag(memoryKey, true);
   const rows = chartRows(chart);
   const interval = Math.max(0, Math.ceil(rows.length / TICK_TARGET) - 1);
   // A line and an area are drawn BETWEEN points, so a single-point series has

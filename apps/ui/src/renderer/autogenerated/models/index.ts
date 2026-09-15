@@ -3746,6 +3746,19 @@ export interface RunWorkflowDto {
 /**
  * 
  * @export
+ * @interface RunWorkflowSnapshotDto
+ */
+export interface RunWorkflowSnapshotDto {
+    /**
+     * 
+     * @type {Workflow}
+     * @memberof RunWorkflowSnapshotDto
+     */
+    workflow: Workflow;
+}
+/**
+ * 
+ * @export
  * @interface SaveWorkflowDto
  */
 export interface SaveWorkflowDto {

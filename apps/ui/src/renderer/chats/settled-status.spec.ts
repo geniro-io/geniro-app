@@ -25,6 +25,23 @@ function item(
 }
 
 describe('settledRunStatus', () => {
+  it('refuses a continuation’s result that arrived INSIDE a turn — it ended nothing', () => {
+    // Mirrored, it put `completed` on the sidebar row of a thread still working.
+    expect(
+      settledRunStatus(
+        item('turn_complete', { continuation: true, insideTurn: true }),
+      ),
+    ).toBeNull();
+    expect(
+      lastTerminalItemAt([
+        {
+          ...item('turn_complete', { insideTurn: true }),
+          createdAt: '2026-09-14T10:00:00.000Z',
+        },
+      ]),
+    ).toBeNull();
+  });
+
   it('reads each terminal kind as the status it implies', () => {
     expect(settledRunStatus(item('turn_complete'))).toBe('completed');
     expect(settledRunStatus(item('turn_cancelled'))).toBe('cancelled');

@@ -18,7 +18,8 @@ import { TasksService } from './tasks.service';
  * finished — the agent says that itself, through `update_task`, together with
  * its report (`TaskBoardToolService`). Moving the card here on the run's own
  * ending is what put a thread's last message on the card as its "report",
- * which was whatever the agent happened to say last.
+ * which was whatever the agent happened to say last — an interim "waiting for
+ * the check, then I'll open the PR" as readily as a conclusion.
  *
  * A failure and a cancel stay: an agent whose process died cannot call a tool,
  * and a user who pressed Stop has already decided. A cancel sends the card

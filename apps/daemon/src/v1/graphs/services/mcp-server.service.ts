@@ -20,6 +20,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
+  HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -34,6 +35,7 @@ import {
   MAX_HOST_METRICS,
   MAX_HOST_QUESTION_OPTIONS,
   MAX_HOST_QUESTIONS,
+  MAX_NOTIFY_MESSAGE_LENGTH,
   MAX_PLAN_STEPS,
   SENTIMENTS,
 } from '../../agents/chat.types';
@@ -42,6 +44,7 @@ import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -65,6 +68,10 @@ import {
   hostMetricsResultText,
   readHostMetrics,
 } from '../../agents/utils/host-metrics';
+import {
+  hostNotifyResultText,
+  readHostNotify,
+} from '../../agents/utils/host-notify';
 import {
   hostPatchResultText,
   readHostPatch,
@@ -151,6 +158,7 @@ export class McpServerService {
     private readonly metrics: MetricsBroker,
     private readonly comparisons: ComparisonBroker,
     private readonly galleries: GalleryBroker,
+    private readonly notices: NotifyBroker,
     private readonly taskBoard: TaskBoardBroker,
     @Inject(RUNTIME_TOKEN) private readonly runtime: RuntimeInfo,
   ) {}
@@ -1012,6 +1020,33 @@ export class McpServerService {
           },
         );
       }
+      if (this.notices.canNotify(runId, nodeId)) {
+        tools.push({
+          name: HOST_NOTIFY_TOOL,
+          description:
+            'Tell the user, with a notification outside this app, that you are finished and they can come back. ' +
+            'Use it when you have finished the task but are leaving a background process running — a dev server, a ' +
+            'watcher, anything you started in the background that will not exit on its own. This app announces every ' +
+            'finished turn by itself, but while something you started is still running it can only say that the turn ' +
+            'ended with a command still running, and it takes that back if you resume — it cannot tell a finished ' +
+            'task from a pause. This is how you say you are done, and what is ready; it replaces that plain announcement. ' +
+            'Do NOT use it when nothing is left running (the app already announces that ending), when you are ' +
+            'pausing to wait for a background command such as a test run or a build (you are not done), or to report ' +
+            'progress. ' +
+            'Call it ONCE, at the very end, with one sentence the user can act on — e.g. "The dev server is running ' +
+            'at http://localhost:3000 and ready to try." The result is a short receipt.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              message: {
+                type: 'string',
+                description: `One sentence, at most ${MAX_NOTIFY_MESSAGE_LENGTH} characters: what is ready, and where.`,
+              },
+            },
+            required: ['message'],
+          },
+        });
+      }
       return { tools };
     });
 
@@ -1187,6 +1222,29 @@ export class McpServerService {
           content: [{ type: 'text', text: hostGalleryResultText(outcome) }],
           // Same reading as its drawing siblings: an unavailable channel is an
           // answer, not a failure — the agent still knows where the files are.
+          isError: false,
+        };
+      }
+      if (name === HOST_NOTIFY_TOOL) {
+        const message = readHostNotify(args);
+        // A notification with nothing in it is only ever a mistake, so it is
+        // answered as a malformed call rather than sent as a blank banner.
+        if (message === null) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: "INVALID_ARGS: 'message' must be a non-empty string.",
+              },
+            ],
+            isError: true,
+          };
+        }
+        const outcome = await this.notices.notify(runId, nodeId, message);
+        return {
+          content: [{ type: 'text', text: hostNotifyResultText(outcome) }],
+          // An unavailable channel is an answer, not a failure — the agent can
+          // still say it in its reply.
           isError: false,
         };
       }

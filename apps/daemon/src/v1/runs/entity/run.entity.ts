@@ -110,6 +110,20 @@ export class Run extends TimestampsEntity {
   contextWindow: string | null = null;
 
   /**
+   * Compact the conversation once a settled turn leaves its context at or above
+   * this percentage of the window; null = never, leaving the CLI's own
+   * behaviour alone.
+   *
+   * The DAEMON performs it, between turns, with the adapter's own `/compact`
+   * rather than handing the CLI a threshold: claude's
+   * `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` is read by the binary but measured to
+   * compact nothing in headless mode (2.1.270 — a haiku session at 155k tokens
+   * with the override at 20% never compacted), and cursor has no such knob.
+   */
+  @Property({ type: 'integer', nullable: true })
+  autoCompactPercent: number | null = null;
+
+  /**
    * Every OTHER model setting this run's next turn asks for, as a JSON object
    * of `{parameterId: value}` — `{"optimize_for":"intelligence"}`.
    *

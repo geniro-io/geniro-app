@@ -638,6 +638,9 @@ export function Chats({
   const [contextWindows, setContextWindows] = useState<
     Partial<Record<CliKind, string>>
   >({});
+  const [autoCompactPercent, setAutoCompactPercent] = useState<number | null>(
+    null,
+  );
   // The OTHER model settings, per CLI, as `{parameterId: value}`. Per CLI on
   // the same terms as the two above, and opaque: which ids exist is the MODEL's
   // answer, re-asked whenever it changes.
@@ -1104,6 +1107,12 @@ export function Chats({
     },
     [],
   );
+
+  /** New-run auto-compact threshold — one for every CLI, remembered. */
+  const changeAutoCompact = useCallback((percent: number | null): void => {
+    setAutoCompactPercent(percent);
+    void window.geniro.updateSettings({ lastAutoCompactPercent: percent });
+  }, []);
 
   /**
    * New-run context-window size for one CLI — remembered per CLI, like the
@@ -2057,6 +2066,7 @@ export function Chats({
       setModels(s.lastModels ?? {});
       setEfforts(s.lastEfforts ?? {});
       setContextWindows(s.lastContextWindows ?? {});
+      setAutoCompactPercent(s.lastAutoCompactPercent ?? null);
       setModelParameters(s.lastModelParameters ?? {});
     });
     // Which CLIs are actually on this machine. The picker used to offer every
@@ -2494,6 +2504,7 @@ export function Chats({
           ...(contextWindows[agentKind]
             ? { contextWindow: contextWindows[agentKind] }
             : {}),
+          ...(autoCompactPercent !== null ? { autoCompactPercent } : {}),
           // Sent only when this CLI honours the composer's pick; otherwise
           // omitted so the daemon applies its own default for that agent —
           // which is also what happens while capabilities are still loading.
@@ -2530,6 +2541,7 @@ export function Chats({
       // model-parameter chip (`optimize_for` chosen, `model_parameters` null on
       // the row); the window has the identical shape and the identical fix.
       contextWindows,
+      autoCompactPercent,
       modelParameters,
       configDir,
       chatApi,
@@ -2547,6 +2559,7 @@ export function Chats({
       model?: string | null;
       effort?: string | null;
       contextWindow?: string | null;
+      autoCompactPercent?: number | null;
       modelParameters?: Record<string, string>;
       configDir?: string | null;
     }): Promise<void> => {
@@ -7382,6 +7395,8 @@ export function Chats({
                                     onContextWindowChange={(size) =>
                                       changeContextWindow(agentKind, size)
                                     }
+                                    autoCompactPercent={autoCompactPercent}
+                                    onAutoCompactChange={changeAutoCompact}
                                     parameters={agentModelParameters.parameters}
                                     parameterValues={
                                       modelParameters[agentKind] ??
@@ -8291,6 +8306,14 @@ export function Chats({
                                   windowTokens={chatContext.window}
                                   onContextWindowChange={(contextWindow) =>
                                     void changeRunSettings({ contextWindow })
+                                  }
+                                  autoCompactPercent={
+                                    activeRun.autoCompactPercent
+                                  }
+                                  onAutoCompactChange={(percent) =>
+                                    void changeRunSettings({
+                                      autoCompactPercent: percent,
+                                    })
                                   }
                                   parameters={agentModelParameters.parameters}
                                   parameterValues={activeRun.modelParameters}

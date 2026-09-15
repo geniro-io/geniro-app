@@ -39,6 +39,7 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  autoCompactPercent: null,
   modelParameters: {},
   contextTokens: null,
   contextWindowTokens: null,

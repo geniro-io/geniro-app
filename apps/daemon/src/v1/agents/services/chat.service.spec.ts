@@ -2533,6 +2533,141 @@ describe('ChatService', () => {
       await drain();
     }
 
+    it('compacts on its own once a settled turn crosses the auto-compact threshold', async () => {
+      const { service, claude, itemDao } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'read it');
+      await drain();
+
+      expect(claude.start).toHaveBeenCalledTimes(2);
+      expect((claude.start.mock.calls[1]?.[0] as AgentTurnInput).prompt).toBe(
+        '/compact',
+      );
+      expect(
+        itemDao.items.some(
+          (item) =>
+            item.kind === 'system' &&
+            item.payload.includes('80% auto-compact threshold') &&
+            item.payload.includes('"severity":"info"'),
+        ),
+      ).toBe(true);
+
+      // The compaction turn's own settle never re-arms it, even though nothing
+      // has measured the conversation smaller yet.
+      await turn(claude, 'compacted.');
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses a message sent while an automatic compaction runs, rather than delivering it into the summary turn', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'read it');
+      await drain();
+      expect((claude.start.mock.calls[1]?.[0] as AgentTurnInput).prompt).toBe(
+        '/compact',
+      );
+
+      await expect(service.sendMessage(run.id, 'and now this')).rejects.toThrow(
+        /compacting its conversation/,
+      );
+      // Never written into the running compaction turn.
+      expect(claude.handles[1]!.sendUserMessage).not.toHaveBeenCalled();
+
+      await turn(claude, 'compacted.');
+      await drain();
+    });
+
+    it('does not compact again when the last compaction left the conversation over the threshold', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 10,
+      });
+      const overThreshold = async (text: string): Promise<void> => {
+        claude.emit({
+          type: 'context_progress',
+          contextTokens: 40_000,
+          contextWindowTokens: 200_000,
+        });
+        await turn(claude, text);
+        await drain();
+      };
+
+      await service.sendMessage(run.id, 'first');
+      await overThreshold('one');
+      expect(claude.start).toHaveBeenCalledTimes(2); // the auto /compact
+      await turn(claude, 'compacted.');
+      await drain();
+
+      // Still at 40k of 200k after compacting — 20% against a 10% threshold.
+      await service.sendMessage(run.id, 'second');
+      await overThreshold('two');
+      await service.sendMessage(run.id, 'third');
+      await overThreshold('three');
+      const prompts = claude.start.mock.calls.map(
+        (call) => (call[0] as AgentTurnInput).prompt,
+      );
+      expect(prompts.filter((prompt) => prompt === '/compact')).toHaveLength(1);
+    });
+
+    it('does not compact after a turn that was cancelled over the threshold', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'read the whole repository');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 170_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'half of it', { type: 'turn_cancelled' });
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves a conversation under its auto-compact threshold alone', async () => {
+      const { service, claude } = setup();
+      const run = await service.createChat({
+        agentKind: 'claude',
+        cwd: dir,
+        autoCompactPercent: 80,
+      });
+      await service.sendMessage(run.id, 'hello');
+      claude.emit({
+        type: 'context_progress',
+        contextTokens: 150_000,
+        contextWindowTokens: 200_000,
+      });
+      await turn(claude, 'hi');
+      await drain();
+      expect(claude.start).toHaveBeenCalledTimes(1);
+    });
+
     it('sends the CLI its OWN compaction command, and touches no session', async () => {
       // claude rewrites its history in place and keeps the session; dropping it
       // here would discard the conversation the summary was distilled from.
@@ -4652,6 +4787,31 @@ describe('ChatService — approval modes (parity M1)', () => {
     ).toBeUndefined();
     claude.finish();
     await drain();
+  });
+
+  it('stores the auto-compact threshold, keeps it across a model change, and clears it with null', async () => {
+    const { service, runDao } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      autoCompactPercent: 80,
+    });
+    expect(run.autoCompactPercent).toBe(80);
+    expect((await runDao.getById(run.id))?.autoCompactPercent).toBe(80);
+
+    const remodelled = await service.updateSettings(run.id, { model: 'opus' });
+    expect(remodelled.autoCompactPercent).toBe(80);
+
+    const lowered = await service.updateSettings(run.id, {
+      autoCompactPercent: 60,
+    });
+    expect(lowered.autoCompactPercent).toBe(60);
+
+    const cleared = await service.updateSettings(run.id, {
+      autoCompactPercent: null,
+    });
+    expect(cleared.autoCompactPercent).toBeNull();
+    expect((await runDao.getById(run.id))?.autoCompactPercent).toBeNull();
   });
 
   it('refuses an effort the run CLI does not list, per CLI', async () => {

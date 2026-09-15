@@ -280,6 +280,12 @@ export interface Settings {
    */
   lastContextWindows: Partial<Record<CliKind, string>>;
   /**
+   * The new-run composer's last auto-compact threshold (a percentage of the
+   * context window), or null for never. ONE value rather than one per CLI: a
+   * share of the window means the same thing to every agent.
+   */
+  lastAutoCompactPercent: number | null;
+  /**
    * The OTHER model settings for the next chat on each CLI, as
    * `{parameterId: value}` — `{optimize_for: 'balanced'}`.
    *
@@ -458,6 +464,18 @@ export interface Settings {
 export const MAX_CUSTOM_INSTRUCTIONS_CHARS = 16_000;
 
 /**
+ * Bounds of `Settings.lastAutoCompactPercent`.
+ *
+ * TWIN PARSER: `MIN_AUTO_COMPACT_PERCENT` / `MAX_AUTO_COMPACT_PERCENT` in the
+ * daemon's `apps/daemon/src/v1/agents/chat.types.ts`, which `AutoCompactPercentSchema`
+ * is built from. The generated client carries no bounds, so this copy exists to
+ * stop a remembered threshold being one the next chat create refuses — change
+ * one, change the other.
+ */
+export const MIN_AUTO_COMPACT_PERCENT = 10;
+export const MAX_AUTO_COMPACT_PERCENT = 95;
+
+/**
  * Whether a custom-instructions value carries a control character.
  *
  * TWIN PARSER: `hasControlCharacters` in
@@ -498,6 +516,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lastModels: {},
   lastEfforts: {},
   lastContextWindows: {},
+  lastAutoCompactPercent: null,
   lastModelParameters: {},
   cliPaths: {},
   checkForUpdates: true,

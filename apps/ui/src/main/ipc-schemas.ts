@@ -6,6 +6,7 @@ import {
   CLI_KINDS,
   type CliKind,
   hasControlCharacters,
+  MAX_AUTO_COMPACT_PERCENT,
   MAX_CONFIG_PROFILE_NAME,
   MAX_CONFIG_PROFILES,
   MAX_CUSTOM_INSTRUCTIONS_CHARS,
@@ -14,6 +15,7 @@ import {
   MAX_FAST_ACTIONS,
   MAX_RUN_CONFIG_NAME,
   MAX_RUN_CONFIGS,
+  MIN_AUTO_COMPACT_PERCENT,
   PROFILE_COLORS,
 } from '../shared/contracts';
 import { THEME_PREFERENCES } from '../shared/themes';
@@ -190,6 +192,15 @@ export const settingsPatchSchema = z.strictObject({
   // per MODEL rather than per CLI — bounded here, never enumerated.
   lastContextWindows: z
     .partialRecord(cliKind, z.string().min(1).max(64))
+    .optional(),
+  // The daemon's own bounds, twinned in contracts.ts, so a remembered threshold
+  // can never be one the next chat create refuses.
+  lastAutoCompactPercent: z
+    .number()
+    .int()
+    .min(MIN_AUTO_COMPACT_PERCENT)
+    .max(MAX_AUTO_COMPACT_PERCENT)
+    .nullable()
     .optional(),
   // The OTHER model settings, per CLI, as `{parameterId: value}`. Both halves
   // are the CLI's own words (`optimize_for` → `balanced`), so both are bounded

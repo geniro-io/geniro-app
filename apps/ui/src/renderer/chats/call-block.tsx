@@ -133,6 +133,71 @@ function CallTaskChip({
 }
 
 /**
+ * The callee's figures — its task chip, how full its window is, and what it
+ * spent — drawn ONE way whether the card is shut or open.
+ *
+ * REPORTED as "i wanna have same design of elements for footer when
+ * uncollapsing agent conversation as in collapsed - with circle and so on": the
+ * shut band drew the task chip and the context RING, while opening the card
+ * swapped them for a plain-text footer reading `96 tools 233k ctx`, so opening
+ * a card changed how its numbers looked rather than only what else was shown.
+ * One component for both is what keeps the two states from drifting apart
+ * again. `slot` only names the hooks, since the two are never on screen at once.
+ */
+function CallFigures({
+  slot,
+  tasks,
+  live,
+  callee,
+  contextTokens,
+  contextWindowTokens,
+  tokens,
+  costUsd,
+}: {
+  slot: 'call-summary' | 'call-footer';
+  tasks: readonly AgentTaskRow[];
+  live: boolean;
+  callee: string;
+  contextTokens: number | null;
+  contextWindowTokens: number | null;
+  tokens: number | null;
+  costUsd: number | null;
+}): React.JSX.Element {
+  return (
+    <>
+      {/* WHAT IT IS ON, without opening the card — asked for beside the
+          figures ("also current tasks icon with popover"). The list is the
+          callee's own, folded out of this block. */}
+      <CallTaskChip tasks={tasks} live={live} callee={callee} />
+      {/* HOW FULL the callee's own window is — the one figure about this call
+          that the caller's ring cannot state, each side of a call holding a
+          window of its own. `runId` is deliberately null: that prop opens the
+          run-wide breakdown, which is a question the run's one live process
+          cannot answer for a particular call. */}
+      {contextTokens === null ? null : (
+        <span data-slot={`${slot}-context`} className="shrink-0">
+          <ContextMeter
+            runId={null}
+            contextTokens={contextTokens}
+            contextWindowTokens={contextWindowTokens}
+          />
+        </span>
+      )}
+      {tokens === null ? null : (
+        <span data-slot={`${slot}-tokens`} className="shrink-0 tabular-nums">
+          {formatTokens(tokens)} tokens
+        </span>
+      )}
+      {costUsd === null ? null : (
+        <span data-slot={`${slot}-cost`} className="shrink-0 tabular-nums">
+          {formatExactUsd(costUsd)}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
  * One agent-to-agent call — geniro web's CommunicationBlock, always
  * expanded: an "Agent communication" eyebrow, a neutral card whose header
  * carries the caller→callee avatar pair, the name line, a live spinner and
@@ -247,6 +312,23 @@ export const CallBlock = memo(function CallBlock({
    * it on `summary ?`, and an element is always truthy, so the caller has to
    * pass `undefined` to say it has nothing to show.
    */
+  const hasFigures =
+    tasks.length > 0 ||
+    usage.tokens !== null ||
+    usage.costUsd !== null ||
+    context.contextTokens !== null;
+  const figures = (slot: 'call-summary' | 'call-footer'): React.JSX.Element => (
+    <CallFigures
+      slot={slot}
+      tasks={tasks}
+      live={status === 'running'}
+      callee={callee}
+      contextTokens={context.contextTokens}
+      contextWindowTokens={context.contextWindowTokens}
+      tokens={usage.tokens}
+      costUsd={usage.costUsd}
+    />
+  );
   const hasSummary =
     summaryText !== null ||
     pending ||
@@ -254,10 +336,7 @@ export const CallBlock = memo(function CallBlock({
     // reader that one fact, so it earns the band on its own — on the same
     // terms the marker itself is drawn, or the band could open empty.
     (block.stalled && status === 'running') ||
-    tasks.length > 0 ||
-    usage.tokens !== null ||
-    usage.costUsd !== null ||
-    context.contextTokens !== null;
+    hasFigures;
   return (
     <div data-role="call-block" className="w-full">
       <BlockShell
@@ -302,43 +381,7 @@ export const CallBlock = memo(function CallBlock({
                   quiet
                 </span>
               ) : null}
-              {/* WHAT IT IS ON, without opening the card — asked for beside the
-                figures ("also current tasks icon with popover"). The list is
-                the callee's own, folded out of this block, so a card that is
-                shut still answers the question a reader opens it for. */}
-              <CallTaskChip
-                tasks={tasks}
-                live={status === 'running'}
-                callee={callee}
-              />
-              {/* HOW FULL the callee's own window is — the one figure about
-                this call that the caller's ring cannot state, each side of a
-                call holding a window of its own. `runId` is deliberately null:
-                that prop opens the run-wide breakdown, which is a question the
-                run's one live process cannot answer for a particular call. */}
-              {context.contextTokens === null ? null : (
-                <span data-slot="call-summary-context" className="shrink-0">
-                  <ContextMeter
-                    runId={null}
-                    contextTokens={context.contextTokens}
-                    contextWindowTokens={context.contextWindowTokens}
-                  />
-                </span>
-              )}
-              {usage.tokens === null ? null : (
-                <span
-                  data-slot="call-summary-tokens"
-                  className="shrink-0 tabular-nums">
-                  {formatTokens(usage.tokens)} tokens
-                </span>
-              )}
-              {usage.costUsd === null ? null : (
-                <span
-                  data-slot="call-summary-cost"
-                  className="shrink-0 tabular-nums">
-                  {formatExactUsd(usage.costUsd)}
-                </span>
-              )}
+              {figures('call-summary')}
             </>
           ) : undefined
         }
@@ -405,17 +448,23 @@ export const CallBlock = memo(function CallBlock({
         ) : null}
         <BlockToolFooter
           count={toolCount}
-          // What this callee has spent, summed from its OWN `turn_complete`
-          // rows inside the block — so the figure grows as its turns land
-          // rather than being a total somebody has to go and look up.
-          tokens={usage.tokens}
-          costUsd={usage.costUsd}
-          // The fallback figure for a CLI that reports no per-turn tokens —
-          // cursor being the shipped one. Same reading the shut band draws as
-          // a ring; the open card had no figure at all.
-          contextTokens={context.contextTokens}
-          contextWindowTokens={context.contextWindowTokens}
-          note={failed ? <span>finished with an error</span> : undefined}
+          // The SAME figures the shut band draws — task chip, ring, tokens and
+          // cost, in the band's own size — pushed to the right as they sit
+          // there, so opening the card never changes how its numbers look.
+          note={
+            failed || hasFigures ? (
+              <>
+                {failed ? <span>finished with an error</span> : null}
+                {hasFigures ? (
+                  <span
+                    data-slot="call-footer-figures"
+                    className="ml-auto flex min-w-0 items-center gap-2 text-xs">
+                    {figures('call-footer')}
+                  </span>
+                ) : null}
+              </>
+            ) : undefined
+          }
         />
       </BlockShell>
     </div>

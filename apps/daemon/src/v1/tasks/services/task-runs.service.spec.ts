@@ -310,19 +310,21 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       void task;
     });
 
-    it('asks a graph for a PROSE report, never naming a tool it cannot see', async () => {
+    it('asks a graph to report through the board tool, from the node that concludes', async () => {
       const task = await seedWorkflowCard();
 
       await service.start(task.id, start());
 
-      // The render family is registered by `ChatService` alone, so no node of
-      // this graph can call `report_findings`. Naming it would ask every node
-      // for a call it will look for and fail to find.
+      // Every agent node of a task workflow is handed the board tools, while
+      // the render family is registered by `ChatService` alone — so the ask
+      // names `update_task`, never `report_findings`, and says which node of
+      // the graph is the one to use it.
       const instructions = String(
         startWorkflowRun.mock.calls[0]?.[1]?.customInstructions ?? '',
       );
       expect(instructions).not.toContain('report_findings');
-      expect(instructions).toContain('close with a report');
+      expect(instructions).toContain('`update_task`');
+      expect(instructions).toContain('leaves the card alone');
       void task;
     });
 

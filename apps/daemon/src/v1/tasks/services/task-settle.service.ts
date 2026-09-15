@@ -1,60 +1,47 @@
 import { EntityManager } from '@mikro-orm/sqlite';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 
-import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
-import { terminalNodeIds } from '../../graphs/utils/graph-order';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { isBreakerOpen } from '../../projects/utils/breaker';
-import type { Run } from '../../runs/entity/run.entity';
 import { isTerminalRunStatus, type RunStatus } from '../../runs/runs.types';
 import { TaskDao } from '../dao/task.dao';
 import type { TaskStatus, TaskWire } from '../tasks.types';
-import { reportImagePaths } from '../utils/report-images';
-import { TaskAttachmentService } from './task-attachment.service';
-import { TaskFilesService } from './task-files.service';
 import { TasksService } from './tasks.service';
 
-/** A row's stored payload, or null for text that does not parse. */
-function parsePayload(raw: string): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-
 /**
- * Where a card lands when the run working it settles.
+ * Where a card that was being WORKED lands when its run ends in a way the agent
+ * could not report itself.
  *
- * A cancel is the user stopping their own agent, so the card goes back to the
- * column it can be started from again rather than being marked failed — they
- * did not fail at anything.
+ * `completed` is deliberately absent. A run finishing is not the task being
+ * finished — the agent says that itself, through `update_task`, together with
+ * its report (`TaskBoardToolService`). Moving the card here on the run's own
+ * ending is what put a thread's last message on the card as its "report",
+ * which was whatever the agent happened to say last.
+ *
+ * A failure and a cancel stay: an agent whose process died cannot call a tool,
+ * and a user who pressed Stop has already decided. A cancel sends the card
+ * back to the column it can be started from rather than marking it failed —
+ * they did not fail at anything.
  */
-const SETTLED_TASK_STATUS: Record<RunStatus, TaskStatus | null> = {
-  pending: null,
-  running: null,
-  completed: 'in_review',
+const ENDED_TASK_STATUS: Partial<Record<RunStatus, TaskStatus>> = {
   failed: 'failed',
   cancelled: 'todo',
 };
 
 /**
- * Moving a card when its agent finishes, and recording what the agent said.
+ * What the board does when a task's run ends by itself.
  *
  * This module OBSERVES the agent plane and never drives it — the same shape
  * `v1/stats` takes, and for the same reason: `AgentEventBus` is where both
  * execution paths converge, so one subscription covers every way a run can
  * settle and nothing in `v1/agents` has to know that tasks exist.
  *
- * The report is read from the TRANSCRIPT rather than from the event that
- * announced the settle, and that is what makes the live path and the
- * app-was-closed path one piece of code. `writeRunStatus` persists the status
- * column alone, so `RunStatusEvent.summary` — the agent's closing words —
- * exists only for as long as that event is in flight. The rows outlive it, and
- * persist-then-emit means they are already written when it arrives.
+ * It no longer writes a report and no longer moves a card on success; both are
+ * the agent's (see {@link ENDED_TASK_STATUS}). What is left is what an agent
+ * cannot do for itself: park a card whose run failed or was stopped, keep the
+ * autopilot's failure streak, and release a card whose run was deleted.
  */
 @Injectable()
 export class TaskSettleService implements OnModuleInit {
@@ -64,13 +51,9 @@ export class TaskSettleService implements OnModuleInit {
     private readonly em: EntityManager,
     private readonly bus: AgentEventBus,
     private readonly runDao: RunDao,
-    private readonly itemDao: ItemDao,
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
-    private readonly workflows: WorkflowStoreService,
-    private readonly attachments: TaskAttachmentService,
-    private readonly files: TaskFilesService,
   ) {}
 
   onModuleInit(): void {
@@ -122,15 +105,12 @@ export class TaskSettleService implements OnModuleInit {
    * straight to `ChatService` and never through `TaskRunsService`, the path
    * that moves a card when the panel's Follow up is pressed. Without this the
    * card sat in `failed` for good under a conversation that went on to finish
-   * cleanly, because `settle` only ever moves a card still `in_progress`.
-   * REPORTED on the card that asked for merged pull requests to end in `done`,
-   * which its own recovered run could then never reach.
+   * cleanly. REPORTED on the card that asked for merged pull requests to end
+   * in `done`, which its own recovered run could then never reach.
    *
-   * So the run announcing `running` again — a new turn, or the CLI carrying on
-   * by itself — makes the card `in_progress`, and the ordinary settle takes it
-   * from there. ONLY `failed` is lifted: a card in review is one whose
-   * conversation the user continues deliberately, and dragging it back to
-   * `in_progress` is exactly what `settle`'s own once-only rule refuses.
+   * ONLY `failed` is lifted: a card in review is one whose conversation the
+   * user continues deliberately, and the agent moves it again itself if the
+   * work reopens.
    */
   private async reviveFailedCard(runId: string): Promise<void> {
     const em = this.em.fork();
@@ -157,9 +137,8 @@ export class TaskSettleService implements OnModuleInit {
    * a missing run is not a settled one.
    *
    * So the edge is cleared and a card that was being worked goes back to the
-   * column it can be started from. Its report reference goes with it: the row
-   * it named was hard-deleted with the transcript, so keeping the id would
-   * leave the detail panel fetching a report that cannot exist.
+   * column it can be started from. The REPORT stays: it is stored on the card
+   * and is the card's account of the work, not a pointer into the transcript.
    *
    * The WORKTREE is deliberately untouched — the branch and the directory are
    * main's, they outlive the conversation, and the agent's work is in them.
@@ -170,7 +149,7 @@ export class TaskSettleService implements OnModuleInit {
     if (!task) {
       return;
     }
-    await this.tasks.update(task.id, { runId: null, reportItemId: null });
+    await this.tasks.update(task.id, { runId: null });
     if (task.status === 'in_progress') {
       await this.tasks.moveStatus(task.id, {
         from: 'in_progress',
@@ -188,8 +167,7 @@ export class TaskSettleService implements OnModuleInit {
    * next loads it.
    */
   async settle(runId: string, status: RunStatus): Promise<void> {
-    const to = SETTLED_TASK_STATUS[status];
-    if (to === null) {
+    if (!isTerminalRunStatus(status)) {
       return;
     }
     const em = this.em.fork();
@@ -204,34 +182,24 @@ export class TaskSettleService implements OnModuleInit {
     if (!task || task.runId !== runId) {
       return;
     }
-    // A card the user called Done while its agent was still working becomes
-    // FINISHED now — the run settling is the second of `isWorkFinished`'s two
-    // conditions, and the first was met at the drag, which could not release
-    // the worktree then. The card itself stays where the user put it.
+    const worked = task.status === 'in_progress';
+    await this.recordOutcome(task.projectId, status, worked, em);
+    // A card in Done — the user's drag, or the agent's own `update_task` —
+    // becomes FINISHED now: the run settling is the second of
+    // `isWorkFinished`'s two conditions, and the first was met at the move,
+    // which could not release the worktree while the agent still worked.
     if (task.status === 'done') {
       this.tasks.announceWorkFinished(task);
       return;
     }
-    // Settle a card ONCE. The run is an ordinary chat, so a follow-up message
-    // after review settles it again — and without this, a card the user had
-    // moved to `done` would be dragged back to `in_review` by a conversation
-    // they deliberately continued. Only a card still reading as worked is a
-    // card this has anything to say about.
-    if (task.status !== 'in_progress') {
+    // Only a card still reading as worked is moved. The run is an ordinary
+    // chat, so a follow-up after review settles it again — and a card the
+    // agent or the user already moved must stay where they put it.
+    const to = ENDED_TASK_STATUS[status];
+    if (to === undefined || !worked) {
       return;
     }
-
-    const reportItemId = await this.findReport(run, em);
-    if (reportItemId !== null) {
-      await this.tasks.update(task.id, { reportItemId });
-    }
-    // Before the card moves, so it lands in review already carrying them.
-    await this.attachReportImages(run, task.id, reportItemId, em);
-    await this.recordOutcome(task.projectId, status, em);
-    // No reason rides this move. A card in review is NOT finished: the user
-    // reads the work in its worktree and routinely continues the conversation,
-    // so the directory has to outlive the settle — see `isWorkFinished`.
-    await this.tasks.moveStatus(task.id, { from: task.status, to });
+    await this.tasks.moveStatus(task.id, { from: 'in_progress', to });
   }
 
   /**
@@ -246,15 +214,18 @@ export class TaskSettleService implements OnModuleInit {
    * A CANCEL moves nothing in either direction: the user stopped their own
    * agent, which is neither a fault to count nor a success to clear one.
    *
-   * A failure counts only while the project is armed. The streak is a claim
-   * about unattended work, and a person deliberately re-running something they
-   * know is broken, on a project they have already disarmed, is not building
-   * evidence for a breaker that is not guarding anything. A SUCCESS clears it
-   * either way — whatever the run was started by, the thing works.
+   * A failure counts only on a card that was being WORKED, on a project that is
+   * armed. The streak is a claim about unattended work: a follow-up turn
+   * failing in a thread already in review is not a task failing, and a person
+   * re-running something on a disarmed project is not building evidence for a
+   * breaker that is guarding nothing. A SUCCESS clears it either way — the card
+   * may well have been moved by its agent before the turn ended, and whatever
+   * started the run, the thing works.
    */
   private async recordOutcome(
     projectId: string,
     status: RunStatus,
+    worked: boolean,
     em: EntityManager,
   ): Promise<void> {
     if (status === 'cancelled') {
@@ -271,7 +242,7 @@ export class TaskSettleService implements OnModuleInit {
       }
       return;
     }
-    if (!project.autopilotEnabled) {
+    if (!worked || !project.autopilotEnabled) {
       return;
     }
     project.autopilotFailureStreak += 1;
@@ -286,8 +257,8 @@ export class TaskSettleService implements OnModuleInit {
   /**
    * Catch one board up on runs that settled while nobody was listening.
    *
-   * The broadcast is the one thing a closed app misses: a run that finishes
-   * with no window open announces to nobody, and the card is still drawn as
+   * The broadcast is the one thing a closed app misses: a run that fails with
+   * no window open announces to nobody, and the card is still drawn as
    * working when the board next loads. So the board asks for this on the way
    * in, and the run ROW answers — the same question the live path asks, put to
    * the durable copy instead of to an event that has already passed.
@@ -319,152 +290,5 @@ export class TaskSettleService implements OnModuleInit {
       });
     }
     return this.tasks.listForProject(projectId);
-  }
-
-  /**
-   * The transcript row holding this run's closing report.
-   *
-   * A structured `report_findings` first, because that is what the run was
-   * asked for and it renders as a report rather than as prose. The agent's
-   * last message is the fallback — an agent that could not call the tool still
-   * finished by saying what it did, and a card with no report at all is the
-   * outcome worth avoiding.
-   *
-   * A WORKFLOW run narrows both lookups to the graph's TERMINAL nodes, and that
-   * is not a refinement — it is what makes the answer mean anything. A chat has
-   * one voice, so its highest-`seq` message is its conclusion; a graph is N
-   * nodes writing into one stream, so the same query returns whichever node of
-   * a fan-out finished last. `report_findings` is only ever sought on the
-   * chance a node had the tool by another route (a caller node holds an MCP
-   * endpoint), which is why the workflow variant of the instructions does not
-   * name it.
-   */
-  private async findReport(
-    run: Pick<Run, 'id' | 'workflowId'>,
-    em: EntityManager,
-  ): Promise<string | null> {
-    const nodeIds = await this.terminalNodesOf(run.workflowId);
-    const found = await this.findReportAmong(run.id, nodeIds, em);
-    if (found !== null || nodeIds === undefined) {
-      return found;
-    }
-    // The workflow can be edited between this run finishing and its card
-    // settling, moving its terminal node ids — a stale set matches no row of
-    // this run just as an absent one would, so the filtered miss falls back
-    // to the unfiltered read rather than reporting no result at all.
-    return this.findReportAmong(run.id, undefined, em);
-  }
-
-  /**
-   * Copy the screenshots the agent's report references onto the card's files.
-   *
-   * The report instructions ask for them as markdown images with absolute paths
-   * (`task-prompt.ts`'s `REPORT_SCREENSHOTS`), in the report OR the closing
-   * message — the report may be a `report_findings` card, whose text lives in
-   * its findings, while the pictures routinely ride the words after it. Both
-   * rows are read, and `reportImagePaths` keeps each image once.
-   *
-   * Every image stands alone: one the agent has since deleted, or one past the
-   * card's file cap, is logged and skipped. The settle is what moves the card,
-   * and a missing screenshot must not leave it standing in `in_progress`.
-   */
-  private async attachReportImages(
-    run: Pick<Run, 'id' | 'workflowId'>,
-    taskId: string,
-    reportItemId: string | null,
-    em: EntityManager,
-  ): Promise<void> {
-    const nodeIds = await this.terminalNodesOf(run.workflowId);
-    const closing =
-      (await this.itemDao.latestOfKind(
-        run.id,
-        'message',
-        'assistant',
-        em,
-        nodeIds,
-      )) ??
-      (nodeIds === undefined
-        ? null
-        : await this.itemDao.latestOfKind(run.id, 'message', 'assistant', em));
-    const payloads: unknown[] = [];
-    for (const id of new Set([reportItemId, closing?.id ?? null])) {
-      if (id === null) {
-        continue;
-      }
-      const item = await this.itemDao.getById(id, em);
-      if (item) {
-        payloads.push(parsePayload(item.payload));
-      }
-    }
-    for (const source of reportImagePaths(payloads)) {
-      try {
-        const copy = await this.attachments.adopt(taskId, source);
-        await this.files.attach(taskId, copy);
-      } catch (error) {
-        this.logger.warn(
-          `could not attach ${source} to task ${taskId}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
-  }
-
-  private async findReportAmong(
-    runId: string,
-    nodeIds: string[] | undefined,
-    em: EntityManager,
-  ): Promise<string | null> {
-    const findings = await this.itemDao.latestOfKind(
-      runId,
-      'report_findings',
-      undefined,
-      em,
-      nodeIds,
-    );
-    if (findings) {
-      return findings.id;
-    }
-    const message = await this.itemDao.latestOfKind(
-      runId,
-      'message',
-      'assistant',
-      em,
-      nodeIds,
-    );
-    return message?.id ?? null;
-  }
-
-  /**
-   * Which nodes of a workflow are its conclusion, or undefined for a chat run
-   * and for anything this cannot answer.
-   *
-   * Undefined means "no node filter", which is the honest degrade: a workflow
-   * whose YAML has since been edited, renamed or deleted still settled a real
-   * card, and the last message of an unknown shape is a better report than
-   * none. Reading TODAY's definition is the same approximation `HandoffService`
-   * makes for a legacy node, and it is safe here because the answer is only
-   * ever used to PREFER one row over another.
-   */
-  private async terminalNodesOf(
-    workflowId: string | null,
-  ): Promise<string[] | undefined> {
-    if (workflowId === null) {
-      return undefined;
-    }
-    try {
-      const { workflow } = await this.workflows.get(workflowId);
-      const ids = terminalNodeIds(workflow.nodes, workflow.edges);
-      // An empty set would match no row at all, turning "we could not tell
-      // which node concludes" into "this run produced no report".
-      return ids.size === 0 ? undefined : [...ids];
-    } catch (error) {
-      this.logger.warn(
-        `could not read workflow ${workflowId} to find its terminal nodes: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return undefined;
-    }
   }
 }

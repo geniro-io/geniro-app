@@ -498,10 +498,10 @@ describe('CallBlock', () => {
     expect(footer).not.toBeNull();
     expect(footer!.textContent).toContain('finished with an error');
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]'),
+      container.querySelector('[data-slot="call-footer-tokens"]'),
     ).toBeNull();
     expect(
-      container.querySelector('[data-slot="block-footer-cost"]'),
+      container.querySelector('[data-slot="call-footer-cost"]'),
     ).toBeNull();
   });
 
@@ -558,13 +558,14 @@ describe('CallBlock', () => {
     expect(openLine?.textContent).toContain('is running');
   });
 
-  it('falls back to the CONTEXT reading when the CLI reports no tokens', () => {
-    // REPORTED as "its not showing amount of tokens for cursor agent", against
-    // an open call card whose footer read `11 tools` and nothing else. Nothing
-    // was hidden: measured across the whole ledger, every one of 3,359 claude
-    // turns carries input and output tokens and NOT ONE of 82 cursor turns
-    // does — nor a cost, nor a duration. The payload below is a real cursor
-    // `turn_complete`, copied field for field.
+  it('draws the context RING in the open footer when the CLI reports no tokens', () => {
+    // REPORTED first as "its not showing amount of tokens for cursor agent",
+    // against an open call card whose footer read `11 tools` and nothing else
+    // — a cursor turn carries no tokens, only a context reading. It then read
+    // `362.8k ctx` as TEXT while the shut card drew a ring, reported as "i
+    // wanna have same design of elements for footer when uncollapsing agent
+    // conversation as in collapsed - with circle". The payload below is a real
+    // cursor `turn_complete`, copied field for field.
     const entries = groupTranscript([
       item(
         'call_started',
@@ -604,19 +605,21 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
     expand();
 
-    // Labelled `ctx`, never `tokens`: it is how full the window is, not what
-    // the turn spent, and the two must not be read as one figure.
-    const ctx = container.querySelector('[data-slot="block-footer-context"]');
-    expect(ctx?.textContent).toBe('362.8k ctx');
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    // The shut band's own ring, inside the open footer — the same component,
+    // so a revert to the plain-text figure finds no ring here.
+    const ring = footer.querySelector('[data-slot="call-footer-context"]');
+    expect(ring).not.toBeNull();
+    expect(ring?.querySelector('svg')).not.toBeNull();
+    expect(footer.textContent).not.toContain('ctx');
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]'),
+      container.querySelector('[data-slot="call-footer-tokens"]'),
     ).toBeNull();
   });
 
-  it('does NOT show the context figure when real token usage was reported', () => {
-    // The fallback fills a gap; it does not add a second large number beside
-    // an exact answer. A claude turn reports both, and only the spend is the
-    // answer to "what did this cost".
+  it('draws the open footer’s figures exactly as the shut band does', () => {
+    // A claude turn reports tokens AND a context reading; the shut band draws
+    // the ring beside the tokens, so the open footer does too.
     const entries = groupTranscript([
       item(
         'call_started',
@@ -653,14 +656,24 @@ describe('CallBlock', () => {
       throw new Error('expected a call block');
     }
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
+    const shut = [
+      ...container.querySelectorAll('[data-slot^="call-summary-"]'),
+    ].map((node) =>
+      node.getAttribute('data-slot')!.replace('call-summary-', ''),
+    );
     expand();
 
+    const footer = container.querySelector('[data-slot="block-footer"]')!;
+    const open = [...footer.querySelectorAll('[data-slot^="call-footer-"]')]
+      .map((node) =>
+        node.getAttribute('data-slot')!.replace('call-footer-', ''),
+      )
+      .filter((slot) => slot !== 'figures');
+    expect(open).toEqual(shut);
+    expect(open).toEqual(['context', 'tokens', 'cost']);
     expect(
-      container.querySelector('[data-slot="block-footer-tokens"]')?.textContent,
+      footer.querySelector('[data-slot="call-footer-tokens"]')?.textContent,
     ).toBe('117.6k tokens');
-    expect(
-      container.querySelector('[data-slot="block-footer-context"]'),
-    ).toBeNull();
   });
 
   it('states the SPENT figures on the shut card, beside the last message', () => {

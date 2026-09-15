@@ -246,6 +246,11 @@ interface RunContext {
   seedPersisted: boolean;
   /** Pictures that came with the seed — for the agents a trigger feeds. */
   seedImages: TurnImage[];
+  /**
+   * The run works a card on the board, so every agent node is handed the MCP
+   * endpoint for the board tools — not only the callers.
+   */
+  boardTask: boolean;
 }
 
 /** How a follow-up reaches a workflow run that is still being walked. */
@@ -626,6 +631,7 @@ export class GraphExecutorService implements OnModuleInit {
         firstSeq: 0,
         seedPersisted: false,
         seedImages: [],
+        boardTask: run.taskId !== null,
       },
       dropped,
     );
@@ -805,6 +811,7 @@ export class GraphExecutorService implements OnModuleInit {
         firstSeq: seq + 1,
         seedPersisted: true,
         seedImages: turnImages,
+        boardTask: run.taskId !== null,
       },
     };
   }
@@ -1085,7 +1092,8 @@ export class GraphExecutorService implements OnModuleInit {
     claudeModes: ClaudeModesCapability,
     dropped: DroppedNodeSetting[],
   ): void {
-    const { cwd, seedPrompt, customInstructions, cursorMaxMode } = run;
+    const { cwd, seedPrompt, customInstructions, cursorMaxMode, boardTask } =
+      run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -1631,15 +1639,24 @@ export class GraphExecutorService implements OnModuleInit {
       callCapable(node) && calleesOf.has(node.id);
 
     /**
-     * The caller's MCP grant: call-capable nodes with outgoing call edges get
+     * Nodes handed the MCP endpoint: every caller, and — on a run that works a
+     * board card — every call-capable agent, since the board tools
+     * (`update_task`) are how the card's report and column change at all.
+     */
+    const holdsEndpoint = (node: WorkflowAgentNode): boolean =>
+      isCaller(node) || (boardTask && callCapable(node));
+
+    /**
+     * The node's MCP grant: call-capable nodes with outgoing call edges get
      * the endpoint (a probe-failed cursor caller degrades — its callees still
-     * work, IT just can't call). Null when the server has no bound port
-     * yet or the run's token is already revoked.
+     * work, IT just can't call), and so does every agent of a board task run.
+     * Null when the server has no bound port yet or the run's token is already
+     * revoked.
      */
     const mcpEndpointFor = (
       node: WorkflowAgentNode,
     ): { url: string; token: string; serverName: string } | null => {
-      if (!isCaller(node)) {
+      if (!holdsEndpoint(node)) {
         return null;
       }
       const token = this.callTokens.get(runId, node.id);
@@ -2893,6 +2910,16 @@ export class GraphExecutorService implements OnModuleInit {
       enqueue(() => finishRunIfSettled());
     };
 
+    // A board task's agents need a token whether or not they call anyone —
+    // the board tools ride the same endpoint. Minted before the callers' loop
+    // below, which re-issues its own nodes' before any turn has read one.
+    if (boardTask) {
+      for (const node of nodes) {
+        if (node.kind === 'agent' && callCapable(node)) {
+          this.callTokens.issue(runId, node.id, mintToken());
+        }
+      }
+    }
     // The broker gets a capability only when the workflow can call at all —
     // the MCP endpoint answers RUN_NOT_ACTIVE for call-free runs.
     if (calleesOf.size > 0) {

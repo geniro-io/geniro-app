@@ -143,14 +143,22 @@ describe('computeAgentActivity', () => {
     expect(activity.get(CHAT_AGENT_KEY)?.contextTokens).toBe(8_400);
   });
 
-  it('falls back to inputTokens when a CLI reports no contextTokens', () => {
+  it('never reads a turn’s fresh inputTokens as the context figure', () => {
+    // REVERSES the old "falls back to inputTokens" pin. The daemon sends a null
+    // count precisely when a CLI reported no per-request breakdown, and
+    // `inputTokens` is one request's fresh input — so the fallback replaced a
+    // real reading with `42 of 1M · 0%`.
     const activity = computeAgentActivity([
+      item('turn_complete', 'worker', {
+        usage: { contextTokens: 120_000, costUsd: null },
+        stopReason: null,
+      }),
       item('turn_complete', 'worker', {
         usage: { inputTokens: 42, costUsd: null },
         stopReason: null,
       }),
     ]);
-    expect(activity.get('worker')?.contextTokens).toBe(42);
+    expect(activity.get('worker')?.contextTokens).toBe(120_000);
     expect(activity.get('worker')?.spentUsd).toBeNull();
   });
 
@@ -387,11 +395,24 @@ describe('call threads', () => {
     expect(activity.get('orch')?.callThreads ?? []).toEqual([]);
   });
 
+  /** A callee sub-turn's status row — the executor stamps the call on it. */
+  const callStatus = (value: string, callId: string): ChatItem =>
+    item('status', 'worker', { nodeId: 'worker', status: value, callId });
+  /** A settled turn's usage, under a call or (null) the node's own. */
+  const turnComplete = (
+    contextTokens: number,
+    callId: string | null,
+  ): ChatItem =>
+    item('turn_complete', 'worker', {
+      usage: { contextTokens, contextWindowTokens: 1_000_000 },
+      ...(callId === null ? {} : { callId }),
+    });
+
   it('threadsOf: a call-only node lists ONLY its call threads (no main)', () => {
     const activity = computeAgentActivity([
       callStarted('call-1', 'go'),
-      status('worker', 'running'),
-      status('worker', 'completed'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
       callResult('call-1', 'ok', 'sess-1'),
     ]);
     const threads = threadsOf(activity.get('worker'));
@@ -399,13 +420,51 @@ describe('call threads', () => {
     expect(threads[0]).toMatchObject({ id: 'call-1', kind: 'call' });
   });
 
+  it('threadsOf: a callee whose ONE call ran several turns still has no main conversation', () => {
+    // REPORTED as "we should show context for EACH subagent instance, now it's
+    // only one for all". Main was inferred as "more turn starts than call
+    // threads", so a call that ran a second turn (a follow-up on its thread, a
+    // continuation) drew a phantom `Main conversation` — which has no reading,
+    // leaving the card's single ring for every instance.
+    const activity = computeAgentActivity([
+      callStarted('call-1', 'go'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
+      callStatus('running', 'call-1'),
+      callStatus('completed', 'call-1'),
+    ]);
+    const threads = threadsOf(activity.get('worker'));
+    expect(threads.map((t) => t.id)).toEqual(['call-1']);
+  });
+
+  it('threadsOf: the main conversation carries its OWN reading, never a call’s', () => {
+    const activity = computeAgentActivity([
+      status('worker', 'running'),
+      turnComplete(100_000, null),
+      status('worker', 'completed'),
+      callStarted('call-1', 'go'),
+      callStatus('running', 'call-1'),
+      turnComplete(900_000, 'call-1'),
+      callStatus('completed', 'call-1'),
+    ]);
+    const worker = activity.get('worker')!;
+    const [main] = threadsOf(worker);
+    expect(main).toMatchObject({
+      kind: 'main',
+      contextTokens: 100_000,
+      contextWindowTokens: 1_000_000,
+    });
+    // The card's own reading is still whichever conversation settled last.
+    expect(worker.contextTokens).toBe(900_000);
+  });
+
   it('threadsOf: a DAG node with calls lists its main conversation FIRST', () => {
     const activity = computeAgentActivity([
       status('worker', 'running'), // the DAG turn
       callStarted('call-1', 'go'),
-      status('worker', 'running'), // the callee sub-turn
+      callStatus('running', 'call-1'), // the callee sub-turn
       callResult('call-1', 'error', null),
-      status('worker', 'failed'), // the call thread settles
+      callStatus('failed', 'call-1'), // the call thread settles
     ]);
     const threads = threadsOf(activity.get('worker'));
     expect(threads.map((t) => t.id)).toEqual(['main', 'call-1']);

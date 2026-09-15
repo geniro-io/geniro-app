@@ -81,6 +81,9 @@ const projectsApi = vi.hoisted(() => ({
   // then fails to type-check.
   listProjects: vi.fn((): Promise<ProjectDto[]> => Promise.resolve([])),
   deleteProject: vi.fn(() => Promise.resolve({ deleted: true })),
+  createProject: vi.fn((): Promise<ProjectDto> =>
+    Promise.reject(new Error('not stubbed')),
+  ),
 }));
 vi.mock('../daemon-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../daemon-api')>()),
@@ -1368,5 +1371,48 @@ describe('the Projects pane', () => {
       projectId: 'p1',
     });
     expect(container?.textContent).not.toContain('Geniro');
+  });
+
+  it('adds a project from the pane itself, through the daemon', async () => {
+    // REPORTED as "i cant add projects" against this pane, which listed and
+    // deleted projects and offered no way to make one.
+    projectsApi.listProjects.mockResolvedValue([aProject({ name: 'Geniro' })]);
+    projectsApi.createProject.mockResolvedValue(
+      aProject({ id: 'p2', name: 'Mobile', folder: '/Users/me/code/mobile' }),
+    );
+    await mount('projects');
+
+    const typeInto = (id: string, value: string): void => {
+      const input = document.getElementById(id) as HTMLInputElement;
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        'value',
+      )!.set!.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const newProject = [...container.querySelectorAll('button')].find(
+      (node) => node.textContent === 'New project',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      newProject.click();
+    });
+    await act(async () => {
+      typeInto('new-project-name', 'Mobile');
+      typeInto('new-project-folder', '/Users/me/code/mobile');
+    });
+    const create = [...document.body.querySelectorAll('button')].find(
+      (node) => node.textContent === 'Create project',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      create.click();
+    });
+
+    expect(projectsApi.createProject).toHaveBeenCalledWith({
+      createProjectDto: expect.objectContaining({
+        name: 'Mobile',
+        folder: '/Users/me/code/mobile',
+      }) as unknown,
+    });
+    expect(container.textContent).toContain('Mobile');
   });
 });

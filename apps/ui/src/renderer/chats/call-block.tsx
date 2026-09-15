@@ -326,11 +326,26 @@ export const CallBlock = memo(function CallBlock({
                   />
                 </span>
               )}
-              {usage.tokens === null ? null : (
+              {/* The ring's own figure, in words. This slot used to print the
+                callee's input + output as "N tokens" right beside the ring, and
+                it was read as the context — REPORTED as wrong numbers over a
+                call reading "838 tokens" whose window held 843k. What a call
+                SPENT is its cost beside it; the in/out split stays on the
+                agents panel's spend line, which says what it is. */}
+              {context.contextTokens === null ? null : (
                 <span
                   data-slot="call-summary-tokens"
+                  title={
+                    usage.tokens === null
+                      ? undefined
+                      : `${formatTokens(usage.tokens)} tokens in/out`
+                  }
                   className="shrink-0 tabular-nums">
-                  {formatTokens(usage.tokens)} tokens
+                  {context.contextWindowTokens === null
+                    ? `${formatTokens(context.contextTokens)} context`
+                    : `${formatTokens(context.contextTokens)} / ${formatTokens(
+                        context.contextWindowTokens,
+                      )}`}
                 </span>
               )}
               {usage.costUsd === null ? null : (

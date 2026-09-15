@@ -370,6 +370,90 @@ describe('readClaudeUsage — cost is this turn, not the session so far', () => 
 });
 
 /**
+ * A running total the ledger CANNOT diff — measured on the reporter's workflow
+ * run `a0877ce9`, where every call into the Engineer resumed one session and a
+ * 12.8s call was billed $0.79 for $0.47 of tokens.
+ */
+describe('readClaudeUsage — a running total that carries history', () => {
+  // 100 in · 1,000 out · 100,000 cache read on Opus 5 list:
+  // 100×5 + 1,000×25 + 100,000×0.5 = 75,500 per million → $0.0755.
+  const TURN_USAGE = {
+    input_tokens: 100,
+    output_tokens: 1_000,
+    cache_read_input_tokens: 100_000,
+    cache_creation_input_tokens: 0,
+  };
+  const MODEL_USAGE = {
+    'claude-opus-5': {
+      contextWindow: 1_000_000,
+      inputTokens: 100,
+      outputTokens: 1_000,
+      cacheReadInputTokens: 100_000,
+      cacheCreationInputTokens: 0,
+      // Calibration 1.0 — the table and the CLI agree about these tokens.
+      costUSD: 0.0755,
+    },
+  };
+  const line = (totalCostUsd: number) => ({
+    session_id: 's-resumed',
+    total_cost_usd: totalCostUsd,
+    duration_api_ms: 900_000,
+    usage: TURN_USAGE,
+    modelUsage: MODEL_USAGE,
+  });
+
+  it('bills a RESUMED process’s first turn at its own tokens, not the session’s history', () => {
+    // The CLI restores the session's saved totals on `--resume`, so this line
+    // states $50 of earlier turns plus this one.
+    const usage = readClaudeUsage(line(50), new ClaudeSessionCostLedger());
+    expect(usage.costUsd).toBeCloseTo(0.0755, 6);
+    // Its API time comes from the same restored total and has nothing to be
+    // priced by — unmeasured, never 15 minutes of somebody else's turns.
+    expect(usage.apiMs).toBeNull();
+  });
+
+  it('bounds an UNCALIBRATED turn at the long-context rate, so a 1M-window turn is not clipped', () => {
+    // No `costUSD` to calibrate against: the bound assumes the doubled tier.
+    // $0.20 is 2.6× the table's $0.0755 — inside 2× + margin, outside 1× + margin.
+    const usage = readClaudeUsage(
+      {
+        ...line(0.2),
+        modelUsage: {
+          'claude-opus-5': {
+            ...MODEL_USAGE['claude-opus-5'],
+            costUSD: undefined,
+          },
+        },
+      },
+      new ClaudeSessionCostLedger(),
+    );
+    expect(usage.costUsd).toBeCloseTo(0.2, 9);
+  });
+
+  it('keeps the CLI’s exact figure for a first turn its tokens account for', () => {
+    const usage = readClaudeUsage(line(0.08), new ClaudeSessionCostLedger());
+    expect(usage.costUsd).toBeCloseTo(0.08, 9);
+    expect(usage.apiMs).toBe(900_000);
+  });
+
+  it('counts the turn’s delegates into the bound, so a real fan-out is not clipped', () => {
+    const ledger = new ClaudeSessionCostLedger();
+    // 20,000 output tokens on Opus 5 → $0.50 of delegate spend.
+    ledger.delegates.record('toolu_1', {
+      model: 'claude-opus-5',
+      inputTokens: 0,
+      outputTokens: 20_000,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+    });
+    ledger.delegates.settle(line(0.6));
+    // $0.60 is far past the launcher's own $0.0755 and well inside it plus
+    // the $0.50 its delegate cost.
+    expect(readClaudeUsage(line(0.6), ledger).costUsd).toBeCloseTo(0.6, 9);
+  });
+});
+
+/**
  * `noteDelegateModel`'s own bookkeeping — which delegate models have already
  * been announced. `MAX_TRACKED_DELEGATE_MODELS` is not exported, so the cap
  * below is MEASURED off the ledger's own public behaviour rather than

@@ -4,7 +4,7 @@ import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { ItemDao } from '../../agents/dao/item.dao';
 import { RunDao } from '../../agents/dao/run.dao';
 import { AgentEventBus } from '../../agents/services/agent-events.bus';
-import { WorkflowStoreService } from '../../graphs/services/workflow-store.service';
+import { RunWorkflowService } from '../../graphs/services/run-workflow.service';
 import { terminalNodeIds } from '../../graphs/utils/graph-order';
 import { ProjectDao } from '../../projects/dao/project.dao';
 import { isBreakerOpen } from '../../projects/utils/breaker';
@@ -68,7 +68,7 @@ export class TaskSettleService implements OnModuleInit {
     private readonly taskDao: TaskDao,
     private readonly projectDao: ProjectDao,
     private readonly tasks: TasksService,
-    private readonly workflows: WorkflowStoreService,
+    private readonly runWorkflows: RunWorkflowService,
     private readonly attachments: TaskAttachmentService,
     private readonly files: TaskFilesService,
   ) {}
@@ -216,8 +216,12 @@ export class TaskSettleService implements OnModuleInit {
     // after review settles it again — and without this, a card the user had
     // moved to `done` would be dragged back to `in_review` by a conversation
     // they deliberately continued. Only a card still reading as worked is a
-    // card this has anything to say about.
+    // card whose COLUMN this has anything to say about — its REPORT is the one
+    // exception, see `refreshReport`.
     if (task.status !== 'in_progress') {
+      if (task.status === 'in_review' && status === 'completed') {
+        await this.refreshReport(run, task.id, task.reportItemId, em);
+      }
       return;
     }
 
@@ -232,6 +236,39 @@ export class TaskSettleService implements OnModuleInit {
     // reads the work in its worktree and routinely continues the conversation,
     // so the directory has to outlive the settle — see `isWorkFinished`.
     await this.tasks.moveStatus(task.id, { from: task.status, to });
+  }
+
+  /**
+   * Re-read the report of a card already in review when its run settles again.
+   *
+   * A turn's end is not the end of the work: an agent that backgrounds a long
+   * command settles its turn while the command runs, and the CLI then carries on
+   * by itself when it reports back — committing, pushing, opening the pull
+   * request and writing its real closing words. The card had already moved on
+   * the first settle, so it kept the interim message for good. REPORTED as a
+   * card whose report read "I'm waiting for its notification. Once it passes
+   * I'll make three commits, push, and open the PR" directly under the pull
+   * request those words promised.
+   *
+   * Only the REPORT moves — the column stays where the first settle put it,
+   * which is the once-only rule `settle` states. Only on `completed`: a later
+   * turn that failed has not concluded anything worth replacing a report with.
+   * Screenshots are copied only when the report actually CHANGED, because each
+   * copy lands under a fresh directory and a settle that found the same rows
+   * would otherwise attach every picture again.
+   */
+  private async refreshReport(
+    run: Pick<Run, 'id' | 'workflowId' | 'workflowSnapshot'>,
+    taskId: string,
+    current: string | null,
+    em: EntityManager,
+  ): Promise<void> {
+    const reportItemId = await this.findReport(run, em);
+    if (reportItemId === null || reportItemId === current) {
+      return;
+    }
+    await this.tasks.update(taskId, { reportItemId });
+    await this.attachReportImages(run, taskId, reportItemId, em);
   }
 
   /**
@@ -340,10 +377,10 @@ export class TaskSettleService implements OnModuleInit {
    * name it.
    */
   private async findReport(
-    run: Pick<Run, 'id' | 'workflowId'>,
+    run: Pick<Run, 'id' | 'workflowId' | 'workflowSnapshot'>,
     em: EntityManager,
   ): Promise<string | null> {
-    const nodeIds = await this.terminalNodesOf(run.workflowId);
+    const nodeIds = await this.terminalNodesOf(run);
     const found = await this.findReportAmong(run.id, nodeIds, em);
     if (found !== null || nodeIds === undefined) {
       return found;
@@ -369,12 +406,12 @@ export class TaskSettleService implements OnModuleInit {
    * and a missing screenshot must not leave it standing in `in_progress`.
    */
   private async attachReportImages(
-    run: Pick<Run, 'id' | 'workflowId'>,
+    run: Pick<Run, 'id' | 'workflowId' | 'workflowSnapshot'>,
     taskId: string,
     reportItemId: string | null,
     em: EntityManager,
   ): Promise<void> {
-    const nodeIds = await this.terminalNodesOf(run.workflowId);
+    const nodeIds = await this.terminalNodesOf(run);
     const closing =
       (await this.itemDao.latestOfKind(
         run.id,
@@ -439,21 +476,25 @@ export class TaskSettleService implements OnModuleInit {
    * Which nodes of a workflow are its conclusion, or undefined for a chat run
    * and for anything this cannot answer.
    *
-   * Undefined means "no node filter", which is the honest degrade: a workflow
-   * whose YAML has since been edited, renamed or deleted still settled a real
-   * card, and the last message of an unknown shape is a better report than
-   * none. Reading TODAY's definition is the same approximation `HandoffService`
-   * makes for a legacy node, and it is safe here because the answer is only
-   * ever used to PREFER one row over another.
+   * Read off the run's OWN copy of its graph (`RunWorkflowService`), so an edit
+   * made to the library workflow after the run started cannot move its
+   * terminal nodes. Undefined means "no node filter", which is the honest
+   * degrade: a run whose graph cannot be read (its library workflow deleted
+   * before it ever kept a copy) still settled a real card, and the last message
+   * of an unknown shape is a better report than none.
    */
   private async terminalNodesOf(
-    workflowId: string | null,
+    run: Pick<Run, 'id' | 'workflowId' | 'workflowSnapshot'>,
   ): Promise<string[] | undefined> {
+    const { workflowId } = run;
     if (workflowId === null) {
       return undefined;
     }
     try {
-      const { workflow } = await this.workflows.get(workflowId);
+      const workflow = await this.runWorkflows.workflowOf({
+        ...run,
+        workflowId,
+      });
       const ids = terminalNodeIds(workflow.nodes, workflow.edges);
       // An empty set would match no row at all, turning "we could not tell
       // which node concludes" into "this run produced no report".

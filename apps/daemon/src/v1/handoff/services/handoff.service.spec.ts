@@ -66,7 +66,8 @@ function build(
         ),
     } as never,
     {
-      get: () => Promise.reject(new Error('workflow store must not be read')),
+      workflowOf: () =>
+        Promise.reject(new Error("the run's workflow must not be read")),
     } as never,
     { for: () => adapter } as never,
   );

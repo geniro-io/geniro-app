@@ -255,7 +255,9 @@ describe('AgentsPanel', () => {
     const spend = orchestrator.querySelector('[data-slot="agent-spend"]')!;
     // INPUT + OUTPUT, never the cache reads: 48.3B of them would print the
     // same enormous figure on every card and say nothing about the work.
-    expect(spend.textContent).toBe('117.6k tokens · $44.17');
+    // Labelled `in/out` rather than `tokens`: beside a context ring a bare
+    // "tokens" was read as the window — reported as wrong numbers.
+    expect(spend.textContent).toBe('117.6k in/out · $44.17');
     // The cache is not dropped — it is on the hover, with the split.
     expect(spend.getAttribute('title')).toBe(
       '310 in · 117.3k out · 48.3B cached',
@@ -283,7 +285,7 @@ describe('AgentsPanel', () => {
       />,
     );
     expect(el.querySelector('[data-slot="agent-spend"]')?.textContent).toBe(
-      '1.5k tokens',
+      '1.5k in/out',
     );
   });
 
@@ -306,7 +308,10 @@ describe('AgentsPanel', () => {
     // own live turns and is deliberately not what this caption counts. Each
     // call is an INSTANCE of the agent, drawn as its own block, so that is the
     // noun the caption counts in.
-    expect(worker.textContent).toContain('1 active · 2 instances');
+    expect(
+      worker.querySelector('[data-slot="agent-instances-caption"]')
+        ?.textContent,
+    ).toBe('Instances2· 1 running');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
     // The figures are hover-only now, so the meter's accessible name is where
     // they are legible without opening anything.
@@ -558,8 +563,8 @@ describe('AgentsPanel', () => {
     const worker = [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
       row.textContent?.includes('Worker'),
     )!;
-    const threads = [...worker.querySelectorAll('p')].find((p) =>
-      p.textContent?.includes('active'),
+    const threads = worker.querySelector(
+      '[data-slot="agent-instances-caption"]',
     )!;
     const tasks = worker.querySelector('[data-slot="agent-task-list"]')!;
 
@@ -797,6 +802,7 @@ describe('AgentsPanel', () => {
           ],
           partialReason: null,
           onJump,
+          inProgress: false,
         }}
       />,
     );
@@ -1892,8 +1898,9 @@ describe('AgentsPanel — sub-agent threads', () => {
         onOpenSubagent={onOpenSubagent}
       />,
     );
-    // The card lists threads only once expanded.
-    click(cardFor(el, 'Orchestrator').querySelector('button[aria-expanded]'));
+    // No press: a Sub-agents block holding a RUNNING delegate is open by
+    // default, and its header is the card's first disclosure — pressing it here
+    // would shut the very rows these cases read.
     return el;
   }
 
@@ -1901,8 +1908,9 @@ describe('AgentsPanel — sub-agent threads', () => {
     const el = renderWithSubagent();
     expect(el.textContent).toContain('Review the diff');
     // ONE row is listed — the delegate. The agent's own conversation is the
-    // card, not a row, so it is not in the count either.
-    expect(el.textContent).toContain('1 active · 1 thread');
+    // card, not a row, so it is not in the count either. The count sits on the
+    // Sub-agents section's own header.
+    expect(el.textContent).toContain('Sub-agents1 running · 1');
   });
 
   it('offers NO terminal handoff on a sub-agent row', () => {
@@ -2093,11 +2101,11 @@ describe('AgentsPanel — sub-agent threads', () => {
         />,
       );
 
-      expect(el.textContent).toContain('3 active · 7 threads');
+      expect(el.textContent).toContain('3 running · 7');
       // The two readings the caption used to give, neither of which any row
       // below it supported.
-      expect(el.textContent).not.toContain('1 active');
-      expect(el.textContent).not.toContain('8 threads');
+      expect(el.textContent).not.toContain('1 running');
+      expect(el.textContent).not.toContain('· 8');
       // …and the rows it now agrees with: three live, four counted as finished.
       expect(el.textContent).toContain('4 finished sub-agents');
     });
@@ -2232,6 +2240,60 @@ describe('AgentsPanel task lists', () => {
     // And it is THIS agent's: the worker was given no list.
     const worker = rows.find((row) => row.textContent?.includes('Worker'))!;
     expect(worker.querySelector('[data-slot="agent-task-list"]')).toBeNull();
+  });
+
+  it('shows what is LEFT, with the completed tasks behind a press', () => {
+    // ASKED FOR as "отображаются не все записи, а только релевантные …
+    // скрываем те, которые уже завершились": a struck-through row is history
+    // the header's own `1/3` already counts.
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        tasksByAgent={
+          new Map([['orchestrator', [{ threadId: 'main', tasks }]]])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-task-list"]')!;
+    expect(section.textContent).toContain('Run the tests');
+    expect(section.textContent).not.toContain('Read the file');
+
+    const toggle = section.querySelector(
+      '[data-slot="agent-task-completed-toggle"]',
+    );
+    expect(toggle?.textContent).toBe('Show 1 completed');
+    click(toggle);
+    expect(section.textContent).toContain('Read the file');
+    expect(toggle?.textContent).toBe('Hide completed');
+  });
+
+  it('folds a list with nothing left shut, still counted on its header', () => {
+    const done = tasks.map((task) => ({
+      ...task,
+      status: 'completed' as const,
+    }));
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={agents}
+        tasksByAgent={
+          new Map([['orchestrator', [{ threadId: 'main', tasks: done }]]])
+        }
+        onOpenThread={vi.fn()}
+      />,
+    );
+    const section = el.querySelector('[data-slot="agent-task-list"]')!;
+    expect(section.textContent).toContain('3/3');
+    expect(section.textContent).not.toContain('Run the tests');
+
+    click(section.querySelector('button[aria-expanded]'));
+    // Opened, a finished list shows all of it — there is nothing else to show.
+    expect(section.textContent).toContain('Run the tests');
+    expect(
+      section.querySelector('[data-slot="agent-task-completed-toggle"]'),
+    ).toBeNull();
   });
 
   it('stops spinning for an agent that is no longer running', () => {
@@ -2463,10 +2525,16 @@ describe('AgentsPanel — the instances of a called agent', () => {
     expect(second.textContent).not.toContain('pnpm build');
     expect(second.textContent).not.toContain('Write the lexer');
 
-    // Counted off the blocks: two of the three are still working.
-    expect(el.querySelector(CARD_SELECTOR)!.textContent).toContain(
-      '2 active · 3 instances',
-    );
+    // Counted off the blocks: two of the three are still working, and only
+    // those two are tinted as the live ones.
+    expect(
+      el.querySelector('[data-slot="agent-instances-caption"]')?.textContent,
+    ).toBe('Instances3· 2 running');
+    expect(
+      [...el.querySelectorAll('[data-slot="agent-instance"][data-live]')].map(
+        (each) => each.getAttribute('data-instance-id'),
+      ),
+    ).toHaveLength(2);
   });
 
   it('says where each instance has got to, and what that instance alone has spent', () => {
@@ -2475,12 +2543,61 @@ describe('AgentsPanel — the instances of a called agent', () => {
       '[data-slot="agent-instance-latest"]',
     )!;
     expect(latest.textContent).toContain('running Bash');
-    expect(latest.textContent).toContain('12.4k tokens');
+    expect(latest.textContent).toContain('12.4k in/out');
     expect(latest.textContent).toContain('$0.42');
-    // An instance nothing has measured draws no line, rather than `0 tokens`.
+    // An instance nothing has said or measured still has its second line —
+    // its status in words — and no figure, rather than `0 tokens`.
+    const quiet = block(el, 'call-2')!.querySelector(
+      '[data-slot="agent-instance-latest"]',
+    )!;
+    expect(quiet.textContent).toBe('running');
+  });
+
+  it('draws EVERY instance in one shape: a disclosure, the brief as its title with the call id, and a second line', () => {
+    // REPORTED against a card where two finished calls had a chevron and one
+    // line while two others had no chevron and two lines — "some of them open,
+    // some of them are not".
+    const el = panel({
+      ...engineer,
+      threads: [
+        call('call-8', 'x', 'completed', {
+          label: 'call-8 · Fix it — add the two missing guards',
+          brief: 'Fix it — add the two missing guards\nThen re-run QA.',
+          latest: 'Still paused.',
+        }),
+        call('call-9', 'x', 'completed', { label: 'call-9', brief: null }),
+      ],
+    });
+    for (const id of ['call-8', 'call-9']) {
+      const each = block(el, id)!;
+      expect(each.querySelector('button[aria-expanded]'), id).not.toBeNull();
+      expect(
+        each.querySelector('[data-slot="agent-instance-latest"]'),
+        id,
+      ).not.toBeNull();
+    }
+    const briefed = block(el, 'call-8')!;
     expect(
-      block(el, 'call-2')!.querySelector('[data-slot="agent-instance-latest"]'),
-    ).toBeNull();
+      briefed.querySelector('[data-slot="thread-row-tag"]')?.textContent,
+    ).toBe('call-8');
+    // The title is the brief alone; the id is the tag, not a prefix.
+    expect(briefed.textContent).not.toContain('call-8 · ');
+    // Opening it shows the WHOLE brief, which the heading truncates.
+    click(briefed.querySelector('button[aria-expanded]'));
+    expect(
+      block(el, 'call-8')!.querySelector('[data-slot="agent-instance-brief"]')
+        ?.textContent,
+    ).toBe('Fix it — add the two missing guards\nThen re-run QA.');
+    // A call with no brief is titled by its id IN WORDS, with no tag repeating
+    // it — `call-10` is the broker's spelling, not a name.
+    const bare = block(el, 'call-9')!;
+    expect(bare.querySelector('[data-slot="thread-row-tag"]')).toBeNull();
+    expect(bare.textContent).toContain('Call 9');
+    expect(bare.textContent).not.toContain('call-9');
+    // …and with nothing said or measured, its second line still says its state.
+    expect(
+      bare.querySelector('[data-slot="agent-instance-latest"]')?.textContent,
+    ).toBe('completed');
   });
 
   it('folds a finished instance to its heading — terminal kept — and opens it on a press', () => {
@@ -2498,7 +2615,17 @@ describe('AgentsPanel — the instances of a called agent', () => {
     ).not.toBeNull();
 
     click(done.querySelector('button[aria-expanded]'));
-    expect(block(el, 'call-0')!.textContent).toContain('1 finished sub-agent');
+    // Its delegate is counted on the Sub-agents block's header — shut, since
+    // nothing in it is still running.
+    const section = block(el, 'call-0')!.querySelector(
+      '[data-slot="agent-subagent-section"]',
+    )!;
+    expect(section.textContent).toContain('Sub-agents1 finished');
+    expect(
+      section
+        .querySelector('button[aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
     // …and the live instances were left exactly as they were.
     expect(
       block(el, 'call-1')!.querySelector('[data-slot="agent-instance-body"]'),

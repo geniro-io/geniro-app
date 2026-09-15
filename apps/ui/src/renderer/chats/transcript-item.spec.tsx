@@ -342,6 +342,32 @@ describe('TranscriptItem — Q&A bridge rows (M4)', () => {
     expect(container.textContent).toContain('spawn cursor-agent ENOENT');
   });
 
+  it('a compaction the DAEMON recorded — automatic, no summary — reads as the same event', () => {
+    // An automatic compaction puts no summary on claude's stream, so the daemon
+    // writes the row itself: no `origin`, a daemon sentence, the marker.
+    render(
+      <TranscriptItem
+        item={item('system', {
+          message:
+            'The conversation was compacted to free up context. The agent reported no summary of what it kept.',
+          severity: 'info',
+          compaction: {
+            preTokens: 200_167,
+            postTokens: 34_120,
+            trigger: 'auto',
+          },
+        })}
+        nodes={NODES}
+      />,
+    );
+
+    expect(container.textContent).toContain(
+      'conversation compacted automatically',
+    );
+    expect(container.textContent).toContain('200.2k → 34.1k tokens');
+    expect(container.querySelector('[data-role="system"]')).not.toBeNull();
+  });
+
   it('a compaction summary is COLLAPSED behind what the compaction did', () => {
     // The reported defect: ~10 000 characters of the CLI summarising the
     // conversation, dropped into the transcript in full between two of the

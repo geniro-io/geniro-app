@@ -10979,6 +10979,259 @@ describe('Chats — running shells', () => {
     ).toEqual(['Manager', 'Engineer']);
   });
 
+  /**
+   * A Dev team run whose Engineer holds calls that continue one another through
+   * `thread` — the builders for its rows, and a mount that opens the run with
+   * its terminals popover pinned open.
+   */
+  const continuedCalls = () => {
+    let seq = 0;
+    const row = (
+      kind: ChatItem['kind'],
+      nodeId: string,
+      payload: Record<string, unknown>,
+    ): ChatItem => {
+      seq += 1;
+      return {
+        id: `cc-${seq}`,
+        runId: 'w9',
+        nodeId,
+        seq,
+        kind,
+        role: null,
+        payload,
+        createdAt: 'now',
+      };
+    };
+    const started = (callId: string, thread?: string): ChatItem =>
+      row('call_started', 'mgr', {
+        callId,
+        callerNodeId: 'mgr',
+        calleeNodeId: 'eng',
+        mode: 'async',
+        message: `brief ${callId}`,
+        ...(thread === undefined ? {} : { thread }),
+      });
+    const running = (callId: string): ChatItem =>
+      row('status', 'eng', { nodeId: 'eng', status: 'running', callId });
+    const settled = (callId: string): ChatItem[] => [
+      row('status', 'eng', { nodeId: 'eng', status: 'completed', callId }),
+      row('call_result', 'mgr', {
+        callId,
+        callerNodeId: 'mgr',
+        calleeNodeId: 'eng',
+        mode: 'async',
+        status: 'ok',
+        sessionId: `s-${callId}`,
+      }),
+    ];
+    const bash = (
+      id: string,
+      command: string,
+      callId: string,
+      background = false,
+    ): ChatItem =>
+      row('tool_call', 'eng', {
+        id,
+        name: 'Bash',
+        input: {
+          command,
+          ...(background ? { run_in_background: true } : {}),
+        },
+        callId,
+      });
+    const open = async (
+      items: ChatItem[],
+      taskList: (typeof run1)['taskList'] = [],
+    ): Promise<HTMLElement> => {
+      api.listChats.mockResolvedValue([]);
+      workflowApi.listWorkflowRuns.mockResolvedValue([
+        {
+          ...run1,
+          id: 'w9',
+          title: 'Dev team',
+          workflowId: 'dev-team',
+          agentKind: null,
+          taskList,
+        },
+      ]);
+      workflowApi.getWorkflow.mockResolvedValue({
+        slug: 'dev-team',
+        workflow: {
+          name: 'Dev team',
+          nodes: [
+            {
+              id: 'mgr',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              name: 'Manager',
+            },
+            {
+              id: 'eng',
+              kind: 'agent',
+              agent: 'claude',
+              approval: 'auto',
+              name: 'Engineer',
+            },
+          ],
+          edges: [],
+        },
+      });
+      api.listRunItems.mockResolvedValue(items);
+      const { client } = makeClient();
+      const container = await mount(client);
+      await clickRun(container, 'Dev team');
+      // Pinned open when there is a shell to list; a run with none has no chip.
+      await act(async () => {
+        container
+          .querySelector<HTMLElement>(
+            '[data-slot="running-shells"] [data-menu-trigger], [data-slot="running-shells"] button',
+          )
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+      return container;
+    };
+    const shelfRows = (
+      container: HTMLElement,
+    ): { text: string; agent: string | null }[] =>
+      [
+        ...container.querySelectorAll(
+          '[data-slot="running-shells"] [data-slot="shell-row"]',
+        ),
+      ].map((r) => ({
+        text: r.textContent ?? '',
+        agent:
+          r.querySelector('[data-slot="shell-agent"]')?.textContent ?? null,
+      }));
+    return { row, started, running, settled, bash, open, shelfRows };
+  };
+
+  it('draws a CONTINUED conversation as ONE instance, naming its shells by the latest call and dropping an earlier call’s command', async () => {
+    // A Manager that briefs its Engineer once and continues that thread twice
+    // has ONE Engineer at work — reported as three.
+    const c = continuedCalls();
+    const container = await c.open([
+      c.started('call-22'),
+      c.running('call-22'),
+      // A foreground command call-22 never got an answer to before it settled.
+      c.bash('sh-22', 'pnpm build', 'call-22'),
+      // …and a detached one it started that is still going: listed, and named
+      // for the conversation's LATEST call although call-22 launched it.
+      c.bash('sh-bg', 'pnpm dev', 'call-22', true),
+      c.row('shell_open', 'eng', { id: 'sh-bg' }),
+      ...c.settled('call-22'),
+      c.started('call-23', 'call-22'),
+      c.running('call-23'),
+      ...c.settled('call-23'),
+      c.started('call-24', 'call-23'),
+      c.running('call-24'),
+      c.bash('sh-24', 'pnpm test', 'call-24'),
+    ]);
+
+    const engineerCard = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="agent-cards"] > li',
+      ),
+    ].find((card) => card.textContent?.includes('Engineer'));
+    expect(engineerCard).toBeDefined();
+    expect(
+      engineerCard!.querySelectorAll('[data-slot="agent-instance"]'),
+    ).toHaveLength(1);
+
+    const rows = c.shelfRows(container);
+    expect(rows).toHaveLength(2);
+    expect(rows.some((r) => r.text.includes('pnpm build'))).toBe(false);
+    expect(rows.find((r) => r.text.includes('pnpm dev'))?.agent).toBe(
+      'Engineer · call-24',
+    );
+    expect(rows.find((r) => r.text.includes('pnpm test'))?.agent).toBe(
+      'Engineer · call-24',
+    );
+  });
+
+  it('keeps a command of a call still running when ANOTHER continuation of the same thread has settled', async () => {
+    // B and C both continue A (the daemon checks only that A has settled). C
+    // finishing says nothing about B, so B's unanswered command is still work.
+    const c = continuedCalls();
+    const container = await c.open([
+      c.started('call-A'),
+      c.running('call-A'),
+      ...c.settled('call-A'),
+      c.started('call-B', 'call-A'),
+      c.running('call-B'),
+      c.bash('sh-B', 'pnpm lint', 'call-B'),
+      c.started('call-C', 'call-A'),
+      c.running('call-C'),
+      ...c.settled('call-C'),
+    ]);
+
+    const rows = c.shelfRows(container);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.text).toContain('pnpm lint');
+    expect(rows[0]!.agent).toBe('Engineer · call-C');
+  });
+
+  it('combines a continued conversation’s task lists in the panel exactly as its card does when a later call restates the list whole', async () => {
+    // call-23 continues call-22 and STATES its list, task 2 gone. The panel
+    // reads the daemon's groups and the card reads the transcript; both must
+    // drop task 2, or the panel lists a task the card says is gone.
+    const c = continuedCalls();
+    const task = (id: string) => ({
+      id,
+      title: `Task ${id}`,
+      status: 'pending' as const,
+      activeForm: null,
+    });
+    const stated = (callId: string, ids: string[]): ChatItem =>
+      c.row('task_list', 'eng', {
+        mode: 'snapshot',
+        tasks: ids.map(task),
+        toolCallId: null,
+        callId,
+      });
+    const container = await c.open(
+      [
+        c.started('call-22'),
+        c.running('call-22'),
+        stated('call-22', ['1', '2']),
+        ...c.settled('call-22'),
+        c.started('call-23', 'call-22'),
+        c.running('call-23'),
+        stated('call-23', ['1']),
+      ],
+      [
+        {
+          nodeId: 'eng',
+          callId: 'call-22',
+          tasks: [task('1'), task('2')],
+          snapshot: true,
+        },
+        {
+          nodeId: 'eng',
+          callId: 'call-23',
+          tasks: [task('1')],
+          snapshot: true,
+        },
+      ],
+    );
+
+    const cardChip = container.querySelector(
+      '[data-slot="call-tasks"] [aria-label]',
+    );
+    expect(cardChip?.getAttribute('aria-label')).toContain('0 of 1 task done');
+    const engineerCard = [
+      ...container.querySelectorAll<HTMLElement>(
+        '[data-slot="agent-cards"] > li',
+      ),
+    ].find((card) => card.textContent?.includes('Engineer'));
+    const panelList = engineerCard?.querySelector(
+      '[data-slot="agent-task-list"]',
+    );
+    expect(panelList?.textContent).toContain('0/1');
+    expect(panelList?.textContent).not.toContain('0/2');
+  });
+
   it('keeps a detached command listed until something says it ended', async () => {
     // The other side of the same rule: the reply to a detached launch settles
     // nothing, so a command with no settle row is still running and still says

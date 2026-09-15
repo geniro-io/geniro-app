@@ -165,6 +165,32 @@ export function foldTaskList(
   return list;
 }
 
+/**
+ * One conversation's checklist across the calls that continued it, `later`
+ * being a later call's list.
+ *
+ * A continued call resumes the SAME session and both CLIs keep numbering that
+ * session's tasks, while the fold behind each call's list starts afresh — so a
+ * list built only from patches holds just what that call moved, and is merged
+ * over the earlier one field by field (the patch rule `applyAnnouncement`
+ * follows). A list a SNAPSHOT stated is the whole list: anything absent from it
+ * is gone, and it replaces the earlier one, keeping only text a terse row left
+ * out.
+ */
+export function combineTaskLists(
+  earlier: readonly AgentTaskRow[],
+  later: readonly AgentTaskRow[],
+  laterIsSnapshot: boolean,
+): readonly AgentTaskRow[] {
+  // The later call's list read as ONE announcement over the earlier list, so
+  // the merge rule is `applyAnnouncement`'s and stated nowhere else.
+  return applyAnnouncement([...earlier], {
+    mode: laterIsSnapshot ? 'snapshot' : 'patch',
+    tasks: [...later],
+    toolCallId: null,
+  });
+}
+
 /** How far along a list is — for the one-line summary a collapsed view shows. */
 export function taskProgress(tasks: readonly AgentTaskRow[]): {
   done: number;
@@ -193,6 +219,8 @@ export interface ThreadTaskList {
   nodeId: string | null;
   callId: string | null;
   tasks: AgentTaskRow[];
+  /** A snapshot stated this list at some point — see `combineTaskLists`. */
+  snapshot: boolean;
 }
 
 /**
@@ -252,5 +280,6 @@ export function taskListsByThread(
     nodeId: thread.nodeId,
     callId: thread.callId,
     tasks: foldTaskList(thread.announcements),
+    snapshot: thread.announcements.some((entry) => entry.mode === 'snapshot'),
   }));
 }

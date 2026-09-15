@@ -50,6 +50,7 @@ function doc(items: ChatExportDtoItemsInner[]): ChatExportDto {
       configDir: null,
       groupId: null,
       customInstructions: null,
+      taskInstructions: null,
       cursorMaxMode: null,
       lastMetricsReading: null,
       pendingContext: null,

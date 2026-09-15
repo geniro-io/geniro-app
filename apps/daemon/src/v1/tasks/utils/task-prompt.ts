@@ -73,7 +73,7 @@ const REPORT_PROSE =
  * What geniro asks a task's agent to do, on top of whatever the user's own
  * standing instructions already say.
  *
- * It rides the run's `customInstructions` snapshot rather than the prompt,
+ * It rides the run's `taskInstructions` rather than the prompt,
  * because the prompt is what a CLI NAMES the conversation from: leading with
  * house-keeping had cursor-agent titling chats after geniro's own preamble
  * (see `AgentAdapter.composeSystemPrompt`), and the same would happen here.

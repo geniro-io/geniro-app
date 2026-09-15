@@ -47,6 +47,7 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
+import { capWholeSections } from '../../agents/utils/cap-whole-sections';
 import {
   mapEventToItem,
   terminalStatus,
@@ -139,6 +140,12 @@ export interface StartWorkflowRunInput {
    */
   customInstructions?: string;
   /**
+   * What the board card this run works asks of it — its label instructions and
+   * the report ask, already composed. Absent for a run started from the
+   * library; every agent node composes it right after the user's own text.
+   */
+  taskInstructions?: string;
+  /**
    * Whether this run's cursor nodes ask for Max Mode — the user's own setting,
    * snapshotted onto the run like the instructions above.
    */
@@ -229,6 +236,8 @@ interface RunContext {
   seedPrompt: string;
   /** The run's snapshotted global instructions; every node composes it. */
   customInstructions: string | null;
+  /** The card's instructions for a task run; every node composes them too. */
+  taskInstructions: string | null;
   /** The run's snapshotted Max Mode choice; every cursor node carries it. */
   cursorMaxMode: boolean | null;
   /**
@@ -556,6 +565,7 @@ export class GraphExecutorService implements OnModuleInit {
         // normalizes to null so a cleared box and an untouched one are one
         // state. Every node of this run then composes the same text.
         customInstructions: input.customInstructions?.trim() || null,
+        taskInstructions: input.taskInstructions?.trim() || null,
         cursorMaxMode: input.cursorMaxMode ?? null,
         // NOT the workflow's name. A stamped title reads as "this run has been
         // named", which is what kept `ChatTitleService` off workflow runs
@@ -621,6 +631,7 @@ export class GraphExecutorService implements OnModuleInit {
         cwd,
         seedPrompt: input.prompt,
         customInstructions: run.customInstructions,
+        taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions: new Map(),
         firstSeq: 0,
@@ -800,6 +811,7 @@ export class GraphExecutorService implements OnModuleInit {
         cwd,
         seedPrompt: text,
         customInstructions: run.customInstructions,
+        taskInstructions: run.taskInstructions,
         cursorMaxMode: run.cursorMaxMode,
         resumeSessions,
         firstSeq: seq + 1,
@@ -1085,7 +1097,13 @@ export class GraphExecutorService implements OnModuleInit {
     claudeModes: ClaudeModesCapability,
     dropped: DroppedNodeSetting[],
   ): void {
-    const { cwd, seedPrompt, customInstructions, cursorMaxMode } = run;
+    const {
+      cwd,
+      seedPrompt,
+      customInstructions,
+      taskInstructions,
+      cursorMaxMode,
+    } = run;
     const nodes = workflow.nodes;
     const { producersOf } = buildEdgeMaps(nodes, workflow.edges);
     const nodesById = new Map(nodes.map((n) => [n.id, n]));
@@ -1137,26 +1155,23 @@ export class GraphExecutorService implements OnModuleInit {
     const instructionTextOf = new Map<string, string>();
     const overflowedBlocks: { nodeId: string; labels: string[] }[] = [];
     for (const [nodeId, blocks] of blocksOf) {
-      const kept: string[] = [];
-      const overflowed: string[] = [];
-      let length = 0;
-      for (const block of blocks) {
-        const joined =
-          kept.length === 0
-            ? block.text.length
-            : length + INSTRUCTION_BLOCK_SEPARATOR.length + block.text.length;
-        if (joined > MAX_CUSTOM_INSTRUCTIONS_CHARS) {
-          overflowed.push(block.label);
-          continue;
-        }
-        kept.push(block.text);
-        length = joined;
-      }
+      const { kept, omitted } = capWholeSections(
+        blocks,
+        (block) => block.text,
+        INSTRUCTION_BLOCK_SEPARATOR,
+        MAX_CUSTOM_INSTRUCTIONS_CHARS,
+      );
       if (kept.length > 0) {
-        instructionTextOf.set(nodeId, kept.join(INSTRUCTION_BLOCK_SEPARATOR));
+        instructionTextOf.set(
+          nodeId,
+          kept.map((block) => block.text).join(INSTRUCTION_BLOCK_SEPARATOR),
+        );
       }
-      if (overflowed.length > 0) {
-        overflowedBlocks.push({ nodeId, labels: overflowed });
+      if (omitted.length > 0) {
+        overflowedBlocks.push({
+          nodeId,
+          labels: omitted.map((block) => block.label),
+        });
       }
     }
     const instructionsFor = (nodeId: string): string | null =>
@@ -1778,6 +1793,8 @@ export class GraphExecutorService implements OnModuleInit {
         // a standing preference. Joining them here would put that ordering in
         // the executor and leave the chat path free to disagree about it.
         customInstructions,
+        // A peer on the same terms; ranked right after the user's own text.
+        taskInstructions,
         // Joined here because the order of several blocks is a graph fact no
         // adapter could recover; ranked by `composeTurnInstructions`.
         instructionBlocks: instructionsFor(node.id),

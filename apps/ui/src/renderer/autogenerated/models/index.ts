@@ -1203,6 +1203,12 @@ export interface ChatExportRun {
     customInstructions: string | null;
     /**
      * 
+     * @type {string}
+     * @memberof ChatExportRun
+     */
+    taskInstructions: string | null;
+    /**
+     * 
      * @type {boolean}
      * @memberof ChatExportRun
      */
@@ -1784,6 +1790,31 @@ export interface CreateChatDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface CreateLabelInstructionDto
+ */
+export interface CreateLabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    projectId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof CreateLabelInstructionDto
+     */
+    instructions: string;
+}
 /**
  * 
  * @export
@@ -2583,6 +2614,62 @@ export type ItemKind = typeof ItemKind[keyof typeof ItemKind];
 /**
  * 
  * @export
+ * @interface LabelInstructionDeletedDto
+ */
+export interface LabelInstructionDeletedDto {
+    /**
+     * 
+     * @type {boolean}
+     * @memberof LabelInstructionDeletedDto
+     */
+    deleted: boolean;
+}
+/**
+ * 
+ * @export
+ * @interface LabelInstructionDto
+ */
+export interface LabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    id: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    projectId: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    label: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    instructions: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    createdAt: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof LabelInstructionDto
+     */
+    updatedAt: string;
+}
+/**
+ * 
+ * @export
  * @interface LocalImageDto
  */
 export interface LocalImageDto {
@@ -3215,7 +3302,7 @@ export interface ReconcileTasksDto {
      * @type {string}
      * @memberof ReconcileTasksDto
      */
-    projectId: string;
+    projectId?: string;
 }
 /**
  * 
@@ -3262,6 +3349,27 @@ export interface ReorderRunGroupsDto {
      */
     ids: Array<string>;
 }
+/**
+ * 
+ * @export
+ * @interface ReorderTasksDto
+ */
+export interface ReorderTasksDto {
+    /**
+     * 
+     * @type {TaskStatus}
+     * @memberof ReorderTasksDto
+     */
+    status: TaskStatus;
+    /**
+     * 
+     * @type {Array<string>}
+     * @memberof ReorderTasksDto
+     */
+    ids: Array<string>;
+}
+
+
 /**
  * 
  * @export
@@ -3668,6 +3776,12 @@ export interface RunTaskGroup {
      * @memberof RunTaskGroup
      */
     tasks: Array<RunTaskRow>;
+    /**
+     * 
+     * @type {boolean}
+     * @memberof RunTaskGroup
+     */
+    snapshot: boolean;
 }
 /**
  * 
@@ -4419,6 +4533,31 @@ export interface UpdateChatSettingsDto {
 }
 
 
+/**
+ * 
+ * @export
+ * @interface UpdateLabelInstructionDto
+ */
+export interface UpdateLabelInstructionDto {
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    label?: string;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    projectId?: string | null;
+    /**
+     * 
+     * @type {string}
+     * @memberof UpdateLabelInstructionDto
+     */
+    instructions?: string;
+}
 /**
  * 
  * @export

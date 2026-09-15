@@ -2485,6 +2485,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'help me',
     });
@@ -2541,6 +2542,7 @@ describe('GraphExecutorService — agent calls', () => {
     expect(caller.input.callSurfacePrompt).not.toContain('SECRET_PLAYBOOK');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'help me',
     });
@@ -2605,6 +2607,7 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'Helper',
       message: 'summarize',
     });
@@ -2678,6 +2681,7 @@ describe('GraphExecutorService — agent calls', () => {
 
     // A callee sub-turn on the SAME node runs and settles…
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'worker',
       message: 'sub-task',
     });
@@ -2715,6 +2719,7 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const detached = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'background task',
       mode: 'fire_and_forget',
@@ -2746,6 +2751,7 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const started = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'do the work',
       mode: 'async',
@@ -2788,6 +2794,7 @@ describe('GraphExecutorService — agent calls', () => {
     });
     await drain();
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'never finishes',
     });
@@ -2874,6 +2881,7 @@ describe('GraphExecutorService — agent calls', () => {
     // Each caller sync-calls its level-1 callee — this fills all four slots.
     for (const i of ids) {
       void callBroker.callAgent(run.id, `c${i}`, {
+        title: 'why',
         agent: `b${i}`,
         message: `to-b${i}`,
       });
@@ -2887,6 +2895,7 @@ describe('GraphExecutorService — agent calls', () => {
     // Each level-1 callee sync-calls its own level-2 callee (depth 2, legal).
     for (const i of ids) {
       void callBroker.callAgent(run.id, `b${i}`, {
+        title: 'why',
         agent: `d${i}`,
         message: `to-d${i}`,
       });
@@ -2933,6 +2942,7 @@ describe('GraphExecutorService — agent calls', () => {
     // many callee TURNS run at once.
     for (const i of ids) {
       void callBroker.callAgent(run.id, 'orch', {
+        title: 'why',
         agent: `h${i}`,
         message: `call ${i}`,
         mode: 'async',
@@ -3016,6 +3026,67 @@ describe('GraphExecutorService — agent calls', () => {
     expect(claude.starts[0]!.input.customInstructions).toBe(
       'Always answer in British English.',
     );
+  });
+
+  it('startRunBySlug carries a card’s task instructions to their own column and every node', async () => {
+    // A task run's label block and report ask are the card's, not the user's,
+    // so they must land apart from `customInstructions` (which the user can
+    // purge) and still reach each node's turn beside it.
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      customInstructions: 'Always answer in British English.',
+      taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+    });
+    await drain();
+
+    const stored = runDao.runs.get(run.id);
+    expect(stored?.customInstructions).toBe(
+      'Always answer in British English.',
+    );
+    expect(stored?.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
+    expect(claude.starts[0]!.input.customInstructions).toBe(
+      'Always answer in British English.',
+    );
+    expect(claude.starts[0]!.input.taskInstructions).toBe(
+      'LABEL BLOCK\n\nREPORT ASK',
+    );
+
+    // The SECOND node too, which only starts once the first has settled.
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    expect(claude.starts[1]!.input.taskInstructions).toBe(
+      'LABEL BLOCK\n\nREPORT ASK',
+    );
+  });
+
+  it('a follow-up pass on a settled run carries the card’s task instructions', async () => {
+    // `prepareNextPass` builds its own run context off the row, separately
+    // from `startRun` — dropping the field there would silently run every
+    // later pass of a task's workflow without its label block and report ask.
+    const { service, claude, runDao, storeGet } = setup();
+    storeGet.mockResolvedValue({ slug: 'lin', workflow: triggered(LINEAR) });
+    const run = await service.startRunBySlug('lin', {
+      cwd: dir,
+      prompt: 'go',
+      taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+    });
+    await drain();
+    completeTurn(claude.starts[0]!, 'A done');
+    await drain();
+    completeTurn(claude.starts[1]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+
+    const next = claude.starts[2];
+    expect(next).toBeDefined();
+    expect(next!.input.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
   });
 
   it('startRunBySlug propagates a library miss without creating a run', async () => {
@@ -3125,6 +3196,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
     claude.throwNextStart = new Error('EACCES');
     const envelope = await callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'go',
     });
@@ -3169,6 +3241,7 @@ describe('GraphExecutorService — agent calls', () => {
     await drain();
     // First call → helper completes.
     const first = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'first',
     });
@@ -3180,6 +3253,7 @@ describe('GraphExecutorService — agent calls', () => {
     // Second call to the SAME callee → a fresh turn that fails; node_state
     // must reflect the LATEST call, not stick on the first completion.
     const second = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'second',
     });
@@ -3245,6 +3319,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     expect(claude.starts[0]!.input.approvalMode).toBe('ask');
 
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3275,6 +3350,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     expect(caller.input.callSurfacePrompt).toContain('answer_agent');
 
     const sync = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3367,7 +3443,11 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
 
     // The callee node is explicitly 'ask' — its plain permissions still go
     // to the human card exactly as before the bridge.
-    void callBroker.callAgent(run.id, 'a', { agent: 'callee', message: 'm' });
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'm',
+    });
     await drain();
     const callee = claude.starts[1]!;
     callee.emit({
@@ -3450,6 +3530,7 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
     await drain();
     const caller = claude.starts[0]!;
     const sync = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3514,7 +3595,11 @@ describe('GraphExecutorService — Q&A bridge (M4)', () => {
       prompt: 'go',
     });
     await drain();
-    void callBroker.callAgent(run.id, 'a', { agent: 'callee', message: 'm' });
+    void callBroker.callAgent(run.id, 'a', {
+      title: 'why',
+      agent: 'callee',
+      message: 'm',
+    });
     await drain();
     expect(cursor.starts).toHaveLength(1);
     expect(cursor.starts[0]!.input.approvalMode).toBe('auto');
@@ -3559,6 +3644,7 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     await drain();
     const caller = ctx.claude.starts[0]!;
     const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3611,6 +3697,7 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     await drain();
     const caller = ctx.claude.starts[0]!;
     const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3709,6 +3796,7 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     await drain();
     const caller = ctx.claude.starts[0]!;
     const sync = ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -3745,6 +3833,7 @@ describe('GraphExecutorService — Q&A bridge guards (round 2)', () => {
     await drain();
     const caller = ctx.claude.starts[0]!;
     void ctx.callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'work',
     });
@@ -4301,6 +4390,7 @@ describe('instruction blocks on a call-only callee', () => {
     expect(claude.starts[0]!.input.systemPrompt).toBe('You orchestrate.');
 
     const envelope = callBroker.callAgent(run.id, 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'help me',
     });
@@ -4445,6 +4535,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     await drain();
 
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'start the build in the background',
     });
@@ -4477,6 +4568,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     });
     await drain();
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'start the build',
     });
@@ -4519,6 +4611,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     });
     await drain();
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'go',
     });
@@ -4553,6 +4646,7 @@ describe('GraphExecutorService — a callee process outlives its turn', () => {
     });
     await drain();
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'go',
     });
@@ -4740,11 +4834,13 @@ describe('GraphExecutorService — a node’s context reading', () => {
     });
     await drain();
     const first = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'one',
       mode: 'async',
     });
     const second = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'two',
       mode: 'async',
@@ -4789,11 +4885,13 @@ describe('GraphExecutorService — a node’s context reading', () => {
     });
     await drain();
     const first = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'one',
       mode: 'async',
     });
     const second = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'two',
       mode: 'async',
@@ -4853,11 +4951,13 @@ describe('GraphExecutorService — a node’s context reading', () => {
     });
     await drain();
     const first = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'one',
       mode: 'async',
     });
     const second = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'two',
       mode: 'async',
@@ -4951,6 +5051,7 @@ describe('GraphExecutorService — a node’s context reading', () => {
     });
     await drain();
     await callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'one',
       mode: 'async',
@@ -5086,6 +5187,7 @@ describe('GraphExecutorService — work still out when a process ends', () => {
     const caller = claude.starts[0]!;
     caller.emit(delegate('task-caller', true));
     const call = callBroker.callAgent(run.id, 'a', {
+      title: 'why',
       agent: 'callee',
       message: 'review it',
     });

@@ -86,6 +86,21 @@ import { closeQuietly } from '../utils/close-quietly';
 import { CallBroker } from './call-broker.service';
 
 /**
+ * The bound on `call_agent`'s `title` — a one-sentence reason shown on the
+ * call's transcript card, not a brief. Long enough for a real sentence,
+ * short enough that a caller writing a brief there instead is refused rather
+ * than quietly truncated onto the card.
+ */
+const MAX_CALL_TITLE_LENGTH = 200;
+
+/**
+ * The title is the call card's headline and its accessible name, so a
+ * direction override or an invisible control character could make it read as
+ * something other than what the agent sent.
+ */
+const UNREADABLE_TITLE_CHARACTERS = /[\p{Cc}\p{Bidi_Control}]/u;
+
+/**
  * The MCP protocol host behind the per-run endpoint
  * (`POST /v1/mcp/<runId>/<nodeId>`, see McpController), serving the tools THIS
  * node can use over the streamable-http transport: the call surface
@@ -346,6 +361,10 @@ export class McpServerService {
                   description:
                     'The task for the callee. Without `thread` it starts a FRESH conversation seeing only this text (plus its own role) — include all context it needs.',
                 },
+                title: {
+                  type: 'string',
+                  description: `A short, human-readable reason for this call — WHY you are making it (e.g. "Get concrete UAT links from the DB"), shown to the user on the call's card. Not the task itself. At most ${MAX_CALL_TITLE_LENGTH} characters.`,
+                },
                 thread: {
                   type: 'string',
                   description:
@@ -358,7 +377,7 @@ export class McpServerService {
                     'sync (default) waits for the result; async returns a call_id at once — collect it later with await_agent; fire_and_forget never returns a result.',
                 },
               },
-              required: ['agent', 'message'],
+              required: ['agent', 'message', 'title'],
             },
           },
           {
@@ -1189,14 +1208,17 @@ export class McpServerService {
       }
       let envelope: CallEnvelope;
       if (name === 'call_agent') {
+        const checked = validateCallAgentArgs(args);
         envelope =
-          validateCallAgentArgs(args) ??
-          (await this.broker.callAgent(runId, nodeId, {
-            agent: args.agent as string,
-            message: args.message as string,
-            mode: args.mode as CallMode | undefined,
-            thread: args.thread as string | undefined,
-          }));
+          typeof checked !== 'string'
+            ? checked
+            : await this.broker.callAgent(runId, nodeId, {
+                agent: args.agent as string,
+                message: args.message as string,
+                title: checked,
+                mode: args.mode as CallMode | undefined,
+                thread: args.thread as string | undefined,
+              });
       } else if (name === 'await_agent') {
         envelope =
           validateAwaitAgentArgs(args) ??
@@ -1233,15 +1255,33 @@ export class McpServerService {
   }
 }
 
-/** Arg validation happens in-envelope — never throw across the transport. */
+/**
+ * Arg validation happens in-envelope — never throw across the transport.
+ * Answers the refusal, or the TRIMMED title the call goes out with, so the
+ * value checked is the value sent.
+ */
 function validateCallAgentArgs(
   args: Record<string, unknown>,
-): CallEnvelope | null {
+): CallEnvelope | string {
   if (typeof args.agent !== 'string' || args.agent.trim().length === 0) {
     return invalidArgs("'agent' must be a non-empty string");
   }
   if (typeof args.message !== 'string' || args.message.length === 0) {
     return invalidArgs("'message' must be a non-empty string");
+  }
+  const title = typeof args.title === 'string' ? args.title.trim() : '';
+  if (title.length === 0) {
+    return invalidArgs("'title' must be a non-empty string");
+  }
+  if (UNREADABLE_TITLE_CHARACTERS.test(title)) {
+    return invalidArgs(
+      "'title' must not contain control or text-direction characters",
+    );
+  }
+  if (title.length > MAX_CALL_TITLE_LENGTH) {
+    return invalidArgs(
+      `'title' exceeds ${MAX_CALL_TITLE_LENGTH} characters — summarize it`,
+    );
   }
   if (args.mode !== undefined && !CALL_MODES.includes(args.mode as CallMode)) {
     return invalidArgs("'mode' must be sync, async, or fire_and_forget");
@@ -1252,7 +1292,7 @@ function validateCallAgentArgs(
   ) {
     return invalidArgs("'thread' must be a non-empty call_id string");
   }
-  return null;
+  return title;
 }
 
 function validateAwaitAgentArgs(

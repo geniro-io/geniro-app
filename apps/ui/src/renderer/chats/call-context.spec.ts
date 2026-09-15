@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveCalleeContext } from './call-context';
+import {
+  resolveCalleeContext,
+  resolveConversationContext,
+} from './call-context';
 import { type LiveState, partialOwnerKey } from './live-text';
 import type { NodeDurableReading } from './use-node-context';
 
@@ -127,5 +130,52 @@ describe('resolveCalleeContext', () => {
       contextTokens: null,
       contextWindowTokens: null,
     });
+  });
+});
+
+describe('resolveConversationContext', () => {
+  it('takes the conversation’s LATEST call’s reading over an earlier call’s', () => {
+    // A continued conversation is one session: its newest call is where the
+    // window stands now, and the first call's row is an older level of it.
+    const rows = reading([
+      {
+        callId: 'call-22',
+        contextTokens: 40_000,
+        contextWindowTokens: 200_000,
+      },
+      {
+        callId: 'call-24',
+        contextTokens: 90_000,
+        contextWindowTokens: 200_000,
+      },
+    ]);
+    expect(
+      resolveConversationContext(NO_LIVE, rows, 'callee', [
+        'call-22',
+        'call-23',
+        'call-24',
+      ]),
+    ).toEqual({ contextTokens: 90_000, contextWindowTokens: 200_000 });
+  });
+
+  it('falls back to an earlier call while the latest has reported nothing yet', () => {
+    const rows = reading([
+      { callId: 'call-22', contextTokens: 40_000, contextWindowTokens: null },
+      {
+        callId: 'call-23',
+        contextTokens: 55_000,
+        contextWindowTokens: 200_000,
+      },
+    ]);
+    const liveText = new Map([
+      [partialOwnerKey('callee', 'call-24'), live(null, 1_000_000)],
+    ]);
+    expect(
+      resolveConversationContext(liveText, rows, 'callee', [
+        'call-22',
+        'call-23',
+        'call-24',
+      ]),
+    ).toEqual({ contextTokens: 55_000, contextWindowTokens: 1_000_000 });
   });
 });

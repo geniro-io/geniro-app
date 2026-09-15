@@ -591,7 +591,7 @@ describe('McpServerService', () => {
       'orch',
       rpc('tools/call', {
         name: 'call_agent',
-        arguments: { agent: 'helper', message: 'find X' },
+        arguments: { agent: 'helper', message: 'find X', title: 'Find X' },
       }),
     );
     const result = json().result as {
@@ -603,6 +603,122 @@ describe('McpServerService', () => {
       status: 'ok',
       result: { call_id: 'call-1', agent: 'helper', text: 'research done' },
     });
+  });
+
+  it('refuses call_agent with a missing, empty, or whitespace-only title', async () => {
+    for (const args of [
+      { agent: 'helper', message: 'm' },
+      { agent: 'helper', message: 'm', title: '' },
+      { agent: 'helper', message: 'm', title: '   ' },
+    ]) {
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/call', { name: 'call_agent', arguments: args }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain('INVALID_ARGS');
+      expect(result.content[0]!.text).toContain('title');
+    }
+  });
+
+  it('refuses a call_agent title carrying a control or text-direction character', async () => {
+    for (const title of ['look\u0000up', 'why \u202Esi siht']) {
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: { agent: 'helper', message: 'm', title },
+        }),
+      );
+      const result = json().result as {
+        content: { text: string }[];
+        isError: boolean;
+      };
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toContain('INVALID_ARGS');
+      expect(result.content[0]!.text).toContain('title');
+    }
+  });
+
+  it('refuses a call_agent title over the length bound', async () => {
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: { agent: 'helper', message: 'm', title: 'x'.repeat(201) },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('INVALID_ARGS');
+    expect(result.content[0]!.text).toContain('title');
+  });
+
+  it('accepts a call_agent title at exactly the bound, measured after trimming', async () => {
+    for (const title of ['x'.repeat(200), `  ${'x'.repeat(200)}  `]) {
+      const { json } = await post(
+        service(),
+        'run-1',
+        'orch',
+        rpc('tools/call', {
+          name: 'call_agent',
+          arguments: { agent: 'helper', message: 'm', title },
+        }),
+      );
+      const result = json().result as { content: { text: string }[] };
+      expect(result.content[0]!.text).not.toContain('INVALID_ARGS');
+    }
+  });
+
+  it('trims a valid call_agent title before it reaches the broker', async () => {
+    const persisted: { kind: string; payload: Record<string, unknown> }[] = [];
+    const capability: RunCallCapability = {
+      calleesOf: new Map([['orch', [HELPER]]]),
+      launchCalleeTurn: async () => ({
+        status: 'completed',
+        finalText: 'done',
+        error: null,
+        sessionId: null,
+      }),
+      persistItem: (_nodeId, kind, _role, payload) => {
+        persisted.push({ kind, payload: payload as Record<string, unknown> });
+      },
+      isCancelled: () => false,
+      isNodeLive: () => true,
+      wakeNode: () => false,
+    };
+    const instance = new CallBroker();
+    instance.registerRun('run-1', capability);
+
+    await post(
+      service(instance),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: {
+          agent: 'helper',
+          message: 'm',
+          title: '  Get concrete UAT links from the DB  ',
+        },
+      }),
+    );
+
+    const started = persisted.find((p) => p.kind === 'call_started');
+    expect(started?.payload.title).toBe('Get concrete UAT links from the DB');
   });
 
   it('bad arguments and unknown tools come back as error ENVELOPES, never bare throws', async () => {
@@ -645,7 +761,7 @@ describe('McpServerService', () => {
       'orch',
       rpc('tools/call', {
         name: 'call_agent',
-        arguments: { agent: 'helper', message: 'm' },
+        arguments: { agent: 'helper', message: 'm', title: 't' },
       }),
     );
     const result = json().result as {
@@ -725,7 +841,7 @@ describe('McpServerService', () => {
       'orch',
       rpc('tools/call', {
         name: 'call_agent',
-        arguments: { agent: 'helper', message: 'm' },
+        arguments: { agent: 'helper', message: 'm', title: 't' },
       }),
     );
     const askedResult = asked.json().result as {

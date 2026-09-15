@@ -32,8 +32,10 @@ import {
   callBlockTasks,
   callBlockUsage,
   countTools,
+  isCallContinuation,
 } from './transcript-groups';
 import type { TranscriptNodeMeta } from './transcript-item';
+import { payloadString } from './transcript-payload';
 
 function blockStatusOf(status: CallBlockEntry['status']): BlockStatus {
   switch (status) {
@@ -193,12 +195,16 @@ export const CallBlock = memo(function CallBlock({
    * full: a source that reports one half says nothing about the other, so a
    * live delta carrying only a count must not erase a window the settled turn
    * already had.
+   *
+   * The resolver is handed every call of the conversation, so a continuation
+   * that has not reported yet reads on the same rule the agents panel's instance
+   * ring does (`CalleeContextResolver`).
    */
   const folded = callBlockContext(block);
   const resolveCallReading = useContext(CalleeContextResolverContext);
   const live =
     resolveCallReading !== null && block.calleeNodeId !== null
-      ? resolveCallReading(block.calleeNodeId, block.callId)
+      ? resolveCallReading(block.calleeNodeId, block.callIds)
       : null;
   const context = {
     contextTokens: live?.contextTokens ?? folded.contextTokens,
@@ -207,6 +213,17 @@ export const CallBlock = memo(function CallBlock({
   };
   const tasks = callBlockTasks(block);
   const failed = block.status === 'failed';
+  const identityText = caller ? `${caller} → ${callee}` : callee;
+  const baseToggleLabel = caller ? `${identityText} call` : `Call to ${callee}`;
+  /**
+   * The accessible name for the disclosure button says WHY the call was made
+   * before it says WHO it was to, matching what a sighted reader sees on the
+   * header; with no reason on record it names the call by its pair alone.
+   */
+  const toggleLabel = block.title
+    ? `${block.title} — ${baseToggleLabel}`
+    : baseToggleLabel;
+  const requestLabel = `Providing instructions for ${callee}`;
   // The callee's live row draws its own spinner and its own clock, so the
   // static hint below it would be the second line in a row saying the same
   // agent is still going.
@@ -265,9 +282,7 @@ export const CallBlock = memo(function CallBlock({
         eyebrowIcon={<ArrowRightLeft aria-hidden="true" className="size-3" />}
         status={status}
         collapsible
-        toggleLabel={
-          caller ? `${caller} → ${callee} call` : `Call to ${callee}`
-        }
+        toggleLabel={toggleLabel}
         summary={
           hasSummary ? (
             <>
@@ -352,7 +367,17 @@ export const CallBlock = memo(function CallBlock({
                 calleeKey={block.calleeNodeId ?? callee}
               />
             ) : null}
-            <BlockTitle>{caller ? `${caller} → ${callee}` : callee}</BlockTitle>
+            {/* With a `title` as the prominent line, the caller→callee pair is
+                the identity beside the avatars, small and muted. Without one
+                the pair IS the title, in `BlockTitle` below. */}
+            {block.title ? (
+              <span
+                data-slot="call-identity"
+                className="shrink-0 text-[11px] text-muted-foreground">
+                {identityText}
+              </span>
+            ) : null}
+            <BlockTitle>{block.title ?? identityText}</BlockTitle>
             {/* WHICH CLI answered. The card is the callee's work, so it is the
                 callee's binary that is named — a graph routinely mixes the two,
                 and a node's name is the user's word for a persona rather than a
@@ -369,10 +394,7 @@ export const CallBlock = memo(function CallBlock({
           </>
         }>
         {block.message ? (
-          <BlockRequest
-            label={`Providing instructions for ${callee}`}
-            text={block.message}
-          />
+          <BlockRequest label={requestLabel} text={block.message} />
         ) : null}
         {/*
           The card's header IS the callee's identity, so its rows carry none of
@@ -384,14 +406,29 @@ export const CallBlock = memo(function CallBlock({
           дублируется — она должна быть просто один раз в хедере блока".
         */}
         <NestedThreadContext.Provider value={true}>
-          {block.entries.map((entry) => (
-            <TranscriptEntryView
-              key={entry.type === 'item' ? entry.item.id : entry.id}
-              entry={entry}
-              nodes={nodes}
-              chatAgentName={chatAgentName}
-            />
-          ))}
+          {block.entries.map((entry) => {
+            // A CONTINUED call's ask, at the point it was sent — drawn exactly
+            // as the first ask is, since the card is one conversation and each
+            // ask is a brief to the same callee.
+            if (isCallContinuation(entry)) {
+              const ask = payloadString(entry.item.payload, 'message');
+              return ask ? (
+                <BlockRequest
+                  key={entry.item.id}
+                  label={requestLabel}
+                  text={ask}
+                />
+              ) : null;
+            }
+            return (
+              <TranscriptEntryView
+                key={entry.type === 'item' ? entry.item.id : entry.id}
+                entry={entry}
+                nodes={nodes}
+                chatAgentName={chatAgentName}
+              />
+            );
+          })}
         </NestedThreadContext.Provider>
         {block.result ? (
           <BlockResult label={`Result from ${callee}`} text={block.result} />

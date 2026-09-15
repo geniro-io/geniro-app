@@ -20,6 +20,7 @@ import {
   CreateTaskDto,
   ListTasksQueryDto,
   MoveTaskStatusDto,
+  ReorderTasksDto,
   ReportPullRequestMergedDto,
   TaskAttachmentDto,
   TaskAwaitingMergeDto,
@@ -94,7 +95,18 @@ export class TasksController {
   @ApiOperation({ operationId: 'reconcileTasks' })
   @ZodResponse({ status: 200, type: [TaskDto] })
   reconcile(@Body() dto: ReconcileTasksDto): Promise<TaskWire[]> {
-    return this.settle.reconcileProject(dto.projectId);
+    return this.settle.reconcileProject(dto.projectId ?? null);
+  }
+
+  /**
+   * Set one column's order from the ids a drag left it in. Declared before the
+   * `:taskId` routes so `reorder` is never read as a task id.
+   */
+  @Post('reorder')
+  @ApiOperation({ operationId: 'reorderTasks' })
+  @ZodResponse({ status: 200, type: [TaskDto] })
+  reorder(@Body() dto: ReorderTasksDto): Promise<TaskWire[]> {
+    return this.tasks.reorder(dto.status, dto.ids);
   }
 
   /**

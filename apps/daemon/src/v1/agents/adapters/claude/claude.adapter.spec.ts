@@ -614,6 +614,29 @@ describe('ClaudeAdapter approval seam (ask mode)', () => {
     );
   });
 
+  it('carries a card’s task instructions into argv, right after the user’s own text', () => {
+    // `taskInstructions: input.taskInstructions` inside composeSystemPrompt is
+    // the one line delivering a card's label block and report ask to a CLI;
+    // the specs above it observe only the turn input or the pure joiner. The
+    // order pinned is user's own → the card's → the node's blocks.
+    const { spawn, captured } = fakeSpawn();
+    new ClaudeAdapter({ spawn, waitForMcpServers: false }).start(
+      {
+        prompt: 'p',
+        cwd: '/proj',
+        customInstructions: 'Always answer in British English.',
+        taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+        instructionBlocks: 'Prefer short sentences.',
+      },
+      () => {},
+    );
+
+    const idx = captured.args!.indexOf('--append-system-prompt');
+    expect(captured.args![idx + 1]).toBe(
+      `${GENIRO_UI_PREAMBLE}\n\nAlways answer in British English.\n\nLABEL BLOCK\n\nREPORT ASK\n\nPrefer short sentences.`,
+    );
+  });
+
   it('sends the preamble alone when the user has typed no instructions', () => {
     // The default state for every existing chat, and the reason the preamble is
     // built in rather than seeded into the settings box: an empty box must

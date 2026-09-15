@@ -251,6 +251,27 @@ export class Run extends TimestampsEntity {
   customInstructions: string | null = null;
 
   /**
+   * What the board card this run works asks of its agent — the card's LABEL
+   * instructions and geniro's own report ask, already composed; null for every
+   * run no card started.
+   *
+   * Its own column rather than joined into {@link customInstructions}, because
+   * the two have different owners and different lifetimes. That column is the
+   * USER's standing text, and `POST /v1/chats/forget-custom-instructions`
+   * exists to purge it — a purge that must not take a task run's label block
+   * and report ask with it. And this one is REFRESHED when a card is continued
+   * in its existing thread (`TaskRunsService.resume`), so a label instruction
+   * edited or added since the first press reaches the next turn; the user's own
+   * snapshot is never re-read that way.
+   *
+   * Composed onto the turn right after {@link customInstructions}
+   * (`composeTurnInstructions`), and hashed by `AgentAdapter.sessionKey` on the
+   * same terms. TEXT so the `safe: true` schema sync adds it additively.
+   */
+  @Property({ type: 'text', nullable: true })
+  taskInstructions: string | null = null;
+
+  /**
    * Whether this run's cursor turns ask for **Max Mode** — the window every
    * model that carries no `context` parameter of its own runs at.
    *

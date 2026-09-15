@@ -24,7 +24,11 @@ import {
   subagentIdOf,
 } from './subagent-payload';
 import type { AgentTaskRow, TaskAnnouncement } from './task-payload';
-import { foldTaskList, readTaskAnnouncement } from './task-payload';
+import {
+  combineTaskLists,
+  foldTaskList,
+  readTaskAnnouncement,
+} from './task-payload';
 import {
   AGENT_TOOLS,
   toolKindOf,
@@ -226,30 +230,68 @@ export interface ItemEntry {
  * call_started row becomes the header (callee, mode, ask, LIVE status) and
  * every item of the callee's sub-turn renders inside — so two parallel
  * callees never interleave their messages in the main flow.
+ *
+ * One block is one CONVERSATION, not one call: a call that continues an earlier
+ * call's thread joins that call's block (see {@link resolveCallChains}).
+ * REPORTED as three stacked `Manager → Engineer` cards read as three Engineers
+ * at work, when they were one Engineer conversation continued twice. So the
+ * header facts below are the LATEST call's, and `entries` holds every call's
+ * sub-turn in order.
  */
 export interface CallBlockEntry {
   type: 'call-block';
-  /** Stable identity (the call_started item's id) for keys and expansion. */
+  /**
+   * Stable identity for keys and expansion: the FIRST call's `call_started`
+   * id, so a continuation arriving does not remount a card the reader opened.
+   * First within the loaded window — an older page bringing earlier calls of
+   * the conversation in moves it back once, costing the card its fold state.
+   */
   id: string;
-  /** The call_started item's timestamp — the block's metadata time. */
+  /**
+   * The LATEST call's `call_started` timestamp — the block is drawn at that
+   * row's position, so its time matches where it sits.
+   */
   createdAt: string;
+  /**
+   * The LATEST call — the one whose sub-turn is live, and the key the per-call
+   * live plane is read by. Matching a call id to a block goes through
+   * {@link callIds}, never this alone.
+   */
   callId: string;
+  /** Every call folded into this block, oldest first; `callId` is the last. */
+  callIds: string[];
   calleeNodeId: string | null;
   /** The caller node the call_started row was attributed to. */
   callerNodeId: string | null;
   mode: string | null;
-  /** The caller's ask — the block's REQUEST. */
+  /**
+   * The FIRST call's ask — the block's REQUEST. A continuation's own ask stays
+   * in {@link entries} as its `call_started` row, at the point it was sent (see
+   * {@link isCallContinuation}).
+   */
   message: string | null;
-  /** Sub-turn lifecycle, from the callId-tagged status items. */
+  /**
+   * A short, human-readable reason for the LATEST call, shown as the card's
+   * prominent header line.
+   *
+   * TWIN PARSER: written by `CallBroker.callAgent`'s `call_started` payload —
+   * see `apps/daemon/src/v1/graphs/services/call-broker.service.ts`. Null on
+   * an older row (written before this field existed) or on a caller that
+   * skipped MCP validation — never treated as "no reason", just as absent.
+   */
+  title: string | null;
+  /** The LATEST call's sub-turn lifecycle, from its callId-tagged status items. */
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   /**
-   * The callee's final message once the sub-turn COMPLETED — the block's
-   * RESULT, pulled out of {@link entries} (geniro-style request → result
-   * framing). Null while running or when the sub-turn did not complete.
+   * The callee's final message once the LATEST call's sub-turn COMPLETED — the
+   * block's RESULT, pulled out of {@link entries} (geniro-style request →
+   * result framing). Null while running or when the sub-turn did not complete.
+   * An earlier call's final message stays in `entries` where it was said: it is
+   * what the next ask was answering.
    */
   result: string | null;
   /**
-   * The daemon has said this call's callee stopped producing.
+   * The daemon has said the LATEST call's callee stopped producing.
    *
    * TWIN PARSER: written by `CallBroker`'s silence watchdog as a `system` row
    * carrying `stalledCall: true` and this call's id — see
@@ -266,6 +308,10 @@ export interface CallBlockEntry {
    * warning nobody reads.
    */
   stalled: boolean;
+  /**
+   * Every call's sub-turn in order, each continuation's preceded by its own
+   * `call_started` row (see {@link isCallContinuation}).
+   */
   entries: TranscriptEntry[];
 }
 
@@ -486,6 +532,12 @@ export interface TaskListEntry {
   callId: string | null;
   /** The list as it stood after the last announcement in this run. */
   tasks: AgentTaskRow[];
+  /**
+   * A SNAPSHOT stated this thread's list at some point, so it is the whole list
+   * rather than only the rows patches moved — which decides whether a later
+   * call's list replaces an earlier call's (`combineTaskLists`).
+   */
+  snapshot: boolean;
   /**
    * This is the thread's LAST card — the list as it stands now, rather than a
    * step on the way there.
@@ -1254,9 +1306,52 @@ function subagentRef(id: string): string {
  * is what the block was ASKED, not where it has got to, and the header already
  * names both ends of the call. A block with no summary is one whose header's
  * spinner is the whole of the answer.
+ *
+ * Read from the LATEST call's rows alone ({@link latestCallTurn}): a
+ * continuation that has not spoken yet is thinking about the new ask, and the
+ * answer to the previous one would report it as already done.
  */
 export function callBlockSummary(block: CallBlockEntry): string | null {
-  return block.result ?? lastSpokenIn(block.entries);
+  return block.result ?? lastSpokenIn(latestCallTurn(block));
+}
+
+/**
+ * Narrowed to the KIND rather than to `ItemEntry`, so the other branch of
+ * {@link isCallContinuation} keeps every ordinary row.
+ */
+type CallContinuationEntry = ItemEntry & {
+  item: { kind: 'call_started' };
+};
+
+/**
+ * A continued call's `call_started` row inside a conversation block — the
+ * marker of where that call's ask was sent. The block's bucket never holds a
+ * call row of its own (`call_started` is unclaimable), so at a block's top
+ * level this kind is only ever that marker.
+ */
+export function isCallContinuation(
+  entry: TranscriptEntry,
+): entry is CallContinuationEntry {
+  return entry.type === 'item' && entry.item.kind === 'call_started';
+}
+
+/** A block's entries split at its continuation markers — one run per call. */
+function callSegments(block: CallBlockEntry): TranscriptEntry[][] {
+  const segments: TranscriptEntry[][] = [[]];
+  for (const entry of block.entries) {
+    if (isCallContinuation(entry)) {
+      segments.push([]);
+      continue;
+    }
+    segments[segments.length - 1]!.push(entry);
+  }
+  return segments;
+}
+
+/** The entries after a block's last continuation marker — its LATEST call's. */
+function latestCallTurn(block: CallBlockEntry): readonly TranscriptEntry[] {
+  const segments = callSegments(block);
+  return segments[segments.length - 1]!;
 }
 
 function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
@@ -1303,9 +1398,12 @@ function lastSpokenIn(entries: readonly TranscriptEntry[]): string | null {
  * Tool invocations are read from `tools` groups alone, the same reading
  * {@link countTools} documents: a card entry hides the calls that produced it,
  * so counting those would name work with no row to open.
+ *
+ * The LATEST call's tools alone, on {@link callBlockSummary}'s rule: a tool an
+ * earlier call finished is not what the callee is doing now.
  */
 export function callBlockActivity(block: CallBlockEntry): string | null {
-  return newestToolNameIn(block.entries);
+  return newestToolNameIn(latestCallTurn(block));
 }
 
 /**
@@ -1384,6 +1482,9 @@ export interface CallBlockUsage {
  * reported nothing — there is no live token or cost channel on either CLI, so
  * the figures appear when the turn lands — and cursor-agent reports no cost at
  * all, which is why the two halves are independent.
+ *
+ * Summed across EVERY call of a continued conversation: it is one callee
+ * session, and its spend accumulates across the asks as it does across turns.
  */
 export function callBlockUsage(block: CallBlockEntry): CallBlockUsage {
   const usage: CallBlockUsage = { tokens: null, costUsd: null };
@@ -1441,6 +1542,9 @@ export interface CallBlockContext {
  * Each figure is carried independently, on the daemon's own rule: a reading
  * that omits one half says nothing about it, so a later turn reporting only a
  * count must not erase the window an earlier one reported.
+ *
+ * Across a continued conversation the walk runs over every call in order, so
+ * the reading is the newest turn's — the one session's current level.
  */
 export function callBlockContext(block: CallBlockEntry): CallBlockContext {
   const found: CallBlockContext = {
@@ -1510,21 +1614,32 @@ function addFigure(total: number | null, next: unknown): number | null {
  * The callee's task list as it stands INSIDE this call block — what the shut
  * card's own tasks chip lists.
  *
- * The LAST card wins, on `TaskListCard`'s own rule: a list is announced many
- * times over a turn and every card but the newest is a step on the way there.
- * Empty when the callee keeps none, which is what withholds the chip.
+ * Each call's LAST card wins for that call, on `TaskListCard`'s own rule: a
+ * list is announced many times over a turn and every card but the newest is a
+ * step on the way there. A continued conversation's calls are then combined in
+ * call order through `combineTaskLists` — the rule the agents panel's instance
+ * applies — so the shut card and the instance state one list, not the latest
+ * call's partial one beside the whole. Empty when the callee keeps none, which
+ * is what withholds the chip.
  */
-export function callBlockTasks(block: CallBlockEntry): AgentTaskRow[] {
-  return lastTaskListIn(block.entries) ?? [];
+export function callBlockTasks(block: CallBlockEntry): readonly AgentTaskRow[] {
+  let tasks: readonly AgentTaskRow[] = [];
+  for (const segment of callSegments(block)) {
+    const last = lastTaskListIn(segment);
+    if (last !== null) {
+      tasks = combineTaskLists(tasks, last.tasks, last.snapshot);
+    }
+  }
+  return tasks;
 }
 
 function lastTaskListIn(
   entries: readonly TranscriptEntry[],
-): AgentTaskRow[] | null {
+): TaskListEntry | null {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]!;
     if (entry.type === 'task-list') {
-      return entry.tasks;
+      return entry;
     }
     if (entry.type === 'item' || entry.type === 'tools' || isCardEntry(entry)) {
       continue;
@@ -1599,6 +1714,44 @@ export function collectCallBlocks(
   };
   walk(entries);
   return out;
+}
+
+/**
+ * Every call block of a folded transcript, keyed by EVERY call it holds — a
+ * continued conversation is one block, reachable by whichever of its calls a
+ * reader asks with.
+ */
+export function indexCallBlocks(
+  entries: readonly TranscriptEntry[],
+): Map<string, CallBlockEntry> {
+  const index = new Map<string, CallBlockEntry>();
+  for (const block of collectCallBlocks(entries)) {
+    for (const callId of block.callIds) {
+      index.set(callId, block);
+    }
+  }
+  return index;
+}
+
+/**
+ * A conversation's block, asked by its calls NEWEST first.
+ *
+ * Newest first rather than by the latest id alone: a continuation that has not
+ * streamed a row yet is not in its block — it stays a flat row until it does —
+ * while the conversation's panel thread already names it, so asking with the
+ * latest id alone would leave the instance's line and spend blank until then.
+ */
+export function callBlockOfConversation(
+  index: ReadonlyMap<string, CallBlockEntry>,
+  callIds: readonly string[],
+): CallBlockEntry | undefined {
+  for (let i = callIds.length - 1; i >= 0; i -= 1) {
+    const block = index.get(callIds[i]!);
+    if (block !== undefined) {
+      return block;
+    }
+  }
+  return undefined;
 }
 
 /** One sub-agent block under assembly. */
@@ -2171,6 +2324,9 @@ interface CallShell {
  *   claim in too — the WHOLE exchange lives in the block; only the anchor
  *   and approval requests/verdicts stay out (see {@link UNCLAIMABLE_KINDS}),
  *   and untagged items (legacy transcripts) keep the flat flow.
+ * - a call continuing an earlier call's `thread` joins that call's block, and
+ *   the block is drawn at the conversation's NEWEST `call_started` — earlier
+ *   anchors draw nothing (see {@link resolveCallChains}).
  *
  * Tool-grouping rules:
  * - a `tool_call` joins its node's OPEN group (or opens one); any other
@@ -2199,6 +2355,7 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       });
     }
   }
+  const chains = resolveCallChains(items);
   // The daemon's silence advisories, read as a SET of call ids rather than
   // claimed into their blocks: the row stays in the caller's main flow, where
   // it is visible without opening anything, and the block reads the fact off
@@ -2317,7 +2474,16 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         shell.started.id === item.id &&
         shell.bucket.length > 0
       ) {
-        entries.push(buildCallBlock(callId, shell, stalledCalls.has(callId)));
+        // One card per conversation, drawn where its NEWEST call was made, so
+        // work in flight stays at the tail rather than above everything the
+        // caller wrote between the calls. A member with no sub-turn yet keeps
+        // its flat row below, exactly as a lone call does.
+        const members = (chains.get(callId) ?? [callId]).filter(
+          (id) => (shells.get(id)?.bucket.length ?? 0) > 0,
+        );
+        if (members[members.length - 1] === callId) {
+          entries.push(buildConversationBlock(members, shells, stalledCalls));
+        }
       } else {
         // No tagged sub-turn yet (a legacy transcript, a call rejected
         // before any turn started, or the spawn racing this render) — keep
@@ -2535,10 +2701,12 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
       // run holding one `TaskUpdate` knows about one task, and the list is only
       // ever the fold of everything before it.
       const tasks = foldTaskList(history);
+      const snapshot = history.some((entry) => entry.mode === 'snapshot');
       const key = groupKey(item);
       const open = openTaskCards.get(key);
       if (open) {
         open.tasks = tasks;
+        open.snapshot = snapshot;
         open.seq = Math.max(open.seq, item.seq);
         continue;
       }
@@ -2554,6 +2722,7 @@ export function groupTranscript(items: readonly ChatItem[]): TranscriptEntry[] {
         parentToolUseId: thread,
         callId: payloadString(item.payload, 'callId'),
         tasks,
+        snapshot,
         // Decided by the sweep below, once the whole stream is known — the same
         // shape `closed` on a tool group takes, and for the same reason: a card
         // cannot know whether a later one exists while it is being built.
@@ -2783,11 +2952,15 @@ function closeGroupsBeforeTurnEnds(
  * folds into the header icon), everything else re-folds recursively (tool
  * groups work inside a block; the bucket holds no call rows, so no blocks
  * nest from here).
+ *
+ * `pullResult` is false for an earlier call of a continued conversation, whose
+ * final message stays in its flow rather than becoming the card's RESULT.
  */
 function buildCallBlock(
   callId: string,
   shell: CallShell,
   stalled: boolean,
+  pullResult: boolean,
 ): CallBlockEntry {
   let status: CallBlockEntry['status'] = 'pending';
   const inner: ChatItem[] = [];
@@ -2805,7 +2978,7 @@ function buildCallBlock(
   // of the flow so the block can frame it (request at the top, result at
   // the bottom). While running the tail message is just the latest stream.
   let result: string | null = null;
-  if (status === 'completed') {
+  if (pullResult && status === 'completed') {
     for (let i = inner.length - 1; i >= 0; i--) {
       if (inner[i]!.kind === 'message') {
         result = payloadString(inner[i]!.payload, 'text');
@@ -2830,10 +3003,12 @@ function buildCallBlock(
     id: shell.started.id,
     createdAt: shell.started.createdAt,
     callId,
+    callIds: [callId],
     calleeNodeId: shell.calleeNodeId,
     callerNodeId: shell.started.nodeId,
     mode: payloadString(shell.started.payload, 'mode'),
     message: payloadString(shell.started.payload, 'message'),
+    title: payloadString(shell.started.payload, 'title'),
     status,
     result,
     stalled,
@@ -2859,6 +3034,125 @@ function buildCallBlock(
         buildSubagentBlocks(groupTranscript(visibleInner), visibleInner),
         visibleInner,
       ),
+    ),
+  };
+}
+
+/**
+ * Group calls into CONVERSATIONS, oldest first: a call whose `call_started`
+ * names an earlier call in `thread` resumes that call's callee session, so it
+ * joins that call's chain — transitively, since the earlier call may itself be
+ * a continuation. Every member of a chain maps to the same array.
+ *
+ * TWIN PARSER: `thread` is written by `CallBroker.callAgent`'s `call_started`
+ * payload — see `apps/daemon/src/v1/graphs/services/call-broker.service.ts`,
+ * which accepts only a SETTLED call the same caller made to the same callee.
+ *
+ * Only a call whose anchor came EARLIER in `items` can be joined, which makes a
+ * cycle impossible by construction: a thread naming itself, a later call, or a
+ * call outside the loaded window leaves the continuation the root of a chain of
+ * its own — its own card.
+ *
+ * The ONE reading of "which calls are one conversation": the transcript's call
+ * blocks and the agents panel's instances both go through it, so a card and
+ * the instance it describes cannot disagree about what was continued. Only
+ * the first `call_started` of a call id counts, as the fold's own shells do.
+ */
+export function resolveCallChains(
+  items: readonly ChatItem[],
+): Map<string, string[]> {
+  const chains = new Map<string, string[]>();
+  for (const item of items) {
+    if (item.kind !== 'call_started') {
+      continue;
+    }
+    const callId = payloadString(item.payload, 'callId');
+    if (!callId || chains.has(callId)) {
+      continue;
+    }
+    const thread = payloadString(item.payload, 'thread');
+    const chain = (thread === null ? undefined : chains.get(thread)) ?? [];
+    chain.push(callId);
+    chains.set(callId, chain);
+  }
+  return chains;
+}
+
+/**
+ * The LATEST call of the conversation a call belongs to — the id its card and
+ * its panel instance go by. A call no chain holds is a conversation of its own.
+ */
+export function conversationHead(
+  chains: ReadonlyMap<string, readonly string[]>,
+  callId: string,
+): string {
+  const chain = chains.get(callId);
+  return chain?.[chain.length - 1] ?? callId;
+}
+
+/**
+ * The FIRST call of the conversation a call belongs to — the identity that
+ * stays put while continuations are added to it.
+ */
+export function conversationRoot(
+  chains: ReadonlyMap<string, readonly string[]>,
+  callId: string,
+): string {
+  return chains.get(callId)?.[0] ?? callId;
+}
+
+/**
+ * One block for a conversation of calls (see {@link resolveCallChains}): the
+ * LATEST call's header facts over every call's sub-turn in order, with each
+ * continuation's `call_started` row kept at the point its ask was sent.
+ *
+ * OPEN is the exception, and it follows every call rather than the latest:
+ * the daemon checks only that a thread names a SETTLED call, so two calls can
+ * continue one thread and run at once. While any call is open the block is
+ * (running before pending), it is stalled if any open call is, and nothing is
+ * pulled out as the RESULT — an answer landing beside a call still at work is
+ * not the conversation's result. Otherwise the latest call's final message is.
+ */
+function buildConversationBlock(
+  callIds: readonly string[],
+  shells: ReadonlyMap<string, CallShell>,
+  stalledCalls: ReadonlySet<string>,
+): CallBlockEntry {
+  const build = (id: string, pullResult: boolean): CallBlockEntry =>
+    buildCallBlock(id, shells.get(id)!, stalledCalls.has(id), pullResult);
+  const last = callIds.length - 1;
+  if (last === 0) {
+    return build(callIds[0]!, true);
+  }
+  const blocks = callIds.map((id, index) => build(id, index === last));
+  const earlierOpen = blocks
+    .slice(0, last)
+    .some((block) => OPEN_CALL_STATUSES.has(block.status));
+  if (earlierOpen) {
+    blocks[last] = build(callIds[last]!, false);
+  }
+  const open = blocks.filter((block) => OPEN_CALL_STATUSES.has(block.status));
+  const first = blocks[0]!;
+  const latest = blocks[last]!;
+  return {
+    ...latest,
+    id: first.id,
+    message: first.message,
+    callIds: [...callIds],
+    status:
+      open.length === 0
+        ? latest.status
+        : open.some((block) => block.status === 'running')
+          ? 'running'
+          : 'pending',
+    stalled: open.some((block) => block.stalled),
+    entries: blocks.flatMap((block, index): TranscriptEntry[] =>
+      index === 0
+        ? block.entries
+        : [
+            { type: 'item', item: shells.get(callIds[index]!)!.started },
+            ...block.entries,
+          ],
     ),
   };
 }

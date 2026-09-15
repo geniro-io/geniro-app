@@ -874,16 +874,20 @@ export const CURSOR_TASK_LAUNCH_MARKER = { key: '_toolName', value: 'task' };
 
 /**
  * `subagentType` values that name no type at all, so the row says nothing
- * rather than labelling a delegate `unspecified`.
+ * rather than labelling a delegate `unspecified` — or, since `readSubagentType`
+ * unwraps the oneof down to its bare key, `custom`.
  *
- * Both spellings observed: the enum's own zero value, and the `{custom:{…}}`
+ * Three spellings observed: the enum's own zero value, the `{custom:{…}}`
  * wrapper the oneof puts an unrecognised value in — which is what a plain
  * delegation with no declared type actually arrives as
- * (`subagentType:{custom:{unspecified:{}}}` above).
+ * (`subagentType:{custom:{unspecified:{}}}` above) — and `custom` itself, the
+ * oneof ARM NAME rather than a real type, which an untyped delegation reads
+ * as once the wrapper is unwrapped to its own key.
  */
 export const CURSOR_SUBAGENT_TYPE_UNSPECIFIED: readonly string[] = [
   'unspecified',
   'default',
+  'custom',
 ];
 
 /** Why a cursor delegate's block opens onto no conversation. See §3 above. */

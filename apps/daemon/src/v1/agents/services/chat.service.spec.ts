@@ -3971,6 +3971,23 @@ describe('ChatService', () => {
     );
   });
 
+  it('stores a card’s task instructions apart from the user’s own and spawns the turn with both', async () => {
+    // Two fields, two columns: the user can purge their own text, and that
+    // purge must not reach what the card asks of its run.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'Always answer in British English.',
+      taskInstructions: 'LABEL BLOCK\n\nREPORT ASK',
+    });
+
+    await service.sendMessage(run.id, 'go');
+    const input = claude.start.mock.calls[0]?.[0];
+    expect(input?.customInstructions).toBe('Always answer in British English.');
+    expect(input?.taskInstructions).toBe('LABEL BLOCK\n\nREPORT ASK');
+  });
+
   it('snapshots the Max Mode choice onto the run, including OFF', async () => {
     // The producer half again, and `false` is the case worth pinning: the
     // adapter reads an ABSENT choice as its own default (ON), so a user who
@@ -4604,6 +4621,29 @@ describe('ChatService — approval modes (parity M1)', () => {
     expect((claude.start.mock.calls[1]![0] as AgentTurnInput).model).toBe(
       'opus',
     );
+    claude.finish();
+    await drain();
+  });
+
+  it('updateSettings persists a card’s task instructions — the NEXT turn spawns with them', async () => {
+    // The one writer `TaskRunsService.resume` uses to refresh a continued
+    // card's label block; the row is what the next turn reads.
+    const { service, claude } = setup();
+    const run = await service.createChat({
+      agentKind: 'claude',
+      cwd: dir,
+      customInstructions: 'Always answer in British English.',
+      taskInstructions: 'OLD LABEL BLOCK',
+    });
+
+    await service.updateSettings(run.id, {
+      taskInstructions: 'NEW LABEL BLOCK',
+    });
+    await service.sendMessage(run.id, 'go');
+
+    const input = claude.start.mock.calls[0]![0] as AgentTurnInput;
+    expect(input.taskInstructions).toBe('NEW LABEL BLOCK');
+    expect(input.customInstructions).toBe('Always answer in British English.');
     claude.finish();
     await drain();
   });

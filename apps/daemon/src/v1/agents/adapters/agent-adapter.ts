@@ -1601,6 +1601,7 @@ export abstract class AgentAdapter {
     return composeTurnInstructions({
       includePreamble: includePreamble && input.internalProbe !== true,
       customInstructions: input.customInstructions,
+      taskInstructions: input.taskInstructions,
       instructionBlocks: input.instructionBlocks,
       systemPrompt: input.systemPrompt,
       callSurfacePrompt: granted ? input.callSurfacePrompt : null,
@@ -1814,6 +1815,9 @@ export abstract class AgentAdapter {
       // share one CLI process, and the second would silently run on the
       // first's.
       input.customInstructions ?? null,
+      // The same block again: a card whose label instructions changed since
+      // this process was spawned must not be served by it.
+      input.taskInstructions ?? null,
       // On the same composed block and the same reasoning: two graph nodes
       // wired to different instruction blocks must not share a process.
       input.instructionBlocks ?? null,

@@ -6,6 +6,8 @@ import type {
 import { endsContextHistory } from './compaction-payload';
 import type { RunStatusKind } from './run-status';
 import {
+  conversationRoot,
+  resolveCallChains,
   type RunSettleAt,
   type SubagentBlockEntry,
   subagentBlockStatus,
@@ -71,10 +73,30 @@ export interface AgentActivity {
   callThreads: AgentCallThread[];
 }
 
-/** One `call_agent` conversation of an agent, as the transcript records it. */
+/**
+ * One `call_agent` conversation of an agent, as the transcript records it.
+ *
+ * A CONVERSATION, not a call: a call continuing an earlier call's `thread`
+ * resumes the same callee session, so it folds into that call's entry rather
+ * than adding one (`resolveCallChains`, the rule the transcript's call blocks
+ * follow too). REPORTED as a Manager → Engineer conversation continued twice
+ * reading as three Engineers running at once. Every other field is the LATEST
+ * call's.
+ */
 export interface AgentCallThread {
+  /** The LATEST call of the conversation — the one that can still be live. */
   callId: string;
-  /** The first message of the thread — its display label. */
+  /** Every call of the conversation, oldest first; `callId` is the last. */
+  callIds: string[];
+  /**
+   * The calls of the conversation still running. More than the latest can be:
+   * the daemon checks only that a thread names a SETTLED call, so two calls can
+   * continue one thread at once — which is why the conversation's `status` is
+   * `running` while ANY of these is, and why the panel's foreground-shell gate
+   * asks each call rather than assuming every call before the last is over.
+   */
+  openCallIds: string[];
+  /** The latest call's brief — its display label. */
   message: string | null;
   status: 'running' | 'completed' | 'failed';
   /** The thread's CLI session id once settled — its terminal/resume handle. */
@@ -156,23 +178,34 @@ export interface AgentDisplay {
   threads: AgentThread[];
 }
 
-/** One conversation of an agent, as the agents panel lists it. */
-export interface AgentThread {
+/**
+ * One conversation of an agent, as the agents panel lists it.
+ *
+ * Which KIND of conversation this is, and the three are genuinely different
+ * things rather than three labels: a `main` thread is the node's own, a `call`
+ * thread is a sub-session with ANOTHER node over the geniro call runtime, and a
+ * `subagent` is one CLI's own in-process delegate — which exists only inside
+ * its parent's turn and has no CLI session of its own. That last distinction is
+ * load-bearing: it is why a sub-agent row offers no terminal handoff, since
+ * there is no session for `--resume` to target.
+ *
+ * A CALL thread always carries `callIds` — every call of its conversation,
+ * oldest first, its `id` being the last — and `openCallIds`, the ones still
+ * running (see {@link AgentCallThread}), so narrowing on `kind` is all a reader
+ * needs to reach them.
+ */
+export type AgentThread = AgentThreadFields &
+  (
+    | { kind: 'call'; callIds: string[]; openCallIds: string[] }
+    | { kind: 'main' | 'subagent'; callIds?: never; openCallIds?: never }
+  );
+
+interface AgentThreadFields {
   /**
    * 'main' for the node's own DAG/chat conversation, the call id for a call
    * thread, and for a sub-agent the id of the tool call that launched it.
    */
   id: string;
-  /**
-   * Which KIND of conversation this is, and the three are genuinely different
-   * things rather than three labels: a `main` thread is the node's own, a
-   * `call` thread is a sub-session with ANOTHER node over the geniro call
-   * runtime, and a `subagent` is one CLI's own in-process delegate — which
-   * exists only inside its parent's turn and has no CLI session of its own.
-   * That last distinction is load-bearing: it is why a sub-agent row offers no
-   * terminal handoff, since there is no session for `--resume` to target.
-   */
-  kind: 'main' | 'call' | 'subagent';
   label: string;
   status: RunStatusKind;
   /**
@@ -242,11 +275,25 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
       : thread.callId,
     status: thread.status,
     sessionId: thread.sessionId,
+    callIds: thread.callIds,
+    openCallIds: thread.openCallIds,
   }));
-  if (activity.turnStarts <= activity.callThreads.length) {
+  // Every CALL took a turn, whether or not it continued an earlier one — so a
+  // continued conversation is counted by its calls, or its extra turns would
+  // read as a main conversation the node never ran.
+  const callTurns = activity.callThreads.reduce(
+    (sum, thread) => sum + thread.callIds.length,
+    0,
+  );
+  if (activity.turnStarts <= callTurns) {
     return calls; // a call-only node never ran a main DAG turn
   }
-  const runningCalls = calls.filter((t) => t.status === 'running').length;
+  // Counted per CALL for the same reason: two continuations of one thread can
+  // run at once, each holding a live turn.
+  const runningCalls = activity.callThreads.reduce(
+    (sum, thread) => sum + thread.openCallIds.length,
+    0,
+  );
   const main: AgentThread = {
     id: MAIN_THREAD_ID,
     kind: 'main',
@@ -499,6 +546,8 @@ export function computeAgentActivity(
       const message = payload?.message;
       entry(calleeNodeId).callThreads.push({
         callId,
+        callIds: [callId],
+        openCallIds: [callId],
         message: typeof message === 'string' ? message : null,
         status: 'running',
         sessionId: null,
@@ -519,6 +568,7 @@ export function computeAgentActivity(
         continue;
       }
       thread.status = payload?.status === 'ok' ? 'completed' : 'failed';
+      thread.openCallIds = [];
       const sessionId = payload?.sessionId;
       if (typeof sessionId === 'string') {
         thread.sessionId = sessionId;
@@ -597,7 +647,51 @@ export function computeAgentActivity(
       }
     }
   }
+  // Folded at the END, once every call_result has settled its own call: the
+  // results are addressed by call id, and each call's outcome is still needed
+  // to know how the conversation's latest call stands.
+  const chains = resolveCallChains(items);
+  for (const agent of byAgent.values()) {
+    agent.callThreads = foldCallConversations(agent.callThreads, chains);
+  }
   return byAgent;
+}
+
+/**
+ * One entry per CONVERSATION (see {@link AgentCallThread}), placed where its
+ * latest call was made — the position its transcript card takes too, so live
+ * work sorts last in both.
+ */
+function foldCallConversations(
+  threads: readonly AgentCallThread[],
+  chains: ReadonlyMap<string, readonly string[]>,
+): AgentCallThread[] {
+  const out: AgentCallThread[] = [];
+  const byRoot = new Map<string, AgentCallThread>();
+  for (const thread of threads) {
+    const root = conversationRoot(chains, thread.callId);
+    const earlier = byRoot.get(root);
+    const openCallIds =
+      earlier === undefined
+        ? thread.openCallIds
+        : [...earlier.openCallIds, ...thread.openCallIds];
+    const merged: AgentCallThread =
+      earlier === undefined
+        ? thread
+        : {
+            ...thread,
+            callIds: [...earlier.callIds, thread.callId],
+            openCallIds,
+            // Open while ANY call is (see `AgentCallThread.openCallIds`).
+            status: openCallIds.length > 0 ? 'running' : thread.status,
+          };
+    if (earlier !== undefined) {
+      out.splice(out.indexOf(earlier), 1);
+    }
+    out.push(merged);
+    byRoot.set(root, merged);
+  }
+  return out;
 }
 
 /**

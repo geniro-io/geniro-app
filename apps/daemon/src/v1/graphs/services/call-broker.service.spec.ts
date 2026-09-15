@@ -107,6 +107,7 @@ describe('CallBroker', () => {
   it('sync call: launches the callee and returns its text in an ok envelope', async () => {
     const { broker, items, launches } = harness();
     const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'summarize X',
     });
@@ -142,14 +143,27 @@ describe('CallBroker', () => {
     });
   });
 
+  it('carries the caller’s title onto the call_started item', async () => {
+    const { broker, items } = harness();
+    await broker.callAgent('run-1', 'orch', {
+      agent: 'helper',
+      message: 'summarize X',
+      title: 'Get concrete UAT links from the DB',
+    });
+    const started = items.find((i) => i.kind === 'call_started')!;
+    expect(started.payload.title).toBe('Get concrete UAT links from the DB');
+  });
+
   it('resolves the callee by display name and refuses names off the call wiring', async () => {
     const { broker } = harness();
     const byName = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'Helper',
       message: 'm',
     });
     expect(byName.status).toBe('ok');
     const unknown = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'stranger',
       message: 'm',
     });
@@ -169,6 +183,7 @@ describe('CallBroker', () => {
       calleesOf: new Map([['orch', [twin, twin2]]]),
     });
     const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'Twin',
       message: 'm',
     });
@@ -176,6 +191,7 @@ describe('CallBroker', () => {
     expect(errorOf(envelope)).toContain('UNKNOWN_AGENT');
     // The exact id still works.
     const byId = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'writer-2',
       message: 'm',
     });
@@ -185,6 +201,7 @@ describe('CallBroker', () => {
   it('a caller with no call edges gets UNKNOWN_AGENT (callable: none)', async () => {
     const { broker } = harness();
     const envelope = await broker.callAgent('run-1', 'lonely', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -195,6 +212,7 @@ describe('CallBroker', () => {
   it('async call returns a call_id at once; await_agent collects exactly once', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     const started = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -238,6 +256,7 @@ describe('CallBroker', () => {
     // whole call from scratch.
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -279,6 +298,7 @@ describe('CallBroker', () => {
     // abandon or re-issue a call that is running perfectly well.
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -314,6 +334,7 @@ describe('CallBroker', () => {
     // callee that had answered.
     const { broker } = harness();
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -336,6 +357,7 @@ describe('CallBroker', () => {
     // looks, from the outside, exactly like the abandonment bug being back.
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -365,6 +387,7 @@ describe('CallBroker', () => {
     // consume anyway.
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -394,6 +417,7 @@ describe('CallBroker', () => {
   it('two concurrent await_agent waiters on one async call still collect exactly once', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -427,6 +451,7 @@ describe('CallBroker', () => {
   it("await_agent refuses another caller's call id", async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -446,6 +471,7 @@ describe('CallBroker', () => {
   it('fire_and_forget detaches: transcript only, never awaitable', async () => {
     const { broker, items } = harness();
     const detached = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'fire_and_forget',
@@ -481,10 +507,23 @@ describe('CallBroker', () => {
         ['d', [node('e')]],
       ]),
     });
-    const p1 = broker.callAgent('run-1', 'a', { agent: 'b', message: 'm' });
-    const p2 = broker.callAgent('run-1', 'b', { agent: 'c', message: 'm' });
-    const p3 = broker.callAgent('run-1', 'c', { agent: 'd', message: 'm' });
+    const p1 = broker.callAgent('run-1', 'a', {
+      title: 'why',
+      agent: 'b',
+      message: 'm',
+    });
+    const p2 = broker.callAgent('run-1', 'b', {
+      title: 'why',
+      agent: 'c',
+      message: 'm',
+    });
+    const p3 = broker.callAgent('run-1', 'c', {
+      title: 'why',
+      agent: 'd',
+      message: 'm',
+    });
     const refused = await broker.callAgent('run-1', 'd', {
+      title: 'why',
       agent: 'e',
       message: 'm',
     });
@@ -505,6 +544,7 @@ describe('CallBroker', () => {
     const { broker } = harness();
     for (let i = 0; i < 50; i++) {
       const envelope = await broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: `call ${i}`,
         mode: 'fire_and_forget',
@@ -512,6 +552,7 @@ describe('CallBroker', () => {
       expect(envelope.status).toBe('ok');
     }
     const over = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'one too many',
     });
@@ -522,6 +563,7 @@ describe('CallBroker', () => {
   it('maps callee failure and cancellation into error envelopes', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
     const failing = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -534,6 +576,7 @@ describe('CallBroker', () => {
     expect(errorOf(await failing)).toContain('CALLEE_FAILED: exit 1');
 
     const cancelled = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -549,6 +592,7 @@ describe('CallBroker', () => {
   it('wraps a throwing launch in CALL_FAILED instead of rejecting', async () => {
     const { broker } = harness({ launch: 'throw' });
     const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -559,6 +603,7 @@ describe('CallBroker', () => {
   it('refuses calls for unregistered runs and cancelled runs', async () => {
     const { broker } = harness({ cancelled: true });
     const cancelled = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -567,6 +612,7 @@ describe('CallBroker', () => {
     broker.unregisterRun('run-1');
     expect(broker.hasRun('run-1')).toBe(false);
     const gone = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -641,6 +687,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('a sync call parks: the caller gets the question envelope early, answers, and collects the final result via await_agent', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -696,6 +743,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('await_agent diverts to the question envelope WITHOUT consuming the call — a later await collects the final', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -725,6 +773,7 @@ describe('CallBroker — parked questions (M4)', () => {
     // actually observed.
     const { broker, deferred } = harness({ launch: 'defer' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -760,6 +809,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('an unanswered question times out: the callee turn is failed and the call settles as QUESTION_TIMEOUT', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -797,7 +847,11 @@ describe('CallBroker — parked questions (M4)', () => {
 
   it('answer_agent enforces ownership and exactly-once settlement', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
-    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     // No question parked yet → NO_QUESTION, not a hang.
     const early = broker.answerAgent('run-1', 'orch', {
       call_id: 'call-1',
@@ -831,7 +885,11 @@ describe('CallBroker — parked questions (M4)', () => {
 
   it('reports DELIVERY_FAILED when the callee turn died before the answer — and resolves the question row', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
-    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     park(broker, { deliver: () => false });
     const gone = broker.answerAgent('run-1', 'orch', {
       call_id: 'call-1',
@@ -859,6 +917,7 @@ describe('CallBroker — parked questions (M4)', () => {
       isNodeLive: () => false,
     });
     const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -879,6 +938,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('a fire-and-forget call that asks is orphaned at once and never becomes awaitable', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     const started = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'fire_and_forget',
@@ -905,6 +965,7 @@ describe('CallBroker — parked questions (M4)', () => {
   it('drainCaller fails a settling caller’s parked questions as QUESTION_ORPHANED', async () => {
     const { broker, items, deferred } = harness({ launch: 'defer' });
     const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -942,6 +1003,7 @@ describe('CallBroker — parked questions (M4)', () => {
       },
     });
     void broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -983,6 +1045,7 @@ describe('CallBroker — parked questions (M4)', () => {
       },
     });
     const sync = broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
     });
@@ -1024,6 +1087,7 @@ describe('CallBroker — parked questions (M4)', () => {
       },
     });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -1057,6 +1121,7 @@ describe('CallBroker — parked questions (M4)', () => {
     const wakeNode = vi.fn(() => true);
     const { broker, deferred } = harness({ launch: 'defer', wakeNode });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -1080,6 +1145,7 @@ describe('CallBroker — parked questions (M4)', () => {
       },
     });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       mode: 'async',
@@ -1104,7 +1170,11 @@ describe('CallBroker — parked questions (M4)', () => {
         fail: () => {},
       }),
     ).toBe(false);
-    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     park(broker);
     expect(
       broker.parkQuestion('run-1', 'call-1', {
@@ -1125,7 +1195,11 @@ describe('CallBroker — parked questions (M4)', () => {
 
   it('unregisterRun defuses parked TTL timers — a dead run’s callee is never failed by a late timer', async () => {
     const { broker, deferred } = harness({ launch: 'defer' });
-    void broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    void broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     const { failed } = park(broker, { ttlMs: 10 });
     broker.unregisterRun('run-1');
     deferred[0]!.resolve({
@@ -1143,12 +1217,14 @@ describe('CallBroker — thread continuation', () => {
   it('continuing a thread resumes the recorded callee session', async () => {
     const { broker, launches, items } = harness();
     const first = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'remember the codeword BANANA',
     });
     expect(first.status).toBe('ok');
 
     const second = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'what was the codeword?',
       thread: 'call-1',
@@ -1172,13 +1248,19 @@ describe('CallBroker — thread continuation', () => {
 
   it('a continued thread can itself be continued (chained resumes)', async () => {
     const { broker, launches } = harness();
-    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'a' });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'a',
+    });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'b',
       thread: 'call-1',
     });
     await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'c',
       thread: 'call-2',
@@ -1197,6 +1279,7 @@ describe('CallBroker — thread continuation', () => {
     ]);
     const { broker, launches } = harness({ calleesOf });
     const unknown = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       thread: 'call-99',
@@ -1205,8 +1288,13 @@ describe('CallBroker — thread continuation', () => {
     expect(errorOf(unknown)).toContain('UNKNOWN_THREAD');
     expect(launches).toHaveLength(0);
 
-    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     const foreign = await broker.callAgent('run-1', 'other', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       thread: 'call-1',
@@ -1217,8 +1305,13 @@ describe('CallBroker — thread continuation', () => {
 
   it('refuses continuing a thread with a different agent', async () => {
     const { broker } = harness();
-    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     const mismatch = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'writer',
       message: 'm',
       thread: 'call-1',
@@ -1229,8 +1322,13 @@ describe('CallBroker — thread continuation', () => {
 
   it('refuses a thread whose turn recorded no resumable session', async () => {
     const { broker } = harness({ noSession: true });
-    await broker.callAgent('run-1', 'orch', { agent: 'helper', message: 'm' });
+    await broker.callAgent('run-1', 'orch', {
+      title: 'why',
+      agent: 'helper',
+      message: 'm',
+    });
     const envelope = await broker.callAgent('run-1', 'orch', {
+      title: 'why',
       agent: 'helper',
       message: 'm',
       thread: 'call-1',
@@ -1327,6 +1425,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       let settled = false;
       const call = broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'take your time',
       });
@@ -1384,6 +1483,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     try {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       const call = broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'ask me something',
       });
@@ -1421,6 +1521,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     try {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       const call = broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'ask me something',
       });
@@ -1454,6 +1555,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     try {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       void broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'wedge',
       });
@@ -1479,6 +1581,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     try {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       const call = broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'work steadily',
       });
@@ -1510,6 +1613,7 @@ describe('CallBroker — a call whose callee goes quiet', () => {
     try {
       const { broker, items, deferred } = harness({ launch: 'defer' });
       const call = broker.callAgent('run-1', 'orch', {
+        title: 'why',
         agent: 'helper',
         message: 'hang',
       });

@@ -544,6 +544,20 @@ describe('TaskSettleService (in-memory sqlite)', () => {
     expect(board.find((row) => row.id === task.id)?.status).toBe('in_review');
   });
 
+  it('reconciles every project at once when the board names none', async () => {
+    const task = await working();
+    const run = await runDao.getById('run-1');
+    if (run) {
+      run.status = 'completed';
+      await em.flush();
+    }
+
+    const board = await service.reconcileProject(null);
+
+    expect((await taskDao.getById(task.id))?.status).toBe('in_review');
+    expect(board.find((row) => row.id === task.id)?.status).toBe('in_review');
+  });
+
   it('leaves a still-running card alone when a board reconciles', async () => {
     const task = await working();
 

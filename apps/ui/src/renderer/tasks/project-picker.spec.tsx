@@ -66,6 +66,41 @@ const marks = (el: HTMLElement): string[] =>
     (node) => node.getAttribute('aria-label') ?? '',
   );
 
+describe('ProjectPicker — every project at once', () => {
+  it('offers All projects, shows it while nothing is picked, and hands it on as null', () => {
+    const onSelect = vi.fn();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <ProjectPicker
+          projects={[project()]}
+          selectedProjectId={null}
+          onSelect={onSelect}
+          onNewProject={vi.fn()}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-menu-trigger]',
+    )!;
+    expect(trigger.textContent).toContain('All projects');
+
+    act(() => {
+      trigger.click();
+    });
+    const all = [
+      ...container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ].find((node) => node.textContent?.includes('All projects'));
+    act(() => {
+      all!.click();
+    });
+
+    expect(onSelect).toHaveBeenCalledWith(null);
+  });
+});
+
 describe('ProjectPicker — the ambient armed mark', () => {
   // Nothing has to LOOK like nothing: a project nobody armed must carry no
   // marker, or the glyph stops meaning anything on the boards that do.

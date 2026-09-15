@@ -2366,6 +2366,17 @@ export interface AgentTurnInput {
    */
   customInstructions?: string | null;
   /**
+   * What the board card this run works asks of it — its label instructions and
+   * geniro's report ask, as stored on `Run.taskInstructions`. Undefined for
+   * every run no card started.
+   *
+   * A peer of {@link customInstructions} rather than joined into it, for the
+   * reason the two are separate columns: the user can purge their own text,
+   * and that purge must not reach this. `composeTurnInstructions` ranks it
+   * directly after the user's own text.
+   */
+  taskInstructions?: string | null;
+  /**
    * The instruction blocks wired to this graph node, already joined by the
    * executor. Undefined for plain chat and for a node nothing is wired to.
    *
@@ -2455,9 +2466,10 @@ export interface AgentTurnInput {
    * that ends up withholding the endpoint (an ACP agent that does not
    * advertise HTTP MCP support) must drop this block too, or the agent is
    * instructed to route work through tools it does not have. Join the two
-   * with `AgentAdapter.composeSystemPrompt`, never by hand — it composes four
-   * parts now (the host preamble and {@link customInstructions} ahead of these
-   * two), and their order is the precedence rule.
+   * with `AgentAdapter.composeSystemPrompt`, never by hand — it composes every
+   * instruction part (the host preamble, {@link customInstructions},
+   * {@link taskInstructions} and {@link instructionBlocks} ahead of these two),
+   * and their order is the precedence rule.
    */
   callSurfacePrompt?: string | null;
   /**

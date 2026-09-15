@@ -675,6 +675,13 @@ export class ChatService implements OnModuleInit {
      */
     customInstructions?: string;
     /**
+     * What the board card this chat works asks of it — its label instructions
+     * and the report ask, already composed. Absent for every ordinary chat;
+     * see {@link Run.taskInstructions} for why it is not joined into the
+     * field above.
+     */
+    taskInstructions?: string;
+    /**
      * Whether cursor turns on this run ask for Max Mode. Snapshotted like the
      * instructions above; absent means the client did not say, which the
      * adapter reads as its own default.
@@ -771,6 +778,7 @@ export class ChatService implements OnModuleInit {
         // are one state in the row, and the turn input below cannot hand an
         // adapter an empty string to compose around.
         customInstructions: input.customInstructions?.trim() || null,
+        taskInstructions: input.taskInstructions?.trim() || null,
         cursorMaxMode: input.cursorMaxMode ?? null,
         groupId,
         taskId: input.taskId ?? null,
@@ -895,6 +903,12 @@ export class ChatService implements OnModuleInit {
    * reads. Switching profiles carries the CLI's own conversation into the new
    * one and retires the run's live process, and both of those are wrong to do
    * underneath a turn that is writing into the old profile as they happen.
+   *
+   * `taskInstructions` is NOT on the HTTP route — `UpdateChatSettingsDto` does
+   * not carry it. Its one caller is `TaskRunsService.resume`, which refreshes a
+   * card's label block and report ask before continuing the card's thread; it
+   * goes through here so every write to a chat's run row keeps one owner. Like
+   * `model`, it only describes the NEXT turn, so it needs no busy refusal.
    */
   async updateSettings(
     runId: string,
@@ -905,6 +919,7 @@ export class ChatService implements OnModuleInit {
       contextWindow?: string | null;
       modelParameters?: Record<string, string> | null;
       configDir?: string | null;
+      taskInstructions?: string | null;
     },
   ): Promise<RunWire> {
     const em = this.em.fork();
@@ -956,6 +971,10 @@ export class ChatService implements OnModuleInit {
           ? { modelParameters: null }
           : {}),
       ...(profileMove === null ? {} : { configDir: profileMove.configDir }),
+      // Blank normalizes to null, as at creation.
+      ...(patch.taskInstructions !== undefined
+        ? { taskInstructions: patch.taskInstructions?.trim() || null }
+        : {}),
     };
     // Captured before the write: `updateById` mutates this same
     // identity-mapped entity, so `run.approval` is already the NEW value by the
@@ -1305,6 +1324,9 @@ export class ChatService implements OnModuleInit {
    * guarantee (a chat keeps what it started with), so it is an explicit action
    * with its own control, not a side effect of an edit the user might be
    * halfway through.
+   *
+   * A task run's `taskInstructions` are untouched: they are the card's, not
+   * the user's standing text.
    */
   async forgetCustomInstructions(): Promise<{ cleared: number }> {
     const em = this.em.fork();
@@ -3290,6 +3312,9 @@ export class ChatService implements OnModuleInit {
       // here is exactly what would respawn this run's CLI process mid-thread
       // (`AgentAdapter.sessionKey` hashes it).
       const customInstructions = settings.customInstructions ?? undefined;
+      // Off the row too; `TaskRunsService` rewrites it before continuing a
+      // card's thread, which is the one time it is meant to change.
+      const taskInstructions = settings.taskInstructions ?? undefined;
       // Off the ROW for the same reason, and `?? undefined` rather than
       // `?? false`: a run created before the column existed says nothing about
       // Max Mode, and the adapter's own default is the right reading of that —
@@ -4405,6 +4430,7 @@ export class ChatService implements OnModuleInit {
           modelParameters,
           configDir,
           customInstructions,
+          taskInstructions,
           cursorMaxMode,
           resumeSessionId,
           // Only ever set alongside a resume id — `retry` refuses the pairing

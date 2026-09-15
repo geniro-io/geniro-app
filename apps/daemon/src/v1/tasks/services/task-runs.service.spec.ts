@@ -18,7 +18,10 @@ import {
   vi,
 } from 'vitest';
 
-import type { RunWire } from '../../agents/chat.types';
+import {
+  MAX_CUSTOM_INSTRUCTIONS_CHARS,
+  type RunWire,
+} from '../../agents/chat.types';
 import { RunDao } from '../../agents/dao/run.dao';
 import type { ChatService } from '../../agents/services/chat.service';
 import type { RunGroupsService } from '../../agents/services/run-groups.service';
@@ -28,14 +31,19 @@ import { Project } from '../../projects/entity/project.entity';
 import { PROJECT_FAILURE_BREAKER_THRESHOLD } from '../../projects/projects.types';
 import { ProjectQueueService } from '../../projects/services/project-queue.service';
 import { Run } from '../../runs/entity/run.entity';
+import { aLabelInstruction } from '../__tests__/fixtures';
 import { TaskDao } from '../dao/task.dao';
 import { Task } from '../entity/task.entity';
-import type { StartTaskRun } from '../tasks.types';
+import type { LabelInstructionWire, StartTaskRun } from '../tasks.types';
 import {
   AUTOPILOT_APPROVAL,
   RUN_TARGET_PROBLEM_CODE,
 } from '../utils/run-target';
-import { TASK_REPORT_INSTRUCTIONS } from '../utils/task-prompt';
+import {
+  TASK_REPORT_INSTRUCTIONS,
+  TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+} from '../utils/task-prompt';
+import type { LabelInstructionsService } from './label-instructions.service';
 import { TaskAttachmentService } from './task-attachment.service';
 import { TaskEventBus } from './task-events.bus';
 import { TaskRunsService } from './task-runs.service';
@@ -80,6 +88,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
   let deleteWorkflowRun: ReturnType<typeof vi.fn>;
   let deleteChat: ReturnType<typeof vi.fn>;
   let resolveAutoGroupId: ReturnType<typeof vi.fn>;
+  let forTask: ReturnType<typeof vi.fn>;
 
   /**
    * A complete run row on the wire.
@@ -166,20 +175,30 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     );
     // The fake writes a REAL run row, because the double-start guard asks the
     // run whether it has settled — against a stub it would find nothing and
-    // wave every second start through.
+    // wave every second start through. It stores both instruction fields the
+    // way `ChatService.createChat` does, so a continued thread's refresh is
+    // observed against the row it replaces.
     let runSeq = 0;
-    createChat = vi.fn(async (input: { taskId?: string }) => {
-      const id = `run-${(runSeq += 1)}`;
-      await runDao.create({
-        id,
-        workflowId: null,
-        status: 'running',
-        agentKind: 'claude',
-        cwd: worktree,
-        taskId: input.taskId ?? null,
-      });
-      return runWire(id);
-    });
+    createChat = vi.fn(
+      async (input: {
+        taskId?: string;
+        customInstructions?: string;
+        taskInstructions?: string;
+      }) => {
+        const id = `run-${(runSeq += 1)}`;
+        await runDao.create({
+          id,
+          workflowId: null,
+          status: 'running',
+          agentKind: 'claude',
+          cwd: worktree,
+          taskId: input.taskId ?? null,
+          customInstructions: input.customInstructions ?? null,
+          taskInstructions: input.taskInstructions ?? null,
+        });
+        return runWire(id);
+      },
+    );
     sendMessage = vi.fn(async () => undefined);
     // A REAL purge, not a stub answering `{ deleted: true }` about nothing —
     // the "does NOT delete the run" spec below asserts the row SURVIVES, and
@@ -188,7 +207,19 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       await runDao.hardDeleteIncludingSoftDeleted({ id }, em);
       return { deleted: true };
     });
-    updateSettings = vi.fn(async () => undefined);
+    // Stores the task instructions the way `ChatService.updateSettings` does,
+    // so a continued thread's refresh is read back off the row at send time.
+    updateSettings = vi.fn(
+      async (runId: string, patch: { taskInstructions?: string | null }) => {
+        if (patch.taskInstructions !== undefined) {
+          await runDao.updateById(
+            runId,
+            { taskInstructions: patch.taskInstructions },
+            em,
+          );
+        }
+      },
+    );
     const chats = {
       createChat,
       sendMessage,
@@ -226,6 +257,11 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // No sidebar rule claims anything by default; a test that needs one says so.
     resolveAutoGroupId = vi.fn(async () => null);
     const groups = { resolveAutoGroupId } as unknown as RunGroupsService;
+    // No label attaches anything by default; a test that needs one says so.
+    forTask = vi.fn(async () => [] as LabelInstructionWire[]);
+    const labelInstructions = {
+      forTask,
+    } as unknown as LabelInstructionsService;
     service = new TaskRunsService(
       em,
       taskDao,
@@ -236,6 +272,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       new ProjectQueueService(em, projectDao, taskDao, runDao),
       executor,
       groups,
+      labelInstructions,
     );
     const project = await projectDao.create({
       name: 'Board',
@@ -319,7 +356,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       // this graph can call `report_findings`. Naming it would ask every node
       // for a call it will look for and fail to find.
       const instructions = String(
-        startWorkflowRun.mock.calls[0]?.[1]?.customInstructions ?? '',
+        startWorkflowRun.mock.calls[0]?.[1]?.taskInstructions ?? '',
       );
       expect(instructions).not.toContain('report_findings');
       expect(instructions).toContain('close with a report');
@@ -383,6 +420,36 @@ describe('TaskRunsService (in-memory sqlite)', () => {
       expect(startWorkflowRun).not.toHaveBeenCalled();
       expect(createChat).toHaveBeenCalledWith(
         expect.objectContaining({ agentKind: 'cursor-agent' }),
+      );
+    });
+
+    it('hands the WORKFLOW run the user’s own text and the card’s instructions as separate fields', async () => {
+      // The compose specs below exercise the chat (agent) arm;
+      // `startWorkflowRun` builds its own fields off the identical
+      // `labelInstructions` value, and this is what proves that path reads it
+      // — and keeps the label block out of the user's purgeable text.
+      forTask.mockResolvedValueOnce([aLabelInstruction()]);
+      const task = await seedWorkflowCard();
+
+      await service.start(
+        task.id,
+        start({ customInstructions: 'Always use pnpm.' }),
+      );
+
+      const passed = startWorkflowRun.mock.calls[0]?.[1] as {
+        customInstructions?: string;
+        taskInstructions?: string;
+      };
+      expect(passed.customInstructions).toBe('Always use pnpm.');
+      expect(passed.taskInstructions).toBe(
+        [
+          "Instructions attached to this task's labels:",
+          '',
+          '## Label "bug"',
+          'Write a regression test.',
+          '',
+          TASK_REPORT_INSTRUCTIONS_WORKFLOW,
+        ].join('\n'),
       );
     });
 
@@ -516,7 +583,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     );
   });
 
-  it('asks for a closing report AFTER the user’s own instructions', async () => {
+  it('keeps the user’s own instructions apart from the report ask', async () => {
+    // The user's text is theirs to purge (`forget-custom-instructions`); the
+    // ask is geniro's, so it travels in the card's own field.
     const task = await seed();
 
     await service.start(
@@ -525,11 +594,78 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     );
 
     const [passed] = createChat.mock.calls[0] as [
-      { customInstructions: string },
+      { customInstructions?: string; taskInstructions?: string },
     ];
-    expect(passed.customInstructions).toBe(
-      `Always use pnpm.\n\n${TASK_REPORT_INSTRUCTIONS}`,
+    expect(passed.customInstructions).toBe('Always use pnpm.');
+    expect(passed.taskInstructions).toBe(TASK_REPORT_INSTRUCTIONS);
+  });
+
+  it('composes the LABEL block, then the report ask, into the card’s own field and never into the user’s', async () => {
+    forTask.mockResolvedValueOnce([aLabelInstruction()]);
+    const task = await seed();
+
+    await service.start(
+      task.id,
+      start({ customInstructions: 'Always use pnpm.' }),
     );
+
+    expect(forTask).toHaveBeenCalledWith(
+      expect.objectContaining({ id: task.id }),
+    );
+    const [passed] = createChat.mock.calls[0] as [
+      { customInstructions?: string; taskInstructions: string },
+    ];
+    expect(passed.customInstructions).toBe('Always use pnpm.');
+    const labelIndex = passed.taskInstructions.indexOf(
+      'Write a regression test.',
+    );
+    const reportIndex = passed.taskInstructions.indexOf(
+      TASK_REPORT_INSTRUCTIONS,
+    );
+    expect(labelIndex).toBeGreaterThan(0);
+    expect(reportIndex).toBeGreaterThan(labelIndex);
+  });
+
+  it('composes a label block alone when the user left no instructions of their own', async () => {
+    forTask.mockResolvedValueOnce([aLabelInstruction()]);
+    const task = await seed();
+
+    await service.start(task.id, start());
+
+    const [passed] = createChat.mock.calls[0] as [
+      { customInstructions?: string; taskInstructions: string },
+    ];
+    expect(passed.customInstructions).toBeUndefined();
+    expect(passed.taskInstructions).toBe(
+      [
+        "Instructions attached to this task's labels:",
+        '',
+        '## Label "bug"',
+        'Write a regression test.',
+        '',
+        TASK_REPORT_INSTRUCTIONS,
+      ].join('\n'),
+    );
+  });
+
+  it('tells the AGENT which label was left out for length, inside the composed instructions', async () => {
+    const huge = 'x'.repeat(MAX_CUSTOM_INSTRUCTIONS_CHARS);
+    forTask.mockResolvedValueOnce([
+      aLabelInstruction({ id: 'li-1', label: 'huge', instructions: huge }),
+      aLabelInstruction({
+        id: 'li-2',
+        label: 'short',
+        instructions: 'fits fine',
+      }),
+    ]);
+    const task = await seed();
+
+    await service.start(task.id, start());
+
+    const [passed] = createChat.mock.calls[0] as [{ taskInstructions: string }];
+    expect(passed.taskInstructions).toContain('## Label "short"');
+    expect(passed.taskInstructions).not.toContain(huge);
+    expect(passed.taskInstructions).toContain('(Left out for length: huge.)');
   });
 
   it('refuses a second start while the first run is still working', async () => {
@@ -598,6 +734,87 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await service.start(task.id, start({ prompt: 'The tests still fail.' }));
 
     expect(sendMessage).toHaveBeenCalledWith('run-1', 'The tests still fail.');
+  });
+
+  it('refreshes a continued thread’s task instructions from the CURRENT label rows before sending', async () => {
+    // The thread was created under one label instruction; the user then edited
+    // it and added a label. Read off the row AT the moment of the send, since
+    // that is what `ChatService.sendMessage` builds the turn from — and read
+    // through a fresh fork, so the row is asserted rather than a cached entity.
+    forTask.mockResolvedValueOnce([
+      aLabelInstruction({ instructions: 'Old wording.' }),
+    ]);
+    const task = await seed();
+    await service.start(
+      task.id,
+      start({ customInstructions: 'Always use pnpm.' }),
+    );
+    await settleAndReturn(task.id);
+    forTask.mockResolvedValueOnce([
+      aLabelInstruction({ instructions: 'New wording.' }),
+      aLabelInstruction({
+        id: 'li-2',
+        label: 'frontend',
+        instructions: 'Added after the first run.',
+      }),
+    ]);
+    let atSend: Run | null = null;
+    sendMessage.mockImplementationOnce(async (runId: string) => {
+      atSend = await new RunDao(orm.em.fork()).getById(runId);
+    });
+
+    await service.start(task.id, start());
+
+    expect(createChat).not.toHaveBeenCalled();
+    const seen = atSend as Run | null;
+    expect(seen?.taskInstructions).toContain('New wording.');
+    expect(seen?.taskInstructions).toContain('Added after the first run.');
+    expect(seen?.taskInstructions).not.toContain('Old wording.');
+    expect(seen?.taskInstructions).toContain(TASK_REPORT_INSTRUCTIONS);
+    // The user's own snapshot is not the card's to rewrite.
+    expect(seen?.customInstructions).toBe('Always use pnpm.');
+  });
+
+  it('drops the label block from a continued thread whose labels were ALL removed', async () => {
+    // The refresh must also SHRINK: a card that lost every label goes back to
+    // the report ask alone, not to the block it was started with.
+    forTask.mockResolvedValueOnce([aLabelInstruction()]);
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    forTask.mockResolvedValueOnce([]);
+    let atSend: Run | null = null;
+    sendMessage.mockImplementationOnce(async (runId: string) => {
+      atSend = await new RunDao(orm.em.fork()).getById(runId);
+    });
+
+    await service.start(task.id, start());
+
+    expect(createChat).not.toHaveBeenCalled();
+    expect((atSend as Run | null)?.taskInstructions).toBe(
+      TASK_REPORT_INSTRUCTIONS,
+    );
+  });
+
+  it('leaves the card where it was when a continued thread’s label lookup fails', async () => {
+    // The lookup comes before the move to `in_progress`, so a failure has no
+    // reservation to undo and no turn is sent on stale instructions. The spy
+    // is what proves the card never MOVED: a lookup placed after the move
+    // would still end in `todo`, via the failure branch's move back.
+    const task = await seed();
+    await service.start(task.id, start());
+    await settleAndReturn(task.id);
+    forTask.mockRejectedValueOnce(new Error('database locked'));
+    const moveStatus = vi.spyOn(tasks, 'moveStatus');
+
+    await expect(service.start(task.id, start())).rejects.toThrow(
+      'database locked',
+    );
+
+    expect(moveStatus).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect((await taskDao.getById(task.id))?.status).toBe('todo');
+    moveStatus.mockRestore();
   });
 
   it('opens a NEW thread when the old one was deleted', async () => {
@@ -672,16 +889,17 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // instruction rather than silence.
     expect(updateSettings).toHaveBeenCalledWith('run-1', {
       approval: AUTOPILOT_APPROVAL,
+      taskInstructions: TASK_REPORT_INSTRUCTIONS,
     });
   });
 
-  it('sends NO settings patch when the card resolves none of them', async () => {
+  it('patches ONLY the task instructions when the card resolves no settings', async () => {
     // `configDir: null` is not "leave it alone": it reaches `moveToConfigDir`,
     // which refuses outright for a CLI that reads no config directory, so every
     // re-press on a cursor-agent card answered 400 — and `model: null` is a
     // CLEAR that takes the run's context window and model parameters with it.
-    // This project names an agent and nothing else, so the correct patch is no
-    // call at all.
+    // This project names an agent and nothing else, so the patch carries the
+    // card's own instructions and no settings key at all.
     const task = await seed();
     await service.start(task.id, start());
     await settleAndReturn(task.id);
@@ -690,7 +908,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await service.start(task.id, start());
 
     expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
-    expect(updateSettings).not.toHaveBeenCalled();
+    expect(updateSettings).toHaveBeenCalledWith('run-1', {
+      taskInstructions: TASK_REPORT_INSTRUCTIONS,
+    });
   });
 
   it('sends ONLY the rungs that resolved, never the ones that did not', async () => {
@@ -707,7 +927,10 @@ describe('TaskRunsService (in-memory sqlite)', () => {
 
     await service.start(task.id, start());
 
-    expect(updateSettings).toHaveBeenCalledWith('run-1', { effort: 'high' });
+    expect(updateSettings).toHaveBeenCalledWith('run-1', {
+      effort: 'high',
+      taskInstructions: TASK_REPORT_INSTRUCTIONS,
+    });
   });
 
   it('sends the two DESTRUCTIVE rungs when they resolve, and nothing else', async () => {
@@ -730,6 +953,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     expect(updateSettings).toHaveBeenCalledWith('run-1', {
       model: 'opus',
       configDir: '/tmp/geniro-profile',
+      taskInstructions: TASK_REPORT_INSTRUCTIONS,
     });
   });
 
@@ -738,7 +962,7 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     // run's context window and model parameters with it, so re-pressing Run on
     // an unchanged card would silently drop a `1m` window the user set inside
     // that thread. Sending the value is as destructive as sending a null here;
-    // only sending nothing is safe.
+    // only leaving the key out is safe.
     const task = await seed();
     await service.start(task.id, start());
     await settleAndReturn(task.id);
@@ -752,7 +976,9 @@ describe('TaskRunsService (in-memory sqlite)', () => {
     await service.start(task.id, start());
 
     expect(sendMessage).toHaveBeenCalledWith('run-1', 'ship it');
-    expect(updateSettings).not.toHaveBeenCalled();
+    expect(updateSettings).toHaveBeenCalledWith('run-1', {
+      taskInstructions: TASK_REPORT_INSTRUCTIONS,
+    });
   });
 
   it('does NOT delete the run when continuing it fails', async () => {

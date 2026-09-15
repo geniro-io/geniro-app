@@ -510,7 +510,9 @@ describe('mapClaudeMessage', () => {
             },
           },
           session_id: 'sess-result',
-          total_cost_usd: 0.14,
+          // Plausible for these tokens — a total far past what they can cost is
+          // read as history the ledger could not subtract, and capped.
+          total_cost_usd: 0.004,
           duration_ms: 7618,
           duration_api_ms: 7176,
         },
@@ -535,7 +537,7 @@ describe('mapClaudeMessage', () => {
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,
           contextModel: expect.any(String),
-          costUsd: 0.14,
+          costUsd: 0.004,
           // The CLI's own turn timing, carried through the mapper to the turn
           // the transcript persists — the number that lets a finished turn say
           // how long it worked instead of only what it cost.

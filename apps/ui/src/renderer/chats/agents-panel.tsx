@@ -1,4 +1,5 @@
 import {
+  Bot as SubagentIcon,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -468,6 +469,7 @@ function SubagentRows({
   onOpenThread,
   onOpenSubagent,
   onResolveHandoff,
+  foldSettled = true,
 }: {
   agent: AgentDisplay;
   subagents: readonly AgentThread[];
@@ -480,9 +482,33 @@ function SubagentRows({
     agent: AgentDisplay,
     thread: AgentThread,
   ) => Promise<HandoffTargetDto>;
+  /**
+   * Whether the finished rows sit behind their own fold. Off when NOTHING is
+   * running: the section around this list is then itself the fold, shut and
+   * captioned `N finished`, so a second one inside it is a second press for the
+   * same rows.
+   */
+  foldSettled?: boolean;
 }): React.JSX.Element {
   const live = subagents.filter((thread) => thread.status === 'running');
   const settled = subagents.filter((thread) => thread.status !== 'running');
+  if (!foldSettled) {
+    return (
+      <ul className="m-0 flex list-none flex-col gap-0.5">
+        {subagents.map((thread) => (
+          <ThreadRow
+            key={thread.id}
+            agent={agent}
+            thread={thread}
+            terminal={terminal}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+          />
+        ))}
+      </ul>
+    );
+  }
   return (
     <ul className="m-0 flex list-none flex-col gap-0.5">
       {live.map((thread) => (
@@ -584,7 +610,6 @@ function ShellBand({
 function TaskBand({
   tasks,
   live,
-  className,
 }: {
   tasks: readonly AgentTaskRow[];
   /**
@@ -593,27 +618,224 @@ function TaskBand({
    * claims work that stopped.
    */
   live: boolean;
-  className?: string;
 }): React.JSX.Element {
+  // What is LEFT, by default. A struck-through row is history the section's own
+  // `done/total` already counts, and a twelve-step plan two steps in showed ten
+  // rows of the future under two of the past — ASKED FOR as "отображаются не
+  // все записи, а только релевантные … скрываем те, которые уже завершились".
+  // A list with nothing left shows all of it: there is nothing else to show.
+  const [showDone, setShowDone] = useState(false);
+  const done = tasks.filter((task) => task.status === 'completed').length;
+  const hiding = !showDone && done > 0 && done < tasks.length;
+  const shown = hiding
+    ? tasks.filter((task) => task.status !== 'completed')
+    : tasks;
+  return (
+    <div className="flex flex-col gap-0.5">
+      {done > 0 && done < tasks.length ? (
+        <button
+          type="button"
+          data-slot="agent-task-completed-toggle"
+          aria-expanded={showDone}
+          onClick={() => setShowDone((value) => !value)}
+          className="self-start rounded-md px-1 py-0.5 text-left text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground">
+          {showDone ? 'Hide completed' : `Show ${done} completed`}
+        </button>
+      ) : null}
+      <TaskScrollRows tasks={shown} live={live} className="pl-0.5" />
+    </div>
+  );
+}
+
+/** Which kind of thing a {@link ConversationSection} holds. */
+type ConversationSectionKind = 'subagents' | 'shells' | 'tasks';
+
+/**
+ * ONE kind of thing a conversation holds — its sub-agents, its terminals, its
+ * task list — as a block that folds, with what it holds COUNTED on its header.
+ *
+ * ASKED FOR as "разделить агентные терминалы, пулреквесты и всё остальное по
+ * блокам, чтобы они тоже были collapsible": an instance used to pour its
+ * delegates, its commands and its whole plan into one column under the brief,
+ * with nothing marking where one stopped and the next began. The count on the
+ * header is what makes the fold free — a shut block still says what is in it.
+ */
+function ConversationSection({
+  slot,
+  icon,
+  label,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  slot: string;
+  icon: React.ReactNode;
+  label: string;
+  summary: React.ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}): React.JSX.Element {
+  return (
+    <section data-slot={slot} className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        // `font-normal`: global.css's base `button` rule would otherwise weight
+        // the whole header like the label it carries.
+        className="flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[11px] font-normal text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground">
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            'size-3 shrink-0 transition-transform',
+            open && 'rotate-90',
+          )}
+        />
+        <span className="flex size-3.5 shrink-0 items-center justify-center">
+          {icon}
+        </span>
+        <span className="shrink-0 font-medium text-foreground">{label}</span>
+        <span className="flex min-w-0 flex-1 items-center gap-1 truncate tabular-nums">
+          {summary}
+        </span>
+      </button>
+      {open ? (
+        <div className="flex flex-col gap-1 pt-0.5 pb-1 pl-5">{children}</div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Everything ONE conversation holds, split into {@link ConversationSection}s —
+ * shared by an agent's flat card and every one of its instance blocks, so the
+ * two cannot come to fold differently.
+ *
+ * A block is OPEN by default while it holds something still moving (a running
+ * delegate, a running command, a task not yet done) and SHUT once all of it is
+ * over — the reader's own press outranks that, and is kept here, above the
+ * instance body's own open state, so folding an instance does not forget it.
+ */
+function ConversationSections({
+  agent,
+  subagents,
+  shells,
+  tasks,
+  tasksLive,
+  terminal,
+  settledOpen,
+  onToggleSettled,
+  onOpenThread,
+  onOpenSubagent,
+  onResolveHandoff,
+  onOpenShell,
+  onKillShell,
+  className,
+}: {
+  agent: AgentDisplay;
+  subagents: readonly AgentThread[];
+  shells: readonly ShellRun[];
+  tasks: readonly AgentTaskRow[];
+  tasksLive: boolean;
+  terminal: { reason: string | null } | null;
+  settledOpen: boolean;
+  onToggleSettled: () => void;
+  onOpenThread: (agent: AgentDisplay, thread: AgentThread) => void;
+  onOpenSubagent?: (subagentId: string) => void;
+  onResolveHandoff?: (
+    agent: AgentDisplay,
+    thread: AgentThread,
+  ) => Promise<HandoffTargetDto>;
+  onOpenShell?: (shell: ShellRun) => void;
+  onKillShell?: (shell: ShellRun) => void | Promise<void>;
+  className?: string;
+}): React.JSX.Element | null {
+  const [pressed, setPressed] = useState<
+    Partial<Record<ConversationSectionKind, boolean>>
+  >({});
+  if (subagents.length === 0 && shells.length === 0 && tasks.length === 0) {
+    return null;
+  }
+  const running = subagents.filter(
+    (thread) => thread.status === 'running',
+  ).length;
   const progress = taskProgress(tasks);
+  const toggle = (kind: ConversationSectionKind, wasOpen: boolean): void =>
+    setPressed((prev) => ({ ...prev, [kind]: !wasOpen }));
+  const subagentsOpen = pressed.subagents ?? running > 0;
+  const shellsOpen = pressed.shells ?? true;
+  const tasksOpen = pressed.tasks ?? progress.done < progress.total;
   return (
     <div
-      data-slot="agent-task-list"
-      className={cn('flex flex-col gap-1', className)}>
-      <p className="m-0 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-        <TaskIcon />
-        <span>Tasks</span>
-        <TaskCount done={progress.done} total={progress.total} />
-        {progress.current !== null && live ? (
-          <span className="min-w-0 flex-1 truncate">
-            ·{' '}
-            {progress.current.activeForm ??
-              progress.current.title ??
-              `Task ${progress.current.id}`}
-          </span>
-        ) : null}
-      </p>
-      <TaskScrollRows tasks={tasks} live={live} className="pl-0.5" />
+      data-slot="agent-conversation-sections"
+      className={cn('flex flex-col gap-0.5', className)}>
+      {subagents.length > 0 ? (
+        <ConversationSection
+          slot="agent-subagent-section"
+          icon={<SubagentIcon aria-hidden="true" className="size-3" />}
+          label="Sub-agents"
+          summary={
+            running > 0
+              ? `${running} running · ${subagents.length}`
+              : `${subagents.length} finished`
+          }
+          open={subagentsOpen}
+          onToggle={() => toggle('subagents', subagentsOpen)}>
+          <SubagentRows
+            agent={agent}
+            subagents={subagents}
+            terminal={terminal}
+            settledOpen={settledOpen}
+            onToggleSettled={onToggleSettled}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+            foldSettled={running > 0}
+          />
+        </ConversationSection>
+      ) : null}
+      {shells.length > 0 ? (
+        /* Only RUNNING commands ever reach here (`Chats.tsx`'s gate), so the
+           block is open by default and its count is a running count. */
+        <ConversationSection
+          slot="agent-shell-section"
+          icon={<TerminalIcon aria-hidden="true" className="size-3" />}
+          label="Terminals"
+          summary={`${shells.length} running`}
+          open={shellsOpen}
+          onToggle={() => toggle('shells', shellsOpen)}>
+          <ShellBand
+            shells={shells}
+            onOpenShell={onOpenShell}
+            onKillShell={onKillShell}
+          />
+        </ConversationSection>
+      ) : null}
+      {tasks.length > 0 ? (
+        <ConversationSection
+          slot="agent-task-list"
+          icon={<TaskIcon />}
+          label="Tasks"
+          summary={
+            <>
+              <TaskCount done={progress.done} total={progress.total} />
+              {progress.current !== null && tasksLive ? (
+                <span className="min-w-0 truncate">
+                  ·{' '}
+                  {progress.current.activeForm ??
+                    progress.current.title ??
+                    `Task ${progress.current.id}`}
+                </span>
+              ) : null}
+            </>
+          }
+          open={tasksOpen}
+          onToggle={() => toggle('tasks', tasksOpen)}>
+          <TaskBand tasks={tasks} live={tasksLive} />
+        </ConversationSection>
+      ) : null}
     </div>
   );
 }
@@ -652,7 +874,9 @@ function InstanceSummary({
   const tokens = measured(thread.spentTokens);
   const usd = measured(thread.spentUsd);
   const spend = [
-    tokens === null ? null : `${formatTokens(tokens)} tokens`,
+    // In/out, said so: a bare "tokens" beside a context ring reads as the
+    // window, and on a cached conversation this is mostly output.
+    tokens === null ? null : `${formatTokens(tokens)} in/out`,
     usd === null ? null : formatUsd(usd),
   ].filter((part): part is string => part !== null);
   const latest = thread.latest ?? null;
@@ -786,33 +1010,21 @@ function InstanceBlock({
               Nothing else happened in this conversation.
             </p>
           ) : null}
-          {instance.subagents.length > 0 ? (
-            <SubagentRows
-              agent={agent}
-              subagents={instance.subagents}
-              terminal={terminal}
-              settledOpen={settledOpen}
-              onToggleSettled={onToggleSettled}
-              onOpenThread={onOpenThread}
-              onOpenSubagent={onOpenSubagent}
-              onResolveHandoff={onResolveHandoff}
-            />
-          ) : null}
-          {instance.shells.length > 0 ? (
-            <ShellBand
-              shells={instance.shells}
-              onOpenShell={onOpenShell}
-              onKillShell={onKillShell}
-              className="px-1"
-            />
-          ) : null}
-          {instance.tasks.length > 0 ? (
-            <TaskBand
-              tasks={instance.tasks}
-              live={thread.status === 'running'}
-              className="px-1"
-            />
-          ) : null}
+          <ConversationSections
+            agent={agent}
+            subagents={instance.subagents}
+            shells={instance.shells}
+            tasks={instance.tasks}
+            tasksLive={thread.status === 'running'}
+            terminal={terminal}
+            settledOpen={settledOpen}
+            onToggleSettled={onToggleSettled}
+            onOpenThread={onOpenThread}
+            onOpenSubagent={onOpenSubagent}
+            onResolveHandoff={onResolveHandoff}
+            onOpenShell={onOpenShell}
+            onKillShell={onKillShell}
+          />
         </div>
       ) : null}
     </li>
@@ -905,7 +1117,7 @@ function AgentSpend({
     return null;
   }
   const parts = [
-    tokens === null ? null : `${formatTokens(tokens)} tokens`,
+    tokens === null ? null : `${formatTokens(tokens)} in/out`,
     agent.spentUsd === null ? null : formatUsd(agent.spentUsd),
   ].filter((part): part is string => part !== null);
   const effort = [
@@ -1649,10 +1861,6 @@ export function AgentsPanel({
               // twenty rows behind it, and the one thread the reader opened the
               // panel to watch was somewhere in the middle of them.
               const subagents = own?.subagents ?? [];
-              const liveSubagents = subagents.filter(
-                (thread) => thread.status === 'running',
-              );
-              const hasList = subagents.length > 0;
               const shells = own?.shells ?? [];
               const tasks = own?.tasks ?? [];
               // Whether the list is still being WORKED, which is what decides
@@ -1846,66 +2054,30 @@ export function AgentsPanel({
                       ) : null}
                     </span>
                   </div>
-                  {hasList ? (
-                    <div className="flex flex-col border-t border-border px-2 py-1.5">
-                      {/* The counts, in the one place they describe something: a
-                        caption over the rows below — and counting THOSE ROWS,
-                        which is the whole of the fix here.
-                        They used to be the agent's own figures: `activeTurns`
-                        (live turns of the NODE) and every thread it holds
-                        INCLUDING the main conversation, whose control sits in
-                        the card's header and which is therefore not a row. The
-                        defence was that "threads" names no rows so the numbers
-                        may exceed them. It does not survive contact with a
-                        reader: measured on a real delegation, a card showing
-                        three spinning sub-agents over "4 finished sub-agents"
-                        was captioned `1 active · 8 threads` — every figure
-                        contradicted by what sat directly beneath it (1 vs 3
-                        spinners, 8 vs 7 rows), because in-process delegates
-                        emit no node status and so count for nothing in
-                        `activeTurns`, while the main conversation counts in
-                        `threads`. A caption that disagrees with its own list is
-                        read as a bug in the counting, which is what it is. */}
-                      <p className="m-0 px-1 pb-1 text-[11px] text-muted-foreground">
-                        {liveSubagents.length} active · {subagents.length}{' '}
-                        {subagents.length === 1 ? 'thread' : 'threads'}
-                      </p>
-                      <SubagentRows
-                        agent={agent}
-                        subagents={subagents}
-                        terminal={terminal}
-                        settledOpen={settledOpen}
-                        onToggleSettled={() => toggleSettled(agent.id)}
-                        onOpenThread={onOpenThread}
-                        onOpenSubagent={onOpenSubagent}
-                        onResolveHandoff={onResolveHandoff}
-                      />
-                    </div>
-                  ) : null}
-                  {shells.length > 0 ? (
-                    /* ABOVE the task list, and under the delegates: the three
-                       sections read from most volatile to least. A shell is
-                       measured in seconds and is the thing a reader glances at
-                       the panel to check, while a task list moves once a
-                       minute and a delegate list once a turn. */
-                    <ShellBand
-                      shells={shells}
-                      onOpenShell={onOpenShell}
-                      onKillShell={onKillShell}
-                      className="border-t border-border px-2.5 py-1.5"
-                    />
-                  ) : null}
-                  {tasks.length > 0 ? (
-                    /* BELOW the delegates, which is the reported order:
-                     "IT should be first, and then todo". Both are open — the
-                     panel is read, not operated — and neither is behind a
-                     control any more. */
-                    <TaskBand
-                      tasks={tasks}
-                      live={tasksLive}
-                      className="border-t border-border px-2.5 py-1.5"
-                    />
-                  ) : null}
+                  {/* Delegates, then commands, then the plan — most volatile
+                    first, and delegates leading as reported ("IT should be
+                    first, and then todo"). Each is its own block that folds,
+                    counted on its header — and that count is the ROWS below
+                    it (`N running · M`), never the agent's own turns and
+                    threads: a card captioned `1 active · 8 threads` over three
+                    spinning delegates and seven rows was read as a bug in the
+                    counting, which is what it was. */}
+                  <ConversationSections
+                    agent={agent}
+                    subagents={subagents}
+                    shells={shells}
+                    tasks={tasks}
+                    tasksLive={tasksLive}
+                    terminal={terminal}
+                    settledOpen={settledOpen}
+                    onToggleSettled={() => toggleSettled(agent.id)}
+                    onOpenThread={onOpenThread}
+                    onOpenSubagent={onOpenSubagent}
+                    onResolveHandoff={onResolveHandoff}
+                    onOpenShell={onOpenShell}
+                    onKillShell={onKillShell}
+                    className="border-t border-border px-2 py-1.5"
+                  />
                   {shownInstances.length > 0 ? (
                     <div
                       data-slot="agent-instances"

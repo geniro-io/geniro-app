@@ -663,10 +663,12 @@ describe('CallBlock', () => {
     ).toBeNull();
   });
 
-  it('states the SPENT figures on the shut card, beside the last message', () => {
+  it('states the callee’s CONTEXT and cost on the shut card, beside the last message', () => {
     // ASKED FOR as "here i should see tokens and price as well" — the footer's
     // figures were behind the fold, so a shut card said how far the callee had
-    // got and nothing about what it had cost.
+    // got and nothing about what it had cost. The figure beside the ring is
+    // the ring's own — the in/out count printed there as "N tokens" was read
+    // as the window and REPORTED as wrong ("838 tokens" over a 843k context).
     const entries = groupTranscript([
       item(
         'call_started',
@@ -687,7 +689,13 @@ describe('CallBlock', () => {
         'turn_complete',
         {
           callId: 'call-1',
-          usage: { inputTokens: 310, outputTokens: 117_300, costUsd: 44.17 },
+          usage: {
+            inputTokens: 310,
+            outputTokens: 117_300,
+            costUsd: 44.17,
+            contextTokens: 80_400,
+            contextWindowTokens: 200_000,
+          },
         },
         'poet',
       ),
@@ -704,11 +712,11 @@ describe('CallBlock', () => {
     act(() => root.render(<CallBlock block={block} nodes={NODES} />));
 
     const shut = container.querySelector('[data-slot="block-summary"]')!;
-    // Labelled, like this block's own footer and the sub-agent header — this is
-    // the one place the figure is read without the card open.
-    expect(
-      shut.querySelector('[data-slot="call-summary-tokens"]')?.textContent,
-    ).toBe('117.6k tokens');
+    const figure = shut.querySelector('[data-slot="call-summary-tokens"]');
+    expect(figure?.textContent).toBe('80.4k / 200k');
+    // The spend is not lost — it is on the hover, said for what it is.
+    expect(figure?.getAttribute('title')).toBe('117.6k tokens in/out');
+    expect(shut.textContent).not.toContain('117.6k tokens');
     expect(
       shut.querySelector('[data-slot="call-summary-cost"]')?.textContent,
     ).toBe('$44.17');

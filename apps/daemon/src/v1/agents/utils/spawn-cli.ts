@@ -543,6 +543,26 @@ const DETACHED_SHELL_POLL_MS = 5000;
  * servers, and the next turn reuses it. Only the turn is given up on.
  */
 const TURN_SILENCE_DEADLINE_MS = 30 * 60 * 1000;
+
+/**
+ * The ending a turn settles on when its prompt was answered inside a
+ * continuation (see `TurnState.continuationAnswer`).
+ *
+ * The continuation's own row has already been written, usage and all, down the
+ * between-turn path — so this carries the answer's TEXT and no usage. Copying
+ * the figures would store the same turn's spend twice, and the usage ledger
+ * reads every `turn_complete` row.
+ */
+function answeredByContinuation(
+  result: Extract<AgentEvent, { type: 'turn_complete' }>,
+): Extract<AgentEvent, { type: 'turn_complete' }> {
+  return {
+    type: 'turn_complete',
+    usage: null,
+    stopReason: result.stopReason,
+    finalText: result.finalText,
+  };
+}
 /**
  * Main-thread events that prove the MODEL is producing again, and so end a
  * hold — see the release in `emit`.
@@ -675,6 +695,25 @@ interface TurnState {
    * new prompt the CLI has not answered yet.
    */
   promptAnswered: boolean;
+  /**
+   * The last continuation result this turn routed AROUND itself while its
+   * prompt was still unanswered — see the continuation branch in `emit`.
+   *
+   * Kept because the CLI can answer the prompt INSIDE that continuation and
+   * never emit a result of its own for it. The "not this turn's ending" rule
+   * then leaves the turn nothing it will accept, and the only thing left to end
+   * it was the silence deadline, which wrote a failure over a finished turn.
+   * TRACED on run `a0877ce9` (2026-09-14): a callee's final message and two
+   * continuation results landed at 17:01:24, the CLI announced `idle` in the
+   * same millisecond, and the call was failed with "produced nothing for 30
+   * minutes" at 17:31:24 — its caller told `CALLEE_FAILED` about work that had
+   * shipped a pull request.
+   *
+   * So once the CLI says it is idle (or has been silent for the whole deadline),
+   * a turn holding one of these settles on it. Cleared with `promptAnswered`
+   * when a follow-up is delivered, since that result did not answer it.
+   */
+  continuationAnswer: Extract<AgentEvent, { type: 'turn_complete' }> | null;
 }
 
 /**
@@ -1100,6 +1139,18 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         finishTurn(turn, held);
         return;
       }
+      // The same reading for a CLI that never says `idle`: it answered this
+      // turn inside a continuation and has had nothing to add for the whole
+      // window. A finished answer is not "produced nothing".
+      if (turn.continuationAnswer) {
+        opts.logger?.warn(
+          `${opts.command}: settling on the continuation result that answered this turn — nothing followed it for ${Math.round(
+            TURN_SILENCE_DEADLINE_MS / 60_000,
+          )} minutes`,
+        );
+        finishTurn(turn, answeredByContinuation(turn.continuationAnswer));
+        return;
+      }
       // Through `emit`, so this takes the one-terminal gate with every other
       // outcome and cannot contradict a `result` line that arrives beside it.
       emit({
@@ -1505,24 +1556,39 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
     }
     const turn = current;
     const held = turn?.deferredTerminal ?? deferredOffTurnTerminal;
-    if (!held) {
-      return;
+    if (held) {
+      if (openWork.size > 0) {
+        opts.logger?.warn(
+          `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
+        );
+        openWork.clear();
+      } else {
+        opts.logger?.debug?.(
+          `${opts.command}: the CLI went idle — settling the held '${held.type}'`,
+        );
+      }
+      if (turn?.deferredTerminal) {
+        finishTurn(turn, turn.deferredTerminal);
+        return;
+      }
+      releaseOffTurnHold();
     }
-    if (openWork.size > 0) {
-      opts.logger?.warn(
-        `${opts.command}: the CLI went idle with ${openWork.size} unit(s) of background work never reported — settling the held '${held.type}'`,
-      );
-      openWork.clear();
-    } else {
+    // The turn's prompt was answered inside a continuation and no result of
+    // its own is coming: `idle` is the CLI saying so. See
+    // `TurnState.continuationAnswer`. Not while a card is open — the CLI can
+    // report idle while it waits on one, and that turn has not finished.
+    if (
+      turn &&
+      !turn.terminalEmitted &&
+      !turn.promptHeld &&
+      turn.outstanding.size === 0 &&
+      turn.continuationAnswer
+    ) {
       opts.logger?.debug?.(
-        `${opts.command}: the CLI went idle — settling the held '${held.type}'`,
+        `${opts.command}: the CLI went idle with this turn's prompt answered inside a continuation — settling on that result`,
       );
+      finishTurn(turn, answeredByContinuation(turn.continuationAnswer));
     }
-    if (turn?.deferredTerminal) {
-      finishTurn(turn, turn.deferredTerminal);
-      return;
-    }
-    releaseOffTurnHold();
   };
 
   const announceShellWork = (
@@ -1915,6 +1981,9 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         opts.logger?.debug?.(
           `${opts.command}: a continuation's result arrived inside a turn — not this turn's ending`,
         );
+        // …unless the CLI turns out to have answered the prompt INSIDE it — see
+        // `TurnState.continuationAnswer`.
+        turn.continuationAnswer = normalized;
         armSilenceDeadline(turn);
         // Stamped, so the ROW says it ended nothing — see `insideTurn`.
         handleOrphanEvent({ ...normalized, insideTurn: true });
@@ -2457,6 +2526,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
       deferredTerminal: null,
       promptHeld: turnOptions.holdPrompt !== undefined,
       promptAnswered: false,
+      continuationAnswer: null,
     };
     current = turn;
     // A continuation's result held for background work is handed over BEFORE
@@ -2652,6 +2722,7 @@ export function runCliSession(opts: CliSessionOptions): CliSession {
         // again not this turn's ending (see `TurnState.promptAnswered`).
         if (delivered) {
           turn.promptAnswered = false;
+          turn.continuationAnswer = null;
         }
         // A message delivered into a HELD turn ends the hold at the write,
         // rather than when the CLI gets round to answering. Waiting for it to

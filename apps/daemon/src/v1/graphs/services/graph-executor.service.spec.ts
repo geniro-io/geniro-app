@@ -239,6 +239,15 @@ interface FakeNodeRow {
 
 class FakeNodeStateDao {
   readonly rows = new Map<string, FakeNodeRow>();
+  /** Every node whose context COUNT a compaction dropped, in order. */
+  readonly forgotContext: { runId: string; nodeId: string }[] = [];
+  async forgetContext(runId: string, nodeId: string): Promise<void> {
+    this.forgotContext.push({ runId, nodeId });
+    const found = this.row(runId, nodeId);
+    if (found) {
+      found.contextTokens = null;
+    }
+  }
   /**
    * The durable per-node context reading, following the real DAO's two rules:
    * a figure the reading OMITS is left alone (a `context_progress` carries a
@@ -446,6 +455,11 @@ class FakeAdapter {
    *  would let it pass against levels the real CLI does not accept. */
   listEfforts(): ReturnType<AgentAdapter['listEfforts']> {
     return this.real.listEfforts();
+  }
+  /** Delegated too: which compaction a CLI has, and whether it replaces the
+   *  session, is the shipped adapter's own declaration. */
+  geniroCommandFor(text: string): ReturnType<AgentAdapter['geniroCommandFor']> {
+    return this.real.geniroCommandFor(text);
   }
   questionFrom(input: unknown): AdapterQuestion | null {
     return this.projectsNoQuestion ? null : this.real.questionFrom(input);
@@ -669,6 +683,7 @@ function setup(
   callContextDao: {
     hardDeleted: unknown[];
     rows: Map<string, FakeCallContextRow>;
+    forgotContext: { runId: string; callId: string }[];
   };
   registry: ProcessRegistry;
   approvals: ApprovalRegistry;
@@ -820,6 +835,11 @@ function setup(
   const callContextDao = {
     hardDeleted: [] as unknown[],
     rows: new Map<string, FakeCallContextRow>(),
+    /** Every call whose context COUNT a compaction dropped, in order. */
+    forgotContext: [] as { runId: string; callId: string }[],
+    async forgetContext(runId: string, callId: string) {
+      this.forgotContext.push({ runId, callId });
+    },
     // Records what the executor PASSED, verbatim — its arguments are the only
     // thing this spec can observe. Deliberately NOT a copy of the real DAO's
     // write rules: those (zero-rejection, never clearing the half a reading
@@ -5963,5 +5983,488 @@ describe('GraphExecutorService — work still out when a process ends', () => {
 
     completeTurn(claude.starts[0]!, 'done');
     await drain();
+  });
+});
+
+describe('GraphExecutorService — automatic compaction of a node', () => {
+  /** A node reports holding `tokens` of a 200k window, then completes. */
+  function fillAndComplete(
+    turn: FakeTurn,
+    tokens: number,
+    finalText: string,
+  ): void {
+    turn.emit({
+      type: 'context_progress',
+      contextTokens: tokens,
+      contextWindowTokens: 200_000,
+    });
+    completeTurn(turn, finalText);
+  }
+  const promptsOf = (adapter: FakeAdapter): string[] =>
+    adapter.starts.map((turn) => turn.input.prompt);
+  const systemRows = (
+    itemDao: FakeItemDao,
+    runId: string,
+  ): Record<string, unknown>[] =>
+    itemDao.items
+      .filter((item) => item.runId === runId && item.kind === 'system')
+      .map((item) => JSON.parse(item.payload) as Record<string, unknown>);
+
+  /** a feeds b, and a compacts at half its window. */
+  const CHAIN: Workflow = {
+    name: 'chain',
+    nodes: [
+      {
+        id: 'a',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-a',
+        autoCompactPercent: 50,
+      },
+      {
+        id: 'b',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-b',
+      },
+    ],
+    edges: [{ from: 'a', to: 'b', kind: 'data' }],
+  };
+  /** Two roots, so the run stays live while `a` is followed up. */
+  const LIVE_ROOTS: Workflow = {
+    ...TWO_ROOTS,
+    nodes: TWO_ROOTS.nodes.map((node) =>
+      node.id === 'a' && node.kind === 'agent'
+        ? { ...node, autoCompactPercent: 50 }
+        : node,
+    ),
+  };
+  const callsWorkflow = (compacts: 'orch' | 'helper'): Workflow => ({
+    name: 'calls',
+    nodes: [
+      {
+        id: 'orch',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You orchestrate.',
+        ...(compacts === 'orch' ? { autoCompactPercent: 50 } : {}),
+      },
+      {
+        id: 'helper',
+        kind: 'agent',
+        name: 'Helper',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'You help.',
+        ...(compacts === 'helper' ? { autoCompactPercent: 50 } : {}),
+      },
+    ],
+    edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
+  });
+  /** A cursor root that compacts, beside a claude root that keeps the run live. */
+  const CURSOR_ROOTS: Workflow = {
+    name: 'cursor roots',
+    nodes: [
+      {
+        id: 'a',
+        kind: 'agent',
+        agent: 'cursor-agent',
+        approval: 'auto',
+        role: 'role-a',
+        autoCompactPercent: 50,
+      },
+      {
+        id: 'b',
+        kind: 'agent',
+        agent: 'claude',
+        approval: 'auto',
+        role: 'role-b',
+      },
+    ],
+    edges: [],
+  };
+
+  it('compacts a node over its threshold BEFORE it settles, on the same process, and holds the next node back until it has', async () => {
+    const { service, claude, itemDao, nodeDao, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const opened = claude.sessionsOpened;
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A done');
+    await drain();
+
+    const a = turnsOf(claude, 'role-a');
+    expect(a).toHaveLength(2);
+    expect(a[1]!.input.prompt).toBe('/compact');
+    // The node's own kept process takes it — the conversation it compacts.
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(
+      systemRows(itemDao, run.id).some((row) =>
+        String(row.message).includes('50% auto-compact threshold'),
+      ),
+    ).toBe(true);
+    // Not settled, and nothing downstream has started while it compacts.
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('running');
+    expect(turnsOf(claude, 'role-b')).toHaveLength(0);
+
+    completeTurn(a[1]!, 'compacted.');
+    await drain();
+    expect(nodeDao.row(run.id, 'a')?.status).toBe('completed');
+    const b = turnsOf(claude, 'role-b');
+    expect(b).toHaveLength(1);
+    // The node's ANSWER flows downstream, never what the compaction said.
+    expect(b[0]!.input.prompt).toContain('A done');
+    expect(b[0]!.input.prompt).not.toContain('compacted.');
+    completeTurn(b[0]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('leaves a node under its threshold alone', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 90_000, 'A done');
+    await drain();
+
+    expect(promptsOf(claude)).not.toContain('/compact');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B done');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('refuses a follow-up while a root compacts, rather than delivering it into the compaction', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    const compaction = turnsOf(claude, 'role-a')[1]!;
+    expect(compaction.input.prompt).toBe('/compact');
+
+    await expect(service.sendMessage(run.id, 'one more thing')).rejects.toThrow(
+      /compacting its conversation/,
+    );
+    await drain();
+    const b = turnsOf(claude, 'role-b')[0]!;
+    expect(b.sendUserMessage).not.toHaveBeenCalled();
+    expect(compaction.sendUserMessage).not.toHaveBeenCalled();
+    expect(userTexts(itemDao, run.id)).toEqual(['go']);
+
+    // Once it has settled, the same message goes through.
+    completeTurn(compaction, 'compacted.');
+    await drain();
+    await service.sendMessage(run.id, 'one more thing');
+    await drain();
+    expect(b.sendUserMessage).toHaveBeenCalledWith({
+      text: 'one more thing',
+      images: [],
+    });
+    expect(turnsOf(claude, 'role-a')[2]!.input.prompt).toBe('one more thing');
+  });
+
+  it('does not compact again when the compaction left the conversation over the threshold', async () => {
+    const { service, claude } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(LIVE_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(claude, 'role-a')[1]!, 'compacted.');
+    await drain();
+
+    // Still 85% full after compacting — a second /compact would buy nothing.
+    await service.sendMessage(run.id, 'next');
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[2]!, 170_000, 'A2');
+    await drain();
+    expect(
+      promptsOf(claude).filter((prompt) => prompt === '/compact'),
+    ).toHaveLength(1);
+  });
+
+  it('compacts a callee before its caller is handed the result, on the call’s own conversation', async () => {
+    const { service, claude, callBroker, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('helper')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    let delivered = false;
+    const envelope = callBroker
+      .callAgent(run.id, 'orch', { agent: 'Helper', message: 'summarize' })
+      .then((result) => {
+        delivered = true;
+        return result;
+      });
+    await drain();
+    const opened = claude.sessionsOpened;
+    fillAndComplete(claude.starts[1]!, 170_000, 'summary text');
+    await drain();
+
+    expect(claude.starts[2]!.input.prompt).toBe('/compact');
+    expect(claude.sessionsOpened).toBe(opened);
+    expect(delivered).toBe(false);
+    expect(
+      itemDao.items.some((item) => {
+        const payload = JSON.parse(item.payload) as Record<string, unknown>;
+        return (
+          item.kind === 'system' &&
+          payload.callId === 'call-1' &&
+          String(payload.message).includes('auto-compact threshold')
+        );
+      }),
+    ).toBe(true);
+
+    completeTurn(claude.starts[2]!, 'compacted.');
+    const result = await envelope;
+    expect(result.status).toBe('ok');
+    expect(JSON.stringify(result)).toContain('summary text');
+    expect(JSON.stringify(result)).not.toContain('compacted.');
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('a result that lands while its caller compacts still wakes the caller once it has', async () => {
+    const { service, claude, callBroker, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered(callsWorkflow('orch')),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const orchTurns = (): FakeTurn[] =>
+      claude.starts.filter(
+        (turn) => turn.input.systemPrompt === 'You orchestrate.',
+      );
+    const started = await callBroker.callAgent(run.id, 'orch', {
+      agent: 'helper',
+      message: 'do the work',
+      mode: 'async',
+    });
+    expect(started.status).toBe('ok');
+    await drain();
+    fillAndComplete(orchTurns()[0]!, 170_000, 'I will report back');
+    await drain();
+    expect(orchTurns()[1]!.input.prompt).toBe('/compact');
+
+    completeTurn(claude.starts[1]!, 'the work, done');
+    await drain();
+    // Neither handed to the turn that is over nor opened on top of the
+    // compaction.
+    expect(orchTurns()).toHaveLength(2);
+
+    completeTurn(orchTurns()[1]!, 'compacted.');
+    await drain();
+    expect(orchTurns()).toHaveLength(3);
+    expect(JSON.stringify(orchTurns()[2]!.input)).toContain('call-1');
+    expect(runDao.runs.get(run.id)?.status).toBe('running');
+    await callBroker.awaitAgent(run.id, 'orch', { call_id: 'call-1' });
+    completeTurn(orchTurns()[2]!, 'reported back');
+    await drain();
+    expect(runDao.runs.get(run.id)?.status).toBe('completed');
+  });
+
+  it('carries a cursor node’s summary into its next turn — once, on a new process, resuming nothing', async () => {
+    const { service, cursor, claude, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const first = turnsOf(cursor, 'role-a')[0]!;
+    first.emit({ type: 'session', sessionId: 'sess-a' });
+    fillAndComplete(first, 170_000, 'A1');
+    await drain();
+    const compaction = turnsOf(cursor, 'role-a')[1]!;
+    // cursor has no compaction of its own: geniro asks for a summary.
+    expect(compaction.input.prompt).toMatch(/summar/i);
+    const opened = cursor.sessionsOpened;
+    completeTurn(compaction, 'we agreed on plan B');
+    await drain();
+
+    expect(nodeDao.forgotContext).toEqual([{ runId: run.id, nodeId: 'a' }]);
+    expect(
+      systemRows(itemDao, run.id).some(
+        (row) => row.conversationReplaced === true,
+      ),
+    ).toBe(true);
+
+    await service.sendMessage(run.id, 'now do it');
+    await drain();
+    const next = turnsOf(cursor, 'role-a')[2]!;
+    expect(next.input.prompt).toContain('we agreed on plan B');
+    expect(next.input.prompt.endsWith('now do it')).toBe(true);
+    // Resuming the replaced session, or keeping the process that holds it,
+    // would hand the summary to the very conversation it replaced.
+    expect(next.input.resumeSessionId).toBeNull();
+    expect(cursor.sessionsOpened).toBe(opened + 1);
+    completeTurn(next, 'done');
+    await drain();
+
+    await service.sendMessage(run.id, 'and again');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')[3]!.input.prompt).toBe('and again');
+    completeTurn(turnsOf(cursor, 'role-a')[3]!, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('leaves a cursor node’s conversation as it was — and says so — when the compaction wrote no summary', async () => {
+    const { service, cursor, claude, itemDao, nodeDao } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(cursor, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    const opened = cursor.sessionsOpened;
+    completeTurn(turnsOf(cursor, 'role-a')[1]!, '   ');
+    await drain();
+
+    expect(nodeDao.forgotContext).toEqual([]);
+    expect(
+      systemRows(itemDao, run.id).some(
+        (row) =>
+          String(row.message).includes('produced no summary') &&
+          row.severity === 'warning',
+      ),
+    ).toBe(true);
+    await service.sendMessage(run.id, 'now do it');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')[2]!.input.prompt).toBe('now do it');
+    expect(cursor.sessionsOpened).toBe(opened);
+    completeTurn(turnsOf(cursor, 'role-a')[2]!, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('a cursor CALLEE’s compaction clears that call’s reading, never its node’s own', async () => {
+    const { service, claude, cursor, callBroker, nodeDao, callContextDao } =
+      setup();
+    const workflow: Workflow = {
+      name: 'cursor calls',
+      nodes: [
+        {
+          id: 'orch',
+          kind: 'agent',
+          agent: 'claude',
+          approval: 'auto',
+          role: 'You orchestrate.',
+        },
+        {
+          id: 'helper',
+          kind: 'agent',
+          name: 'Helper',
+          agent: 'cursor-agent',
+          approval: 'auto',
+          role: 'You help.',
+          autoCompactPercent: 50,
+        },
+      ],
+      edges: [{ from: 'orch', to: 'helper', kind: 'call' as const }],
+    };
+    const run = await service.startRun({
+      slug: 'cursor-calls',
+      workflow: triggered(workflow),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const envelope = callBroker.callAgent(run.id, 'orch', {
+      agent: 'Helper',
+      message: 'summarize',
+    });
+    await drain();
+    fillAndComplete(cursor.starts[0]!, 170_000, 'summary text');
+    await drain();
+    completeTurn(cursor.starts[1]!, 'we agreed on plan B');
+    expect((await envelope).status).toBe('ok');
+    await drain();
+
+    expect(callContextDao.forgotContext).toEqual([
+      { runId: run.id, callId: 'call-1' },
+    ]);
+    expect(nodeDao.forgotContext).toEqual([]);
+    completeTurn(claude.starts[0]!, 'done');
+    await drain();
+  });
+
+  it('keeps a cursor node’s summary for the next turn when the turn meant to carry it fails to start', async () => {
+    const { service, cursor, claude } = setup();
+    const run = await service.startRun({
+      slug: 'cursor',
+      workflow: triggered(CURSOR_ROOTS),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(cursor, 'role-a')[0]!, 170_000, 'A1');
+    await drain();
+    completeTurn(turnsOf(cursor, 'role-a')[1]!, 'we agreed on plan B');
+    await drain();
+
+    // The retired process is replaced on the next turn — and that spawn fails.
+    cursor.throwNextStart = new Error('ENOSPC: no space left on device');
+    await service.sendMessage(run.id, 'first try');
+    await drain();
+    expect(turnsOf(cursor, 'role-a')).toHaveLength(2);
+
+    await service.sendMessage(run.id, 'second try');
+    await drain();
+    const next = turnsOf(cursor, 'role-a')[2]!;
+    expect(next.input.prompt).toContain('we agreed on plan B');
+    expect(next.input.prompt.endsWith('second try')).toBe(true);
+    completeTurn(next, 'ok');
+    completeTurn(turnsOf(claude, 'role-b')[0]!, 'B');
+    await drain();
+  });
+
+  it('a run cancelled mid-compaction cancels the compaction and settles', async () => {
+    const { service, claude, runDao } = setup();
+    const run = await service.startRun({
+      slug: 'chain',
+      workflow: triggered(CHAIN),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    fillAndComplete(turnsOf(claude, 'role-a')[0]!, 170_000, 'A done');
+    await drain();
+    const compaction = turnsOf(claude, 'role-a')[1]!;
+
+    await service.cancel(run.id);
+    await drain();
+    expect(compaction.cancelled).toBe(true);
+    expect(runDao.runs.get(run.id)?.status).toBe('cancelled');
   });
 });

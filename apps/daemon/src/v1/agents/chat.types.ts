@@ -973,6 +973,29 @@ export const CustomInstructionsSchema = z
   );
 
 /**
+ * The bounds of an auto-compact threshold. The ceiling exists because past it a
+ * turn's own growth overruns the window before a settle can compact.
+ *
+ * TWIN PARSER: `MIN_AUTO_COMPACT_PERCENT` / `MAX_AUTO_COMPACT_PERCENT` in
+ * `apps/ui/src/shared/contracts.ts`, which bound the remembered new-chat pick
+ * in `settings.json`. The generated client carries no bounds — change one,
+ * change the other.
+ */
+export const MIN_AUTO_COMPACT_PERCENT = 10;
+export const MAX_AUTO_COMPACT_PERCENT = 95;
+
+/**
+ * The ONE validator for an auto-compact threshold, shared by chat create and
+ * the settings PATCH so the two cannot disagree about what a percentage may
+ * be. See `Run.autoCompactPercent`.
+ */
+export const AutoCompactPercentSchema = z
+  .number()
+  .int()
+  .min(MIN_AUTO_COMPACT_PERCENT)
+  .max(MAX_AUTO_COMPACT_PERCENT);
+
+/**
  * The HTTP body ceiling the daemon hands Fastify (`main.ts`), DERIVED from the
  * two limits above rather than chosen.
  *
@@ -1548,6 +1571,7 @@ export const ChatExportRunSchema = z
     approval: ChatApprovalModeSchema.nullable(),
     effort: z.string().nullable(),
     contextWindow: z.string().nullable(),
+    autoCompactPercent: z.number().nullable(),
     modelParameters: z.record(z.string(), z.string()),
     contextTokens: z.number().nullable(),
     contextWindowTokens: z.number().nullable(),
@@ -2828,6 +2852,12 @@ export const RunWireSchema = z.object({
     .nullable()
     .describe(
       "Which of the model's context-window sizes the next turn runs at, in the CLI's own vocabulary; null = the model's own default",
+    ),
+  autoCompactPercent: z
+    .number()
+    .nullable()
+    .describe(
+      'Compact the conversation once a settled turn leaves its context at or above this percentage of the window; null = never',
     ),
   modelParameters: z
     .record(z.string(), z.string())

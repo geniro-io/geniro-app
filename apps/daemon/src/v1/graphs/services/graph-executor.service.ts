@@ -48,7 +48,14 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../../agents/utils/approval-answer';
+import {
+  AUTO_COMPACT_COMMAND,
+  autoCompactDue,
+  autoCompactNotice,
+  type AutoCompactReading,
+} from '../../agents/utils/auto-compact';
 import { BackgroundWorkCounts } from '../../agents/utils/background-work-counts';
+import { withCarriedContext } from '../../agents/utils/carried-context';
 import { CompactionRows } from '../../agents/utils/compaction-rows';
 import {
   mapEventToItem,
@@ -234,6 +241,20 @@ function hasProbedApprovalMode(
  * new run-scoped snapshot is the same shape, so the next one goes in here
  * instead of widening two signatures again.
  */
+/**
+ * What one node turn ended with, read once its events have drained — see
+ * `beginAgentTurn`'s `finish`.
+ */
+interface NodeTurnResult {
+  outcome: NodeOutcome;
+  finalText: string | null;
+  sessionId: string | null;
+  /** The last context reading the turn reported — what auto-compaction judges. */
+  reading: AutoCompactReading;
+  /** The registry key the turn ran under — the conversation it belongs to. */
+  sessionKey: string;
+}
+
 interface RunContext {
   /** Shared working folder every node runs in, already canonicalized. */
   cwd: string;
@@ -476,6 +497,26 @@ export class GraphExecutorService implements OnModuleInit {
   private readonly sessionClosers = new Map<string, () => void>();
 
   /**
+   * The summary an automatic CARRIED compaction owes the next turn on one
+   * session key — a CLI whose compaction geniro performs itself
+   * (`AgentGeniroCommand.replacesSession`) — and whose presence makes that turn
+   * open a fresh session rather than resume the one it replaced. Per KEY
+   * because a node's own conversation and each call conversation are compacted
+   * apart.
+   *
+   * In memory: after a restart the summary is gone and the node resumes its
+   * old session, which is intact — the conversation is merely not compacted.
+   */
+  private readonly carriedSummaries = new Map<string, string>();
+
+  /**
+   * Per session key, the context a conversation held on its first settled
+   * turn after an automatic compaction ('pending' until that turn settles) —
+   * the node twin of `ChatService.compactionBaselines`; see `autoCompactDue`.
+   */
+  private readonly compactionBaselines = new Map<string, number | 'pending'>();
+
+  /**
    * How many detached commands and background sub-agents each workflow run
    * still has out — the chat path's own counter (`BackgroundWorkCounts`),
    * recorded from this executor's event sinks. A workflow run is listed in the
@@ -488,6 +529,12 @@ export class GraphExecutorService implements OnModuleInit {
   );
 
   onModuleInit(): void {
+    // Every way a run is destroyed announces it here — this executor's own
+    // delete and the archive sweep's shared teardown alike — so the per-key
+    // compaction facts are dropped whichever path took the run.
+    this.bus.allDeleted().subscribe((runId) => {
+      this.forgetCompactions(runId);
+    });
     this.sessions.onClosed((key) => {
       const closer = this.sessionClosers.get(key);
       if (closer) {
@@ -926,6 +973,21 @@ export class GraphExecutorService implements OnModuleInit {
     }
   }
 
+  /** Drop every per-key compaction fact of one run — its keys are `<runId>::…`. */
+  private forgetCompactions(runId: string): void {
+    const prefix = `${runId}::`;
+    for (const key of [...this.carriedSummaries.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.carriedSummaries.delete(key);
+      }
+    }
+    for (const key of [...this.compactionBaselines.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.compactionBaselines.delete(key);
+      }
+    }
+  }
+
   /**
    * Workflow runs, newest first (the Chats page's run picker).
    *
@@ -1307,6 +1369,20 @@ export class GraphExecutorService implements OnModuleInit {
      */
     const continuationHandles = new Map<string, AgentTurnHandle>();
     /**
+     * The automatic compactions running right now — reached by the run's
+     * cancel like every other live turn. See `compactIfDue`.
+     */
+    const compactionHandles = new Set<AgentTurnHandle>();
+    /**
+     * Nodes whose OWN conversation is being compacted. A follow-up is refused
+     * while a node is here rather than delivered into the compaction.
+     *
+     * A WAKE needs no such guard: the node's turn is still retained while it
+     * compacts, so the broker reads its caller as live and wakes nobody, and
+     * the wake `drainCaller` issues at the settle is queued behind that settle.
+     */
+    const compactingNodes = new Set<string>();
+    /**
      * The CLI session each node's own turns reported in THIS pass, so a
      * follow-up can still resume the conversation after the registry has
      * reaped the kept process. Callee turns resume per call, not from here.
@@ -1360,6 +1436,12 @@ export class GraphExecutorService implements OnModuleInit {
         );
       });
     };
+
+    /** Resolves once every write queued so far has run. */
+    const drained = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        enqueue(() => resolve());
+      });
 
     const persistItem = async (
       nodeId: string | null,
@@ -1492,6 +1574,9 @@ export class GraphExecutorService implements OnModuleInit {
           handle.cancel();
         }
         for (const handle of continuationHandles.values()) {
+          handle.cancel();
+        }
+        for (const handle of compactionHandles) {
           handle.cancel();
         }
         // Nodes that never started settle as cancelled in the next pass.
@@ -1822,13 +1907,31 @@ export class GraphExecutorService implements OnModuleInit {
       extras: { resumeSessionId?: string | null; images?: TurnImage[] } = {},
     ): {
       handle: AgentTurnHandle;
-      finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      finish: () => NodeTurnResult;
     } => {
       const adapter = this.adapterFor(node.agent);
+      // One registry key per CONVERSATION — see the note at `startTurn` below.
+      const sessionKey = callContext
+        ? callSessionKey(runId, callContext.conversationId)
+        : nodeSessionKey(runId, node.id);
+      // An automatic carried compaction replaced this conversation: its summary
+      // rides this turn, once, and the session it replaced is not resumed.
+      const carried = this.carriedSummaries.get(sessionKey) ?? null;
+      this.carriedSummaries.delete(sessionKey);
+      /**
+       * Put the summary back for a turn that never delivered it — a start that
+       * threw, or a turn that ended before its CLI opened a session. Without
+       * it the conversation would resume the replaced session with no summary,
+       * and measure its pre-compaction size as the new baseline.
+       */
+      const restoreCarried = (): void => {
+        if (carried !== null && !this.carriedSummaries.has(sessionKey)) {
+          this.carriedSummaries.set(sessionKey, carried);
+        }
+      };
+      // The newest context reading this turn reported, for auto-compaction.
+      let lastContextTokens: number | null = null;
+      let lastWindowTokens: number | null = null;
       const textChunks: string[] = [];
       let finalText: string | null = null;
       let outcome: NodeOutcome | null = null;
@@ -1871,7 +1974,7 @@ export class GraphExecutorService implements OnModuleInit {
         (callContext !== undefined || isCaller(node));
       const approval = resolveApproval(node).mode;
       const input: AgentTurnInput = {
-        prompt,
+        prompt: withCarriedContext(carried, prompt),
         ...(extras.images?.length ? { images: extras.images } : {}),
         cwd,
         model: node.model ?? null,
@@ -1885,8 +1988,12 @@ export class GraphExecutorService implements OnModuleInit {
         // reports a size the model does not offer, against the live agent.
         contextWindow: node.contextWindow ?? null,
         modelParameters: node.modelParameters ?? null,
+        // Never the session a carried compaction replaced: resuming it would
+        // hand the summary to the conversation it summarised.
         resumeSessionId:
-          callContext?.resumeSessionId ?? extras.resumeSessionId ?? null,
+          carried !== null
+            ? null
+            : (callContext?.resumeSessionId ?? extras.resumeSessionId ?? null),
         systemPrompt: node.role ?? null,
         // A PEER of the role rather than something joined into it: the two are
         // composed by `AgentAdapter.composeSystemPrompt`, which ranks the
@@ -1976,6 +2083,13 @@ export class GraphExecutorService implements OnModuleInit {
             return;
           }
           if (event.type === 'context_progress') {
+            lastContextTokens = event.contextTokens;
+            if (
+              event.contextWindowTokens !== undefined &&
+              event.contextWindowTokens !== null
+            ) {
+              lastWindowTokens = event.contextWindowTokens;
+            }
             // BEFORE the figure it scales — `context` publishes, so a window
             // remembered after it would not reach the client until the next
             // reading. See the same pair in `ChatService`.
@@ -2075,6 +2189,9 @@ export class GraphExecutorService implements OnModuleInit {
           }
           if (event.type === 'turn_complete') {
             finalText = event.finalText ?? textChunks.join('');
+            lastContextTokens = event.usage?.contextTokens ?? lastContextTokens;
+            lastWindowTokens =
+              event.usage?.contextWindowTokens ?? lastWindowTokens;
             // The ONLY line carrying the model's window — under the model that
             // REPORTED it, so a node that fell back to a second model cannot
             // file that model's window under the requested one.
@@ -2142,6 +2259,9 @@ export class GraphExecutorService implements OnModuleInit {
             terminal === 'cancelled'
           ) {
             outcome = terminal;
+            if (terminal !== 'completed' && capturedSessionId === null) {
+              restoreCarried();
+            }
           }
           if (event.type === 'approval_request') {
             // The caller-bridge admits ONLY AskUserQuestion by NAME: bridging
@@ -2456,17 +2576,20 @@ export class GraphExecutorService implements OnModuleInit {
       // "2 active · 2 threads" above it. The published nodeId stays the NODE's,
       // so a client can still attribute the reading.
       const ownerKey = partialOwnerKey(node.id, callContext?.callId ?? null);
-      const sessionKey = callContext
-        ? callSessionKey(runId, callContext.conversationId)
-        : nodeSessionKey(runId, node.id);
-      const handle: AgentTurnHandle = this.sessions.startTurn(
-        sessionKey,
-        adapter,
-        input,
-        onEvent,
-        onBetweenTurnApproval,
-        onOffTurnEvent,
-      );
+      let handle: AgentTurnHandle;
+      try {
+        handle = this.sessions.startTurn(
+          sessionKey,
+          adapter,
+          input,
+          onEvent,
+          onBetweenTurnApproval,
+          onOffTurnEvent,
+        );
+      } catch (err) {
+        restoreCarried();
+        throw err;
+      }
       // The registry may close this process at any time — reaped as unused,
       // evicted, replaced as stale, or ended by the run's archive — during this
       // pass or long after it, since the process is kept between passes. Every
@@ -2508,11 +2631,7 @@ export class GraphExecutorService implements OnModuleInit {
         });
       });
 
-      const finish = (): {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      } => {
+      const finish = (): NodeTurnResult => {
         // A clean exit with no result line still completes the node — the
         // synthetic-completion mirror of the chat turn's finalizer.
         const finalOutcome: NodeOutcome =
@@ -2525,9 +2644,142 @@ export class GraphExecutorService implements OnModuleInit {
           outcome: finalOutcome,
           finalText: text,
           sessionId: capturedSessionId,
+          reading: {
+            tokens: lastContextTokens,
+            window:
+              lastWindowTokens ?? this.partials.windowFor(runId, ownerKey),
+          },
+          sessionKey,
         };
       };
       return { handle, finish };
+    };
+
+    /**
+     * Compact one conversation right after the turn that filled it, while the
+     * unit that owns its session key still holds it — so nothing else can open
+     * a turn on that key meanwhile: a callee's call is still active
+     * (`THREAD_BUSY`), and a node's own turn is still retained and unsettled.
+     * The node's settle, and a sync caller's result, simply wait for it.
+     *
+     * NEVER called from inside `enqueue`: the compaction's own events are
+     * enqueued, and awaiting them from a queued callback would wait forever.
+     *
+     * `onStart` fires only when a compaction actually begins, which is what
+     * lets a node's settle path mark it busy for exactly that long.
+     */
+    const compactIfDue = async (
+      node: WorkflowAgentNode,
+      turn: NodeTurnResult,
+      callContext: { callId: string; conversationId: string } | undefined,
+      onStart: () => void,
+    ): Promise<void> => {
+      try {
+        const percent = node.autoCompactPercent ?? null;
+        const command = this.adapterFor(node.agent).geniroCommandFor(
+          AUTO_COMPACT_COMMAND,
+        );
+        if (
+          percent === null ||
+          command === null ||
+          turn.outcome !== 'completed' ||
+          cancelRequested ||
+          runFinished
+        ) {
+          return;
+        }
+        const baseline = this.compactionBaselines.get(turn.sessionKey);
+        if (baseline === 'pending') {
+          // The first turn after a compaction measures what it left behind; a
+          // conversation still over the threshold here is one the compaction
+          // did not help, and compacting it again would only repeat that.
+          if (turn.reading.tokens !== null) {
+            this.compactionBaselines.set(turn.sessionKey, turn.reading.tokens);
+          }
+          return;
+        }
+        if (!autoCompactDue(percent, turn.reading, baseline ?? null)) {
+          return;
+        }
+        onStart();
+        const owner = {
+          nodeId: node.id,
+          ...(callContext ? { callId: callContext.callId } : {}),
+        };
+        enqueue(async () => {
+          await persistItem(node.id, 'system', null, {
+            message: autoCompactNotice(percent, turn.reading),
+            severity: 'info',
+            ...owner,
+          }).catch(() => {});
+        });
+        const compaction = beginAgentTurn(
+          node,
+          command.prompt,
+          callContext
+            ? { ...callContext, resumeSessionId: turn.sessionId }
+            : undefined,
+          callContext ? {} : { resumeSessionId: turn.sessionId },
+        );
+        compactionHandles.add(compaction.handle);
+        try {
+          await compaction.handle.done;
+          await drained();
+        } finally {
+          compactionHandles.delete(compaction.handle);
+        }
+        const result = compaction.finish();
+        if (result.outcome !== 'completed') {
+          // Stopped or failed: nothing shrank, so the rule stays armed.
+          return;
+        }
+        if (command.replacesSession) {
+          const summary = result.finalText?.trim() ?? '';
+          if (summary === '') {
+            enqueue(async () => {
+              await persistItem(node.id, 'system', null, {
+                message:
+                  'Automatic compaction produced no summary — the conversation was left as it was.',
+                severity: 'warning',
+                ...owner,
+              }).catch(() => {});
+            });
+            return;
+          }
+          this.carriedSummaries.set(turn.sessionKey, summary);
+          this.sessions.retire(
+            turn.sessionKey,
+            'its conversation was compacted',
+          );
+          enqueue(async () => {
+            // The CONVERSATION's figure: a call's own row for a callee, the
+            // node's for its own conversation — never the other one.
+            await (
+              callContext
+                ? this.callContextDao.forgetContext(
+                    runId,
+                    callContext.callId,
+                    em,
+                  )
+                : this.nodeStateDao.forgetContext(runId, node.id, em)
+            ).catch(() => {});
+            await persistItem(node.id, 'system', null, {
+              message:
+                'Conversation compacted. The agent starts fresh from the summary above; everything before it is no longer in its context.',
+              severity: 'info',
+              // TWIN PARSER: `apps/ui/src/renderer/chats/compaction-payload.ts`'s
+              // `conversationReplaced` — the chat twin is `commitCarriedCompaction`.
+              conversationReplaced: true,
+              ...owner,
+            }).catch(() => {});
+          });
+        }
+        this.compactionBaselines.set(turn.sessionKey, 'pending');
+      } catch (err) {
+        this.logger.warn(
+          `workflow run ${runId} node ${node.id} auto-compaction failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     };
 
     const launchNode = (node: WorkflowAgentNode): void => {
@@ -2545,11 +2797,7 @@ export class GraphExecutorService implements OnModuleInit {
       // DAG walking — drive()/startRun promise "never throws", and letting it
       // escape would leave the aggregate handle registered but never settling.
       let handle: AgentTurnHandle;
-      let finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      let finish: () => NodeTurnResult;
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
           // An earlier pass of this run left this node a conversation; a
@@ -2594,7 +2842,13 @@ export class GraphExecutorService implements OnModuleInit {
       }
       runningHandles.set(node.id, handle);
 
-      void handle.done.then(() => {
+      void handle.done.then(async () => {
+        // Compacted BEFORE the settle, while this turn still owns the node's
+        // session key — see `compactIfDue`.
+        await drained();
+        await compactIfDue(node, finish(), undefined, () => {
+          compactingNodes.add(node.id);
+        });
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
             const recordSwept = sweepApprovals(node.id);
@@ -2659,6 +2913,7 @@ export class GraphExecutorService implements OnModuleInit {
             // throws — schedule() is the only path that launches/skips the
             // downstream nodes and enqueues the run finalizer (always AFTER
             // any skip writes, so the run-level turn_complete stays last).
+            compactingNodes.delete(node.id);
             schedule();
           }
         });
@@ -2718,11 +2973,7 @@ export class GraphExecutorService implements OnModuleInit {
           // suppress this node's approval sweep for the rest of the run) nor
           // reject into the broker with an unbalanced ledger.
           let handle: AgentTurnHandle;
-          let finish: () => {
-            outcome: NodeOutcome;
-            finalText: string | null;
-            sessionId: string | null;
-          };
+          let finish: () => NodeTurnResult;
           // The silence window measures the CALLEE, so it starts when the
           // callee does — not when `call_agent` returned. Depth-1 calls queue
           // on a four-slot pool, so a fan-out's fifth call can sit here for
@@ -2775,6 +3026,16 @@ export class GraphExecutorService implements OnModuleInit {
           }
           subTurnHandles.set(callId, handle);
           await handle.done;
+          // Compacted BEFORE the result is handed back: the call is still
+          // active, so no continuation can open a turn on this conversation
+          // while it runs — see `compactIfDue`.
+          await drained();
+          await compactIfDue(
+            callee,
+            finish(),
+            { callId, conversationId },
+            () => {},
+          );
           return await new Promise<CalleeTurnOutcome>((resolve) => {
             enqueue(async () => {
               // Resolve in finally: a bookkeeping write failure must never
@@ -2863,11 +3124,7 @@ export class GraphExecutorService implements OnModuleInit {
       retainNodeTurn(node.id);
       persistTurnStart(node);
       let handle: AgentTurnHandle;
-      let finish: () => {
-        outcome: NodeOutcome;
-        finalText: string | null;
-        sessionId: string | null;
-      };
+      let finish: () => NodeTurnResult;
       try {
         ({ handle, finish } = beginAgentTurn(node, prompt, undefined, {
           images,
@@ -2907,7 +3164,11 @@ export class GraphExecutorService implements OnModuleInit {
         return;
       }
       continuationHandles.set(node.id, handle);
-      void handle.done.then(() => {
+      void handle.done.then(async () => {
+        await drained();
+        await compactIfDue(node, finish(), undefined, () => {
+          compactingNodes.add(node.id);
+        });
         enqueue(async () => {
           if (releaseNodeTurn(node.id)) {
             const recordSwept = sweepApprovals(node.id);
@@ -2940,6 +3201,7 @@ export class GraphExecutorService implements OnModuleInit {
               `workflow run ${runId} node ${node.id} follow-up bookkeeping failed: ${err instanceof Error ? err.message : String(err)}`,
             );
           } finally {
+            compactingNodes.delete(node.id);
             liveSubTurns -= 1;
             await finishRunIfSettled();
           }
@@ -2985,6 +3247,14 @@ export class GraphExecutorService implements OnModuleInit {
         )
       ) {
         throw busy('the workflow is still starting');
+      }
+      // Never delivered into a compaction: on a CLI whose compaction replaces
+      // the session, a message landing in it would be summarised away.
+      const compactingRoot = roots.find((root) => compactingNodes.has(root.id));
+      if (compactingRoot) {
+        throw busy(
+          `${compactingRoot.name ?? compactingRoot.id} is compacting its conversation`,
+        );
       }
       const { stored, turnImages } = this.storeImages(runId, images);
       for (const root of roots) {

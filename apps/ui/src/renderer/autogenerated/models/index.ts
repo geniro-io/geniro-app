@@ -1167,6 +1167,12 @@ export interface ChatExportRun {
     contextWindow: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof ChatExportRun
+     */
+    autoCompactPercent: number | null;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof ChatExportRun
      */
@@ -1751,6 +1757,12 @@ export interface CreateChatDto {
      * @memberof CreateChatDto
      */
     contextWindow?: string;
+    /**
+     * 
+     * @type {number}
+     * @memberof CreateChatDto
+     */
+    autoCompactPercent?: number;
     /**
      * 
      * @type {{ [key: string]: string; }}
@@ -3402,6 +3414,12 @@ export interface RunDto {
      */
     contextWindow: string | null;
     /**
+     * 
+     * @type {number}
+     * @memberof RunDto
+     */
+    autoCompactPercent: number | null;
+    /**
      * Every OTHER model setting this run's next turn asks for, keyed by the CLI's own parameter id; {} when none are set. Sent back verbatim — geniro holds no vocabulary for these
      * @type {{ [key: string]: string; }}
      * @memberof RunDto
@@ -4425,6 +4443,12 @@ export interface UpdateChatSettingsDto {
     contextWindow?: string | null;
     /**
      * 
+     * @type {number}
+     * @memberof UpdateChatSettingsDto
+     */
+    autoCompactPercent?: number | null;
+    /**
+     * 
      * @type {{ [key: string]: string; }}
      * @memberof UpdateChatSettingsDto
      */
@@ -4817,6 +4841,12 @@ export interface WorkflowAgentNode {
      * @memberof WorkflowAgentNode
      */
     contextWindow?: string;
+    /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof WorkflowAgentNode
+     */
+    autoCompactPercent?: number;
     /**
      * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
      * @type {{ [key: string]: string; }}

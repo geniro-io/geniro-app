@@ -1075,4 +1075,28 @@ describe('AgentSessionRegistry — a folder whose MCP servers changed', () => {
 
     expect(sessions).toHaveLength(2);
   });
+
+  it('retires ONE key: its next turn runs on a new process, every other key keeps its own', async () => {
+    // A carried compaction replaces a conversation, and the kept process still
+    // holds the session it replaced — a later turn would be opened on it.
+    const registry = new AgentSessionRegistry();
+    const { adapter, sessions } = fakeAdapter();
+    registry.startTurn('run-1::node:a', adapter, INPUT, noop);
+    registry.startTurn('run-1::node:b', adapter, INPUT, noop);
+    await at(sessions, 0).endTurn();
+    await at(sessions, 1).endTurn();
+
+    expect(
+      registry.retire('run-1::node:a', 'its conversation was compacted'),
+    ).toBe(true);
+    // A mark, not a close: nothing the process started is killed until then.
+    expect(at(sessions, 0).closes).toBe(0);
+    registry.startTurn('run-1::node:a', adapter, INPUT, noop);
+    registry.startTurn('run-1::node:b', adapter, INPUT, noop);
+
+    expect(sessions).toHaveLength(3);
+    expect(at(sessions, 0).closes).toBe(1);
+    expect(at(sessions, 1).closes).toBe(0);
+    expect(registry.retire('run-1::node:none', 'nothing here')).toBe(false);
+  });
 });

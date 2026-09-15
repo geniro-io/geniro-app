@@ -508,6 +508,29 @@ export class AgentSessionRegistry implements OnApplicationShutdown {
     return marked;
   }
 
+  /**
+   * Retire ONE key's process: its next turn runs on a fresh one — the
+   * single-key twin of {@link markStale}.
+   *
+   * For a conversation geniro has REPLACED (a carried compaction, which drops
+   * the CLI's session). The kept process still holds that session, and a later
+   * turn is opened on it rather than on a new one — an ACP session keeps its
+   * session id across turns — so the summary would be sent into the very
+   * conversation it replaced and nothing would shrink. A mark rather than a
+   * close for `markStale`'s reasons: whatever the process started in the
+   * background runs on until the conversation is actually continued.
+   *
+   * Answers whether there was a process to retire.
+   */
+  retire(key: string, reason: string): boolean {
+    const entry = this.entries.get(key);
+    if (!entry) {
+      return false;
+    }
+    entry.stale ??= reason;
+    return true;
+  }
+
   /** Runs currently holding a process — for diagnostics and the specs. */
   get liveCount(): number {
     return this.entries.size;

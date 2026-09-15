@@ -242,6 +242,7 @@ const run1: ChatRun = {
   approval: null,
   effort: null,
   contextWindow: null,
+  autoCompactPercent: null,
   modelParameters: {},
   contextTokens: null,
   contextWindowTokens: null,
@@ -3830,6 +3831,7 @@ describe('Chats workflow runs', () => {
     approval: null,
     effort: null,
     contextWindow: null,
+    autoCompactPercent: null,
     modelParameters: {},
     contextTokens: null,
     contextWindowTokens: null,
@@ -4609,6 +4611,7 @@ describe('Chats — handing a conversation to the user', () => {
       approval: null,
       effort: null,
       contextWindow: null,
+      autoCompactPercent: null,
       modelParameters: {},
       contextTokens: null,
       contextWindowTokens: null,
@@ -4885,6 +4888,20 @@ describe('Chats composer memory & suggestions', () => {
     });
     expect(window.geniro.updateSettings).toHaveBeenCalledWith({
       lastModels: { claude: 'opus' },
+    });
+  });
+
+  it('starts the chat with the remembered auto-compact threshold', async () => {
+    stubSettings({ lastAutoCompactPercent: 70 });
+    api.createChat.mockResolvedValue({ ...run1, id: 'r-new' });
+    api.sendChatMessage.mockResolvedValue(msg(0, 'user', 'hello'));
+    const { client } = makeClient();
+    const container = await mount(client);
+
+    await sendTask(container);
+
+    expect(api.createChat).toHaveBeenCalledWith({
+      createChatDto: expect.objectContaining({ autoCompactPercent: 70 }),
     });
   });
 

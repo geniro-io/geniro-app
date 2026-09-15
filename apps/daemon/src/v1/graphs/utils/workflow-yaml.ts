@@ -78,6 +78,7 @@ const KIND_ONLY_FIELDS = {
     'effort',
     'contextWindow',
     'modelParameters',
+    'autoCompactPercent',
     'description',
     'role',
     'approval',

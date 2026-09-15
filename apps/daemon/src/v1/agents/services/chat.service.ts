@@ -64,6 +64,11 @@ import {
   foldApprovalAnswer,
   isUserQuestion,
 } from '../utils/approval-answer';
+import {
+  AUTO_COMPACT_COMMAND,
+  autoCompactDue,
+  autoCompactNotice,
+} from '../utils/auto-compact';
 import { BackgroundWorkCounts } from '../utils/background-work-counts';
 import { withCarriedContext } from '../utils/carried-context';
 import { CompactionRows } from '../utils/compaction-rows';
@@ -219,6 +224,24 @@ export class ChatService implements OnModuleInit {
    * on this, or the rows it destroys get rewritten a moment later.
    */
   private readonly finalizing = new Map<string, Promise<void>>();
+
+  /**
+   * Runs whose current turn is a geniro command (`/compact`), each mapped to a
+   * token owned by that turn. A follow-up is refused rather than delivered into
+   * one — see {@link sendMessage}. Cleared only by the turn that set it: the
+   * registry frees the run before a finalizer finishes, so the next compaction
+   * can claim the run while the previous one is still tidying up.
+   */
+  private readonly compactingRuns = new Map<string, symbol>();
+
+  /**
+   * The context each chat held on its first settled turn after its last
+   * compaction ('pending' until that turn settles). The auto-compact rule
+   * compacts again only once the conversation has regrown past it — see
+   * `autoCompactDue`. In memory: after a restart the worst case is one extra
+   * compaction, which re-establishes the baseline.
+   */
+  private readonly compactionBaselines = new Map<string, number | 'pending'>();
 
   /**
    * Runs whose delete is in progress.
@@ -668,6 +691,7 @@ export class ChatService implements OnModuleInit {
     approval?: ChatApprovalMode;
     effort?: string;
     contextWindow?: string;
+    autoCompactPercent?: number;
     modelParameters?: Record<string, string>;
     configDir?: string;
     /**
@@ -767,6 +791,7 @@ export class ChatService implements OnModuleInit {
         model: input.model ?? null,
         effort: input.effort ?? null,
         contextWindow: input.contextWindow ?? null,
+        autoCompactPercent: input.autoCompactPercent ?? null,
         modelParameters: writeModelParameters(input.modelParameters),
         configDir,
         // Blank normalizes to null so "typed nothing" and "cleared the box"
@@ -905,6 +930,7 @@ export class ChatService implements OnModuleInit {
       model?: string | null;
       effort?: string | null;
       contextWindow?: string | null;
+      autoCompactPercent?: number | null;
       modelParameters?: Record<string, string> | null;
       configDir?: string | null;
     },
@@ -956,6 +982,9 @@ export class ChatService implements OnModuleInit {
       (patch.contextWindow !== undefined &&
         patch.contextWindow !== run.contextWindow)
         ? { contextWindowTokens: null }
+        : {}),
+      ...(patch.autoCompactPercent !== undefined
+        ? { autoCompactPercent: patch.autoCompactPercent }
         : {}),
       // Cleared by a model change on exactly the window's own reasoning, and
       // more sharply: these axes belong to the model that enumerated them, and
@@ -1782,6 +1811,7 @@ export class ChatService implements OnModuleInit {
       this.backgroundWork.forget(runId);
       // Same rule, same one place: nothing can read a deleted run's context.
       this.contexts.forget(runId);
+      this.compactionBaselines.delete(runId);
       // Nor send a notification about it.
       this.notifiers.get(runId)?.();
       this.notifiers.delete(runId);
@@ -2167,6 +2197,11 @@ export class ChatService implements OnModuleInit {
       this.clearDelegateLease(runId);
       if (this.offTurnRuns.delete(runId)) {
         await this.setRunStatus(em, runId, settled);
+        // A continuation the CLI opened by itself grows the context as much as
+        // a turn the user sent, so it is checked on the same terms.
+        if (settled === 'completed') {
+          void this.autoCompactIfDue(runId);
+        }
       }
       return;
     }
@@ -3076,6 +3111,19 @@ export class ChatService implements OnModuleInit {
     // the claim must stay the first thing that can be raced. A pure lookup
     // against this CLI's own static list — no probe, no await.
     const geniroCommand = this.adapterFor(run.agentKind).geniroCommandFor(text);
+    // Nor is a message handed to — or started behind — a geniro compaction. On
+    // a CLI whose compaction replaces the session, a follow-up interrupts the
+    // summary prompt and the reply to it is what gets committed as the summary;
+    // and that compaction is not over when its turn ends — its finalizer still
+    // commits the summary and retires the process, so a turn started in that
+    // window would resume the replaced session and be missing from the summary.
+    // Synchronous, so it cannot open a window ahead of the claim below.
+    if (this.compactingRuns.has(runId)) {
+      throw new ConflictException(
+        'RUN_BUSY',
+        'the agent is compacting its conversation — your message goes out once it has',
+      );
+    }
     // Reserve the run synchronously BEFORE any further await — this closes the
     // check-then-act window where two concurrent messages would both pass the
     // busy check, share one `maxSeq` base, allocate colliding seq values (the
@@ -3133,6 +3181,15 @@ export class ChatService implements OnModuleInit {
      * no turn behind them. Reassigned once the registrations exist.
      */
     let disposeHostTools = (): void => {};
+    const compactionToken = Symbol(runId);
+    if (geniroCommand) {
+      this.compactingRuns.set(runId, compactionToken);
+    }
+    const releaseCompaction = (): void => {
+      if (this.compactingRuns.get(runId) === compactionToken) {
+        this.compactingRuns.delete(runId);
+      }
+    };
     try {
       const cwd = resolveValidCwd(run.cwd);
       const agentKind = run.agentKind;
@@ -5200,6 +5257,13 @@ export class ChatService implements OnModuleInit {
             );
             settledStatus = 'completed';
           }
+          // Only a compaction that FINISHED re-bases the auto-compact rule. One
+          // that was stopped or failed shrank nothing, and arming the baseline
+          // anyway would measure the next turn at the same size and switch
+          // auto-compaction off for exactly the conversation that needs it.
+          if (geniroCommand && settledStatus === 'completed') {
+            this.compactionBaselines.set(runId, 'pending');
+          }
           // LAST, once the transcript is drained and the run's status is
           // final: this is the only step that destroys something (the CLI's
           // own conversation), so it must not run beside writes that could
@@ -5229,6 +5293,20 @@ export class ChatService implements OnModuleInit {
           this.finalizing.delete(runId);
         }
       });
+      // On the TURN's end for a compaction done in place, so a later turn's
+      // follow-ups are never refused on its account — but on the FINALIZER's
+      // for one that replaces the session, which is not over until the summary
+      // is committed and the process retired.
+      void (
+        geniroCommand?.replacesSession === true ? finalized : handle.done
+      ).finally(releaseCompaction);
+      // After the finalizer rather than inside it: the claim this turn held
+      // must be gone before `/compact` can take the run. A compaction turn
+      // never re-arms it, or a conversation that stays over the threshold
+      // would compact itself in a loop.
+      if (!geniroCommand && options.resumeOnly !== true) {
+        void finalized.then(() => this.autoCompactIfDue(runId));
+      }
       // Dropped on the same settle, so a PATCH arriving after the turn ends
       // takes the plain persist-only path instead of writing into a dead
       // closure and reporting the change as live.
@@ -5258,7 +5336,78 @@ export class ChatService implements OnModuleInit {
         },
       );
       this.registry.release(runId);
+      releaseCompaction();
       throw err;
+    }
+  }
+
+  /**
+   * Compact a chat whose settled turn left its context at or over the run's
+   * auto-compact threshold.
+   *
+   * It sends the adapter's own `/compact` through {@link sendMessage}, exactly
+   * as if the user had typed it, so the compaction commits, reports and
+   * refuses the same way a typed one does — including losing the race to a
+   * message the user sent first, which is fine: the next settle checks again.
+   */
+  private async autoCompactIfDue(runId: string): Promise<void> {
+    try {
+      const em = this.em.fork();
+      const run = await this.runDao.getById(runId, em);
+      if (
+        !run ||
+        run.status !== 'completed' ||
+        run.archivedAt !== null ||
+        run.autoCompactPercent === null ||
+        !run.agentKind ||
+        this.registry.has(runId) ||
+        this.adapterFor(run.agentKind).geniroCommandFor(
+          AUTO_COMPACT_COMMAND,
+        ) === null
+      ) {
+        return;
+      }
+      const live = this.contexts.read(runId);
+      const reading = {
+        tokens: live?.tokens ?? run.contextTokens,
+        window: live?.window ?? run.contextWindowTokens,
+      };
+      const baseline = this.compactionBaselines.get(runId);
+      if (baseline === 'pending') {
+        // The first turn after a compaction measures what it left behind. A
+        // conversation still over the threshold here is one the compaction did
+        // not help, and compacting it again would only repeat that.
+        if (reading.tokens !== null) {
+          this.compactionBaselines.set(runId, reading.tokens);
+        }
+        return;
+      }
+      if (!autoCompactDue(run.autoCompactPercent, reading, baseline ?? null)) {
+        return;
+      }
+      // Sent FIRST: a message the user sent a moment earlier can still win the
+      // claim, and a note written ahead of that refusal would announce a
+      // compaction that never ran.
+      await this.sendMessage(runId, AUTO_COMPACT_COMMAND);
+      // Its own catch: the compaction is already running by now, so a failed
+      // note must not be reported as a compaction that never started.
+      const notice = autoCompactNotice(run.autoCompactPercent, reading);
+      await this.persist(
+        em,
+        runId,
+        await this.seqs.reserve(runId),
+        'system',
+        null,
+        { message: notice, severity: 'info' },
+      ).catch((err: unknown) => {
+        this.logger.warn(
+          `run ${runId} auto-compaction note write failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    } catch (err) {
+      this.logger.warn(
+        `run ${runId} auto-compaction did not start: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -5314,6 +5463,10 @@ export class ChatService implements OnModuleInit {
     }
     await this.runDao.setPendingContext(runId, carried, em);
     await this.nodeStateDao.clearSessionId(runId, SINGLE_AGENT_NODE, em);
+    // Clearing the id is not enough on a KEPT process: a later turn is opened
+    // on the session it already holds, so the summary would be sent into the
+    // very conversation it replaced and the window would never shrink.
+    this.sessions.retire(runId, 'its conversation was compacted');
     // The conversation this run's context figure was measured on has just been
     // DISCARDED — the next turn opens a fresh session carrying the summary
     // above. REPORTED as "после компакта кружочек не обновляется, он всё ещё

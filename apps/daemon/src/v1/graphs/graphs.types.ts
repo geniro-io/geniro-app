@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  AutoCompactPercentSchema,
   ChatApprovalModeSchema,
   ClaudeModesCapabilitySchema,
   CustomInstructionsSchema,
@@ -189,6 +190,17 @@ export const WorkflowAgentNodeSchema = z
       .min(1)
       .optional()
       .describe("Context-window size; omitted = the model's own default"),
+    /**
+     * Compact this node's conversation right after a turn that left its
+     * context at or above this percentage of the window; omitted = never.
+     * Performed by the executor inside the unit that still owns the node's (or
+     * the call's) session, before the turn settles — so a follow-up is refused
+     * meanwhile and a caller's result waits for it. See
+     * `GraphExecutorService`'s `compactIfDue` and `Run.autoCompactPercent`.
+     */
+    autoCompactPercent: AutoCompactPercentSchema.optional().describe(
+      'Auto-compact threshold (% of the context window); omitted = never',
+    ),
     /**
      * Every OTHER model setting this node's turns ask for, keyed by the CLI's
      * own parameter id (`{optimize_for: 'intelligence'}`).

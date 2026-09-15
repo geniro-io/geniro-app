@@ -440,7 +440,11 @@ export const notificationSchema = z.strictObject({
   runId: z.string().min(1).max(128),
   title: z.string().min(1).max(120),
   body: z.string().max(240),
+  retractable: z.boolean().optional(),
 });
+
+/** The run whose retractable banner is withdrawn — bounded like a post's. */
+export const retractNotificationSchema = z.string().min(1).max(128);
 
 /** Onboarding payload committed in a single IPC call. */
 export const onboardingInputSchema = z.strictObject({

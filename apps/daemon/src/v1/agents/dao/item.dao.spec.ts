@@ -726,4 +726,52 @@ describe('ItemDao (in-memory sqlite)', () => {
       ['run-b', 'shell_open'],
     ]);
   });
+
+  it("reads a run's call rows in seq order — starts and results, and nothing else", async () => {
+    // What the call seed folds after a daemon restart: the start (id, parties,
+    // the thread it continued) and the result (the callee's session), in the
+    // order they happened, so a continuation lands after its parent. Inserted
+    // out of order so the ordering has to be the query's, with a row of
+    // another kind and another run's call beside them.
+    await dao.create({
+      runId: 'run-a',
+      seq: 3,
+      kind: 'call_result',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
+    });
+    await dao.create({
+      runId: 'run-a',
+      seq: 0,
+      kind: 'call_started',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+    await insert('run-a', 1);
+    await dao.create({
+      runId: 'run-a',
+      seq: 2,
+      kind: 'call_question',
+      nodeId: 'manager',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+    await dao.create({
+      runId: 'run-b',
+      seq: 0,
+      kind: 'call_started',
+      payload: JSON.stringify({ callId: 'call-1' }),
+    });
+
+    const rows = await dao.callRecordRows('run-a');
+    expect(rows.map((row) => row.kind)).toEqual([
+      'call_started',
+      'call_result',
+    ]);
+    // The column comes back as it is stored — JSON text — which the fold
+    // parses for itself.
+    expect(rows.map((row) => row.payload)).toEqual([
+      JSON.stringify({ callId: 'call-1' }),
+      JSON.stringify({ callId: 'call-1', sessionId: 'sess-1' }),
+    ]);
+  });
 });

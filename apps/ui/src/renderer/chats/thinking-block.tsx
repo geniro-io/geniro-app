@@ -1,9 +1,10 @@
 import { ChevronRight } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 import { cn } from '../components/ui/utils';
 import { followTail } from '../scroll-to-bottom';
 import { nextFollowState } from './scroll-follow';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * How tall a reasoning stretch may grow while it is being written.
@@ -130,14 +131,17 @@ export function ThinkingScroller({
  */
 export function ThinkingDisclosure({
   text,
+  memoryKey,
   children,
 }: {
   /** The reasoning, for the preview and for the fold decision. */
   text: string;
+  /** Where the fold is remembered within the thread — the reasoning row's id. */
+  memoryKey?: string;
   /** The full body, drawn by the caller in its own idiom. */
   children: React.ReactNode;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useThreadFlag(memoryKey, false);
   if (text.length <= THINKING_FOLD_CHARS) {
     return <>{children}</>;
   }

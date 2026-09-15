@@ -698,6 +698,33 @@ export type HostGalleryOutcome =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * geniro's own NOTIFY tool: the agent tells the user, outside the app, that it
+ * is done — for the one ending geniro cannot recognise by itself.
+ *
+ * A turn's ending is announced automatically unless a background command is
+ * still running, because an agent routinely ends its turn WAITING on one (a
+ * test run, a build) and carries on when it reports — REPORTED as a false
+ * "done" each time. Nothing on the CLI's wire separates that from an agent that
+ * has finished and left a dev server up: measured on claude 2.1.270, the CLI
+ * reports `session_state_changed: idle` in both, and its background-task frames
+ * carry only the command. Only the agent knows which it did, so this tool is
+ * how it says so — the shape of Claude Code's own `PushNotification`.
+ *
+ * Not a render tool: it draws nothing and writes no row. The message rides the
+ * client-wide `run_status` broadcast ({@link RunStatusEvent.notify}), because
+ * the thread it is about is usually not the one on screen. It auto-approves
+ * like the render family: a banner is not something a permission card guards.
+ */
+export const HOST_NOTIFY_TOOL = 'notify_user';
+
+/** The longest notification message kept — a banner shows two or three lines. */
+export const MAX_NOTIFY_MESSAGE_LENGTH = 500;
+
+/** What a `notify_user` call did. */
+export type HostNotifyOutcome =
+  { status: 'sent' } | { status: 'unavailable'; reason: string };
+
+/**
  * The render family's third tool, and the first that is not only a drawing.
  *
  * An agent proposes a change it has NOT made: the transcript shows the diff
@@ -2231,6 +2258,15 @@ export interface RunStatusEvent {
    * and the notification disagreeing about the same sentence.
    */
   summary?: string | null;
+  /**
+   * A message the AGENT asked to put in front of the user — its `notify_user`
+   * call ({@link HOST_NOTIFY_TOOL}). Absent on every other announce.
+   *
+   * On this broadcast rather than a transcript row because it has to reach a
+   * window that is not looking at this chat, which is the only window it is
+   * for. Two states: there is nothing to clear.
+   */
+  notify?: string;
   /**
    * The text of a `message` item this run just persisted — the sidebar's
    * preview line, pushed as it happens.

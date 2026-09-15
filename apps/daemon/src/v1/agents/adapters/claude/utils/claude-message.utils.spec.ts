@@ -448,6 +448,36 @@ describe('mapClaudeMessage', () => {
     ]);
   });
 
+  it('marks the result of a turn the CLI ran BY ITSELF as a continuation, and only that one', () => {
+    // Probed on 2.1.266: a message sent mid-continuation got the continuation's
+    // own result first — with this origin — and its real answer after, with none.
+    const line = (origin?: unknown) =>
+      mapClaudeMessage(
+        {
+          type: 'result',
+          subtype: 'success',
+          is_error: false,
+          result: 'Background task completed (exit code 0).',
+          stop_reason: 'end_turn',
+          ...(origin === undefined ? {} : { origin }),
+        },
+        new ClaudeSessionCostLedger(),
+      );
+    expect(line({ kind: 'task-notification' })).toEqual([
+      expect.objectContaining({
+        type: 'turn_complete',
+        finalText: 'Background task completed (exit code 0).',
+        continuation: true,
+      }),
+    ]);
+    expect(line()).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+    expect(line({ kind: 'human' })).toEqual([
+      expect.not.objectContaining({ continuation: expect.anything() }),
+    ]);
+  });
+
   it('maps a successful result to turn_complete with the usage readClaudeUsage derives', () => {
     expect(
       mapClaudeMessage(
@@ -480,7 +510,9 @@ describe('mapClaudeMessage', () => {
             },
           },
           session_id: 'sess-result',
-          total_cost_usd: 0.14,
+          // Plausible for these tokens — a total far past what they can cost is
+          // read as history the ledger could not subtract, and capped.
+          total_cost_usd: 0.004,
           duration_ms: 7618,
           duration_api_ms: 7176,
         },
@@ -505,7 +537,7 @@ describe('mapClaudeMessage', () => {
           contextTokens: 1012,
           contextWindowTokens: 1_000_000,
           contextModel: expect.any(String),
-          costUsd: 0.14,
+          costUsd: 0.004,
           // The CLI's own turn timing, carried through the mapper to the turn
           // the transcript persists — the number that lets a finished turn say
           // how long it worked instead of only what it cost.
@@ -1515,6 +1547,9 @@ describe('mapClaudeMessage — background tasks', () => {
         phase: 'started',
         unit: 'other',
         toolCallId: 'toolu_01JGZBzkWjmavxf5ztmdNu83',
+        // …and says whose it is, so the session keeps it off the main
+        // thread's terminals.
+        ownedByDelegate: true,
       },
     ]);
   });

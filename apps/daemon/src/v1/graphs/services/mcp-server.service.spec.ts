@@ -12,6 +12,7 @@ import {
   HOST_FINDINGS_TOOL,
   HOST_GALLERY_TOOL,
   HOST_METRICS_TOOL,
+  HOST_NOTIFY_TOOL,
   HOST_PATCH_TOOL,
   HOST_PLAN_TOOL,
   HOST_QUESTION_TOOL,
@@ -21,6 +22,7 @@ import { ComparisonBroker } from '../../agents/services/comparison.broker';
 import { FindingsReportBroker } from '../../agents/services/findings-report.broker';
 import { GalleryBroker } from '../../agents/services/gallery.broker';
 import { MetricsBroker } from '../../agents/services/metrics.broker';
+import { NotifyBroker } from '../../agents/services/notify.broker';
 import { PatchBroker } from '../../agents/services/patch.broker';
 import { PlanBroker } from '../../agents/services/plan.broker';
 import { UserQuestionBroker } from '../../agents/services/user-question.broker';
@@ -28,10 +30,15 @@ import {
   MAX_AWAIT_TIMEOUT_MS,
   MIN_AWAIT_TIMEOUT_MS,
   type RunCallCapability,
+  TASK_BOARD_GET_TOOL,
+  TASK_BOARD_UPDATE_TOOL,
+  type TaskBoardCard,
+  type TaskBoardHandler,
   type WorkflowAgentNode,
 } from '../graphs.types';
 import { CallBroker } from './call-broker.service';
 import { McpServerService } from './mcp-server.service';
+import { TaskBoardBroker } from './task-board.broker';
 
 const HELPER: WorkflowAgentNode = {
   id: 'helper',
@@ -72,6 +79,8 @@ function service(
   metrics = new MetricsBroker(),
   comparisons = new ComparisonBroker(),
   galleries = new GalleryBroker(),
+  notices = new NotifyBroker(),
+  taskBoard = new TaskBoardBroker(),
 ): McpServerService {
   return new McpServerService(
     callBroker,
@@ -83,6 +92,8 @@ function service(
     metrics,
     comparisons,
     galleries,
+    notices,
+    taskBoard,
     {
       token: 'launch',
       version: '9.9.9',
@@ -119,6 +130,7 @@ async function everyHostTool(): Promise<
   const metrics = new MetricsBroker();
   const comparisons = new ComparisonBroker();
   const galleries = new GalleryBroker();
+  const notices = new NotifyBroker();
   for (const broker of [
     questions,
     findings,
@@ -128,6 +140,7 @@ async function everyHostTool(): Promise<
     metrics,
     comparisons,
     galleries,
+    notices,
   ]) {
     broker.register('run-1', 'agent', noop as never);
   }
@@ -142,6 +155,7 @@ async function everyHostTool(): Promise<
       metrics,
       comparisons,
       galleries,
+      notices,
     ),
     'run-1',
     'agent',
@@ -1197,6 +1211,75 @@ describe('McpServerService', () => {
     expect(result.content[0]!.text).not.toContain('.png');
   });
 
+  it('tools/call notify_user hands the message to the run and answers with a receipt', async () => {
+    const notices = new NotifyBroker();
+    const sent: string[] = [];
+    notices.register('run-1', 'agent', async (message) => {
+      sent.push(message);
+      return { status: 'sent' };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        notices,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_NOTIFY_TOOL,
+        arguments: { message: '  The dev server is running at :3000.  ' },
+      }),
+    );
+    const result = json().result as {
+      content: { text: string }[];
+      isError: boolean;
+    };
+    expect(sent).toEqual(['The dev server is running at :3000.']);
+    expect(result.isError).toBe(false);
+    expect(result.content[0]!.text).toContain('Notification sent');
+  });
+
+  it('refuses a notify_user call with no message, without reaching the run', async () => {
+    // A banner with nothing in it is only ever a mistake.
+    const notices = new NotifyBroker();
+    const sent: string[] = [];
+    notices.register('run-1', 'agent', async (message) => {
+      sent.push(message);
+      return { status: 'sent' };
+    });
+    const { json } = await post(
+      service(
+        new CallBroker(),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        notices,
+      ),
+      'run-1',
+      'agent',
+      rpc('tools/call', {
+        name: HOST_NOTIFY_TOOL,
+        arguments: { message: '   ' },
+      }),
+    );
+    const result = json().result as { isError: boolean };
+    expect(result.isError).toBe(true);
+    expect(sent).toEqual([]);
+  });
+
   it('refuses a gallery naming no picture, without reaching the drawer', async () => {
     // A gallery of nothing is only ever a mistake, so it is a malformed call
     // rather than an empty result — the chart's rule, not the findings tool's.
@@ -1425,6 +1508,144 @@ describe('McpServerService', () => {
  * Asserted on the tools/list RESPONSE rather than on the source string: that is
  * the text a model actually receives.
  */
+describe('McpServerService — the board tools', () => {
+  const card: TaskBoardCard = {
+    identifier: 'GEN-12',
+    title: 'Ship it',
+    description: null,
+    status: 'in_progress',
+    report: null,
+  };
+
+  /** A service whose board answers for run-1 through `handler`. */
+  const boardService = (handler: Partial<TaskBoardHandler> = {}) => {
+    const board = new TaskBoardBroker();
+    const update = vi.fn<TaskBoardHandler['update']>(async () => ({
+      status: 'updated',
+      card: { ...card, status: 'in_review' },
+      attachedImages: 1,
+      skippedImages: [],
+    }));
+    board.install({ cardFor: async () => card, update, ...handler });
+    const subject = service(
+      new CallBroker(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      board,
+    );
+    return { subject, update };
+  };
+
+  const listed = async (subject: McpServerService) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/list', {}),
+    );
+    return (json().result as { tools: { name: string; description: string }[] })
+      .tools;
+  };
+
+  const call = async (
+    subject: McpServerService,
+    name: string,
+    args: Record<string, unknown>,
+  ) => {
+    const { json } = await post(
+      subject,
+      'run-1',
+      'agent',
+      rpc('tools/call', { name, arguments: args }),
+    );
+    return json().result as {
+      content: { text: string }[];
+      isError?: boolean;
+    };
+  };
+
+  it('offers both tools to a run that works a card, and neither to one that does not', async () => {
+    const names = (await listed(boardService().subject)).map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining([TASK_BOARD_GET_TOOL, TASK_BOARD_UPDATE_TOOL]),
+    );
+
+    const none = (
+      await listed(boardService({ cardFor: async () => null }).subject)
+    ).map((t) => t.name);
+    expect(none).not.toContain(TASK_BOARD_GET_TOOL);
+    expect(none).not.toContain(TASK_BOARD_UPDATE_TOOL);
+  });
+
+  it('hands the report and the column to the board and answers with a receipt', async () => {
+    const { subject, update } = boardService();
+
+    const result = await call(subject, TASK_BOARD_UPDATE_TOOL, {
+      status: 'in_review',
+      report: 'Done — ![shot](/tmp/shot.png)',
+    });
+
+    expect(update).toHaveBeenCalledWith('run-1', {
+      status: 'in_review',
+      report: 'Done — ![shot](/tmp/shot.png)',
+    });
+    expect(result.isError).toBe(false);
+    expect(result.content[0]?.text).toContain('in_review');
+    expect(result.content[0]?.text).toContain('1 image copied');
+  });
+
+  it('refuses a call that changes nothing, or names a column an agent may not use', async () => {
+    const { subject, update } = boardService();
+
+    for (const args of [{}, { status: 'todo' }, { report: '   ' }]) {
+      const result = await call(subject, TASK_BOARD_UPDATE_TOOL, args);
+      expect(result.isError, JSON.stringify(args)).toBe(true);
+      expect(result.content[0]?.text).toMatch(/^INVALID_ARGS/);
+    }
+    // Refused at the edge — a card sent back to the intake would be handed
+    // straight out again by the autopilot.
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('answers a board refusal as an outcome, not as a tool failure', async () => {
+    const { subject } = boardService({
+      update: async () => ({ status: 'refused', reason: 'the card moved on' }),
+    });
+
+    const result = await call(subject, TASK_BOARD_UPDATE_TOOL, {
+      status: 'done',
+    });
+
+    expect(result.isError).toBe(false);
+    expect(result.content[0]?.text).toContain('the card moved on');
+  });
+
+  it('reads the card back', async () => {
+    const result = await call(boardService().subject, TASK_BOARD_GET_TOOL, {});
+
+    expect(JSON.parse(result.content[0]!.text)).toEqual(card);
+  });
+
+  it('tells a model the tool is the ONLY way the card changes, and when not to call it', async () => {
+    const tools = await listed(boardService().subject);
+    const update = tools.find((t) => t.name === TASK_BOARD_UPDATE_TOOL)!;
+    const get = tools.find((t) => t.name === TASK_BOARD_GET_TOOL)!;
+
+    expect(update.description).toContain('ONLY way the card changes');
+    expect(update.description).toMatch(/Use it when/);
+    expect(update.description).toMatch(/Do NOT use it/);
+    expect(get.description).toMatch(/Use it when/);
+    expect(get.description).toMatch(/Do not use it/);
+  });
+});
+
 describe('McpServerService — what the descriptions tell a model', () => {
   const find = (
     tools: { name: string; description: string }[],
@@ -1509,6 +1730,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_PATCH_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when`).toMatch(
         /Use it (when|whenever)/,
@@ -1520,6 +1742,7 @@ describe('McpServerService — what the descriptions tell a model', () => {
       HOST_COMPARISON_TOOL,
       HOST_PLAN_TOOL,
       HOST_GALLERY_TOOL,
+      HOST_NOTIFY_TOOL,
     ]) {
       expect(find(tools, name), `${name} never says when NOT`).toMatch(
         /(Do NOT use it|Do not use it|instead\.|write a table instead)/,

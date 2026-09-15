@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { CustomInstructionsSchema } from '../../agents/chat.types';
 import {
   NodeStateWireSchema,
+  RunWorkflowSnapshotWireSchema,
   WorkflowSchema,
   WorkflowSummarySchema,
   WorkflowWireSchema,
@@ -74,6 +75,11 @@ export class RunWorkflowDto extends createZodDto(runWorkflowSchema) {}
 
 /** One workflow definition addressed by its library slug. */
 export class WorkflowFileDto extends createZodDto(WorkflowWireSchema) {}
+
+/** The workflow ONE run runs — its own copy, not the library's current one. */
+export class RunWorkflowSnapshotDto extends createZodDto(
+  RunWorkflowSnapshotWireSchema,
+) {}
 
 /** A workflow as listed from the library (counts, no full definition). */
 export class WorkflowSummaryDto extends createZodDto(WorkflowSummarySchema) {}

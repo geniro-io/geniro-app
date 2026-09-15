@@ -415,6 +415,20 @@ export interface AgentTask {
    * two halves cannot be paired without state the mapper deliberately lacks.
    */
   activeForm: string | null;
+  /**
+   * The CLI REMOVED this task — set on a PATCH row only. claude's `TaskUpdate`
+   * takes `status: "deleted"` (its own input schema, read out of the 2.1.270
+   * bundle), and reading that as an unrecognised status left the row on screen
+   * under the unknown glyph, still counted in the total.
+   */
+  deleted?: true;
+  /**
+   * A PATCH row that states no status at all — `TaskUpdate`'s `status` is
+   * optional, and a call that only renames a task omits it. The consumer keeps
+   * the status it had; without this the patch's null read as "moved somewhere
+   * unknown" and a finished task lost its tick.
+   */
+  keepsStatus?: true;
 }
 
 /**
@@ -706,6 +720,31 @@ type AgentEventBody =
        * the turn's `text` events).
        */
       finalText: string | null;
+      /**
+       * True when this ends a turn the CLI opened BY ITSELF — a continuation it
+       * ran because background work reported back — rather than a turn geniro
+       * started with a prompt. Absent otherwise.
+       *
+       * A turn geniro starts must not settle on one. PROBED on claude 2.1.266:
+       * a message written while the CLI was mid-continuation was answered only
+       * AFTER the continuation's own `result` line (which carries
+       * `origin:{kind:"task-notification"}`), so settling on the first result
+       * handed the new turn the continuation's text and ended it before its
+       * real answer arrived.
+       */
+      continuation?: boolean;
+      /**
+       * True when this continuation's result arrived while a turn geniro
+       * started was still owed its own answer, so it ended NOTHING. Set by
+       * `spawn-cli` alone, never by an adapter — only the session knows a turn
+       * is open.
+       *
+       * Persisted on the row, because a client reading the row cannot tell
+       * otherwise: the renderer mirrors a live `turn_complete` onto the run's
+       * badge, and REPORTED as a sidebar reading `completed · 32m` over a thread
+       * still visibly working, the daemon's own status having never moved.
+       */
+      insideTurn?: boolean;
     }
   | { type: 'turn_cancelled' }
   | {
@@ -1007,7 +1046,7 @@ type AgentEventBody =
        * as the tool call that made it, which is the reason `shell_info` was
        * settle-only in the first place. What it carries instead is the one thing
        * no row can — that this run has a command out RIGHT NOW — so the daemon
-       * can publish a live count per run (`ChatService.shellRuns`).
+       * can publish a live count per run (`BackgroundWorkCounts`).
        *
        * That count exists because the renderer used to fold the same question
        * out of the OPEN thread's transcript, which is answerable for one run and
@@ -1131,6 +1170,15 @@ type AgentEventBody =
        */
       unit: 'agent' | 'other';
       /**
+       * The unit was started BY a delegate rather than by the agent itself —
+       * claude's `owned_by_subagent`, the only owner fact its `task_started`
+       * line carries (read out of the 2.1.270 bundle: no parent id). A
+       * delegate's own background command belongs to that delegate's block,
+       * not to the main thread's terminals, so `runCliSession` announces
+       * nothing for it.
+       */
+      ownedByDelegate?: true;
+      /**
        * The tool call that launched it, when the CLI ties one to it — which is
        * what joins this unit to the sub-agent block already in the transcript,
        * since that block is keyed by exactly that id.
@@ -1235,6 +1283,20 @@ type AgentEventBody =
     }
   | {
       /**
+       * The CLI's own statement of whether it is working, for a CLI that makes
+       * one (claude, under `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`). `idle` is
+       * its authoritative turn-over: probed on claude 2.1.270, it is NOT sent
+       * while a background agent the turn launched is still due to report, and
+       * it is sent only after the continuation that report triggers has ended.
+       * Consumed by `spawn-cli` to end a held turn without a timer.
+       *
+       * EPHEMERAL — never a transcript row.
+       */
+      type: 'session_state';
+      idle: boolean;
+    }
+  | {
+      /**
        * The CLI is compacting the conversation, or has finished doing so — it
        * summarises the history and carries on with a much smaller context.
        *
@@ -1255,7 +1317,10 @@ type AgentEventBody =
        * saying "compacted" is housekeeping the user did not ask for in the
        * middle of the conversation they did. What DOES earn a row is the CLI's
        * own summary text and a compaction that FAILED, and both arrive as their
-       * own lines rather than on this arm.
+       * own lines rather than on this arm — except that a FINISHED compaction
+       * no summary follows (every automatic one, on claude 2.1.266) gets a row
+       * of its own from `CompactionRows`, since an agent silently forgetting
+       * most of the conversation is not housekeeping the user can do without.
        */
       type: 'context_compacted';
       /**
@@ -2621,6 +2686,13 @@ export interface AgentSession {
    * retired session on sight, the way it closes a dead one.
    */
   readonly retired: boolean;
+  /**
+   * How many detached commands this process has started and not yet ended —
+   * see `CliSession.shellsRunning`. A holder must not reap a process holding
+   * them for going quiet, or evict it to make room: a dev server writes nothing
+   * for as long as it works, and it dies with this process.
+   */
+  readonly shellsRunning: number;
   /**
    * Alive and idle, and yet not free: the CLI is standing still on a verdict
    * only the user can give, raised (or held) between turns.

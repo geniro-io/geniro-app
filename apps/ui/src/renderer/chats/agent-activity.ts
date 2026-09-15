@@ -26,6 +26,27 @@ export interface AgentActivity {
   activeTurns: number;
   /** How many turns of this agent have STARTED over the run's lifetime. */
   turnStarts: number;
+  /**
+   * How many of those were the node's OWN turn rather than a turn under a
+   * call — a status row carrying no `callId`.
+   *
+   * What decides whether the agent has a main conversation at all. It used to
+   * be inferred as "more turn starts than call threads", which is wrong the
+   * moment one call runs more than one turn (a follow-up on its thread, a
+   * continuation after a delegate reports back): a callee that never ran a turn
+   * of its own was drawn a phantom `Main conversation` instance with no reading,
+   * so its card showed one ring for every instance. REPORTED as "we should show
+   * context for EACH subagent instance, now it's only one for all".
+   */
+  mainTurnStarts: number;
+  /**
+   * The OWN conversation's context reading, folded from `turn_complete` rows
+   * carrying no `callId` — the main instance's ring. {@link contextTokens} is
+   * whichever conversation of this node settled last, which is the card's
+   * question and not an instance's.
+   */
+  mainContextTokens: number | null;
+  mainContextWindowTokens: number | null;
   /** The node's most recent status transition; null before its first one. */
   lastStatus: NodeRunStatus | null;
   /** Prompt-side tokens of the agent's LATEST settled turn (its context). */
@@ -205,6 +226,13 @@ export interface AgentThread {
    */
   callId?: string | null;
   /**
+   * For a CALL thread: what the caller ASKED it, verbatim — or null when the
+   * call carried no message. `label` is this with the call id in front, for
+   * the surfaces that name a thread in one string; the instance block states
+   * the two apart.
+   */
+  brief?: string | null;
+  /**
    * For a CALL thread: where it has got to — what it last SAID, else the
    * newest tool it ran — or null when it has done neither yet. The same two
    * readings its call block's summary band draws in the transcript.
@@ -240,11 +268,12 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
     label: thread.message
       ? `${thread.callId} · ${thread.message}`
       : thread.callId,
+    brief: thread.message || null,
     status: thread.status,
     sessionId: thread.sessionId,
   }));
-  if (activity.turnStarts <= activity.callThreads.length) {
-    return calls; // a call-only node never ran a main DAG turn
+  if (activity.mainTurnStarts === 0) {
+    return calls; // a call-only node never ran a turn of its own
   }
   const runningCalls = calls.filter((t) => t.status === 'running').length;
   const main: AgentThread = {
@@ -260,6 +289,8 @@ export function threadsOf(activity: AgentActivity | undefined): AgentThread[] {
           ? activity.lastStatus
           : 'completed',
     sessionId: null,
+    contextTokens: activity.mainContextTokens,
+    contextWindowTokens: activity.mainContextWindowTokens,
   };
   return [main, ...calls];
 }
@@ -344,10 +375,19 @@ export function displayStatus(
   return activity.lastStatus ?? 'pending';
 }
 
+/** The call a row was written under — the executor stamps it on the payload. */
+function callIdOf(item: ChatItem): string | null {
+  const callId = asRecord(item.payload)?.callId;
+  return typeof callId === 'string' && callId !== '' ? callId : null;
+}
+
 function emptyActivity(): AgentActivity {
   return {
     activeTurns: 0,
     turnStarts: 0,
+    mainTurnStarts: 0,
+    mainContextTokens: null,
+    mainContextWindowTokens: null,
     lastStatus: null,
     contextTokens: null,
     contextWindowTokens: null,
@@ -467,6 +507,9 @@ export function computeAgentActivity(
       // A reading the compaction itself reported lands BELOW this row and
       // overwrites the null, which is why this is a reset rather than a stop.
       entry(key).contextTokens = null;
+      if (callIdOf(item) === null) {
+        entry(key).mainContextTokens = null;
+      }
       continue;
     }
     if (item.kind === 'status') {
@@ -479,6 +522,9 @@ export function computeAgentActivity(
       if (status === 'running') {
         agent.activeTurns += 1;
         agent.turnStarts += 1;
+        if (callIdOf(item) === null) {
+          agent.mainTurnStarts += 1;
+        }
       } else if (status !== 'pending') {
         // A terminal transition settles ONE live turn. `skipped` (and a
         // defensive clamp) can arrive without a matching start — never
@@ -536,7 +582,11 @@ export function computeAgentActivity(
       // a real figure with it made the meter read `0 of 200k` mid-conversation
       // — and the live plane already treats a non-positive count as absent
       // (`live-text.ts`), so accepting it only here was the odd one out.
-      const context = usage.contextTokens ?? usage.inputTokens;
+      // `contextTokens` ALONE. `inputTokens` is the turn's fresh input — a
+      // figure like 12 — and the daemon sends a null count precisely when the
+      // CLI reported no per-request breakdown, so falling back to it overwrote
+      // a real reading with `12 of 1M · 0%`.
+      const context = usage.contextTokens;
       if (typeof context === 'number' && context > 0) {
         agent.contextTokens = context;
       }
@@ -579,6 +629,17 @@ export function computeAgentActivity(
       const model = usage.contextModel;
       if (typeof model === 'string' && model.length > 0) {
         agent.contextModel = model;
+      }
+      // The node's OWN conversation's reading, on the same two rules — kept
+      // apart because a call's turn settling must not move the main
+      // instance's ring.
+      if (callIdOf(item) === null) {
+        if (typeof context === 'number' && context > 0) {
+          agent.mainContextTokens = context;
+        }
+        if (typeof window === 'number' && window > 0) {
+          agent.mainContextWindowTokens = window;
+        }
       }
       // ADDED, never remembered like the two readings above: a window is the
       // state of one conversation while these are a running total, so a turn

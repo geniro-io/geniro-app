@@ -74,7 +74,10 @@ describe('RunTeardownService (in-memory sqlite)', () => {
       // touches the database, and what this spec is about is which TABLES the
       // purge reaches.
       { cancel: () => false } as unknown as ProcessRegistry,
-      { close: () => undefined } as unknown as AgentSessionRegistry,
+      {
+        close: () => undefined,
+        closeRun: () => undefined,
+      } as unknown as AgentSessionRegistry,
       { revokeRun: () => undefined } as unknown as CallTokenRegistry,
       { forgetRun: () => undefined } as unknown as PartialStreamService,
       { removeRun: () => undefined } as unknown as AttachmentStoreService,

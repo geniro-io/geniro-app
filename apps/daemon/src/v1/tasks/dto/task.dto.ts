@@ -88,7 +88,7 @@ export class CreateTaskDto extends createZodDto(createTaskSchema) {}
  * What a client may change about a card — its OWN fields, and nothing of the
  * run working it.
  *
- * `runId`, `worktreePath`, `branch` and `reportItemId` are deliberately NOT
+ * `runId`, `worktreePath`, `branch` and `report` are deliberately NOT
  * here, though `UpdateTaskInput` still carries them for the services. They are
  * the two ends of the run<->task edge and the run's own record, and
  * `TaskRunsService` guards every write to them: a synchronous claim, a

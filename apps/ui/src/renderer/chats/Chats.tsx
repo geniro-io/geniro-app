@@ -179,7 +179,11 @@ import {
   sessionProfiles,
 } from './session-search';
 import { lastTerminalItemAt } from './settled-status';
-import { runningShellsByAgent, type ShellRun } from './shell-activity';
+import {
+  runningShellsByAgent,
+  type ShellRun,
+  shellRuns,
+} from './shell-activity';
 import { ShellOutputDialog } from './shell-output-dialog';
 import {
   applySkill,
@@ -201,12 +205,14 @@ import {
   taskProgress,
 } from './task-payload';
 import { restoreTaskWorktree, sendRestoringWorktree } from './task-worktree';
+import { forgetThread } from './thread-ui-memory';
 import { CollapseToolStepsContext } from './tool-group';
 import { TranscriptEntryView } from './transcript-entry';
 import {
   buildSubagentBlocks,
   buildTurnBlocks,
   buildWorkflowCards,
+  type CallBlockEntry,
   callBlockLatest,
   callBlockUsage,
   collectCallBlocks,
@@ -261,7 +267,7 @@ import {
 import { useTranscriptJump } from './use-transcript-jump';
 import { useUnseenRuns } from './use-unseen-runs';
 import { useWorktreeOrigin } from './use-worktree-origin';
-import { rootAgentOf } from './workflow-root';
+import { rootAgentOf, triggerFedAgentIds } from './workflow-root';
 
 /**
  * A follow-up typed while the agent was still working. It carries its images
@@ -390,6 +396,29 @@ function runLabel(run: ChatRun, workflowNames: Map<string, string>): string {
  * effect dependency of `useRunNotifications`, and a fresh arrow per render
  * would re-run that effect on every keystroke in the composer.
  */
+/**
+ * A call block's lifecycle in the panel's run vocabulary. A `pending` call has
+ * been asked for and is not over, which the panel's rows call `running`.
+ */
+function callThreadStatusOf(
+  status: CallBlockEntry['status'],
+): AgentThread['status'] {
+  return status === 'pending' ? 'running' : status;
+}
+
+/**
+ * Order two call ids by the number the broker minted them with (`call-2`
+ * before `call-10`), which is the order the calls were made in. An id carrying
+ * no number sorts after the ones that do, by its text.
+ */
+function compareCallIds(a: string, b: string): number {
+  const number = (id: string): number => {
+    const match = /(\d+)$/.exec(id);
+    return match === null ? Number.POSITIVE_INFINITY : Number(match[1]);
+  };
+  return number(a) - number(b) || a.localeCompare(b);
+}
+
 function runAwaiting(run: ChatRun): RunAwaiting | null {
   return run.awaiting;
 }
@@ -927,6 +956,7 @@ export function Chats({
     delegatesOut,
     settleSummaries,
     quietSettles,
+    agentNotices,
     deadRequestKeys,
     pendingScrollRef,
     sawTerminalRef,
@@ -2110,6 +2140,65 @@ export function Chats({
   }, [items, liveText]);
 
   /**
+   * Fetch the page before the oldest item on screen, and hold the reader's
+   * place while it lands. Three callers: the scroll listener, the notice's own
+   * button, and the fill effect below `transcriptEntries` — the last two exist
+   * because a transcript that does not overflow its pane can never be scrolled.
+   *
+   * Hold the reader's place. Prepending a page inserts rows ABOVE the viewport,
+   * which pushes everything they were reading down by exactly the height that
+   * arrived — so the scroll offset is moved by the same amount, and nothing
+   * appears to move at all.
+   *
+   * Over SEVERAL FRAMES, and that is the whole of a reported defect. The promise
+   * resolves when the state is set, not when React has committed the rows and
+   * the browser has laid them out — so a single correction here reads a
+   * `scrollHeight` that has barely moved, applies almost nothing, and the page
+   * then grows underneath the reader with nothing left to compensate. Measured
+   * in the running app on a 30k-row thread: the transcript grew 42,865px →
+   * 74,092px across one older page while `scrollTop` stayed put, which puts the
+   * reader 31,227px away from what they were reading. REPORTED as "он обрезает
+   * беседу почему-то" — the conversation had not been cut, they had been moved
+   * off it.
+   *
+   * `applied` is what makes re-running safe: each pass compensates only the
+   * growth it has not already paid for, so a page that arrives in three chunks
+   * is held three times rather than over-corrected once.
+   */
+  const pageOlder = useCallback(
+    async (scroller: HTMLElement): Promise<boolean> => {
+      const load = loadOlderRef.current;
+      if (load === null) {
+        return false;
+      }
+      const before = scroller.scrollHeight;
+      const grew = await load();
+      if (!grew) {
+        return false;
+      }
+      let frames = 0;
+      let applied = 0;
+      const hold = (): void => {
+        if (!scroller.isConnected) {
+          return;
+        }
+        const owed = scroller.scrollHeight - before - applied;
+        if (owed > 0) {
+          scroller.scrollTop += owed;
+          applied += owed;
+        }
+        frames += 1;
+        if (frames < OLDER_PAGE_HOLD_FRAMES) {
+          requestAnimationFrame(hold);
+        }
+      };
+      requestAnimationFrame(hold);
+      return true;
+    },
+    [],
+  );
+
+  /**
    * Keep the tail glued to the bottom when a block grows AFTER it rendered.
    *
    * The effect above runs once per React commit, which is too early for the
@@ -2163,48 +2252,7 @@ export function Chats({
         loadOlderRef.current !== null &&
         shouldLoadOlder(scroller, previousScrollTop)
       ) {
-        // Hold the reader's place. Prepending a page inserts rows ABOVE the
-        // viewport, which pushes everything they were reading down by exactly
-        // the height that arrived — so the scroll offset is moved by the same
-        // amount, and nothing appears to move at all.
-        //
-        // Over SEVERAL FRAMES, and that is the whole of a reported defect. The
-        // promise resolves when the state is set, not when React has committed
-        // the rows and the browser has laid them out — so a single correction
-        // here reads a `scrollHeight` that has barely moved, applies almost
-        // nothing, and the page then grows underneath the reader with nothing
-        // left to compensate. Measured in the running app on a 30k-row thread:
-        // the transcript grew 42,865px → 74,092px across one older page while
-        // `scrollTop` stayed put, which puts the reader 31,227px away from what
-        // they were reading. REPORTED as "он обрезает беседу почему-то" — the
-        // conversation had not been cut, they had been moved off it.
-        //
-        // `applied` is what makes re-running safe: each pass compensates only
-        // the growth it has not already paid for, so a page that arrives in
-        // three chunks is held three times rather than over-corrected once.
-        const before = scroller.scrollHeight;
-        void loadOlderRef.current().then((grew) => {
-          if (!grew) {
-            return;
-          }
-          let frames = 0;
-          let applied = 0;
-          const hold = (): void => {
-            if (!scroller.isConnected) {
-              return;
-            }
-            const owed = scroller.scrollHeight - before - applied;
-            if (owed > 0) {
-              scroller.scrollTop += owed;
-              applied += owed;
-            }
-            frames += 1;
-            if (frames < OLDER_PAGE_HOLD_FRAMES) {
-              requestAnimationFrame(hold);
-            }
-          };
-          requestAnimationFrame(hold);
-        });
+        void pageOlder(scroller);
       }
     };
     scroller.addEventListener('scroll', onScroll, { passive: true });
@@ -2649,32 +2697,40 @@ export function Chats({
    * fresh identity per render would re-run their effects.
    */
   const loadChatMetrics = useCallback(
-    (runId: string) =>
-      chatApi.readChatMetrics({ runId }).then((metrics) => {
-        // The reading the PANEL takes is the freshest one this client can get:
-        // it is the CLI's own accounting, asked over the live process, while
-        // the ring's own sources are a turn's `context_progress` — emitted on
-        // main-thread assistant lines only — and the last settled turn. So a
-        // tool-heavy stretch moves the panel and leaves the ring where the
-        // last assistant line put it.
-        //
-        // REPORTED as "Context circle wasnt synced, it took 15s to sync",
-        // against an open panel reading 425.4k while the ring beside it still
-        // showed the previous figure — and 15s is simply how long that agent
-        // went without producing a main-thread line.
-        //
-        // Mirrored through the SAME seam the live plane uses, so the ranking
-        // is unchanged: `chatContext` reads the live delta first, and this
-        // only ever refreshes the run-row copy underneath it. Its own guards
-        // do the rest — a non-positive count is not a measurement, and an
-        // unchanged one re-renders nothing.
-        rememberRunContext(
-          runId,
-          metrics.context?.totalTokens ?? null,
-          metrics.context?.maxTokens ?? null,
-        );
-        return metrics;
-      }),
+    (runId: string, nodeId: string | null) =>
+      chatApi
+        .readChatMetrics({ runId, nodeId: nodeId ?? undefined })
+        .then((metrics) => {
+          // A NODE's reading is one agent of a workflow run, and the run row's
+          // copy is a chat's — mirroring it would put one node's window under
+          // the whole run.
+          if (nodeId !== null) {
+            return metrics;
+          }
+          // The reading the PANEL takes is the freshest one this client can get:
+          // it is the CLI's own accounting, asked over the live process, while
+          // the ring's own sources are a turn's `context_progress` — emitted on
+          // main-thread assistant lines only — and the last settled turn. So a
+          // tool-heavy stretch moves the panel and leaves the ring where the
+          // last assistant line put it.
+          //
+          // REPORTED as "Context circle wasnt synced, it took 15s to sync",
+          // against an open panel reading 425.4k while the ring beside it still
+          // showed the previous figure — and 15s is simply how long that agent
+          // went without producing a main-thread line.
+          //
+          // Mirrored through the SAME seam the live plane uses, so the ranking
+          // is unchanged: `chatContext` reads the live delta first, and this
+          // only ever refreshes the run-row copy underneath it. Its own guards
+          // do the rest — a non-positive count is not a measurement, and an
+          // unchanged one re-renders nothing.
+          rememberRunContext(
+            runId,
+            metrics.context?.totalTokens ?? null,
+            metrics.context?.maxTokens ?? null,
+          );
+          return metrics;
+        }),
     [chatApi, rememberRunContext],
   );
 
@@ -3061,6 +3117,7 @@ export function Chats({
       // Nothing can ever show it again, so it must not be kept — the same rule
       // the daemon's own per-run maps follow, announced there on the bus.
       forgetContextReading(deleting.id);
+      forgetThread(deleting.id);
       setDeleting(null);
       // The open transcript belongs to a run that no longer exists: leave its
       // room and fall back to the composer, rather than leaving a dead
@@ -3094,6 +3151,7 @@ export function Chats({
     () =>
       client.onRunDeleted((runId) => {
         forgetContextReading(runId);
+        forgetThread(runId);
         dropRun(runId, newChat);
       }),
     [client, dropRun, newChat, forgetContextReading],
@@ -4101,48 +4159,6 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
-  /**
-   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
-   * can — what decides whether the strip offers "send now".
-   *
-   * Derived from the daemon's report for the same reason as the two sets
-   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
-   * decides it by agent name, a CLI that gains the channel keeps a dead
-   * control. Undefined-safe by construction — while capabilities are loading
-   * there is no row, and the honest answer is "not right now", which reads as
-   * a disabled button rather than one that queues without saying so.
-   */
-  const steerUnavailableReason = useMemo((): string | null => {
-    const agent = activeRun?.agentKind;
-    if (!agent) {
-      return 'This run has no agent that could take a message mid-turn';
-    }
-    const row = (capabilities?.followUps ?? []).find((f) => f.agent === agent);
-    return row
-      ? row.unavailableReason
-      : `Checking whether ${agent} can take a message mid-turn…`;
-  }, [capabilities, activeRun]);
-
-  /**
-   * Whether sending one of those messages now STOPS what the agent is doing.
-   *
-   * From the daemon for the same reason the sentence above is, and it is a
-   * separate question rather than more of that sentence: both shipped CLIs take
-   * a message mid-turn, and only one of them keeps working on what it was
-   * doing. Cursor's channel is a second `session/prompt`, which cancels the
-   * first — so on that CLI a press costs the tool call in flight, and the
-   * control has to say so BEFORE it is pressed. False while the answer is
-   * loading: the milder claim is the safe one to make about a control the user
-   * cannot successfully press yet anyway.
-   */
-  const steerInterrupts = useMemo((): boolean => {
-    const agent = activeRun?.agentKind;
-    return agent
-      ? ((capabilities?.followUps ?? []).find((f) => f.agent === agent)
-          ?.interrupts ?? false)
-      : false;
-  }, [capabilities, activeRun]);
-
   // ── The composer's `/` skill autocomplete ──────────────────────────────
   // Which agent kinds the current composer's message reaches, and in which
   // folder. A new-run workflow target resolves through its SELECTED trigger
@@ -4185,6 +4201,8 @@ export function Chats({
     skillKinds,
     skillCwd,
     vocabularyConfigDir,
+    // Refreshed as the `/` popup opens, so it never shows a stale first read.
+    slashQuery(input) !== null,
   );
   // Assigned during render rather than from an effect: the two send paths read
   // it in a click handler, which cannot run before the render that produced
@@ -4633,7 +4651,15 @@ export function Chats({
      * has none or more than one.
      */
     rootId: string | null;
-  }>({ agents: [], triggers: [], allIds: new Set(), rootId: null });
+    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
+    feedIds: string[];
+  }>({
+    agents: [],
+    triggers: [],
+    allIds: new Set(),
+    rootId: null,
+    feedIds: [],
+  });
   /**
    * Set when the active run's workflow is GONE from the library (a 404, not a
    * failed request) — the run's own history survives it, so the transcript
@@ -4645,18 +4671,23 @@ export function Chats({
   useEffect(() => {
     let cancelled = false;
     const workflowId = activeRun?.workflowId;
+    const runId = activeRun?.id;
     setMissingWorkflow(null);
-    if (!workflowId) {
+    if (!workflowId || !runId) {
       setWfNodes({
         agents: [],
         triggers: [],
         allIds: new Set(),
         rootId: null,
+        feedIds: [],
       });
       return;
     }
+    // The RUN's own copy of its graph, never the library's current one — so
+    // editing a workflow changes no run already made from it ("old workflows
+    // chats should not be changed if i change current workflow").
     void workflowApi
-      .getWorkflow({ slug: workflowId })
+      .getWorkflowRunSnapshot({ runId })
       .then(({ workflow }) => {
         if (cancelled) {
           return;
@@ -4670,6 +4701,7 @@ export function Chats({
           ),
           allIds: new Set(workflow.nodes.map((node) => node.id)),
           rootId: rootAgentOf(workflow),
+          feedIds: triggerFedAgentIds(workflow),
         });
       })
       .catch((err: unknown) => {
@@ -4681,6 +4713,7 @@ export function Chats({
           triggers: [],
           allIds: new Set(),
           rootId: null,
+          feedIds: [],
         });
         // A deleted workflow is not a failure to report as one: the request
         // worked, the graph is simply gone. Say that in the user's terms and
@@ -4700,7 +4733,87 @@ export function Chats({
     return () => {
       cancelled = true;
     };
-  }, [activeRun?.workflowId, workflowApi]);
+  }, [activeRun?.id, activeRun?.workflowId, workflowApi]);
+
+  /**
+   * Why THIS run's CLI cannot be handed a message mid-turn, or null when it
+   * can — what decides whether the strip offers "send now".
+   *
+   * Derived from the daemon's report for the same reason as the two sets
+   * above: `AdapterConfig.followUp` is the fact, and the moment the renderer
+   * decides it by agent name, a CLI that gains the channel keeps a dead
+   * control. Undefined-safe by construction — while capabilities are loading
+   * there is no row, and the honest answer is "not right now", which reads as
+   * a disabled button rather than one that queues without saying so.
+   */
+  /**
+   * The CLIs a message sent into this run lands in. A chat has its one agent;
+   * a WORKFLOW run has no agent kind of its own, and the daemon hands a
+   * follow-up to every agent the trigger feeds — so those are the agents the
+   * question is about. Reading `activeRun.agentKind` alone answered "no agent"
+   * for every workflow run, leaving the queue's send control inert over a
+   * running Manager whose CLI takes a message mid-turn perfectly well:
+   * REPORTED as "queued messages doesn't work in workflow — I can't send them
+   * from queue".
+   */
+  const steerAgents = useMemo((): string[] => {
+    if (!activeRun) {
+      return [];
+    }
+    if (!activeRun.workflowId) {
+      return activeRun.agentKind ? [activeRun.agentKind] : [];
+    }
+    const fed = new Set(wfNodes.feedIds);
+    return [
+      ...new Set(
+        wfNodes.agents
+          .filter((node) => fed.has(node.id))
+          .map((node) => node.agent),
+      ),
+    ];
+  }, [activeRun, wfNodes]);
+
+  const steerUnavailableReason = useMemo((): string | null => {
+    if (steerAgents.length === 0) {
+      return 'This run has no agent that could take a message mid-turn';
+    }
+    // EVERY agent must have the channel: the daemon refuses the whole delivery
+    // when any one of them cannot take it, so the first refusal is the answer.
+    for (const agent of steerAgents) {
+      const row = (capabilities?.followUps ?? []).find(
+        (f) => f.agent === agent,
+      );
+      if (!row) {
+        return `Checking whether ${agent} can take a message mid-turn…`;
+      }
+      if (row.unavailableReason !== null) {
+        return row.unavailableReason;
+      }
+    }
+    return null;
+  }, [capabilities, steerAgents]);
+
+  /**
+   * Whether sending one of those messages now STOPS what the agent is doing.
+   *
+   * From the daemon for the same reason the sentence above is, and it is a
+   * separate question rather than more of that sentence: both shipped CLIs take
+   * a message mid-turn, and only one of them keeps working on what it was
+   * doing. Cursor's channel is a second `session/prompt`, which cancels the
+   * first — so on that CLI a press costs the tool call in flight, and the
+   * control has to say so BEFORE it is pressed. False while the answer is
+   * loading: the milder claim is the safe one to make about a control the user
+   * cannot successfully press yet anyway.
+   */
+  const steerInterrupts = useMemo(
+    (): boolean =>
+      steerAgents.some(
+        (agent) =>
+          (capabilities?.followUps ?? []).find((f) => f.agent === agent)
+            ?.interrupts ?? false,
+      ),
+    [capabilities, steerAgents],
+  );
   // Node display metadata for the transcript (names + kinds), and the
   // transcript folded into render entries — consecutive tool calls collapse
   // into expandable groups.
@@ -4890,7 +5003,10 @@ export function Chats({
     return buildTurnBlocks(
       buildWorkflowCards(buildSubagentBlocks(flow, items), items),
     );
-  }, [items, collapseToolSteps]);
+    // The daemon's list is an input too. It is folded and broadcast AFTER the
+    // item that moved it, so keyed on `items` alone the latest card kept the
+    // previous list's rows until some unrelated item arrived.
+  }, [items, collapseToolSteps, activeRun?.id, activeRun?.taskList]);
   /**
    * The run's row has SETTLED — whatever it settled as.
    *
@@ -5059,6 +5175,43 @@ export function Chats({
     [durableEntries, liveText, workingAgents],
   );
   /**
+   * Keep paging while what is loaded does not FILL the pane.
+   *
+   * Scrolling is the pager's trigger, and a transcript shorter than its pane
+   * has no scroll to give — so it never asked. That is not an edge case on a
+   * workflow run: every row a callee streams folds into ONE call card, so the
+   * newest 1,000 items routinely render as a single row. REPORTED as "it cannot
+   * load messages" over exactly that — "Scroll up for earlier messages" above
+   * one card and a pane of nothing. Re-checked on every render of the entries,
+   * since a page that also folds into that card leaves the pane just as short.
+   *
+   * A page that fails or adds nothing stops it for this run: without that a
+   * daemon refusing the read would be asked again on every streamed token.
+   * The notice's button is still there to try again.
+   */
+  const fillStoppedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const scroller = transcriptEndRef.current?.parentElement;
+    if (
+      !scroller ||
+      !hasOlder ||
+      loadingOlder ||
+      activeRunId === null ||
+      fillStoppedRef.current === activeRunId ||
+      // jsdom, and a pane not laid out yet: nothing measured is not "short".
+      scroller.clientHeight === 0 ||
+      scroller.scrollHeight - scroller.clientHeight > scroller.clientHeight / 2
+    ) {
+      return;
+    }
+    const runId = activeRunId;
+    void pageOlder(scroller).then((grew) => {
+      if (!grew) {
+        fillStoppedRef.current = runId;
+      }
+    });
+  }, [transcriptEntries, hasOlder, loadingOlder, activeRunId, pageOlder]);
+  /**
    * The dynamic workflows this run launched — the SAME reading the transcript's
    * cards are built from, handed to the shelf above the composer and to the
    * side panel.
@@ -5122,6 +5275,24 @@ export function Chats({
     [items],
   );
   /**
+   * The newest paragraph the agent WROTE in the loaded window — a `message`
+   * that is not the user's, or a `reasoning` row — the timeline's third refresh
+   * trigger, which is what keeps the stretch being worked live. The same rows
+   * the daemon counts as a stretch's messages.
+   */
+  const latestAgentSeq = useMemo(
+    () =>
+      items.reduce(
+        (seq, item) =>
+          (item.kind === 'message' && item.role !== 'user') ||
+          item.kind === 'reasoning'
+            ? item.seq
+            : seq,
+        0,
+      ),
+    [items],
+  );
+  /**
    * Every user message in the thread, whatever the loaded window holds.
    *
    * The daemon's own fold: a long chat opens on its newest 1,000 items, so a
@@ -5133,6 +5304,7 @@ export function Chats({
     activeRunId,
     threadWorked.turns,
     latestUserSeq,
+    latestAgentSeq,
   );
   /**
    * Every command the run still has RUNNING, read from the daemon.
@@ -5205,8 +5377,11 @@ export function Chats({
       markers: timeline.markers,
       partialReason: timeline.partialReason,
       onJump: jumpToSeq,
+      // The reading the header's own `live` controls take, so the timeline's
+      // live dot and the rest of the screen cannot disagree about the run.
+      inProgress: isWorkingRunStatus(activeRunStatus),
     }),
-    [timeline.markers, timeline.partialReason, jumpToSeq],
+    [timeline.markers, timeline.partialReason, jumpToSeq, activeRunStatus],
   );
   /**
    * What the header states about the thread as a WHOLE — the daemon's answer
@@ -5354,18 +5529,32 @@ export function Chats({
           // latest request, while `activity` can only report the last
           // COMPLETED turn — which is exactly the staleness the meter was
           // criticised for. Falls back the moment the live plane is quiet.
+          // …then the RUN ROW, in the composer ring's own order (`chatContext`).
+          // Skipping it put the last SETTLED turn's figure on this card beside a
+          // ring reading the daemon's newer one — `2%` against `46%` on a
+          // thread reopened mid-turn.
           contextTokens:
             liveText.get(CHAT_LIVE_KEY)?.contextTokens ??
+            activeRun.contextTokens ??
             chatActivity?.contextTokens ??
             null,
           contextWindowTokens:
             liveText.get(CHAT_LIVE_KEY)?.contextWindowTokens ??
+            activeRun.contextWindowTokens ??
             chatActivity?.contextWindowTokens ??
             null,
-          spentUsd: chatActivity?.spentUsd ?? null,
-          inputTokens: chatActivity?.inputTokens ?? null,
-          outputTokens: chatActivity?.outputTokens ?? null,
-          cacheTokens: chatActivity?.cacheTokens ?? null,
+          // The DAEMON's totals over every turn, the figures the header and
+          // the context readout state — the transcript fold covers only the
+          // loaded window, so on a long thread it left the oldest turns out and
+          // the card read a smaller spend than the readout beside it. The fold
+          // stays underneath for the moment before the totals read lands.
+          spentUsd: threadTotals.costUsd ?? chatActivity?.spentUsd ?? null,
+          inputTokens:
+            threadTotals.inputTokens ?? chatActivity?.inputTokens ?? null,
+          outputTokens:
+            threadTotals.outputTokens ?? chatActivity?.outputTokens ?? null,
+          cacheTokens:
+            threadTotals.cacheTokens ?? chatActivity?.cacheTokens ?? null,
           threads: [
             {
               id: 'main',
@@ -5403,7 +5592,18 @@ export function Chats({
       nodeId: string,
       nodeActivity: AgentActivity | undefined,
     ): AgentThread[] => {
-      return threadsOf(nodeActivity).map((thread) => {
+      const fromWindow = threadsOf(nodeActivity).map((thread): AgentThread => {
+        if (thread.kind === 'main') {
+          // The node's OWN conversation streams on the node's own key, and that
+          // live reading outranks the one folded from its settled turns.
+          const live = liveText.get(nodeId);
+          return {
+            ...thread,
+            contextTokens: live?.contextTokens ?? thread.contextTokens ?? null,
+            contextWindowTokens:
+              live?.contextWindowTokens ?? thread.contextWindowTokens ?? null,
+          };
+        }
         if (thread.kind !== 'call') {
           return thread;
         }
@@ -5417,6 +5617,62 @@ export function Chats({
           spentUsd: usage?.costUsd ?? null,
         };
       });
+      // Calls OLDER than the loaded window, known only from the daemon's
+      // per-call readings. A call's `call_started` row is the only thing that
+      // names it in the transcript, so a node called earlier in a long run had
+      // a ring on its card and no instance at all — REPORTED as "strange
+      // researcher card with some context but without calls". Each keeps its
+      // own ring; it is `running` only while its own key is streaming.
+      //
+      // A call whose START is above the window while its rows are not has a
+      // block too — the fold rebuilds it from the rows the call still tags —
+      // and that block knows how the call STANDS, which the readings cannot:
+      // they carry a window and nothing else. Read off it, a call working for
+      // an hour past its start row is `running`, where the live-key test above
+      // called it `completed` between two deltas. REPORTED as an Engineer card
+      // reading `running` over "0 active · 4 instances", every one `completed`.
+      const inWindow = new Set(fromWindow.map((thread) => thread.id));
+      const readings = nodeReadings.get(nodeId)?.calls ?? [];
+      const olderIds = [
+        ...new Set([
+          ...readings.map((call) => call.callId),
+          ...[...callBlocks.values()]
+            .filter((block) => block.calleeNodeId === nodeId)
+            .map((block) => block.callId),
+        ]),
+      ]
+        .filter((callId) => !inWindow.has(callId))
+        .sort(compareCallIds);
+      const older = olderIds.map((callId): AgentThread => {
+        const block = callBlocks.get(callId);
+        const usage = block === undefined ? null : callBlockUsage(block);
+        return {
+          id: callId,
+          kind: 'call',
+          label: callId,
+          brief: block?.message ?? null,
+          status:
+            block !== undefined
+              ? callThreadStatusOf(block.status)
+              : liveText.has(partialOwnerKey(nodeId, callId))
+                ? 'running'
+                : 'completed',
+          sessionId: null,
+          ...resolveCalleeContext(liveText, nodeReadings, nodeId, callId),
+          latest: block === undefined ? null : callBlockLatest(block),
+          spentTokens: usage?.tokens ?? null,
+          spentUsd: usage?.costUsd ?? null,
+        };
+      });
+      // After the node's own conversation, before the calls the window holds —
+      // they are older than anything on screen.
+      const mainAt =
+        fromWindow.findIndex((thread) => thread.kind === 'main') + 1;
+      return [
+        ...fromWindow.slice(0, mainAt),
+        ...older,
+        ...fromWindow.slice(mainAt),
+      ];
     };
     /**
      * WHICH reading a node's CARD states — resolved as ONE source per rank, so
@@ -5575,6 +5831,10 @@ export function Chats({
     liveText,
     nodeReadings,
     subagentThreads,
+    threadTotals.costUsd,
+    threadTotals.inputTokens,
+    threadTotals.outputTokens,
+    threadTotals.cacheTokens,
   ]);
 
   /**
@@ -5963,7 +6223,7 @@ export function Chats({
         // already applies between two agents.
         const several = lists.length > 1;
         taskGroups.push({
-          agentId: several ? `${agentId} ${list.threadId}` : agentId,
+          agentId: several ? `${agentId}\u0000${list.threadId}` : agentId,
           agentName: several
             ? `${agentName} · ${list.threadId === MAIN_THREAD_ID ? 'main' : list.threadId}`
             : agentName,
@@ -6028,7 +6288,15 @@ export function Chats({
     if (runShells.length === 0) {
       return sidePanelLive.shells;
     }
-    const known = new Set(sidePanelLive.shells.map((shell) => shell.id));
+    // Every command the loaded transcript KNOWS, finished ones included — not
+    // only the running list. The daemon's read is refetched when the run's
+    // count moves, and never at all for a workflow run, so a command that ended
+    // in the window was put straight back as `running` from a list read before
+    // it ended.
+    const known = new Set([
+      ...sidePanelLive.shells.map((shell) => shell.id),
+      ...shellRuns(items).map((shell) => shell.id),
+    ]);
     const extra: ShellRun[] = [];
     for (const shell of runShells) {
       if (known.has(shell.id)) {
@@ -6056,7 +6324,7 @@ export function Chats({
     // Oldest first, like the transcript they came from: the daemon's rows are
     // by definition older than anything the loaded window holds.
     return [...extra, ...sidePanelLive.shells];
-  }, [runShells, sidePanelLive.shells]);
+  }, [runShells, sidePanelLive.shells, items]);
 
   /**
    * Which sub-agent's detail panel is open, by the id of the tool call that
@@ -6605,7 +6873,10 @@ export function Chats({
         // spinner for as long as the user is looking elsewhere.
         heldForBackgroundWork: holding.has(run.id),
       }),
-    [holding, shellsOut],
+    // `delegatesOut` too: a turn that settles with sub-agents still out moves
+    // only that set, and without it every thread the user was not looking at
+    // kept the old reading — `completed` over a hold, `held` after it ended.
+    [holding, shellsOut, delegatesOut],
   );
   /**
    * That same reading taken WITHOUT the live plane — what the row would say if
@@ -6673,17 +6944,18 @@ export function Chats({
   );
 
   /**
-   * Whether this run still has a DETACHED command out — the reading that says
-   * an ending might yet be undone, for {@link useRunNotifications}.
+   * How many DETACHED commands this run has out — the reading that decides
+   * whether a finished turn is announced by itself, for
+   * {@link useRunNotifications}.
    *
-   * The same `shellsOut` the badge reads, deliberately: the badge and the
-   * banner are then disagreeing about nothing, they are answering two different
-   * questions off one fact — "something this thread started is running" and
-   * "so this ending may not be one".
+   * The run row's own count, the one the Terminals chip shows and the badge's
+   * `shellsOut` is derived from: the badge and the banner then disagree about
+   * nothing, answering two questions off one fact — "something this thread
+   * started is running" and "so this ending may not be the agent finishing".
    */
-  const runHasShellsOut = useCallback(
-    (run: ChatRun): boolean => shellsOut.has(run.id),
-    [shellsOut],
+  const runShellsOpen = useCallback(
+    (run: ChatRun): number => run.shellsOpen,
+    [],
   );
 
   const notificationLabel = useCallback(
@@ -6712,8 +6984,12 @@ export function Chats({
     quiet: quietSettles,
     // A thread with a command still out may not be finished at all: the agent
     // routinely ENDS ITS TURN waiting on one and resumes the moment it reports.
+    // Its ending is announced provisionally and withdrawn if the run resumes.
     // The same reading the badge uses for its own shells word — see the hook.
-    deferEnding: runHasShellsOut,
+    shellsOpenOf: runShellsOpen,
+    // What the agent said itself, with `notify_user` — posted in its words, in
+    // place of the plain ending.
+    notices: agentNotices,
     activeRunId,
   });
   // The lasting half of the same signal. A banner is gone in seconds — and on
@@ -6832,7 +7108,10 @@ export function Chats({
       <ChatProviders
         signIn={signInToActiveCli}
         retry={retryActiveRun}
-        callContext={resolveCallReading}>
+        callContext={resolveCallReading}
+        // What the reader folded and opened is remembered per THREAD — see
+        // `thread-ui-memory.ts`.
+        threadId={activeRunId}>
         <AttachmentLoaderContext.Provider value={loadAttachment}>
           <ChatMetricsLoaderContext.Provider value={loadChatMetrics}>
             <LocalImageLoaderContext.Provider value={loadMarkdownImage}>
@@ -7620,6 +7899,11 @@ export function Chats({
                     conversation that appears to start mid-sentence — and it is
                     the top row precisely because that is where a reader who has
                     scrolled this far is looking. */}
+                      {/* A BUTTON as well as a caption: scrolling is the only
+                    other trigger, and a transcript that does not overflow its
+                    pane has no scroll to give. REPORTED as "it cannot load
+                    messages" over a workflow whose newest page folded into ONE
+                    call card — "Scroll up" above nothing to scroll. */}
                       {hasOlder ? (
                         <div
                           data-slot="older-messages"
@@ -7630,7 +7914,21 @@ export function Chats({
                               Loading earlier messages…
                             </>
                           ) : (
-                            'Scroll up for earlier messages'
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              data-slot="older-messages-load"
+                              className="h-6 px-2 text-xs text-muted-foreground"
+                              onClick={() => {
+                                const scroller =
+                                  transcriptEndRef.current?.parentElement;
+                                if (scroller) {
+                                  void pageOlder(scroller);
+                                }
+                              }}>
+                              Load earlier messages
+                            </Button>
                           )}
                         </div>
                       ) : null}
@@ -8019,7 +8317,11 @@ export function Chats({
                             // unfinished task on a settled thread is one
                             // nothing is advancing, and a spinner there would
                             // claim work that stopped.
-                            live={!isSettledRunStatus(activeRunStatus)}
+                            // `running` alone, the agents panel's own reading:
+                            // held or waiting on the user is not work moving
+                            // through the list, and the two surfaces disagreed
+                            // about the same task for as long as that lasted.
+                            live={activeRunStatus === 'running'}
                           />
                           <ActiveWorkflowChips
                             workflows={runWorkflows}
@@ -8458,13 +8760,19 @@ export function Chats({
                           single root, so this draws nothing rather than a
                           figure about no particular node.
 
-                          `runId` is null: that prop opens the full breakdown,
-                          which is a question put to ONE live process, and a
-                          workflow run holds one per node. */}
+                          Its full breakdown is the ROOT node's, asked by node:
+                          a workflow run holds one process per node, so the run
+                          alone names no agent. REPORTED as "i cant see full
+                          context info for workflow" while this was withheld. */}
                                 {chatContext.tokens === null ? null : (
                                   <ContextMeter
                                     className="ml-1.5"
-                                    runId={null}
+                                    runId={
+                                      wfNodes.rootId === null
+                                        ? null
+                                        : activeRun.id
+                                    }
+                                    nodeId={wfNodes.rootId}
                                     contextTokens={chatContext.tokens}
                                     contextWindowTokens={chatContext.window}
                                     live={isWorkingRunStatus(activeRunStatus)}
@@ -8529,11 +8837,10 @@ export function Chats({
                           : undefined
                       }
                       terminalReasons={terminalReasons}
-                      // A chat only: a workflow run's nodes each hold their own
-                      // process, and this readout is about the one a chat holds.
-                      metricsRunId={
-                        activeRun && !activeRun.workflowId ? activeRun.id : null
-                      }
+                      // A workflow run's readouts are asked per NODE, each
+                      // holding its own process; a chat's is its one agent's.
+                      metricsRunId={activeRun?.id ?? null}
+                      metricsByNode={Boolean(activeRun?.workflowId)}
                       // The HOVER half of the same resolution the button acts on.
                       // Never passed until now, so the hint it feeds — the invocation,
                       // selectable, with a copy control — could not open on this
@@ -8806,6 +9113,7 @@ export function Chats({
                     truncated={chatChanges.truncated}
                     unavailableReason={chatChanges.unavailableReason}
                     movedOffStart={chatChanges.movedOffStart}
+                    upstreamBase={chatChanges.upstreamBase}
                     error={chatChanges.error}
                     loading={chatChanges.loading}
                     onRefresh={readChangesNow}

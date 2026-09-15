@@ -29,6 +29,21 @@ const TURN_ENDING_KINDS = new Set(['turn_complete', 'turn_cancelled', 'error']);
  * reader of a raw row does this for itself; {@link ItemDao.findToolCallPair}
  * carries the same two lines for the same reason.
  */
+/**
+ * The text a tool result printed, whatever shape the CLI gave it.
+ *
+ * claude's is a string. cursor's ACP `execute` answers with an object —
+ * `{exitCode, stdout, stderr}` — so reading only a string captured no pull
+ * request cursor ever opened: the URL was in `stdout`, one level down.
+ */
+function resultText(result: unknown): string | null {
+  const text = asString(result);
+  if (text !== null) {
+    return text;
+  }
+  return asString(asRecord(result)?.stdout);
+}
+
 function parseRow(payload: string): Record<string, unknown> | null {
   try {
     return asRecord(JSON.parse(payload));
@@ -229,7 +244,7 @@ export class PullRequestCaptureService implements OnModuleInit {
   ): Promise<RunPullRequest[]> {
     const payload = parseRow(row.payload);
     const callId = asString(payload?.id);
-    const text = asString(payload?.result);
+    const text = resultText(payload?.result);
     if (callId === null || text === null) {
       return [];
     }

@@ -265,6 +265,18 @@ export function ownerOfKey(ownerKey: string): string {
 }
 
 /**
+ * The CALL an owner key belongs to — the part after the separator for a callee
+ * turn's per-call key, and null for a node's own turn (and for the chat's
+ * sentinel, which carries no separator).
+ */
+export function callIdOfKey(ownerKey: string): string | null {
+  const split = ownerKey.indexOf(OWNER_KEY_SEPARATOR);
+  return split === -1
+    ? null
+    : ownerKey.slice(split + OWNER_KEY_SEPARATOR.length);
+}
+
+/**
  * Apply one event to the per-agent live map. An agent with neither words nor a
  * reasoning total is REMOVED rather than stored empty, so callers can treat
  * "has a key" as "is doing something right now".

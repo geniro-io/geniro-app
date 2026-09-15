@@ -7,6 +7,7 @@ import { TaskQueueController } from './controllers/task-queue.controller';
 import { TasksController } from './controllers/tasks.controller';
 import { TaskDao } from './dao/task.dao';
 import { TaskAttachmentService } from './services/task-attachment.service';
+import { TaskBoardToolService } from './services/task-board-tool.service';
 import { TaskEventBus } from './services/task-events.bus';
 import { TaskFilesService } from './services/task-files.service';
 import { TaskMergeService } from './services/task-merge.service';
@@ -57,6 +58,7 @@ import { TasksService } from './services/tasks.service';
     TasksService,
     TaskRunsService,
     TaskSettleService,
+    TaskBoardToolService,
     TaskMergeService,
     TaskQueueService,
   ],

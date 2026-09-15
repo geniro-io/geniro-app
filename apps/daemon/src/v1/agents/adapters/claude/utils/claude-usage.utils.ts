@@ -5,7 +5,12 @@ import {
   asString,
 } from '../../../utils/json-util';
 import type { AgentUsage } from '../../adapter.types';
-import { ClaudeDelegateCostLedger } from './claude-delegate-cost.utils';
+import { canonicalClaudeModel } from '../claude-pricing.const';
+import {
+  ClaudeDelegateCostLedger,
+  listCostUsd,
+  readCalibration,
+} from './claude-delegate-cost.utils';
 
 /**
  * The running totals claude's own cost ledger reports, per CLI SESSION.
@@ -124,6 +129,7 @@ export class ClaudeSessionCostLedger {
   perTurn(
     sessionId: string | null,
     cumulative: SessionTotals,
+    ownSpendUsd: number | null = null,
   ): { costUsd: number | null; apiMs: number | null } {
     if (sessionId === null) {
       // Nothing to key on. Reporting the running total would be the very bug
@@ -133,8 +139,31 @@ export class ClaudeSessionCostLedger {
     }
     const previous = this.totals.get(sessionId);
     this.remember(sessionId, cumulative);
+    const costUsd = step(previous?.costUsd ?? null, cumulative.costUsd);
+    // A step far past what the turn's own tokens can have cost is not this
+    // turn's — it is history the ledger could not subtract. Two ways that
+    // happens, both measured on the reporter's workflow run `a0877ce9`:
+    //
+    //   - a RESUMED process starts from the session's SAVED totals (the CLI
+    //     restores `costState` on `--resume`), so its first result carries every
+    //     earlier turn — which this ledger, seeing the id for the first time in
+    //     this process, took whole: a 12.8s call billed $0.79 for $0.47 of tokens;
+    //   - every call into a workflow node resumes that node's ONE session, so
+    //     several processes report under one id and their totals interleave —
+    //     a total that "dropped" was taken whole: $29.41 for $13.79 of tokens.
+    //
+    // The turn is then billed at its own priced tokens, and its API time — a
+    // figure from the same untrustworthy total, with nothing to price it by —
+    // is reported as unmeasured rather than as history.
+    if (
+      costUsd !== null &&
+      ownSpendUsd !== null &&
+      costUsd > ownSpendUsd * RUNNING_TOTAL_TOLERANCE + RUNNING_TOTAL_SLACK_USD
+    ) {
+      return { costUsd: ownSpendUsd, apiMs: null };
+    }
     return {
-      costUsd: step(previous?.costUsd ?? null, cumulative.costUsd),
+      costUsd,
       apiMs: step(previous?.apiMs ?? null, cumulative.apiMs),
     };
   }
@@ -177,6 +206,61 @@ interface SessionTotals {
  * to save memory.
  */
 const MAX_TRACKED_SESSIONS = 512;
+
+/**
+ * How far the CLI's own figure may exceed the turn's token-priced spend before
+ * it is read as history rather than as this turn.
+ *
+ * The priced figure is already CALIBRATED against the line's own `modelUsage`,
+ * so on a healthy turn the two agree to a few percent (the Manager's own turns
+ * on the reporter's run matched to the cent). The margin is for what the
+ * calibration cannot see — a 1-hour cache write billed at 2x where the table
+ * assumes 1.25x — and the slack keeps a cents-sized turn from being clipped by
+ * rounding. The inflated turns this exists for ran 1.4x to 3.7x over.
+ */
+const RUNNING_TOTAL_TOLERANCE = 1.5;
+const RUNNING_TOTAL_SLACK_USD = 0.05;
+
+/**
+ * What this turn's OWN tokens cost, plus its delegates — the bound
+ * {@link ClaudeSessionCostLedger.perTurn} checks the running-total step against.
+ *
+ * `result.usage` is per-turn on the wire (see the ledger's own probe), so this
+ * does not depend on any running total. Null whenever a part cannot be priced —
+ * an unknown model, a delegate nobody could price, a line with no usage — and a
+ * null bound caps nothing: an unpriceable turn keeps the CLI's figure.
+ */
+function turnOwnSpendUsd(
+  root: Record<string, unknown>,
+  usage: Record<string, unknown> | null,
+  model: string | null,
+  delegatesUsd: number | null,
+): number | null {
+  if (!usage || model === null || delegatesUsd === null) {
+    return null;
+  }
+  const list = listCostUsd(model, {
+    inputTokens: asNumber(usage.input_tokens),
+    outputTokens: asNumber(usage.output_tokens),
+    cacheReadTokens: asNumber(usage.cache_read_input_tokens),
+    cacheCreationTokens: asNumber(usage.cache_creation_input_tokens),
+  });
+  if (list === null || list <= 0) {
+    return null;
+  }
+  const calibration = readCalibration(root);
+  // With nothing to calibrate against, assume the LONG-CONTEXT tier — the rate
+  // doubles past 200k — so an uncalibrated bound can only be loose, never clip
+  // a real 1M-window turn billed at twice the table.
+  const factor =
+    calibration.byModel.get(canonicalClaudeModel(model)) ??
+    calibration.overall ??
+    UNCALIBRATED_FACTOR;
+  return list * factor + delegatesUsd;
+}
+
+/** @see turnOwnSpendUsd */
+const UNCALIBRATED_FACTOR = 2;
 
 /**
  * One rung of the ladder: what this turn added to a session total.
@@ -229,10 +313,19 @@ export function readClaudeUsage(
   // rather than optional: an overload that silently reported the running total
   // when the ledger was left out is exactly the defect, and it would be
   // invisible in every spec that did not pass one.
-  const step = ledger.perTurn(asString(root.session_id), {
-    costUsd: asNumber(root.total_cost_usd),
-    apiMs: asNumber(root.duration_api_ms),
-  });
+  const step = ledger.perTurn(
+    asString(root.session_id),
+    {
+      costUsd: asNumber(root.total_cost_usd),
+      apiMs: asNumber(root.duration_api_ms),
+    },
+    turnOwnSpendUsd(
+      root,
+      usage,
+      context.model,
+      ledger.delegates.takeSettledUsd(),
+    ),
+  );
   return {
     // Cumulative by nature and labelled as such — the turn's billed input.
     inputTokens: usage ? asNumber(usage.input_tokens) : null,

@@ -1,5 +1,4 @@
 import { ChevronRight } from 'lucide-react';
-import { useState } from 'react';
 
 import { Badge } from '../components/ui/badge';
 import { cn } from '../components/ui/utils';
@@ -12,6 +11,7 @@ import {
   type FindingVerdict,
   groupFindingsByFile,
 } from './findings-payload';
+import { useThreadFlag } from './thread-ui-memory';
 
 /**
  * A code-review findings report, drawn as the card the agent could not draw for
@@ -56,10 +56,13 @@ function locationOf(finding: FindingRow): string {
 
 function FindingDisclosure({
   finding,
+  memoryKey,
 }: {
   finding: FindingRow;
+  /** Where this row's fold is remembered within its thread. */
+  memoryKey?: string;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useThreadFlag(memoryKey, false);
   const verdict =
     finding.verdict === null ? null : VERDICT_BADGE[finding.verdict];
   const outcome =
@@ -130,10 +133,13 @@ function FindingDisclosure({
  */
 export function FindingsCard({
   report,
+  memoryKey,
 }: {
   report: FindingsReport;
+  /** Where the card's folds are remembered within its thread. */
+  memoryKey?: string;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useThreadFlag(memoryKey, true);
   const { total, confirmed, resolved } = findingsSummary(report);
   const groups = groupFindingsByFile(report.findings);
   const heading = [
@@ -191,6 +197,11 @@ export function FindingsCard({
                     // are a thing an agent legitimately reports.
                     key={`${finding.file}:${finding.line ?? '-'}:${index}`}
                     finding={finding}
+                    memoryKey={
+                      memoryKey === undefined
+                        ? undefined
+                        : `${memoryKey}:${finding.file}:${finding.line ?? '-'}:${index}`
+                    }
                   />
                 ))}
               </div>

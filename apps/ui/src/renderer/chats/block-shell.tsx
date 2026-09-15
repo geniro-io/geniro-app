@@ -1,5 +1,4 @@
 import { ChevronDown, ChevronUp } from 'lucide-react';
-import { useState } from 'react';
 
 import { Spinner } from '../components/ui/spinner';
 import { cn } from '../components/ui/utils';
@@ -10,6 +9,7 @@ import {
   RunStatusIcon,
   type RunStatusKind,
 } from './run-status';
+import { useThreadFlag, useThreadOverride } from './thread-ui-memory';
 
 /**
  * Block LIFECYCLE — how a piece of nested work ends, in the transcript fold's
@@ -177,12 +177,15 @@ export function InlineClampText({
   text,
   accentClass,
   lines = 3,
+  memoryKey,
 }: {
   text: string;
   accentClass: string;
   lines?: number;
+  /** Where Show more is remembered within the thread. */
+  memoryKey?: string;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useThreadFlag(memoryKey, false);
   const isLong = text.split('\n').length > lines || text.length > lines * 80;
   return (
     <div
@@ -257,15 +260,18 @@ export function InlineClampText({
 export function BlockRequest({
   label,
   text,
+  memoryKey,
 }: {
   label: React.ReactNode;
   text: string;
+  memoryKey?: string;
 }): React.JSX.Element {
   return (
     <div>
       <SectionLabel>{label}</SectionLabel>
       <InlineClampText
         text={text}
+        memoryKey={memoryKey}
         accentClass="bg-secondary/20 border border-secondary/50 text-foreground"
       />
     </div>
@@ -276,15 +282,18 @@ export function BlockRequest({
 export function BlockResult({
   label,
   text,
+  memoryKey,
 }: {
   label: React.ReactNode;
   text: string;
+  memoryKey?: string;
 }): React.JSX.Element {
   return (
     <div>
       <SectionLabel>{label}</SectionLabel>
       <InlineClampText
         text={text}
+        memoryKey={memoryKey}
         accentClass="bg-success/5 border border-success/40 text-foreground"
       />
     </div>
@@ -503,8 +512,14 @@ export function BlockShell({
   toggleLabel,
   headerAction,
   summary,
+  memoryKey,
   children,
 }: {
+  /**
+   * Where the fold is remembered within the open thread — the block's own
+   * entry id, so leaving the thread and coming back finds it as it was left.
+   */
+  memoryKey?: string;
   /**
    * The kind of aside this is — "Agent communication", "Sub-agent". Carried on
    * the header for a screen reader; sighted readers get {@link eyebrowIcon}.
@@ -559,7 +574,7 @@ export function BlockShell({
   // `useState`, which reads its argument only at mount. A card arrives after
   // the block is on screen, so a seeded block would stay shut on exactly the
   // delegate whose report it exists to reveal. Same shape as `ToolRow`.
-  const [override, setOverride] = useState<boolean | null>(null);
+  const [override, setOverride] = useThreadOverride(memoryKey);
   const open = override ?? (!collapsible || defaultOpen);
   const headerInner = (
     <>

@@ -240,7 +240,8 @@ export class TasksService {
       branch?: string | null;
       worktreePath?: string | null;
       runId?: string | null;
-      reportItemId?: string | null;
+      /** The agent's report; `null` clears it. Stamps `reportedAt` either way. */
+      report?: string | null;
     },
   ): Promise<TaskWire> {
     const em = this.em.fork();
@@ -315,8 +316,9 @@ export class TasksService {
     if (patch.runId !== undefined) {
       task.runId = patch.runId;
     }
-    if (patch.reportItemId !== undefined) {
-      task.reportItemId = patch.reportItemId;
+    if (patch.report !== undefined) {
+      task.report = patch.report;
+      task.reportedAt = patch.report === null ? null : new Date();
     }
 
     await em.flush();
@@ -510,7 +512,8 @@ function toWire(
     branch: task.branch,
     worktreePath: task.worktreePath,
     runId: task.runId,
-    reportItemId: task.reportItemId,
+    report: task.report,
+    reportedAt: task.reportedAt?.toISOString() ?? null,
     pullRequests: [...pullRequests],
     position: task.position,
     priority: task.priority,

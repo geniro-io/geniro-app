@@ -402,6 +402,23 @@ describe('SkillsService', () => {
     expect(names).toEqual(['compact']);
   });
 
+  it('returns every entry uncapped — the list is also what a send is checked against', async () => {
+    // More reported commands than the 200 rows the reply was once cut to, so
+    // the ones sorting last (the CLI's report, alphabetically) are the ones a
+    // cap would drop — and the composer would then refuse to send them.
+    const reported = Array.from({ length: 250 }, (_, i) =>
+      named(`cmd-${String(i).padStart(3, '0')}`),
+    );
+    const { service, cwd } = build(reported);
+    writeSkill(cwd, 'deploy', 'name: deploy\ndescription: Ship it');
+
+    const names = discovered(await service.list('claude', cwd)).map(
+      (skill) => skill.name,
+    );
+    expect(names).toHaveLength(251);
+    expect(names.at(-1)).toBe('cmd-249');
+  });
+
   it('rejects an invalid cwd with INVALID_CWD instead of scanning', async () => {
     const { service } = build();
     await expect(

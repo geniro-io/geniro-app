@@ -2373,6 +2373,35 @@ describe('withLiveText', () => {
     ).toBe('working');
   });
 
+  it('draws NO end row for a buried callee whose caller is already waiting on it', () => {
+    // REPORTED twice: `waiting on Engineer · call-2` at the end of the
+    // transcript, and directly under it an ENGINEER block holding nothing but
+    // `Engineer is working · call-2`. Something landing after the card (the
+    // caller's reply, the user's message) reads as "buried", but the caller's
+    // own row already names the call — a second one is the callee twice.
+    const entries = withLiveText(
+      buriedCall(),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(
+      liveRows.some((row) => row.item.nodeId === 'poet'),
+      'a callee row was drawn beside the caller’s waiting row',
+    ).toBe(false);
+    expect(
+      liveRows.find((row) => row.item.nodeId === 'orch')?.item.payload,
+    ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
+  });
+
   it('still draws the CALLER’s own working row while it waits', () => {
     // The caller is genuinely silent — it is holding its turn open for the
     // callee — so the fallback above must not have been narrowed to "any agent

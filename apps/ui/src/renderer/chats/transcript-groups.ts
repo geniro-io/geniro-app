@@ -3540,7 +3540,21 @@ export function withLiveText(
     const workingNode = nodeIdOf(key);
     if (workingNode !== null && openCallees.has(workingNode)) {
       const buried = buriedOpenCallOf(blocks, workingNode);
-      if (buried !== null) {
+      // …and UNLESS the caller already says so. A caller blocked on this very
+      // call gets its own row at the end of the transcript — `waiting on
+      // <callee> · call-N`, drawn by the working fallback below whenever the
+      // caller has no words streaming — so a second row naming the same call
+      // is the callee twice, as an otherwise empty block of its own. REPORTED
+      // twice, over a user message and over the caller's own reply landing
+      // after the card: both read as "buried" here while the waiting row sat
+      // one line above the empty block.
+      const callerSaysSo =
+        buried !== null &&
+        buried.callerNodeId !== null &&
+        workingAgents.has(buried.callerNodeId) &&
+        !spokenFor.has(buried.callerNodeId) &&
+        openCallOfCaller(blocks, buried.callerNodeId)?.callId === buried.callId;
+      if (buried !== null && !callerSaysSo) {
         const since = lastMainThreadRowAt(buried.entries, workingNode);
         attach(
           out,

@@ -4842,6 +4842,12 @@ export interface WorkflowAgentNode {
      */
     contextWindow?: string;
     /**
+     * Auto-compact threshold (% of the context window); omitted = never
+     * @type {number}
+     * @memberof WorkflowAgentNode
+     */
+    autoCompactPercent?: number;
+    /**
      * Other model settings, keyed by the CLI's own parameter id; omitted = the model's own defaults
      * @type {{ [key: string]: string; }}
      * @memberof WorkflowAgentNode

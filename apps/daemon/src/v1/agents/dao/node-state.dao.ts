@@ -318,6 +318,21 @@ export class NodeStateDao extends BaseDao<NodeState> {
   }
 
   /**
+   * Drop this node's context COUNT while keeping its window — what a
+   * compaction leaves behind. The node twin of `RunDao.forgetContext`.
+   */
+  async forgetContext(
+    runId: string,
+    nodeId: string,
+    txEm?: EntityManager,
+  ): Promise<void> {
+    await this.getRepo(txEm).nativeUpdate(
+      { runId, nodeId },
+      { contextTokens: null },
+    );
+  }
+
+  /**
    * Forget the CLI session this node was resuming, so the next turn starts a
    * fresh one.
    *

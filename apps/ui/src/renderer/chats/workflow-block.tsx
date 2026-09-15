@@ -283,6 +283,7 @@ export const WorkflowCard = memo(function WorkflowCard({
         }
         status={status}
         collapsible
+        memoryKey={`workflow:${entry.id}`}
         toggleLabel={`Show what the workflow ${heading} ran`}>
         {/* The description, only where it is not already the heading — a script
             with no `meta.name` puts its description on the header itself. */}
@@ -306,6 +307,7 @@ export const WorkflowCard = memo(function WorkflowCard({
         {entry.script === null ? null : (
           <BlockRequest
             label="Script"
+            memoryKey={`workflow:${entry.id}:script`}
             // Fenced so it is highlighted rather than reflowed as prose: the
             // panel renders markdown, and a workflow script is JavaScript whose
             // blank lines and indentation are the shape a reader scans.
@@ -317,7 +319,11 @@ export const WorkflowCard = memo(function WorkflowCard({
             the sub-agent block already learned not to do. The roster above is
             the report in that case. */}
         {entry.result === null || !entry.resultIsOwn ? null : (
-          <BlockResult label="Result" text={entry.result} />
+          <BlockResult
+            label="Result"
+            text={entry.result}
+            memoryKey={`workflow:${entry.id}:result`}
+          />
         )}
       </BlockShell>
     </div>

@@ -24,7 +24,6 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Popover } from '../components/ui/popover';
 import { cn } from '../components/ui/utils';
-import { usePersistedFlag } from '../components/use-persisted-flag';
 import { useSecondTick } from '../components/use-second-tick';
 import {
   type AgentDisplay,
@@ -54,6 +53,7 @@ import type { ShellRun } from './shell-activity';
 import { ShellRows } from './shell-list';
 import { TaskCount, TaskIcon, TaskScrollRows } from './task-list';
 import { type AgentTaskRow, taskProgress } from './task-payload';
+import { useThreadFlag, useThreadFlags } from './thread-ui-memory';
 import type { WorkflowEntry } from './transcript-groups';
 import {
   formatDuration,
@@ -957,7 +957,7 @@ function ThreadPullRequestsSection({
   // request on a machine that is merely logged out.
   const open = results.filter((row) => !isSettled(row));
   const settled = results.filter(isSettled);
-  const [settledOpen, setSettledOpen] = usePersistedFlag(
+  const [settledOpen, setSettledOpen] = useThreadFlag(
     THREAD_PULL_REQUESTS_SETTLED_FLAG,
     false,
   );
@@ -1315,7 +1315,11 @@ export function AgentsPanel({
   // on this column and so lives in it, and the rail keeps it in reach — a
   // panel that vanished entirely would need a second control somewhere else to
   // bring it back, which is the arrangement that was just retired.
-  const [collapsed, setCollapsed] = usePersistedFlag(
+  // PER THREAD, not one flag for the app: folding the panel in one
+  // conversation left it folded in every other ("правый сайдбар сохраняется,
+  // и он становится открытым во всех тредах"). What is folded is a fact about
+  // the thread, so a thread nobody folded opens with the panel out.
+  const [collapsed, setCollapsed] = useThreadFlag(
     AGENTS_PANEL_COLLAPSED_FLAG,
     false,
   );
@@ -1367,25 +1371,25 @@ export function AgentsPanel({
   // `expanded`, and per agent: a run that spawned forty delegates and finished
   // thirty-nine of them buried its one live thread under them, which is the
   // whole reason the list is split.
-  const [showSettled, setShowSettled] = useState<Set<string>>(new Set());
-  const toggleSettled = (agentId: string): void => {
-    setShowSettled((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(agentId)) {
-        next.add(agentId);
-      }
-      return next;
-    });
+  //
+  // Both this and the instance folds below are remembered PER THREAD — the
+  // panel is remounted per run, so component state forgot them on every
+  // switch.
+  const folds = useThreadFlags();
+  const settledKey = (id: string): string => `delegates-settled:${id}`;
+  const isSettledShown = (id: string): boolean =>
+    folds.get(settledKey(id)) === true;
+  const toggleSettled = (id: string): void => {
+    folds.set(settledKey(id), !isSettledShown(id));
   };
   // The reader's own press on an instance block, keyed per (agent, instance).
   // An override rather than the whole state: absent a press a block follows
   // its instance — open while it works, shut once it is over — so a call that
   // finishes folds itself away without anybody having to.
-  const [instanceOpen, setInstanceOpen] = useState<
-    ReadonlyMap<string, boolean>
-  >(new Map());
+  const instanceOverride = (key: string): boolean | null =>
+    folds.get(`instance:${key}`);
   const toggleInstance = (key: string, wasOpen: boolean): void => {
-    setInstanceOpen((prev) => new Map(prev).set(key, !wasOpen));
+    folds.set(`instance:${key}`, !wasOpen);
   };
   if (collapsed) {
     // The rail is CONTROLS now, not a label. It used to carry the word `Agents`
@@ -1606,7 +1610,7 @@ export function AgentsPanel({
               // it: a settled agent's unfinished task is one nothing is advancing,
               // and a spinner there claims work that stopped.
               const tasksLive = agent.status === 'running';
-              const settledOpen = showSettled.has(agent.id);
+              const settledOpen = isSettledShown(agent.id);
               // The SPLIT shape's blocks: every call, and the node's own
               // conversation only when something happened in it — its heading
               // and terminal are the card's, so an empty block for it would be a
@@ -1855,7 +1859,7 @@ export function AgentsPanel({
                         {shownInstances.map((instance) => {
                           const key = instanceKey(agent.id, instance.thread.id);
                           const open =
-                            instanceOpen.get(key) ?? isInstanceLive(instance);
+                            instanceOverride(key) ?? isInstanceLive(instance);
                           return (
                             <InstanceBlock
                               key={instance.thread.id}
@@ -1864,7 +1868,7 @@ export function AgentsPanel({
                               terminal={terminal}
                               open={open}
                               onToggle={() => toggleInstance(key, open)}
-                              settledOpen={showSettled.has(key)}
+                              settledOpen={isSettledShown(key)}
                               onToggleSettled={() => toggleSettled(key)}
                               onOpenThread={onOpenThread}
                               onOpenSubagent={onOpenSubagent}

@@ -238,7 +238,9 @@ export const TranscriptItem = memo(function TranscriptItem({
               ? 'thinking'
               : tag('sub-agent thinking')
           }>
-          <ThinkingDisclosure text={reasoning}>
+          <ThinkingDisclosure
+            text={reasoning}
+            memoryKey={`thinking:${item.id}`}>
             <div className="whitespace-pre-wrap italic break-words">
               {reasoning}
             </div>
@@ -282,6 +284,7 @@ export const TranscriptItem = memo(function TranscriptItem({
     case 'error':
       return (
         <DisclosureRow
+          memoryKey={`disclosure:${item.id}`}
           caption="error"
           message={payloadString(item.payload, 'message') ?? 'unknown error'}
           // What the failure said about itself, and the whole thing as one
@@ -416,6 +419,7 @@ export const TranscriptItem = memo(function TranscriptItem({
         if (compaction !== null) {
           return (
             <DisclosureRow
+              memoryKey={`disclosure:${item.id}`}
               tone="muted"
               caption="conversation compacted"
               detail={compactionDetail(compaction)}
@@ -444,6 +448,7 @@ export const TranscriptItem = memo(function TranscriptItem({
       if (isWarningNotice(item.payload)) {
         return (
           <DisclosureRow
+            memoryKey={`disclosure:${item.id}`}
             tone="warning"
             // `not applied` is the DEGRADE's caption, not the level's: it is
             // true of a setting the agent could not honour and false of the
@@ -456,7 +461,13 @@ export const TranscriptItem = memo(function TranscriptItem({
       }
       // The DAEMON's own system items are failure advisories (a degraded caller,
       // a persistence problem) — surface them like errors: red, expandable.
-      return <DisclosureRow caption="system" message={message} />;
+      return (
+        <DisclosureRow
+          memoryKey={`disclosure:${item.id}`}
+          caption="system"
+          message={message}
+        />
+      );
     }
     case 'approval_verdict': {
       const allow = (item.payload as { allow?: unknown } | null)?.allow;

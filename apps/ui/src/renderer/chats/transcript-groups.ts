@@ -10,6 +10,7 @@ import type { FindingsReport } from './findings-payload';
 import { readFindingsReport } from './findings-payload';
 import { type GallerySpec, readGallery } from './gallery-payload';
 import {
+  callIdOfKey,
   CHAT_LIVE_KEY,
   formatLiveSpend,
   type LiveState,
@@ -3473,8 +3474,14 @@ export function withLiveText(
    * below and the working fallback cannot disagree about which nodes those are.
    */
   const openCallees = openCallCallees(blocks);
-  /** Agents already given a row, so the working fallback does not double up. */
+  /**
+   * Agents already given a row, so the working fallback does not double up —
+   * by OWNER NODE, never by raw key. A callee's live plane is keyed
+   * `<node>::<callId>` while `workingAgents` names the node, so comparing raw
+   * keys could never match and drew `Thinking…` beside `Working…`.
+   */
   const spokenFor = new Set<string>();
+  const spokenKey = (key: string): string => nodeIdOf(key) ?? key;
   for (const [key, state] of liveText) {
     // A stretch is open when the daemon says which one — never inferred from
     // the token count, which is legitimately 0 on a stretch's first delta.
@@ -3487,7 +3494,7 @@ export function withLiveText(
     if (state.text === '' && !thinking) {
       continue;
     }
-    spokenFor.add(key);
+    spokenFor.add(spokenKey(key));
     // Words render as the assistant message they are about to become; a
     // reasoning stretch rides the `reasoning` kind, carrying whichever of the
     // two things its CLI gives — the thinking TEXT where it discloses it, and
@@ -3520,7 +3527,34 @@ export function withLiveText(
             payload: { text: state.text },
           },
     );
-    attach(out, entry, openCallees);
+    // Into ITS call's card when the key names one: a node serving two calls at
+    // once has two open cards, and matching on the node alone put every word
+    // into the newer of them.
+    attach(out, entry, openCallees, callIdOfKey(key));
+  }
+  /**
+   * The calls a caller's own working row NAMES (`waiting on <callee> ·
+   * call-N`), decided up front by the same conditions that draw that row below.
+   *
+   * Read by the buried-callee branch, so the two cannot disagree: a second row
+   * naming a call the caller's row already names is the callee on screen twice,
+   * as an otherwise empty block — REPORTED twice. Deciding it from the rows that
+   * are actually drawn, rather than re-stating their conditions there, is what
+   * keeps a later change to either from reopening it.
+   */
+  const namedByWaitingRow = new Set<string>();
+  for (const key of workingAgents) {
+    const node = nodeIdOf(key);
+    if (
+      (node !== null && openCallees.has(node)) ||
+      spokenFor.has(spokenKey(key))
+    ) {
+      continue;
+    }
+    const waitingOn = openCallOfCaller(blocks, node);
+    if (waitingOn !== null) {
+      namedByWaitingRow.add(waitingOn.callId);
+    }
   }
   for (const key of workingAgents) {
     // A callee working inside an open call block is NOT silent: the block says
@@ -3540,23 +3574,10 @@ export function withLiveText(
     const workingNode = nodeIdOf(key);
     if (workingNode !== null && openCallees.has(workingNode)) {
       const buried = buriedOpenCallOf(blocks, workingNode);
-      // …and UNLESS the caller already says so. A caller blocked on this very
-      // call gets its own row at the end of the transcript — `waiting on
-      // <callee> · call-N`, drawn by the working fallback below whenever the
-      // caller has no words streaming — so a second row naming the same call
-      // is the callee twice, as an otherwise empty block of its own. REPORTED
-      // twice, over a user message and over the caller's own reply landing
-      // after the card: both read as "buried" here while the waiting row sat
-      // one line above the empty block.
-      const callerSaysSo =
-        buried !== null &&
-        buried.callerNodeId !== null &&
-        workingAgents.has(buried.callerNodeId) &&
-        !spokenFor.has(buried.callerNodeId) &&
-        openCallOfCaller(blocks, buried.callerNodeId)?.callId === buried.callId;
-      if (buried !== null && !callerSaysSo) {
+      // …and UNLESS the caller already says so (see `namedByWaitingRow`).
+      if (buried !== null && !namedByWaitingRow.has(buried.callId)) {
         const since = lastMainThreadRowAt(buried.entries, workingNode);
-        attach(
+        attachAtEnd(
           out,
           liveEntry(key, {
             id: `${LIVE_TEXT_ITEM_PREFIX}${key}:working-in-call`,
@@ -3568,11 +3589,12 @@ export function withLiveText(
               workingInNodeId: workingNode,
             },
           }),
+          buried.callerNodeId,
         );
       }
       continue;
     }
-    if (spokenFor.has(key)) {
+    if (spokenFor.has(spokenKey(key))) {
       continue;
     }
     // Measured from the last row this agent put on screen, NEVER from the row's
@@ -3802,14 +3824,37 @@ function placeInOpenCall(
   list: TranscriptEntry[],
   nodeId: string,
   entry: ItemEntry,
+  /**
+   * The call the row belongs to, when its live key names one. Its OWN card is
+   * preferred: a node serving two calls at once has two open cards, and the
+   * newest-first walk alone filed every word under the newer one. Falls back
+   * to any open card of the node for a key that names no call.
+   */
+  callId: string | null = null,
+): boolean {
+  const open = (candidate: CallBlockEntry): boolean =>
+    candidate.calleeNodeId === nodeId &&
+    OPEN_CALL_STATUSES.has(candidate.status);
+  return (
+    (callId !== null &&
+      placeInMatchingCall(
+        list,
+        entry,
+        (candidate) => open(candidate) && candidate.callId === callId,
+      )) ||
+    placeInMatchingCall(list, entry, open)
+  );
+}
+
+function placeInMatchingCall(
+  list: TranscriptEntry[],
+  entry: ItemEntry,
+  matches: (candidate: CallBlockEntry) => boolean,
 ): boolean {
   for (let i = list.length - 1; i >= 0; i--) {
     const candidate = list[i]!;
     if (candidate.type === 'call-block') {
-      if (
-        candidate.calleeNodeId === nodeId &&
-        OPEN_CALL_STATUSES.has(candidate.status)
-      ) {
+      if (matches(candidate)) {
         list[i] = { ...candidate, entries: [...candidate.entries, entry] };
         return true;
       }
@@ -3817,7 +3862,7 @@ function placeInOpenCall(
     }
     if (candidate.type === 'turn-block') {
       const inner = [...candidate.entries];
-      if (placeInOpenCall(inner, nodeId, entry)) {
+      if (placeInMatchingCall(inner, entry, matches)) {
         list[i] = { ...candidate, entries: inner };
         return true;
       }
@@ -3878,10 +3923,36 @@ function liveEntry(
  * end. That is also what makes the row's position stable across the
  * live→durable seam: both land after the same divider.
  */
+/**
+ * Put a row that NAMES its own subject at the very end of the transcript,
+ * without opening a block titled with that subject.
+ *
+ * For the buried-callee row (`<callee> is working · call-N`): under the
+ * callee's own title the block holds nothing but that one row, which is the
+ * "empty Engineer block" REPORTED against it. So it joins the last main-thread
+ * turn block, whoever's it is — the row says whose work it is — and only when
+ * the transcript does not end in one does it open a block, owned by the CALLER
+ * whose flow the conversation moved on in.
+ */
+function attachAtEnd(
+  out: TranscriptEntry[],
+  entry: ItemEntry,
+  callerNodeId: string | null,
+): void {
+  const last = out[out.length - 1];
+  if (last?.type === 'turn-block' && last.subagentId === null) {
+    out[out.length - 1] = { ...last, entries: [...last.entries, entry] };
+    return;
+  }
+  attach(out, { ...entry, item: { ...entry.item, nodeId: callerNodeId } });
+}
+
 function attach(
   out: TranscriptEntry[],
   entry: ItemEntry,
   openCallees: ReadonlySet<string> = new Set(),
+  /** The call a callee's row belongs to — see {@link placeInOpenCall}. */
+  callId: string | null = null,
 ): void {
   const nodeId = entry.item.nodeId;
   // Matched on the thread as well as the node, exactly as `ownerOf` does. A
@@ -3903,7 +3974,7 @@ function attach(
     nodeId !== null &&
     subagentId === null &&
     openCallees.has(nodeId) &&
-    placeInOpenCall(out, nodeId, entry)
+    placeInOpenCall(out, nodeId, entry, callId)
   ) {
     return;
   }

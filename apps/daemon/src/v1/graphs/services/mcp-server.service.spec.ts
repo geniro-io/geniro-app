@@ -382,6 +382,38 @@ describe('McpServerService', () => {
     ).not.toContain('call_id');
   });
 
+  it('steers a caller to ASYNC calls and tells it it is woken when one finishes or asks', async () => {
+    // REPORTED: a Manager making sync calls sat idle for the whole of each
+    // callee's work instead of taking other tasks. The runtime already starts
+    // a new turn for a caller whose async call finishes or asks after its turn
+    // ended — a model only uses that if the tool says so.
+    const { json } = await post(
+      service(),
+      'run-1',
+      'orch',
+      rpc('tools/list', {}),
+    );
+    const tools = (
+      json().result as {
+        tools: {
+          name: string;
+          description: string;
+          inputSchema: { properties: Record<string, { description?: string }> };
+        }[];
+      }
+    ).tools;
+    const call = tools.find((t) => t.name === 'call_agent')!;
+    expect(call.description).toContain('PREFER mode "async"');
+    expect(call.description).toMatch(/END YOUR TURN/);
+    expect(call.description).toMatch(/started again/);
+    expect(call.inputSchema.properties.mode!.description).toMatch(
+      /async \(preferred\)/,
+    );
+    expect(tools.find((t) => t.name === 'await_agent')!.description).toMatch(
+      /Do not sit in await_agent/,
+    );
+  });
+
   it('refuses a timeout_ms outside the window, or one that is not a whole number', async () => {
     // NaN is the case worth pinning rather than the merely-large one: it is
     // what a model's "5 seconds" parses to, `setTimeout` accepts it without

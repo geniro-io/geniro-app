@@ -168,6 +168,27 @@ describe('ItemDao (in-memory sqlite)', () => {
   });
 
   describe('latestMessageTextPerRun', () => {
+    it('previews the ROOT conversation of a workflow run, not a callee inside a call', async () => {
+      // REPORTED as a Dev Team row previewing the Engineer's "Fixed: 36/36…"
+      // over the Manager's own words.
+      await insert(
+        'run-a',
+        0,
+        'message',
+        JSON.stringify({ text: 'Manager: launching the Engineer' }),
+      );
+      await insert(
+        'run-a',
+        1,
+        'message',
+        JSON.stringify({ text: 'Fixed: 36/36', callId: 'call-13' }),
+      );
+
+      expect((await dao.latestMessageTextPerRun(['run-a'])).get('run-a')).toBe(
+        'Manager: launching the Engineer',
+      );
+    });
+
     it('previews the text of the highest-seq message item, per run', async () => {
       // Head row inserted FIRST so a "last row processed wins" reduction would
       // be caught too, not just a min/max mixup.

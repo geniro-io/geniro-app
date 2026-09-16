@@ -361,7 +361,9 @@ export class McpServerService {
             description:
               `Invoke one of your call-wired agents and get its result envelope. Callable now: ${callable}. ` +
               'Choose by what each agent says it does; when none of them fits the task, do it yourself or ask the user rather than forcing it on the closest one. ' +
-              'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent. ' +
+              'PREFER mode "async" for any task that is not a quick lookup: a sync call blocks you for the whole of the callee\'s work, and you are the one the user and your other callees are waiting on. ' +
+              'After an async call you do NOT wait for it: carry on with other work, launch more calls in parallel, or END YOUR TURN — when a callee finishes or asks you a question after your turn has ended, you are started again with a message naming the call, and you collect it with await_agent. ' +
+              'Use sync only when you cannot take your next step without the answer and expect it quickly. ' +
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
               'After answering, collect the final result with await_agent(call_id). ' +
@@ -392,7 +394,7 @@ export class McpServerService {
                   type: 'string',
                   enum: [...CALL_MODES],
                   description:
-                    'sync (default) waits for the result; async returns a call_id at once — collect it later with await_agent; fire_and_forget never returns a result.',
+                    'async (preferred) returns a call_id at once — keep working or end your turn, you are notified when it finishes or asks, then collect it with await_agent; sync (the default when omitted) blocks until the result; fire_and_forget never returns a result.',
                 },
               },
               required: ['agent', 'message', 'title'],
@@ -408,7 +410,8 @@ export class McpServerService {
               'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
               '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again. ' +
               'OMIT call_id after fanning out several calls: it waits on ALL of them and returns the FIRST thing any produces — a question or a finished result — ' +
-              'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run.',
+              'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run. ' +
+              'Do not sit in await_agent while you have other work to do: an open call notifies you by starting a new turn when it finishes or asks, so it is fine to end your turn and collect then.',
             inputSchema: {
               type: 'object',
               properties: {

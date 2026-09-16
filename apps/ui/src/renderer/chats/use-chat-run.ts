@@ -26,7 +26,7 @@ import type { DaemonClient } from '../daemon-client';
  */
 export type ChatListScope = ListChatsScopeEnum;
 import type { AgentNotice } from '../notifications/run-notifications';
-import { previewMessageOf } from './chat-preview';
+import { previewMessageOf, previewsThread } from './chat-preview';
 import { compactionFacts, conversationReplaced } from './compaction-payload';
 import { applyLiveText, type LiveState } from './live-text';
 import { isSettledRunStatus } from './run-status';
@@ -159,6 +159,11 @@ export interface ChatRunState {
   hasOlder: boolean;
   /** A page of older items is in flight. */
   loadingOlder: boolean;
+  /**
+   * The open thread's history is still being fetched — the transcript is empty
+   * because it has not arrived, not because the thread has nothing in it.
+   */
+  loadingHistory: boolean;
   /**
    * Load the page before the oldest item on screen. Resolves true when rows
    * were prepended, so the caller can hold the reader's scroll position.
@@ -359,6 +364,13 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * scrolling up should fetch, and to say so while it does.
    */
   const [hasOlder, setHasOlder] = useState(false);
+  /**
+   * The newest page of the thread being opened is in flight. REPORTED as a
+   * switch that "долго загружается" with nothing saying so — the pane went
+   * blank, or kept the previous thread on screen while a busy renderer caught
+   * up, and read as flicker rather than as loading.
+   */
+  const [loadingHistory, setLoadingHistory] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   /**
    * Mirror of {@link items}, so the stable `loadOlder` can read the oldest row
@@ -718,7 +730,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     // being read crept up the list on every message while the threads working
     // in the background stood still. The row's time is the daemon's, and it now
     // arrives for every thread alike on `RunStatusEvent.at`.
-    if (live && item.kind === 'message') {
+    if (live && previewsThread(item)) {
       // Every message previews now, whoever said it — the rule is "the newest
       // message" (see {@link previewMessageOf}), and a lone message row IS the
       // newest of the batch it arrived in. The role test that used to stand
@@ -1169,6 +1181,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       setLiveText(EMPTY_LIVE_TEXT);
       setStreaming(false);
       setError(null);
+      setLoadingHistory(true);
       // Join FIRST so any live item published during the history fetch is
       // buffered through addItem; the seq de-dupe reconciles the overlap.
       try {
@@ -1229,6 +1242,12 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
         if (activeRunIdRef.current === runId) {
           setError(String(err));
         }
+      } finally {
+        // Only for the thread still open: a switch made while this was in
+        // flight has raised the flag for ITS fetch, which must keep it.
+        if (activeRunIdRef.current === runId) {
+          setLoadingHistory(false);
+        }
       }
     },
     [client, chatApi, addItem],
@@ -1253,6 +1272,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     activeRunIdRef.current = null;
     setActiveRunId(null);
     setItems([]);
+    setLoadingHistory(false);
     setLiveText(EMPTY_LIVE_TEXT);
     setStreaming(false);
     setError(null);
@@ -2052,6 +2072,7 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     items,
     hasOlder,
     loadingOlder,
+    loadingHistory,
     loadOlder,
     awayFromTail,
     loadAround,

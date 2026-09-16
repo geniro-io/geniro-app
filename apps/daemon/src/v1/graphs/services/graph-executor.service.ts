@@ -2031,7 +2031,7 @@ export class GraphExecutorService implements OnModuleInit {
         questionTool !== null
           ? `A callee may pause with a {"status":"question"} envelope: answer via answer_agent when your role/context makes you confident; otherwise ask the user with your ${questionTool} tool and relay their answer. Then collect the final result with await_agent.`
           : 'A callee may pause with a {"status":"question"} envelope: answer via answer_agent from your role/context — you cannot escalate to the user; an unanswered question times the call out.';
-      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}`;
+      return `May call (via the call_agent tool; await_agent collects async results):\n${lines.join('\n')}\n${questionLine}\nPrefer async calls: launch them, keep working or end your turn, and you are started again when a call finishes or asks you something — do not sit waiting on a callee while you have other work.`;
     };
 
     /**

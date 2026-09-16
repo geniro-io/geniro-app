@@ -951,6 +951,7 @@ export function Chats({
     items,
     hasOlder,
     loadingOlder,
+    loadingHistory,
     loadOlder,
     loadAround,
     returnToTail,
@@ -8043,6 +8044,15 @@ export function Chats({
                     pane has no scroll to give. REPORTED as "it cannot load
                     messages" over a workflow whose newest page folded into ONE
                     call card — "Scroll up" above nothing to scroll. */}
+                      {loadingHistory && transcriptEntries.length === 0 ? (
+                        <div
+                          data-slot="thread-loading"
+                          role="status"
+                          className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <Spinner />
+                          Loading conversation…
+                        </div>
+                      ) : null}
                       {hasOlder ? (
                         <div
                           data-slot="older-messages"

@@ -372,6 +372,22 @@ describe('CallBlock', () => {
     expect(footer.textContent).toContain('$44.17');
     // The border is what separates the summary from the rows above it.
     expect(footer.className).toContain('border-t');
+    // One type size for the row — the count was 10px beside 12px figures.
+    expect(footer.className).toContain('text-xs');
+    expect(footer.className).not.toContain('text-[10px]');
+
+    // The way back sits at the end of the work, not only on the header.
+    const collapse = footer.querySelector<HTMLButtonElement>(
+      '[data-slot="block-footer-collapse"]',
+    );
+    expect(collapse?.textContent).toContain('Collapse');
+    act(() => collapse!.click());
+    expect(
+      container
+        .querySelector('[data-role="call-block"] button[aria-expanded]')
+        ?.getAttribute('aria-expanded'),
+    ).toBe('false');
+    expect(container.querySelector('[data-slot="block-footer"]')).toBeNull();
   });
 
   it('says the callee is thinking on a SHUT card that has no words yet', () => {

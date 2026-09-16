@@ -263,7 +263,7 @@ import { useAgentEfforts } from './use-agent-efforts';
 import { type AgentMcpScope, mcpScopeKey, useAgentMcp } from './use-agent-mcp';
 import { useAgentModelParameters } from './use-agent-model-parameters';
 import { useAgentModels } from './use-agent-models';
-import { useAgentSkills } from './use-agent-skills';
+import { type SkillTarget, useAgentSkills } from './use-agent-skills';
 import { type StagedAttachment, useAttachments } from './use-attachments';
 import { useChatChanges } from './use-chat-changes';
 import { type ChatListScope, useChatRun } from './use-chat-run';
@@ -4201,22 +4201,80 @@ export function Chats({
 
   /** The open transcript's pending queue (queues persist per run). */
   const queued = activeRunId ? (queues[activeRunId] ?? []) : [];
+  // The active workflow's node inventory: its agent nodes (the agents panel),
+  // its triggers (the run composer's inactive info chips), and every node id
+  // it knows (so trigger status items are never mistaken for an unknown
+  // agent's). Filled by the snapshot effect further down; declared here
+  // because the `/` autocomplete below reads it.
+  const [wfNodes, setWfNodes] = useState<{
+    agents: WorkflowAgentNode[];
+    triggers: WorkflowTriggerNode[];
+    allIds: Set<string>;
+    /**
+     * The agent the TRIGGER feeds — the one the run is a conversation WITH, so
+     * its rows need no identity (see {@link rootAgentOf}). Null when the graph
+     * has none or more than one.
+     */
+    rootId: string | null;
+    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
+    feedIds: string[];
+  }>({
+    agents: [],
+    triggers: [],
+    allIds: new Set(),
+    rootId: null,
+    feedIds: [],
+  });
+  /**
+   * The agent nodes a message written into the open WORKFLOW run lands in —
+   * the daemon's `deliverFollowUp` hands it to exactly the agents its trigger
+   * feeds. Empty for a chat, and until the run's snapshot has loaded.
+   */
+  const workflowFeedAgents = useMemo((): WorkflowAgentNode[] => {
+    const fed = new Set(wfNodes.feedIds);
+    return wfNodes.agents.filter((node) => fed.has(node.id));
+  }, [wfNodes]);
   // ── The composer's `/` skill autocomplete ──────────────────────────────
-  // Which agent kinds the current composer's message reaches, and in which
-  // folder. A new-run workflow target resolves through its SELECTED trigger
-  // (the run prompt is delivered to the agents that trigger feeds); an open
-  // workflow run has a disabled composer, so it gets no kinds at all.
-  const skillKinds = useMemo((): CliKind[] => {
+  // Which agents the current composer's message reaches, under which account,
+  // and in which folder. A new-run workflow target resolves through its
+  // SELECTED trigger (the run prompt is delivered to the agents that trigger
+  // feeds). An OPEN workflow run asks about the agents a follow-up lands in,
+  // each under its own node's profile: its composer takes messages, and it
+  // answered no agents at all for as long as it had been disabled — REPORTED
+  // as a Dev Team thread offering no `/` suggestions while the Manager ran
+  // `/geniro:resolve` perfectly well.
+  const skillTargets = useMemo((): SkillTarget[] => {
     if (activeRunId !== null) {
-      return activeRun && activeRun.workflowId === null && activeRun.agentKind
-        ? [activeRun.agentKind]
+      if (!activeRun) {
+        return [];
+      }
+      if (activeRun.workflowId !== null) {
+        return workflowFeedAgents.map((node) => ({
+          kind: node.agent,
+          configDir: node.configDir ?? null,
+        }));
+      }
+      return activeRun.agentKind
+        ? [{ kind: activeRun.agentKind, configDir: activeRun.configDir }]
         : [];
     }
     if (workflowSlug) {
-      return triggers.find((entry) => entry.id === triggerId)?.agentKinds ?? [];
+      // Null: a library trigger lists only its agents' kinds, not profiles.
+      return (
+        triggers.find((entry) => entry.id === triggerId)?.agentKinds ?? []
+      ).map((kind) => ({ kind, configDir: null }));
     }
-    return [agentKind];
-  }, [activeRunId, activeRun, workflowSlug, triggers, triggerId, agentKind]);
+    return [{ kind: agentKind, configDir }];
+  }, [
+    activeRunId,
+    activeRun,
+    workflowFeedAgents,
+    workflowSlug,
+    triggers,
+    triggerId,
+    agentKind,
+    configDir,
+  ]);
   /**
    * The ACCOUNT every vocabulary on this screen is about, scoped exactly like
    * `modelKind` and `effortModel`: whichever composer is on screen owns the
@@ -4240,9 +4298,8 @@ export function Chats({
   const skillCwd = activeRunId !== null ? (activeRun?.cwd ?? null) : folder;
   const skills = useAgentSkills(
     agentsApi,
-    skillKinds,
+    skillTargets,
     skillCwd,
-    vocabularyConfigDir,
     // Refreshed as the `/` popup opens, so it never shows a stale first read.
     slashQuery(input) !== null,
   );
@@ -4679,29 +4736,6 @@ export function Chats({
     return false;
   };
 
-  // The active workflow's node inventory: its agent nodes (the agents panel),
-  // its triggers (the run composer's inactive info chips), and every node id
-  // it knows (so trigger status items are never mistaken for an unknown
-  // agent's).
-  const [wfNodes, setWfNodes] = useState<{
-    agents: WorkflowAgentNode[];
-    triggers: WorkflowTriggerNode[];
-    allIds: Set<string>;
-    /**
-     * The agent the TRIGGER feeds — the one the run is a conversation WITH, so
-     * its rows need no identity (see {@link rootAgentOf}). Null when the graph
-     * has none or more than one.
-     */
-    rootId: string | null;
-    /** Every agent the trigger feeds — see {@link triggerFedAgentIds}. */
-    feedIds: string[];
-  }>({
-    agents: [],
-    triggers: [],
-    allIds: new Set(),
-    rootId: null,
-    feedIds: [],
-  });
   /**
    * Set when the active run's workflow is GONE from the library (a 404, not a
    * failed request) — the run's own history survives it, so the transcript
@@ -4805,15 +4839,8 @@ export function Chats({
     if (!activeRun.workflowId) {
       return activeRun.agentKind ? [activeRun.agentKind] : [];
     }
-    const fed = new Set(wfNodes.feedIds);
-    return [
-      ...new Set(
-        wfNodes.agents
-          .filter((node) => fed.has(node.id))
-          .map((node) => node.agent),
-      ),
-    ];
-  }, [activeRun, wfNodes]);
+    return [...new Set(workflowFeedAgents.map((node) => node.agent))];
+  }, [activeRun, workflowFeedAgents]);
 
   const steerUnavailableReason = useMemo((): string | null => {
     if (steerAgents.length === 0) {

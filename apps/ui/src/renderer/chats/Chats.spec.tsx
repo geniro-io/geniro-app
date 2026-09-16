@@ -9809,6 +9809,13 @@ describe('Chats skill autocomplete', () => {
     },
   ];
 
+  // jsdom has no `scrollIntoView`, which the popup calls on its highlighted
+  // row. These tests passed only as part of the whole file, on a stub an
+  // unrelated test earlier in it leaves on the prototype.
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
   /** Type `value` into the (only) composer textarea through React's setter. */
   async function type(textarea: HTMLTextAreaElement, value: string) {
     await act(async () => {
@@ -9920,6 +9927,73 @@ describe('Chats skill autocomplete', () => {
       agent: 'cursor-agent',
       cwd: '/proj',
     });
+  });
+
+  it("offers an OPEN workflow run the skills of the agents a follow-up lands in, under each one's profile", async () => {
+    // REPORTED as a Dev Team thread with no `/` suggestions at all: the open
+    // run asked about no agent, while its Manager ran the command fine.
+    agentsApi.listAgentSkills.mockResolvedValue(SKILLS);
+    workflowApi.listWorkflowRuns.mockResolvedValue([
+      {
+        id: 'w1',
+        status: 'completed',
+        awaiting: null,
+        holdingFor: 0,
+        shellsOpen: 0,
+        subagentsOut: 0,
+        title: 'Team run',
+        agentKind: null,
+        workflowId: 'dev-team',
+        cwd: '/proj',
+        model: null,
+        createdAt: 'later',
+        updatedAt: 'later',
+        lastMessage: null,
+      },
+    ]);
+    workflowApi.getWorkflowRunSnapshot.mockResolvedValue({
+      workflow: {
+        name: 'Dev team',
+        nodes: [
+          { id: 'start', kind: 'trigger', trigger: 'manual' },
+          {
+            id: 'manager',
+            kind: 'agent',
+            agent: 'claude',
+            approval: 'auto',
+            configDir: '/profiles/lab',
+          },
+          {
+            id: 'qa',
+            kind: 'agent',
+            agent: 'cursor-agent',
+            approval: 'auto',
+          },
+        ],
+        edges: [
+          { from: 'start', to: 'manager', kind: 'data' },
+          { from: 'manager', to: 'qa', kind: 'call' },
+        ],
+      },
+    });
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'Team run');
+
+    expect(agentsApi.listAgentSkills).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/proj',
+      configDir: '/profiles/lab',
+    });
+    // A callee is not where a follow-up goes, so its CLI is not asked.
+    expect(agentsApi.listAgentSkills).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agent: 'cursor-agent' }),
+    );
+    const textarea = container.querySelector('textarea')!;
+    await type(textarea, '/');
+    expect(container.querySelector('[role="listbox"]')?.textContent).toContain(
+      '/deploy',
+    );
   });
 });
 

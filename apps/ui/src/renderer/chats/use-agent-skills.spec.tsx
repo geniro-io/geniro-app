@@ -47,9 +47,8 @@ async function mount(agentsApi: DaemonApis['agents']): Promise<{
   function Probe({ typingCommand }: { typingCommand: boolean }): null {
     latest = useAgentSkills(
       agentsApi,
-      ['claude'],
+      [{ kind: 'claude', configDir: null }],
       '/repo',
-      null,
       typingCommand,
     );
     return null;
@@ -107,6 +106,51 @@ describe('useAgentSkills', () => {
 
     expect(listAgentSkills).toHaveBeenCalledTimes(2);
     expect(latest()).toEqual(['geniro:resolve']);
+  });
+
+  it('asks each target under its OWN profile and unions the answers', async () => {
+    // Two agents of one CLI on two accounts have two lists — one directory for
+    // the whole set would read one account's list twice.
+    const listAgentSkills = vi.fn(({ configDir }: { configDir?: string }) =>
+      Promise.resolve(
+        configDir === '/lab' ? [skill('geniro:resolve')] : [skill('compact')],
+      ),
+    );
+    let latest: AgentSkill[] = [];
+    // Built once: a client rebuilt per render is a new effect dependency each
+    // time, and the hook would refetch forever.
+    const agentsApi = api(listAgentSkills);
+    function Probe(): null {
+      latest = useAgentSkills(
+        agentsApi,
+        [
+          { kind: 'claude', configDir: '/lab' },
+          { kind: 'claude', configDir: null },
+        ],
+        '/repo',
+      );
+      return null;
+    }
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(<Probe />);
+    });
+
+    expect(listAgentSkills).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/repo',
+      configDir: '/lab',
+    });
+    expect(listAgentSkills).toHaveBeenCalledWith({
+      agent: 'claude',
+      cwd: '/repo',
+    });
+    expect(latest.map((entry) => entry.name).sort()).toEqual([
+      'compact',
+      'geniro:resolve',
+    ]);
   });
 
   it('serves the cache, without asking, when no command is being typed', async () => {

@@ -1136,6 +1136,72 @@ describe('GraphExecutorService', () => {
     expect(callBroker.hasRun(run.id)).toBe(false);
   });
 
+  it('hands a question to a WORKING caller only where its CLI takes a message without interrupting', async () => {
+    const { service, claude, cursor, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const callsFrom = (agent: 'claude' | 'cursor-agent') =>
+      triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent, approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      });
+
+    await service.startRun({
+      slug: 'calls',
+      workflow: callsFrom('claude'),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const claudeCaller = register.mock.calls.at(-1)![1];
+    expect(claudeCaller.tellLiveNode('a', 'a question')).toBe(true);
+    expect(claude.starts[0]!.sendUserMessage).toHaveBeenCalledWith({
+      text: 'a question',
+      images: [],
+    });
+    // A node with no live turn has nothing to join.
+    expect(claudeCaller.tellLiveNode('callee', 'a question')).toBe(false);
+
+    await service.startRun({
+      slug: 'calls',
+      workflow: callsFrom('cursor-agent'),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const cursorCaller = register.mock.calls.at(-1)![1];
+    // cursor's follow-up CANCELS the turn in flight, so nothing is sent.
+    expect(cursor.getConfig().followUp.interrupts).toBe(true);
+    expect(cursorCaller.tellLiveNode('a', 'a question')).toBe(false);
+    expect(cursor.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('hands nothing to a caller whose run is being cancelled', async () => {
+    const { service, claude, callBroker } = setup();
+    const register = vi.spyOn(callBroker, 'registerRun');
+    const run = await service.startRun({
+      slug: 'calls',
+      workflow: triggered({
+        name: 'calls',
+        nodes: [
+          { id: 'a', kind: 'agent', agent: 'claude', approval: 'auto' },
+          { id: 'callee', kind: 'agent', agent: 'claude', approval: 'auto' },
+        ],
+        edges: [{ from: 'a', to: 'callee', kind: 'call' as const }],
+      }),
+      cwd: dir,
+      prompt: 'go',
+    });
+    await drain();
+    const capability = register.mock.calls.at(-1)![1];
+    await service.cancel(run.id);
+    expect(capability.tellLiveNode('a', 'a question')).toBe(false);
+    expect(claude.starts[0]!.sendUserMessage).not.toHaveBeenCalled();
+  });
+
   it('rejects running an empty workflow (a blank-canvas draft)', async () => {
     // Empty workflows are legal in the library (the builder starts blank) but
     // must never start a run: no run row, no adapter spawn.
@@ -2561,6 +2627,35 @@ describe('GraphExecutorService — follow-up messages', () => {
     )!;
     expect(JSON.parse(row.payload)).toEqual({
       text: 'see this',
+      images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
+    });
+  });
+
+  it('carries the starting message’s pictures to the trigger-fed agents and into the seed row', async () => {
+    const { service, claude, itemDao } = setup();
+    const run = await service.startRun({
+      slug: 'two',
+      workflow: triggered(TWO_ROOTS),
+      cwd: dir,
+      prompt: 'look',
+      images: [{ mediaType: 'image/png', data: 'aGk=' }],
+    });
+    await drain();
+
+    const expected = [
+      {
+        path: join(dir, 'attachments', run.id, 'pic-0.png'),
+        mediaType: 'image/png',
+      },
+    ];
+    expect(turnsOf(claude, 'role-a')[0]!.input.images).toEqual(expected);
+    expect(turnsOf(claude, 'role-b')[0]!.input.images).toEqual(expected);
+    const seed = itemDao.items.find(
+      (item) =>
+        item.kind === 'message' && String(item.payload).includes('look'),
+    )!;
+    expect(JSON.parse(seed.payload)).toEqual({
+      text: 'look',
       images: [{ id: 'pic-0.png', mediaType: 'image/png' }],
     });
   });

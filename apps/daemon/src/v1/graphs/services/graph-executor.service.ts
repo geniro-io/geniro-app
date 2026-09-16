@@ -153,6 +153,8 @@ export interface StartWorkflowRunInput {
   cwd: string;
   /** The user's task — seeds every node's prompt. */
   prompt: string;
+  /** Pictures pasted with the task, for the agents the trigger feeds. */
+  images?: SendMessageImage[];
   /**
    * The app's global custom instructions, snapshotted onto the run like a
    * chat's. Every agent node composes it BEHIND its own `role`.
@@ -292,6 +294,8 @@ interface RunContext {
   seedPersisted: boolean;
   /** Pictures that came with the seed — for the agents a trigger feeds. */
   seedImages: TurnImage[];
+  /** The same pictures as the seed row's attachments, when this pass writes it. */
+  seedAttachments: readonly AttachmentWire[];
   /**
    * The run works a card on the board, so every agent node is handed the MCP
    * endpoint for the board tools — not only the callers.
@@ -679,7 +683,9 @@ export class GraphExecutorService implements OnModuleInit {
     // Call tokens are minted per caller node inside drive() (once the call
     // edges are known); nothing to revoke here yet — the catch keeps the
     // revokeRun call for symmetry with the settle path.
+    let seed: { stored: AttachmentWire[]; turnImages: TurnImage[] };
     try {
+      seed = this.storeImages(run.id, input.images ?? []);
       for (const node of input.workflow.nodes) {
         // A node that never runs gets no state row at all. `pending` is a
         // promise that something will happen to it, and an instruction block
@@ -721,7 +727,8 @@ export class GraphExecutorService implements OnModuleInit {
         resumeSessions: new Map(),
         callSeed: null,
         seedPersisted: false,
-        seedImages: [],
+        seedImages: seed.turnImages,
+        seedAttachments: seed.stored,
         boardTask: run.taskId !== null,
       },
       dropped,
@@ -923,6 +930,7 @@ export class GraphExecutorService implements OnModuleInit {
         callSeed,
         seedPersisted: true,
         seedImages: turnImages,
+        seedAttachments: [],
         boardTask: run.taskId !== null,
       },
     };
@@ -3425,6 +3433,23 @@ export class GraphExecutorService implements OnModuleInit {
           },
           isCancelled: () => cancelRequested,
           isNodeLive: (nodeId) => liveTurnsByNode.has(nodeId),
+          tellLiveNode: (nodeId, prompt) => {
+            const node = nodesById.get(nodeId);
+            if (
+              node?.kind !== 'agent' ||
+              cancelRequested ||
+              runFinished ||
+              !liveTurnsByNode.has(nodeId) ||
+              this.adapterFor(node.agent).getConfig().followUp.interrupts
+            ) {
+              return false;
+            }
+            const handle =
+              continuationHandles.get(nodeId) ?? runningHandles.get(nodeId);
+            return (
+              handle?.sendUserMessage({ text: prompt, images: [] }) ?? false
+            );
+          },
           wakeNode: (nodeId, prompt) => {
             const node = nodesById.get(nodeId);
             if (node?.kind !== 'agent' || cancelRequested || runFinished) {
@@ -3512,7 +3537,12 @@ export class GraphExecutorService implements OnModuleInit {
     // follow-up, whose row the route has already written.
     if (!run.seedPersisted) {
       enqueue(async () => {
-        await persistItem(null, 'message', 'user', { text: seedPrompt });
+        await persistItem(
+          null,
+          'message',
+          'user',
+          messagePayload(seedPrompt, run.seedAttachments),
+        );
       });
     }
     liveControl = { deliver: deliverFollowUp };

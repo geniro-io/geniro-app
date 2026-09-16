@@ -397,6 +397,20 @@ async function clickRun(container: HTMLElement, title: string): Promise<void> {
   await act(async () => {
     activate?.click();
   });
+  await expandAgentsPanel(container);
+}
+
+/**
+ * Unfold the agents panel, which starts folded in a thread nobody opened it
+ * in — nearly every case reaching the panel is about what it draws open.
+ */
+async function expandAgentsPanel(container: HTMLElement): Promise<void> {
+  const expand = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand agents panel"]',
+  );
+  await act(async () => {
+    expand?.click();
+  });
 }
 
 /** The composer's round icon actions, looked up by their accessible name. */
@@ -5670,6 +5684,57 @@ describe('Chats queued messages', () => {
 
   const pngFile = (name: string): File =>
     new File([PNG_BYTES], name, { type: 'image/png' });
+
+  it('starts a workflow run with the pasted image instead of refusing it', async () => {
+    workflowApi.listWorkflows.mockResolvedValue([
+      {
+        slug: 'review-team',
+        name: 'Review team',
+        description: null,
+        nodeCount: 2,
+        updatedAt: 'now',
+      },
+    ]);
+    workflowApi.startWorkflowRun.mockResolvedValue({
+      ...run1,
+      id: 'w9',
+      agentKind: null,
+      workflowId: 'review-team',
+    });
+    api.listChats.mockResolvedValue([{ ...run1, status: 'completed' }]);
+    const { client } = makeClient();
+    const container = await mount(client);
+    await clickRun(container, 'My chat');
+    const plus = container.querySelector('[aria-label="New chat"]')!;
+    await act(async () => {
+      plus.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    await pickMenuRow(container, targetTrigger(container), 'Review team');
+    await pasteImages(container, [pngFile('shot.png')]);
+    const textarea = container.querySelector('textarea')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        'value',
+      )!.set!.call(textarea, 'what is wrong here');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Start run"]')!
+        .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(workflowApi.startWorkflowRun).toHaveBeenCalledWith({
+      slug: 'review-team',
+      runWorkflowDto: {
+        cwd: '/proj',
+        prompt: 'what is wrong here',
+        images: [{ mediaType: 'image/png', data: PNG_BASE64 }],
+      },
+    });
+    expect(staged(container)).toHaveLength(0);
+  });
 
   it('sends a pasted image with the message, carrying it through the queue', async () => {
     // The whole paste path in one: the image stages visibly, survives the

@@ -364,7 +364,8 @@ export class McpServerService {
               'A sync call can take minutes — for long tasks or parallel fan-out prefer mode "async" and collect with await_agent. ' +
               'An envelope of {"status":"question",...} means the callee PAUSED to ask you something: answer it with answer_agent ' +
               'only when your role/context makes you confident; otherwise ask the user yourself and relay their answer. ' +
-              'After answering, collect the final result with await_agent(call_id).',
+              'After answering, collect the final result with await_agent(call_id). ' +
+              'Check the envelope\'s call_id: a question from ANOTHER of your calls can arrive here too, and then "still_running" names this call, which you collect later with await_agent.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -401,16 +402,20 @@ export class McpServerService {
             name: 'await_agent',
             description:
               'Collect the result envelope of one of YOUR earlier async call_agent calls (or of a sync call that paused on a question). ' +
-              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when the callee pauses to ask; ' +
-              'the call stays collectable after you answer via answer_agent. ' +
+              'Blocks until that callee finishes — or returns early with a {"status":"question"} envelope when that callee, or ANY other callee of yours, pauses to ask; ' +
+              'check the envelope\'s call_id: when it names a different call, "still_running" names the call you were waiting on. ' +
+              'Every call stays collectable after you answer via answer_agent. ' +
               'Pass timeout_ms to check in WITHOUT committing to the whole wait: a callee still working answers ' +
-              '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again.',
+              '{"status":"pending"}, which is not a failure — the call is untouched, so go do something else and await it again. ' +
+              'OMIT call_id after fanning out several calls: it waits on ALL of them and returns the FIRST thing any produces — a question or a finished result — ' +
+              'with its call_id, leaving the rest collectable; call it again to get the next one. Prefer this over waiting on one call while others run.',
             inputSchema: {
               type: 'object',
               properties: {
                 call_id: {
                   type: 'string',
-                  description: 'The call_id an async call_agent returned.',
+                  description:
+                    'The call_id an async call_agent returned. Omit it to wait on all of your open calls at once.',
                 },
                 timeout_ms: {
                   type: 'integer',
@@ -422,7 +427,6 @@ export class McpServerService {
                     'so prefer a window plus a second await for work you expect to be slow.',
                 },
               },
-              required: ['call_id'],
             },
           },
           {
@@ -430,7 +434,7 @@ export class McpServerService {
             description:
               'Answer a parked question one of YOUR callees raised (a {"status":"question"} envelope carrying its call_id). ' +
               'Answer from your own role/context only when confident; when unsure, ask the user through your own question mechanism first and relay their answer verbatim. ' +
-              "After answering, collect the callee's final result with await_agent(call_id). Unanswered questions time out and fail the call.",
+              "After answering, collect the callee's final result with await_agent(call_id). Answer promptly: an unanswered question times out after a few minutes and fails the call.",
             inputSchema: {
               type: 'object',
               properties: {
@@ -1356,13 +1360,18 @@ export class McpServerService {
         envelope =
           typeof checked !== 'string'
             ? checked
-            : await this.broker.callAgent(runId, nodeId, {
-                agent: args.agent as string,
-                message: args.message as string,
-                title: checked,
-                mode: args.mode as CallMode | undefined,
-                thread: args.thread as string | undefined,
-              });
+            : await this.broker.callAgent(
+                runId,
+                nodeId,
+                {
+                  agent: args.agent as string,
+                  message: args.message as string,
+                  title: checked,
+                  mode: args.mode as CallMode | undefined,
+                  thread: args.thread as string | undefined,
+                },
+                gone,
+              );
       } else if (name === 'await_agent') {
         envelope =
           validateAwaitAgentArgs(args) ??
@@ -1370,7 +1379,7 @@ export class McpServerService {
             runId,
             nodeId,
             {
-              call_id: args.call_id as string,
+              call_id: args.call_id as string | undefined,
               timeout_ms: args.timeout_ms as number | undefined,
             },
             gone,
@@ -1493,8 +1502,13 @@ function validateCallAgentArgs(
 function validateAwaitAgentArgs(
   args: Record<string, unknown>,
 ): CallEnvelope | null {
-  if (typeof args.call_id !== 'string' || args.call_id.length === 0) {
-    return invalidArgs("'call_id' must be a non-empty string");
+  if (
+    args.call_id !== undefined &&
+    (typeof args.call_id !== 'string' || args.call_id.length === 0)
+  ) {
+    return invalidArgs(
+      "'call_id' must be a non-empty string, or omitted to wait on all of your calls",
+    );
   }
   if (args.timeout_ms !== undefined) {
     // Integer-checked rather than merely numeric: `setTimeout` takes a

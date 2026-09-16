@@ -3864,6 +3864,12 @@ export interface RunWorkflowDto {
     prompt: string;
     /**
      * 
+     * @type {Array<SendMessageDtoImagesInner>}
+     * @memberof RunWorkflowDto
+     */
+    images?: Array<SendMessageDtoImagesInner>;
+    /**
+     * 
      * @type {string}
      * @memberof RunWorkflowDto
      */

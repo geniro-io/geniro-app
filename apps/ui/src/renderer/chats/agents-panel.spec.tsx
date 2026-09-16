@@ -23,7 +23,8 @@ import { mcpScopeKey } from './use-agent-mcp';
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
-function render(element: React.ReactElement): HTMLDivElement {
+/** Mount exactly as rendered — the panel starts FOLDED. */
+function renderFolded(element: React.ReactElement): HTMLDivElement {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
@@ -31,6 +32,35 @@ function render(element: React.ReactElement): HTMLDivElement {
     root!.render(element);
   });
   return container;
+}
+
+/**
+ * Mount and unfold, since nearly every case here is about what the OPEN panel
+ * draws; the folded default is pinned by its own case.
+ */
+function render(element: React.ReactElement): HTMLDivElement {
+  const el = renderFolded(element);
+  const expand = el.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand agents panel"]',
+  );
+  act(() => {
+    expand?.click();
+  });
+  return el;
+}
+
+/**
+ * Unfold every instance block that starts folded — several instances at work
+ * start folded, and most cases here read what a block HOLDS.
+ */
+function openAllInstances(el: HTMLElement): void {
+  for (const heading of el.querySelectorAll<HTMLButtonElement>(
+    '[data-slot="agent-instance"] > div button[aria-expanded="false"]',
+  )) {
+    act(() => {
+      heading.click();
+    });
+  }
 }
 
 /**
@@ -317,11 +347,20 @@ describe('AgentsPanel', () => {
         ?.textContent,
     ).toBe('Instances2· 1 running');
     expect(worker.querySelector('svg.animate-spin')).not.toBeNull();
-    // The figures are hover-only now, so the meter's accessible name is where
-    // they are legible without opening anything.
+    // Two instances, each with its own window — so the CARD draws no ring of
+    // its own; a card holding one conversation still does, and its figures are
+    // legible through the meter's accessible name without opening anything.
     expect(
       worker.querySelector(
-        'button[aria-label="Context 6% full \u2014 12k of 200k, <$0.01 spent"]',
+        '[data-slot="agent-card-context"] [aria-label^="Context"]',
+      ),
+    ).toBeNull();
+    const orchestratorCard = rows.find((row) =>
+      row.textContent?.includes('Orchestrator'),
+    )!;
+    expect(
+      orchestratorCard.querySelector(
+        '[data-slot="agent-card-context"] [aria-label^="Context"]',
       ),
     ).not.toBeNull();
 
@@ -564,6 +603,7 @@ describe('AgentsPanel', () => {
         onOpenThread={vi.fn()}
       />,
     );
+    openAllInstances(el);
     const worker = [...el.querySelectorAll(CARD_SELECTOR)].find((row) =>
       row.textContent?.includes('Worker'),
     )!;
@@ -674,7 +714,9 @@ describe('AgentsPanel', () => {
     ).not.toBeNull();
   });
 
-  it('folds to a rail that can bring the panel back, and stays folded in THAT thread only', () => {
+  it('starts FOLDED in a thread nobody opened it in, and remembers an unfold for THAT thread only', () => {
+    // "right sidebar should be closed by default": the transcript is what a
+    // thread is opened to read, and the rail keeps the panel one press away.
     const panelIn = (runId: string): React.ReactElement => (
       <ThreadUiMemoryContext.Provider value={runId}>
         <AgentsPanel
@@ -684,46 +726,35 @@ describe('AgentsPanel', () => {
         />
       </ThreadUiMemoryContext.Provider>
     );
-    const panel = panelIn('run-1');
-    const el = render(panel);
-    expect(el.textContent).toContain('Orchestrator');
-
-    click(el.querySelector('button[aria-label="Collapse agents panel"]'));
-    // The CARDS go; the column does not. A panel that vanished entirely would
-    // need a second control hosted somewhere else to bring it back — the
-    // arrangement that was retired and is not being reintroduced.
+    const el = renderFolded(panelIn('run-1'));
     expect(el.textContent).not.toContain('Orchestrator');
-    // The rail is what proves the column survived, and it is CONTROLS rather
-    // than a label now — the word `Agents` that used to be asserted here is
-    // gone from both the rail and the heading. What must not go is the way
-    // back in.
-    expect(
+    // The CARDS go; the column does not — the rail is the way back in.
+    click(
       el.querySelector(
         'aside[aria-label="Run agents"] button[aria-label="Expand agents panel"]',
       ),
-    ).not.toBeNull();
+    );
+    expect(el.textContent).toContain('Orchestrator');
 
-    // Another thread, exactly as switching chats remounts the panel (it is
-    // keyed by run id in `Chats.tsx`): it was ONE global flag, so folding it
-    // here folded it in every thread ("правый сайдбар… становится открытым во
-    // всех тредах"). A thread nobody folded opens with the panel out.
+    // Another thread, exactly as switching chats remounts the panel: the
+    // unfold was made in run-1, so run-2 still opens folded.
     act(() => {
       root!.unmount();
     });
     container!.remove();
-    const other = render(panelIn('run-2'));
-    expect(other.textContent).toContain('Orchestrator');
+    expect(renderFolded(panelIn('run-2')).textContent).not.toContain(
+      'Orchestrator',
+    );
 
-    // And back: the fold is remembered for the thread it was made in.
+    // And back: run-1 remembers it was opened, and folds again on request.
     act(() => {
       root!.unmount();
     });
     container!.remove();
-    const again = render(panel);
-    expect(again.textContent).not.toContain('Orchestrator');
-
-    click(again.querySelector('button[aria-label="Expand agents panel"]'));
+    const again = renderFolded(panelIn('run-1'));
     expect(again.textContent).toContain('Orchestrator');
+    click(again.querySelector('button[aria-label="Collapse agents panel"]'));
+    expect(again.textContent).not.toContain('Orchestrator');
   });
 
   it('opens a terminal in the run’s folder from the heading and from the rail', () => {
@@ -1914,7 +1945,10 @@ describe('AgentsPanel — sub-agent threads', () => {
     // ONE row is listed — the delegate. The agent's own conversation is the
     // card, not a row, so it is not in the count either. The count sits on the
     // Sub-agents section's own header.
-    expect(el.textContent).toContain('Sub-agents1 running · 1');
+    expect(
+      el.querySelector('[data-slot="agent-subagent-section"] > button')
+        ?.textContent,
+    ).toBe('Sub-agents1 running');
   });
 
   it('offers NO terminal handoff on a sub-agent row', () => {
@@ -2105,7 +2139,7 @@ describe('AgentsPanel — sub-agent threads', () => {
         />,
       );
 
-      expect(el.textContent).toContain('3 running · 7');
+      expect(el.textContent).toContain('3 of 7 running');
       // The two readings the caption used to give, neither of which any row
       // below it supported.
       expect(el.textContent).not.toContain('1 running');
@@ -2514,6 +2548,7 @@ describe('AgentsPanel — the instances of a called agent', () => {
 
   it('draws each call as its own block, holding only its OWN delegates, commands and plan', () => {
     const el = panel();
+    openAllInstances(el);
     const first = block(el, 'call-1')!;
     const second = block(el, 'call-2')!;
 
@@ -2543,6 +2578,36 @@ describe('AgentsPanel — the instances of a called agent', () => {
     ).toHaveLength(2);
   });
 
+  it('draws no card-level context ring over several instances, and keeps it over one', () => {
+    // REPORTED against a Researcher card with three instances: its own ring
+    // restated one of them, while each instance's window differs.
+    const cardRing = (el: HTMLElement): Element | null =>
+      el.querySelector(
+        '[data-slot="agent-card-context"] [aria-label^="Context"]',
+      );
+    const reading = { contextTokens: 200_000, contextWindowTokens: 1_000_000 };
+
+    expect(cardRing(panel({ ...engineer, ...reading }))).toBeNull();
+    container?.remove();
+    expect(
+      cardRing(
+        render(
+          <AgentsPanel
+            terminalReasons={TERMINALS}
+            agents={[
+              {
+                ...engineer,
+                ...reading,
+                threads: [call('call-1', 'Build the parser', 'running')],
+              },
+            ]}
+            onOpenThread={vi.fn()}
+          />,
+        ),
+      ),
+    ).not.toBeNull();
+  });
+
   it('says where each instance has got to, and what that instance alone has spent', () => {
     const el = panel();
     const latest = block(el, 'call-1')!.querySelector(
@@ -2556,10 +2621,59 @@ describe('AgentsPanel — the instances of a called agent', () => {
     const quiet = block(el, 'call-2')!.querySelector(
       '[data-slot="agent-instance-latest"]',
     )!;
-    expect(quiet.textContent).toBe('running');
+    expect(quiet.firstElementChild?.textContent).toBe('running');
   });
 
-  it('draws EVERY instance in one shape: a disclosure, the brief as its title with the call id, and a second line', () => {
+  it('starts folded while several instances work, and counts what each folded one holds', () => {
+    // REPORTED as overloaded: three live calls opened at once stacked three
+    // briefs and all their sections into one tall card.
+    const el = panel();
+    for (const id of ['call-1', 'call-2']) {
+      expect(
+        block(el, id)!.querySelector('[data-slot="agent-instance-body"]'),
+        id,
+      ).toBeNull();
+    }
+    const counts = block(el, 'call-2')!.querySelector(
+      '[data-slot="agent-instance-counts"]',
+    )!;
+    expect(
+      [...counts.children].map((part) => part.getAttribute('aria-label')),
+    ).toEqual([
+      '1 sub-agent running',
+      '1 terminal running',
+      '0 of 2 tasks done',
+    ]);
+  });
+
+  it('opens the ONE instance at work by default, without counts on its summary', () => {
+    const el = render(
+      <AgentsPanel
+        terminalReasons={TERMINALS}
+        agents={[
+          {
+            ...engineer,
+            threads: [
+              call('call-0', 'Explore the repo', 'completed'),
+              call('call-1', 'Build the parser', 'running'),
+              delegate('explore', 'Exploring the codebase', 'call-1'),
+            ],
+          },
+        ]}
+        onOpenThread={vi.fn()}
+        onOpenSubagent={vi.fn()}
+      />,
+    );
+    const live = block(el, 'call-1')!;
+    expect(
+      live.querySelector('[data-slot="agent-instance-body"]'),
+    ).not.toBeNull();
+    expect(
+      live.querySelector('[data-slot="agent-instance-counts"]'),
+    ).toBeNull();
+  });
+
+  it('draws EVERY instance in one shape: a disclosure, the brief’s first line as its title, and a second line', () => {
     // REPORTED against a card where two finished calls had a chevron and one
     // line while two others had no chevron and two lines — "some of them open,
     // some of them are not".
@@ -2583,27 +2697,72 @@ describe('AgentsPanel — the instances of a called agent', () => {
       ).not.toBeNull();
     }
     const briefed = block(el, 'call-8')!;
+    // The title is the brief's first line; the call id is not drawn, only
+    // named on hover.
+    expect(briefed.textContent).not.toContain('call-8');
+    expect(briefed.querySelector('span[title^="call-8 — "]')?.textContent).toBe(
+      'Fix it — add the two missing guards',
+    );
+    // Its disclosure is named after that title, not the whole brief, which
+    // runs to pages on a real call.
     expect(
-      briefed.querySelector('[data-slot="thread-row-tag"]')?.textContent,
-    ).toBe('call-8');
-    // The title is the brief alone; the id is the tag, not a prefix.
-    expect(briefed.textContent).not.toContain('call-8 · ');
-    // Opening it shows the WHOLE brief, which the heading truncates.
+      briefed
+        .querySelector('button[aria-expanded]')
+        ?.getAttribute('aria-label'),
+    ).toBe('Show what Fix it — add the two missing guards holds');
+    // Opening it shows the rest of the brief — never the title a second time.
     click(briefed.querySelector('button[aria-expanded]'));
     expect(
       block(el, 'call-8')!.querySelector('[data-slot="agent-instance-brief"]')
         ?.textContent,
-    ).toBe('Fix it — add the two missing guards\nThen re-run QA.');
-    // A call with no brief is titled by its id IN WORDS, with no tag repeating
-    // it — `call-10` is the broker's spelling, not a name.
+    ).toBe('Then re-run QA.');
+    // A call with no brief is titled by its id IN WORDS — `call-10` is the
+    // broker's spelling, not a name.
     const bare = block(el, 'call-9')!;
-    expect(bare.querySelector('[data-slot="thread-row-tag"]')).toBeNull();
     expect(bare.textContent).toContain('Call 9');
     expect(bare.textContent).not.toContain('call-9');
     // …and with nothing said or measured, its second line still says its state.
     expect(
-      bare.querySelector('[data-slot="agent-instance-latest"]')?.textContent,
+      bare.querySelector('[data-slot="agent-instance-latest"]')
+        ?.firstElementChild?.textContent,
     ).toBe('completed');
+  });
+
+  it('draws a brief without its markdown markers, and folds back from the bottom of the open body', () => {
+    // REPORTED against an open instance whose body read
+    // `⚠️ **DO NOT PARK A QUESTION.**`, with the heading's chevron as its only
+    // way to fold — a screen above once the body is open.
+    const el = panel({
+      ...engineer,
+      threads: [
+        call('call-8', 'x', 'running', {
+          label: 'call-8',
+          brief:
+            'Implement **CI-784**\n⚠️ **DO NOT PARK A QUESTION.**\nhttps://linear.app/acme/issue/CI-784/finish-the-page',
+        }),
+      ],
+    });
+    openAllInstances(el);
+    const open = block(el, 'call-8')!;
+    expect(open.textContent).not.toContain('**');
+    expect(open.textContent).toContain('Implement CI-784');
+    const brief = open.querySelector('[data-slot="agent-instance-brief"]')!;
+    expect(brief.querySelector('p')?.textContent).toBe(
+      '⚠️ DO NOT PARK A QUESTION.',
+    );
+    // A bare ticket URL is one short link, not a paragraph of path.
+    const link = brief.querySelector('a')!;
+    expect(link.getAttribute('href')).toBe(
+      'https://linear.app/acme/issue/CI-784/finish-the-page',
+    );
+    expect(link.textContent).toBe(
+      'linear.app/acme/issue/CI-784/finish-the-page',
+    );
+
+    click(open.querySelector('[data-slot="agent-instance-collapse"]'));
+    expect(
+      block(el, 'call-8')!.querySelector('[data-slot="agent-instance-body"]'),
+    ).toBeNull();
   });
 
   it('folds a finished instance to its heading — terminal kept — and opens it on a press', () => {
@@ -2632,10 +2791,11 @@ describe('AgentsPanel — the instances of a called agent', () => {
         .querySelector('button[aria-expanded]')
         ?.getAttribute('aria-expanded'),
     ).toBe('false');
-    // …and the live instances were left exactly as they were.
+    // …and the live instances were left exactly as they were: folded, since
+    // two of them are at work.
     expect(
       block(el, 'call-1')!.querySelector('[data-slot="agent-instance-body"]'),
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it('draws the node’s OWN conversation as a block only when something happened in it', () => {
@@ -2654,6 +2814,7 @@ describe('AgentsPanel — the instances of a called agent', () => {
         delegate('own', 'Own delegate', null),
       ],
     });
+    openAllInstances(withOwnWork);
     const main = block(withOwnWork, 'main')!;
     expect(main.textContent).toContain('Own delegate');
     // Its terminal is the CARD's, in the header — never a second copy here.
@@ -2695,6 +2856,7 @@ describe('AgentsPanel — the instances of a called agent', () => {
     };
     const el = render(<div />);
     renderWith(call('call-1', 'Build the parser', 'running'));
+    click(el.querySelector('button[aria-label="Expand agents panel"]'));
     // Live, so open by default — then shut by the reader.
     click(block(el, 'call-1')!.querySelector('button[aria-expanded]'));
     expect(

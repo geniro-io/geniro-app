@@ -3836,16 +3836,19 @@ export function withLiveText(
     attach(out, entry, openCallees, callIdOfKey(key));
   }
   /**
-   * The calls a caller's own working row NAMES (`waiting on <callee> ·
-   * call-N`), decided up front by the same conditions that draw that row below.
+   * The callers whose own working row says `waiting on <callee> · call-N`,
+   * decided up front by the same conditions that draw that row below.
    *
-   * Read by the buried-callee branch, so the two cannot disagree: a second row
-   * naming a call the caller's row already names is the callee on screen twice,
-   * as an otherwise empty block — REPORTED twice. Deciding it from the rows that
-   * are actually drawn, rather than re-stating their conditions there, is what
+   * Read by the buried-callee branch, so the two cannot disagree: while a
+   * caller's row already says it is waiting, a second row under it naming a
+   * callee at work is the same wait drawn twice — REPORTED as two loaders at
+   * once. Keyed by CALLER rather than by call: the waiting row names the
+   * caller's FIRST open call, and with several open the buried one is routinely
+   * a different call of the same caller. Deciding it from the rows that are
+   * actually drawn, rather than re-stating their conditions there, is what
    * keeps a later change to either from reopening it.
    */
-  const namedByWaitingRow = new Set<string>();
+  const waitingCallers = new Set<string | null>();
   for (const key of workingAgents) {
     const node = nodeIdOf(key);
     if (
@@ -3854,9 +3857,8 @@ export function withLiveText(
     ) {
       continue;
     }
-    const waitingOn = openCallOfCaller(blocks, node);
-    if (waitingOn !== null) {
-      namedByWaitingRow.add(waitingOn.callId);
+    if (openCallOfCaller(blocks, node) !== null) {
+      waitingCallers.add(node);
     }
   }
   for (const key of workingAgents) {
@@ -3877,8 +3879,8 @@ export function withLiveText(
     const workingNode = nodeIdOf(key);
     if (workingNode !== null && openCallees.has(workingNode)) {
       const buried = buriedOpenCallOf(blocks, workingNode);
-      // …and UNLESS the caller already says so (see `namedByWaitingRow`).
-      if (buried !== null && !namedByWaitingRow.has(buried.callId)) {
+      // …and UNLESS the caller already says so (see `waitingCallers`).
+      if (buried !== null && !waitingCallers.has(buried.callerNodeId)) {
         const since = lastMainThreadRowAt(buried.entries, workingNode);
         attachAtEnd(
           out,

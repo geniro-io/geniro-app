@@ -2880,6 +2880,48 @@ describe('withLiveText', () => {
     ).toMatchObject({ live: 'working', waitingCallId: 'call-1' });
   });
 
+  it('draws ONE loader when the caller waits on one call while the same callee works in a later one', () => {
+    // REPORTED as "i have 2 loaders on the same time": `waiting on Engineer ·
+    // call-10` and `Engineer is working · call-12`, three calls open. The
+    // caller's row names its FIRST open call, so a guard matching the call id
+    // never saw the later one — the same wait, drawn twice.
+    const entries = withLiveText(
+      buildTurnBlocks(
+        groupTranscript([
+          item(
+            'call_started',
+            { callId: 'call-1', calleeNodeId: 'poet', message: 'One.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-1' }, 'poet'),
+          item(
+            'call_started',
+            { callId: 'call-2', calleeNodeId: 'poet', message: 'Two.' },
+            'orch',
+          ),
+          item('status', { status: 'running', callId: 'call-2' }, 'poet'),
+          item('message', { text: 'Both are running.' }, 'orch'),
+        ]),
+      ),
+      new Map(),
+      new Set(['orch', 'poet']),
+    );
+
+    const liveRows = entries.flatMap((entry) =>
+      entry.type === 'turn-block'
+        ? entry.entries.filter(
+            (row): row is Extract<TranscriptEntry, { type: 'item' }> =>
+              row.type === 'item' && liveRowKind(row.item.payload) !== null,
+          )
+        : [],
+    );
+    expect(liveRows).toHaveLength(1);
+    expect(liveRows[0]!.item.payload).toMatchObject({
+      live: 'working',
+      waitingCallId: 'call-1',
+    });
+  });
+
   it('still draws the CALLER’s own working row while it waits', () => {
     // The caller is genuinely silent — it is holding its turn open for the
     // callee — so the fallback above must not have been narrowed to "any agent

@@ -66,6 +66,30 @@ const marks = (el: HTMLElement): string[] =>
     (node) => node.getAttribute('aria-label') ?? '',
   );
 
+const trigger = (el: HTMLElement): HTMLButtonElement =>
+  el.querySelector<HTMLButtonElement>('[data-menu-trigger]')!;
+
+/** Marks on the closed TRIGGER — a `Select`'s menu panel is not this. */
+const triggerMarks = (el: HTMLElement): string[] =>
+  [...trigger(el).querySelectorAll('[role="img"]')].map(
+    (node) => node.getAttribute('aria-label') ?? '',
+  );
+
+/**
+ * Marks in the LIST rows. `Menu` renders nothing at all while closed (see
+ * `select.tsx`), so a row's marks do not exist in the DOM until the trigger
+ * is opened — this opens it first, or every assertion here would pass
+ * whether or not a row ever draws anything.
+ */
+const rowMarks = (el: HTMLElement): string[] => {
+  act(() => {
+    trigger(el).click();
+  });
+  return [...el.querySelectorAll('[role="option"] [role="img"]')].map(
+    (node) => node.getAttribute('aria-label') ?? '',
+  );
+};
+
 describe('ProjectPicker — every project at once', () => {
   it('offers All projects, shows it while nothing is picked, and hands it on as null', () => {
     const onSelect = vi.fn();
@@ -103,29 +127,54 @@ describe('ProjectPicker — every project at once', () => {
 
 describe('ProjectPicker — the ambient armed mark', () => {
   // Nothing has to LOOK like nothing: a project nobody armed must carry no
-  // marker, or the glyph stops meaning anything on the boards that do.
+  // marker anywhere, or the glyph stops meaning anything on the boards that do.
   it('marks nothing on a project nobody armed', () => {
     expect(marks(picker())).toEqual([]);
   });
 
   it('marks an armed project on the trigger', () => {
-    expect(marks(picker({ autopilotEnabled: true }))).toContain(
+    expect(triggerMarks(picker({ autopilotEnabled: true }))).toContain(
       'geniro-app: autopilot on',
     );
+  });
+
+  // The list dropped the plain "armed" lightning — reported as noise repeated
+  // down every row — while the trigger keeps it. This must fail if the row
+  // ever regains the mark.
+  it('does not mark an armed-but-not-tripped project in the list', () => {
+    expect(rowMarks(picker({ autopilotEnabled: true }))).toEqual([]);
   });
 
   // The accessible name rather than a tooltip: an aria-label wins the name
   // computation, so a fact stated only in a `title` is silent to the reader
   // that most needs it.
-  it('says WHY a stopped project stopped, and how many runs it took', () => {
+  it('says WHY a stopped project stopped, and how many runs it took, on the trigger', () => {
     expect(
-      marks(picker({ autopilotEnabled: true, autopilotFailureStreak: 3 })),
+      triggerMarks(
+        picker({ autopilotEnabled: true, autopilotFailureStreak: 3 }),
+      ),
     ).toContain('geniro-app: autopilot stopped after 3 failed runs');
   });
 
-  it('still reads as armed one failure short of the breaker', () => {
+  // The breaker mark is a WARNING, not the lightning — it must still show up
+  // in the list even though the plain armed mark no longer does.
+  it('still marks a tripped breaker in the list', () => {
     expect(
-      marks(picker({ autopilotEnabled: true, autopilotFailureStreak: 2 })),
+      rowMarks(picker({ autopilotEnabled: true, autopilotFailureStreak: 3 })),
+    ).toContain('geniro-app: autopilot stopped after 3 failed runs');
+  });
+
+  it('still reads as armed one failure short of the breaker, on the trigger', () => {
+    expect(
+      triggerMarks(
+        picker({ autopilotEnabled: true, autopilotFailureStreak: 2 }),
+      ),
     ).toContain('geniro-app: autopilot on');
+  });
+
+  it('does not mark the list one failure short of the breaker either', () => {
+    expect(
+      rowMarks(picker({ autopilotEnabled: true, autopilotFailureStreak: 2 })),
+    ).toEqual([]);
   });
 });

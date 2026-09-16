@@ -109,8 +109,8 @@ import { useAutosave } from './use-autosave';
 import { configDirCapabilityFrom } from './use-config-dir-capability';
 import { useNodeMcp } from './use-node-mcp';
 import { clearViewport, loadViewport, saveViewport } from './viewport-store';
+import { WorkflowCard } from './workflow-card';
 import { WorkflowMetaDialog } from './workflow-meta-dialog';
-import { WorkflowRow } from './workflow-row';
 
 const NODE_TYPES = {
   agent: AgentNode,
@@ -1046,12 +1046,10 @@ export function Workflows({
           </EmptyState>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
-            {/* One ruled surface, hairline-separated — the same construction
-                as the Stats page's `StatGrid` (gap-px over a `bg-border`
-                container), so the two pages read as the same material. */}
-            <ul className="grid gap-px overflow-hidden rounded-xl border border-border bg-border shadow-panel-sm">
+            {/* See `WorkflowCard` for why two per line and `items-start`. */}
+            <ul className="grid grid-cols-1 items-start gap-4 sm:grid-cols-2">
               {summaries.map((summary) => (
-                <WorkflowRow
+                <WorkflowCard
                   key={summary.slug}
                   summary={summary}
                   onOpen={() => void openWorkflow(summary.slug)}

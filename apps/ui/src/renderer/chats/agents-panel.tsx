@@ -2,6 +2,7 @@ import {
   Bot as SubagentIcon,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Download,
   FileText,
   Search,
@@ -43,6 +44,7 @@ import {
   isInstanceLive,
 } from './agent-instances';
 import type { RunArtifact } from './artifact-payload';
+import { bareUrl, briefParts, plainMarkdownText } from './brief-text';
 import { ContextMeter } from './context-meter';
 import { ConversationTimeline } from './conversation-timeline';
 import {
@@ -321,7 +323,7 @@ function ThreadRow({
   leading = null,
   hideTerminal = false,
   title,
-  tag = null,
+  hoverTitle,
   agent,
   thread,
   terminal,
@@ -345,11 +347,11 @@ function ThreadRow({
   hideTerminal?: boolean;
   /**
    * What the row says in place of `thread.label` — an instance heading states
-   * the brief, with the call id as its {@link tag}.
+   * its brief's first line.
    */
   title?: string;
-  /** A short muted identifier after the title — an instance's call id. */
-  tag?: string | null;
+  /** What the row's hover says, when it should say more than its label. */
+  hoverTitle?: string;
   agent: AgentDisplay;
   thread: AgentThread;
   /**
@@ -404,17 +406,12 @@ function ThreadRow({
           {thread.label}
         </button>
       ) : (
-        <span className="min-w-0 flex-1 truncate" title={thread.label}>
+        <span
+          className="min-w-0 flex-1 truncate"
+          title={hoverTitle ?? thread.label}>
           {title ?? thread.label}
         </span>
       )}
-      {tag ? (
-        <span
-          data-slot="thread-row-tag"
-          className="shrink-0 font-mono text-[10px] text-muted-foreground">
-          {tag}
-        </span>
-      ) : null}
       {/*
         This CONVERSATION's own window. On the row rather than on the card
         because a node can hold several calls at once and each has its own
@@ -778,9 +775,11 @@ function ConversationSections({
           icon={<SubagentIcon aria-hidden="true" className="size-3" />}
           label="Sub-agents"
           summary={
-            running > 0
-              ? `${running} running · ${subagents.length}`
-              : `${subagents.length} finished`
+            running === 0
+              ? `${subagents.length} finished`
+              : running === subagents.length
+                ? `${running} running`
+                : `${running} of ${subagents.length} running`
           }
           open={subagentsOpen}
           onToggle={() => toggle('subagents', subagentsOpen)}>
@@ -856,6 +855,76 @@ function instanceKey(agentId: string, threadId: string): string {
 }
 
 /**
+ * What a FOLDED instance holds, as glyph-and-number pairs on its summary line —
+ * so folding a block by default hides nothing silently: two sub-agents at work
+ * and a terminal running still show, one glance wide.
+ */
+function InstanceCounts({
+  instance,
+}: {
+  instance: AgentInstance;
+}): React.JSX.Element | null {
+  const runningSubagents = instance.subagents.filter(
+    (thread) => thread.status === 'running',
+  ).length;
+  const progress = taskProgress(instance.tasks);
+  const parts: {
+    id: string;
+    icon: React.ReactNode;
+    text: React.ReactNode;
+    title: string;
+  }[] = [];
+  if (instance.subagents.length > 0) {
+    const shown =
+      runningSubagents > 0 ? runningSubagents : instance.subagents.length;
+    parts.push({
+      id: 'subagents',
+      icon: <SubagentIcon aria-hidden="true" className="size-3" />,
+      text: String(shown),
+      title:
+        runningSubagents > 0
+          ? `${runningSubagents} sub-agent${runningSubagents === 1 ? '' : 's'} running`
+          : `${shown} finished sub-agent${shown === 1 ? '' : 's'}`,
+    });
+  }
+  if (instance.shells.length > 0) {
+    parts.push({
+      id: 'shells',
+      icon: <TerminalIcon aria-hidden="true" className="size-3" />,
+      text: String(instance.shells.length),
+      title: `${instance.shells.length} terminal${instance.shells.length === 1 ? '' : 's'} running`,
+    });
+  }
+  if (instance.tasks.length > 0) {
+    parts.push({
+      id: 'tasks',
+      icon: <TaskIcon />,
+      text: <TaskCount done={progress.done} total={progress.total} />,
+      title: `${progress.done} of ${progress.total} tasks done`,
+    });
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  return (
+    <span
+      data-slot="agent-instance-counts"
+      className="flex shrink-0 items-center gap-2 tabular-nums">
+      {parts.map((part) => (
+        <span
+          key={part.id}
+          title={part.title}
+          aria-label={part.title}
+          className="flex items-center gap-0.5">
+          {part.icon}
+          {part.text}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
  * Where one instance has got to and what it has spent — one muted line under
  * its heading, indented to its label.
  *
@@ -865,13 +934,16 @@ function instanceKey(agentId: string, threadId: string): string {
  * one and two lines tall beside each other, which read as some calls being
  * open and some not. With nothing said yet the line states the status in
  * words; the spend stays omit-when-unmeasured, the rule every figure here
- * follows.
+ * follows. A folded block adds what it holds ({@link InstanceCounts}).
  */
 function InstanceSummary({
-  thread,
+  instance,
+  open,
 }: {
-  thread: AgentThread;
+  instance: AgentInstance;
+  open: boolean;
 }): React.JSX.Element {
+  const { thread } = instance;
   const tokens = measured(thread.spentTokens);
   const usd = measured(thread.spentUsd);
   const spend = [
@@ -880,18 +952,66 @@ function InstanceSummary({
     tokens === null ? null : `${formatTokens(tokens)} in/out`,
     usd === null ? null : formatUsd(usd),
   ].filter((part): part is string => part !== null);
-  const latest = thread.latest ?? null;
+  const latest =
+    thread.latest === undefined || thread.latest === null
+      ? null
+      : plainMarkdownText(thread.latest);
   return (
     <p
       data-slot="agent-instance-latest"
-      className="m-0 flex items-baseline gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
+      className="m-0 flex items-center gap-2 pr-1.5 pb-1 pl-7 text-[11px] text-muted-foreground">
       <span className="min-w-0 flex-1 truncate" title={latest ?? undefined}>
         {latest ?? RUN_STATUS_META[thread.status].label}
       </span>
+      {open ? null : <InstanceCounts instance={instance} />}
       {spend.length > 0 ? (
         <span className="shrink-0 tabular-nums">{spend.join(' · ')}</span>
       ) : null}
     </p>
+  );
+}
+
+/**
+ * The part of a brief the heading does not already state — its lines after the
+ * first — with a line that is nothing but a web link drawn as one short link
+ * rather than a URL wrapping over three lines.
+ */
+function BriefBody({ lines }: { lines: readonly string[] }): React.JSX.Element {
+  const text: string[] = [];
+  const links: URL[] = [];
+  for (const line of lines) {
+    const url = bareUrl(line);
+    if (url === null) {
+      text.push(line);
+    } else {
+      links.push(url);
+    }
+  }
+  const prose = text.join('\n').trim();
+  return (
+    <div
+      data-slot="agent-instance-brief"
+      className="flex flex-col gap-0.5 px-1">
+      {prose.length > 0 ? (
+        <p className="m-0 line-clamp-3 text-[11px] whitespace-pre-wrap text-muted-foreground">
+          {prose}
+        </p>
+      ) : null}
+      {/* An inline link inside the brief rather than a `PanelLinkRow`: that
+          row is a bordered block, and this sits in the body's running text. */}
+      {links.map((url, index) => (
+        <a
+          key={`${index}:${url.href}`}
+          href={url.href}
+          target="_blank"
+          rel="noreferrer"
+          title={url.href}
+          className="truncate text-[11px] text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground">
+          {url.host}
+          {url.pathname === '/' ? '' : url.pathname}
+        </a>
+      ))}
+    </div>
   );
 }
 
@@ -908,12 +1028,10 @@ function InstanceSummary({
  * card used to pool their sub-agents, commands and plans into one list each,
  * with nothing saying which conversation any row belonged to.
  *
- * Open while the instance is still producing anything, shut once it is over —
- * a finished call's plan and delegates are history, and a card of eleven
- * calls buried its two live ones under the other nine. The heading stays
- * either way, with its terminal control, because a settled call is exactly the
- * one whose conversation can be opened. The reader's own press outranks that
- * default, and is kept by the panel rather than here.
+ * The heading states the brief's FIRST line and the body only what follows it,
+ * so the brief is never on screen twice. The call id is not drawn — it is the
+ * broker's bookkeeping — and stays on the heading's hover. Whether the block
+ * starts open is the panel's decision; the reader's own press outranks it.
  */
 function InstanceBlock({
   agent,
@@ -947,10 +1065,18 @@ function InstanceBlock({
 }): React.JSX.Element {
   const { thread } = instance;
   const content = hasInstanceContent(instance);
-  // A call with a brief is titled BY it, with its id as a tag; one without is
-  // titled by what it is called — `Call 10`, the id in words, since `call-10`
-  // is the broker's spelling rather than a name.
-  const brief = thread.kind === 'call' ? (thread.brief ?? null) : null;
+  const rawBrief = thread.kind === 'call' ? (thread.brief ?? null) : null;
+  const brief = rawBrief === null ? null : briefParts(rawBrief);
+  const briefTitle =
+    brief !== null && brief.title.length > 0 ? brief.title : null;
+  const briefRest = brief?.rest ?? [];
+  // What the heading says, and so what its disclosure is named after — never
+  // the whole brief, which runs to pages.
+  const headingTitle =
+    briefTitle ??
+    (thread.kind === 'call' && thread.label === thread.id
+      ? callTitle(thread.id)
+      : thread.label);
   const live = isInstanceLive(instance);
   return (
     <li
@@ -963,14 +1089,10 @@ function InstanceBlock({
       <ThreadRow
         as="div"
         leading={
-          // EVERY block opens, whatever it holds: its body always has the
-          // whole brief to show, which the heading truncates. A disclosure on
-          // only the blocks holding delegates read as some calls being open
-          // and others not.
           <button
             type="button"
             aria-expanded={open}
-            aria-label={`${open ? 'Hide' : 'Show'} what ${thread.label} holds`}
+            aria-label={`${open ? 'Hide' : 'Show'} what ${headingTitle} holds`}
             title={open ? 'Hide its details' : 'Show its details'}
             onClick={onToggle}
             className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground">
@@ -980,13 +1102,12 @@ function InstanceBlock({
             />
           </button>
         }
-        title={
-          brief ??
-          (thread.kind === 'call' && thread.label === thread.id
-            ? callTitle(thread.id)
-            : undefined)
+        // A call with no brief is titled by what it is called — `Call 10`, the
+        // id in words, since `call-10` is the broker's spelling, not a name.
+        title={headingTitle}
+        hoverTitle={
+          briefTitle === null ? undefined : `${thread.id} — ${briefTitle}`
         }
-        tag={brief === null ? null : thread.id}
         // The node's own conversation carries its terminal in the card header.
         hideTerminal={thread.kind === 'main'}
         agent={agent}
@@ -995,19 +1116,13 @@ function InstanceBlock({
         onOpenThread={onOpenThread}
         onResolveHandoff={onResolveHandoff}
       />
-      <InstanceSummary thread={thread} />
+      <InstanceSummary instance={instance} open={open} />
       {open ? (
         <div
           data-slot="agent-instance-body"
-          className="flex flex-col gap-1.5 border-t border-border px-1.5 py-1.5">
-          {brief !== null ? (
-            <p
-              data-slot="agent-instance-brief"
-              className="m-0 line-clamp-6 px-1 text-[11px] whitespace-pre-wrap text-muted-foreground">
-              {brief}
-            </p>
-          ) : null}
-          {brief === null && !content ? (
+          className="flex flex-col gap-1.5 border-t border-border/60 px-1.5 py-1.5">
+          {briefRest.length > 0 ? <BriefBody lines={briefRest} /> : null}
+          {briefRest.length === 0 && !content ? (
             <p className="m-0 px-1 text-[11px] text-muted-foreground">
               Nothing else happened in this conversation.
             </p>
@@ -1027,6 +1142,16 @@ function InstanceBlock({
             onOpenShell={onOpenShell}
             onKillShell={onKillShell}
           />
+          {/* The heading's chevron is a screen away once sub-agents and a plan
+              are open under it, so the body carries its own way back. */}
+          <button
+            type="button"
+            data-slot="agent-instance-collapse"
+            onClick={onToggle}
+            className="flex items-center gap-1 self-start rounded px-1 py-0.5 text-[11px] font-normal text-muted-foreground transition-colors hover:text-foreground">
+            <ChevronUp aria-hidden="true" className="size-3" />
+            Hide details
+          </button>
         </div>
       ) : null}
     </li>
@@ -1584,10 +1709,12 @@ export function AgentsPanel({
   // PER THREAD, not one flag for the app: folding the panel in one
   // conversation left it folded in every other ("правый сайдбар сохраняется,
   // и он становится открытым во всех тредах"). What is folded is a fact about
-  // the thread, so a thread nobody folded opens with the panel out.
+  // the thread. A thread nobody opened it in starts FOLDED — the transcript is
+  // what a thread is opened to read, and the panel is one press away on its
+  // rail ("right sidebar should be closed by default").
   const [collapsed, setCollapsed] = useThreadFlag(
     AGENTS_PANEL_COLLAPSED_FLAG,
-    false,
+    true,
   );
   // ONE at a time, and that is a statement of fact rather than a policy:
   // `Popover` closes on any pointer press outside its own trigger, so pressing
@@ -1998,29 +2125,35 @@ export function AgentsPanel({
                       // pinning instead of the figure.
                       data-slot="agent-card-context"
                       className="ml-auto flex shrink-0 items-center gap-0.5">
-                      <ContextMeter
-                        // Per node on a workflow run, else only the chat
-                        // agent's own card: see `metricsByNode`.
-                        runId={
-                          metricsByNode || agent.id === CHAT_AGENT_KEY
-                            ? metricsRunId
-                            : null
-                        }
-                        nodeId={metricsByNode ? agent.id : null}
-                        contextTokens={agent.contextTokens}
-                        contextWindowTokens={agent.contextWindowTokens}
-                        spentUsd={agent.spentUsd}
-                        // This card's OWN status, not the run's: the panel lists
-                        // several agents and only the working one's readout has
-                        // anything to keep current.
-                        live={agent.status === 'running'}
-                        // The same box as the two icon buttons beside it, so the
-                        // one `gap-0.5` produces one gap. The ring is 14px and
-                        // their glyphs are 14px inside a 24px button, so left as
-                        // content-width it sat 5px tighter against the terminal
-                        // control than that control sits against the plug.
-                        className="size-6 justify-center"
-                      />
+                      {/* No card ring over SEVERAL instances: each holds its own
+                          window and draws its own ring below, so one here could
+                          only restate whichever reported last ("it has 3
+                          instances … it's different for each instance"). */}
+                      {shownInstances.length > 1 ? null : (
+                        <ContextMeter
+                          // Per node on a workflow run, else only the chat
+                          // agent's own card: see `metricsByNode`.
+                          runId={
+                            metricsByNode || agent.id === CHAT_AGENT_KEY
+                              ? metricsRunId
+                              : null
+                          }
+                          nodeId={metricsByNode ? agent.id : null}
+                          contextTokens={agent.contextTokens}
+                          contextWindowTokens={agent.contextWindowTokens}
+                          spentUsd={agent.spentUsd}
+                          // This card's OWN status, not the run's: the panel lists
+                          // several agents and only the working one's readout has
+                          // anything to keep current.
+                          live={agent.status === 'running'}
+                          // The same box as the two icon buttons beside it, so the
+                          // one `gap-0.5` produces one gap. The ring is 14px and
+                          // their glyphs are 14px inside a 24px button, so left as
+                          // content-width it sat 5px tighter against the terminal
+                          // control than that control sits against the plug.
+                          className="size-6 justify-center"
+                        />
+                      )}
                       {mainTerminal ? (
                         <OpenInCliButton
                           agent={agent}
@@ -2116,12 +2249,21 @@ export function AgentsPanel({
                           and a status word, drew eight borders around four
                           facts — REPORTED as "we need to improve calls design.
                           Now it looks ugly". */}
-                      <ul className="m-0 flex list-none flex-col divide-y divide-border overflow-hidden rounded-md border border-border p-0">
+                      {/* Rules between rows and no box around them: the card is
+                          already the enclosure, and a bordered list inside it
+                          was a box in a box. */}
+                      <ul className="m-0 flex list-none flex-col divide-y divide-border/60 border-y border-border/60 p-0">
                         {shownInstances.map((instance) => {
                           const identity = instanceIdentity(instance.thread);
                           const key = instanceKey(agent.id, identity);
+                          // Open by default only when it is the ONE instance at
+                          // work: three live calls opened at once stacked three
+                          // briefs and their sections into one tall card
+                          // ("now it's overloaded"). A folded block still counts
+                          // what it holds on its summary line.
                           const open =
-                            instanceOverride(key) ?? isInstanceLive(instance);
+                            instanceOverride(key) ??
+                            (activeInstances === 1 && isInstanceLive(instance));
                           return (
                             <InstanceBlock
                               key={identity}

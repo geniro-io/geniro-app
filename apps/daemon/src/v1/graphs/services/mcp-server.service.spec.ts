@@ -63,6 +63,7 @@ function broker(): CallBroker {
     persistItem: () => {},
     isCancelled: () => false,
     isNodeLive: () => true,
+    tellLiveNode: () => false,
     wakeNode: () => false,
   };
   const instance = new CallBroker();
@@ -373,6 +374,12 @@ describe('McpServerService', () => {
     // running perfectly well — the descriptions are the routing logic here.
     expect(await_.description).toContain('"pending"');
     expect(await_.description).toContain('not a failure');
+    // Waiting on ALL calls is only used if the model is told it exists — and
+    // call_id stops being required for it.
+    expect(await_.description).toContain('OMIT call_id');
+    expect(
+      (await_.inputSchema as { required?: string[] }).required ?? [],
+    ).not.toContain('call_id');
   });
 
   it('refuses a timeout_ms outside the window, or one that is not a whole number', async () => {
@@ -619,6 +626,39 @@ describe('McpServerService', () => {
     });
   });
 
+  it("hands call_agent and await_agent the request's own abort signal, and lets await_agent omit call_id", async () => {
+    // The only production route to a sync call noticing its client gave up:
+    // without the signal, a dropped call's waiter swallows the next question.
+    const callBroker = broker();
+    const callSpy = vi.spyOn(callBroker, 'callAgent');
+    const awaitSpy = vi.spyOn(callBroker, 'awaitAgent');
+    await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', {
+        name: 'call_agent',
+        arguments: { agent: 'helper', message: 'find X', title: 'Find X' },
+      }),
+    );
+    expect(callSpy.mock.calls[0]![3]).toBeInstanceOf(AbortSignal);
+
+    const { json } = await post(
+      service(callBroker),
+      'run-1',
+      'orch',
+      rpc('tools/call', { name: 'await_agent', arguments: {} }),
+    );
+    expect(awaitSpy.mock.calls[0]![2]).toEqual({
+      call_id: undefined,
+      timeout_ms: undefined,
+    });
+    expect(awaitSpy.mock.calls[0]![3]).toBeInstanceOf(AbortSignal);
+    const text = (json().result as { content: { text: string }[] }).content[0]!
+      .text;
+    expect(text).not.toContain('INVALID_ARGS');
+  });
+
   it('refuses call_agent with a missing, empty, or whitespace-only title', async () => {
     for (const args of [
       { agent: 'helper', message: 'm' },
@@ -712,6 +752,7 @@ describe('McpServerService', () => {
       },
       isCancelled: () => false,
       isNodeLive: () => true,
+      tellLiveNode: () => false,
       wakeNode: () => false,
     };
     const instance = new CallBroker();
@@ -844,6 +885,7 @@ describe('McpServerService', () => {
       persistItem: () => {},
       isCancelled: () => false,
       isNodeLive: () => true,
+      tellLiveNode: () => false,
       wakeNode: () => false,
     };
     instance.registerRun('run-1', capability);

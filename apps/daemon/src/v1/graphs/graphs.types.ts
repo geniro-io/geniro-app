@@ -574,7 +574,12 @@ export interface CalleeTurnOutcome {
  */
 export type CallEnvelope =
   | { status: 'ok'; result: unknown }
-  | { status: 'error'; error: string }
+  | {
+      status: 'error';
+      error: string;
+      /** Which call failed — set when a wait over several calls returns it. */
+      call_id?: string;
+    }
   | {
       status: 'question';
       call_id: string;
@@ -584,12 +589,20 @@ export type CallEnvelope =
       question: string;
       /** Option labels the callee offered (may be empty for free-form). */
       options: string[];
+      /**
+       * Set when this question interrupted a wait on a DIFFERENT call of the
+       * caller's: that call is still running and stays collectable with
+       * await_agent once the question is answered.
+       */
+      still_running?: string;
     }
   | {
       status: 'pending';
       call_id: string;
       /** The callee node id still working on it. */
       agent: string;
+      /** Every call a wait over ALL of the caller's calls is still waiting on. */
+      waiting_on?: { call_id: string; agent: string }[];
     };
 
 /**
@@ -911,6 +924,14 @@ export interface RunCallCapability {
    * did before this existed.
    */
   wakeNode(nodeId: string, prompt: string): boolean;
+  /**
+   * Hand `prompt` to a node that is WORKING, as a message joining its running
+   * turn. False — and nothing sent — when the node has no live turn, the CLI
+   * refused the message, or the CLI's follow-up would INTERRUPT the turn
+   * (`AdapterConfig.followUp.interrupts`): stopping a caller's tool call to
+   * relay a question costs more than letting its next wait deliver it.
+   */
+  tellLiveNode(nodeId: string, prompt: string): boolean;
 }
 
 /**

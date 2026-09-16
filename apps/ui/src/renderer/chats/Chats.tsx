@@ -3323,20 +3323,13 @@ export function Chats({
       // A workflow target ALWAYS seeds a fresh run — never routes the task
       // into whatever run happens to be open (activateRun leaves the old room).
       if (workflowSlug) {
-        // A workflow run takes one text task — its start body has no image
-        // channel. Say so rather than dropping the attachments on the floor.
-        if (images.length > 0) {
-          setError(
-            'Images can only be sent to a single agent — remove them or pick an agent instead of a workflow.',
-          );
-          return;
-        }
         const cwd = await ensureFolder();
         if (!cwd) {
           setError('Choose a folder for this run first.');
           return;
         }
         setInput('');
+        attachments.clear();
         const run = await workflowApi.startWorkflowRun({
           slug: workflowSlug,
           // A workflow run snapshots the instructions exactly as a chat does;
@@ -3344,6 +3337,7 @@ export function Chats({
           runWorkflowDto: {
             cwd,
             prompt: text,
+            ...(images.length > 0 ? { images } : {}),
             ...(await currentRunSettings()),
           },
         });

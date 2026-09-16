@@ -221,21 +221,23 @@ export class UpdateChatSettingsDto extends createZodDto(
   updateChatSettingsSchema,
 ) {}
 
+/** Pasted images riding one message — shared by the chat and workflow routes. */
+export const messageImagesSchema = z
+  .array(
+    z.object({
+      mediaType: AttachmentMediaTypeSchema,
+      data: z.string().min(1).describe('base64-encoded image bytes'),
+    }),
+  )
+  .max(MAX_ATTACHMENTS_PER_MESSAGE);
+
 export const sendMessageSchema = z
   .object({
     // Not `.min(1)`: an image alone is a complete message ("what's wrong with
     // this?" is carried by the screenshot). The refine below keeps the empty
     // message — no text AND no images — refused.
     text: z.string(),
-    images: z
-      .array(
-        z.object({
-          mediaType: AttachmentMediaTypeSchema,
-          data: z.string().min(1).describe('base64-encoded image bytes'),
-        }),
-      )
-      .max(MAX_ATTACHMENTS_PER_MESSAGE)
-      .optional(),
+    images: messageImagesSchema.optional(),
   })
   .refine(
     (dto) => dto.text.trim().length > 0 || (dto.images?.length ?? 0) > 0,

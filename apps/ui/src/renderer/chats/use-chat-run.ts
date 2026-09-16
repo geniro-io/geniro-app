@@ -366,6 +366,15 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
    * re-arm the transcript's scroll listener several times a second.
    */
   const itemsRef = useRef<ChatItem[]>([]);
+  /**
+   * The last older page `loadOlder` fetched: which oldest row it paged below,
+   * and the oldest row it brought back. See the stale-ref note in `loadOlder`.
+   */
+  const lastOlderPageRef = useRef<{
+    runId: string;
+    beforeSeq: number;
+    floorSeq: number;
+  } | null>(null);
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
@@ -1850,13 +1859,24 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
     if (oldest === undefined) {
       return false;
     }
+    // `itemsRef` catches up only after React commits, so a load started right
+    // after the previous one landed still sees the old oldest row. When it is
+    // the very row that load paged below, carry on from where that page ended
+    // rather than asking for the same page again.
+    const lastPage = lastOlderPageRef.current;
+    const beforeSeq =
+      lastPage !== null &&
+      lastPage.runId === runId &&
+      lastPage.beforeSeq === oldest.seq
+        ? lastPage.floorSeq
+        : oldest.seq;
     loadingOlderRef.current = true;
     setLoadingOlder(true);
     try {
       const page = await chatApi.listRunItems({
         runId,
         limit: HISTORY_PAGE,
-        beforeSeq: oldest.seq,
+        beforeSeq,
       });
       // The user may have switched threads while this was in flight; a stale
       // page must not be spliced into somebody else's conversation.
@@ -1869,9 +1889,28 @@ export function useChatRun(scope: ChatRunScope): ChatRunState {
       }
       // Prepended WHOLE rather than through `addItem`: that path is written for
       // the newest row and would re-sort the entire transcript once per item.
-      // These are older than everything held, already in seq order, and cannot
-      // collide — they were selected strictly below the oldest seq on screen.
-      setItems((prev) => [...page, ...prev]);
+      //
+      // Only what is still older than the oldest row HELD, decided against
+      // `prev` rather than trusted from the request. The guard above is released
+      // when the page arrives, while `itemsRef` catches up only after React
+      // commits — so a scroll event in between asked for the very same page
+      // again and prepended it onto the copy already there. REPORTED as one
+      // manager message drawn four times on a long workflow run, stored once.
+      // `lastOlderPageRef` above is what keeps that second request from asking
+      // for the same rows; this filter is what keeps a repeat harmless anyway.
+      lastOlderPageRef.current = {
+        runId,
+        beforeSeq: oldest.seq,
+        floorSeq: page[0]!.seq,
+      };
+      setItems((prev) => {
+        const oldestHeld = prev[0]?.seq;
+        const fresh =
+          oldestHeld === undefined
+            ? page
+            : page.filter((item) => item.seq < oldestHeld);
+        return fresh.length === 0 ? prev : [...fresh, ...prev];
+      });
       return true;
     } catch {
       // A page that will not load is a transcript that stops growing upward,

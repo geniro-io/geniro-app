@@ -332,6 +332,57 @@ describe('useChatRun', () => {
     expect(harness.state().runs.map((run) => run.id)).toContain('r9');
   });
 
+  it('never prepends the same older page twice when a second load starts before the first commits', async () => {
+    // REPORTED as a manager message drawn four times while the reader scrolled
+    // up a long workflow run, one row in the database. The in-flight guard is
+    // released when the page ARRIVES, while the oldest row it reads is only
+    // updated after React commits — so a scroll event in between asked for the
+    // same page again and prepended it onto the copy already there.
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([
+      msg('r1', 10, 'user', 'newer'),
+      msg('r1', 11, 'assistant', 'newest'),
+    ]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems
+      .mockResolvedValueOnce([
+        msg('r1', 4, 'user', 'older'),
+        msg('r1', 5, 'assistant', 'CI-786 готов'),
+      ])
+      .mockResolvedValueOnce([msg('r1', 2, 'user', 'oldest')]);
+
+    await act(async () => {
+      await harness.state().loadOlder();
+      await harness.state().loadOlder();
+    });
+
+    // The second load carried on BELOW the page the first brought back.
+    expect(chatApi.listRunItems).toHaveBeenLastCalledWith(
+      expect.objectContaining({ beforeSeq: 4 }),
+    );
+    expect(harness.state().items.map((item) => item.seq)).toEqual([
+      2, 4, 5, 10, 11,
+    ]);
+  });
+
+  it('drops rows it already holds even if the same older page does come back twice', async () => {
+    const { client } = makeClient();
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 10, 'user', 'newer')]);
+    const harness = await mount(client);
+    await open(harness, 'r1');
+    chatApi.listRunItems.mockResolvedValue([msg('r1', 5, 'assistant', 'once')]);
+
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+    await act(async () => {
+      await harness.state().loadOlder();
+    });
+
+    expect(harness.state().items.map((item) => item.seq)).toEqual([5, 10]);
+  });
+
   it('leaves the previous room before joining the next, and empties the transcript', async () => {
     const { client, joinRun, leaveRun } = makeClient();
     chatApi.listRunItems.mockResolvedValue([msg('r1', 0, 'user', 'hello')]);

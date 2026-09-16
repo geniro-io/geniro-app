@@ -966,6 +966,39 @@ export const CURSOR_AGENT_FAILURE_UNAUTHENTICATED = '[unauthenticated]';
  * deliberately absent: it is unanchored text, and matching it would risk
  * putting the agent's own words in the failure chrome.
  */
+/**
+ * The failures that are only a DROPPED CONNECTION between cursor-agent and
+ * Cursor's servers, which geniro resumes rather than reporting.
+ *
+ * Measured 2026-09-16 on 2026.08.31-4057e58. The CLI's interactive and print
+ * modes run a turn with `enableAgentRetries` for a user message (`2336.index.js`
+ * `retry-helpers.ts` → `w5`), so a drop is reconnected and the turn resumed from
+ * its last checkpoint; its ACP server (`6863.index.js`) calls the same
+ * `agentClient.run` WITHOUT that option, and the drop is thrown out as the
+ * turn's failure (`[AGENT_ERROR_DIAGNOSTICS] … enableAgentRetries:false`). Five
+ * turns in the author's database died this way, after 15–30 minutes each.
+ * Reproduced by routing the CLI through a local CONNECT proxy and aborting its
+ * tunnels mid-turn: `acp` answered `Error: RetriableError: [canceled] http/2
+ * stream closed with error code CANCEL (0x8)` and ended the turn, `-p` opened a
+ * new tunnel and finished; the same session given a continuation prompt re-ran
+ * the interrupted command and finished too.
+ *
+ * Only the transport codes: a `RetriableError` also carries server answers such
+ * as `[internal] Input token limit exceeded`, which a retry cannot fix.
+ */
+export const CURSOR_TRANSIENT_FAILURE_PATTERN =
+  /^Error: RetriableError: (\[(canceled|unavailable|aborted|deadline_exceeded)\]|Stream ended without turnEnded)/;
+
+/**
+ * What geniro sends when a turn died on a dropped connection — see
+ * `CURSOR_TRANSIENT_FAILURE_PATTERN`.
+ */
+export const CURSOR_TRANSIENT_RESUME_PROMPT =
+  'The connection to the model service dropped before your last response finished. Continue exactly where you left off. Do not repeat steps that already completed; re-run a step only if its result never came back.';
+
+/** How many times one turn is resumed before the drop is reported as its failure. */
+export const CURSOR_TRANSIENT_RESUME_ATTEMPTS = 3;
+
 export const CURSOR_AGENT_FAILURE_ACTION_SENTENCES: readonly string[] = [
   'Please sign in to continue',
   'Upgrade your plan to continue',
